@@ -172,6 +172,16 @@ Dependabotの通常更新は設定順に09:00から15分間隔で開始し、既
 初回成功とC03のマージを確認し、`android-gate`をmainの必須チェックへ登録済み。
 KotlinのCodeQL解析はC04の別作業であり、このCIの成功を解析成功として扱わない。
 
+### Android内部テスト配布（C39）
+
+`android-release.yml`は固定main SHAの手動実行だけを受け付け、`android-internal` Environmentに配布認証を分離する。同一SHAの最新CI・Records CI・CodeQL成功を確認し、署名・manifest・hashを検証した同一AABだけを内部トラックへ提出する。Core／Records配信やPlay掲載情報は変更しない。
+
+GitHub OIDCからGoogle WIFとサービスアカウントへ委譲し、短寿命のADCを使う。AWS権限と長期Play API秘密鍵は渡さない。署名用upload keyとFirebase Android設定はEnvironment Secretとして別途保護する。外部設定未完了では`ANDROID_RELEASE_ENABLED=false`により起動を拒否する。
+
+GPPはstageのみ行い、対象bundleと他トラック不変を確認してから公式APIでcommitを一度実行する。既存審査の取消・未送信掲載情報の審査送信を防ぐ。応答不明はPlay再取得で判断し、commitやWorkflowを無条件に再実行しない。公開artifactは7日保持の非機密receiptのみとする。
+
+外部設定、最小権限、配布・失敗時の手順は[Androidアプリ設計](29_Androidアプリ設計.md#c39内部テスト配布の自動化)を参照する。既存3言語のCodeQLとC04のAndroid解析待ちを混同しない。
+
 ### npm監査サービスの障害
 
 `npm audit`/`pnpm audit`は通常どおり必須である。

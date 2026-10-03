@@ -123,7 +123,7 @@ def load_tool_pins(path: Path) -> tuple[ToolPin, ...]:
 
         repository = _require_string(raw, "repository", name)
         version = _require_string(raw, "version", name)
-        tag_prefix = _require_string(raw, "tag_prefix", name)
+        tag_prefix = raw["tag_prefix"]
         archive_name = _require_string(raw, "archive_name", name)
         archive_sha256 = _require_string(raw, "archive_sha256", name)
 
@@ -131,7 +131,7 @@ def load_tool_pins(path: Path) -> tuple[ToolPin, ...]:
             raise ValueError(f"invalid GitHub repository for {name}: {repository}")
         if VERSION_PATTERN.fullmatch(version) is None:
             raise ValueError(f"invalid semantic version for {name}: {version}")
-        if tag_prefix not in {"v", ""}:
+        if not isinstance(tag_prefix, str) or tag_prefix not in {"v", ""}:
             raise ValueError(f"unsupported tag prefix for {name}: {tag_prefix}")
         if Path(archive_name).name != archive_name or version not in archive_name:
             raise ValueError(f"invalid archive name for {name}: {archive_name}")

@@ -55,6 +55,10 @@ updated: 2026-10-03
 | C35 | NEW／OLD切替とログイン完了演出 | 新旧順の選択位置・形状変化と、保存tokenのサーバー確認後だけ出る短い完了通知を接続 |
 | C36 | 可変幅レイアウト・戻る操作の仕上げ | 一覧／詳細の標準Adaptive配置、Predictive Back、読み上げ・文字拡大を接続 |
 | C37 | Web機能への導線・アカウントメニュー | 記録閲覧中のメニューから固定Web機能を開き、ログアウトと表示切替を行う |
+| C38 | Gradle Play Publisher・短寿命API認証の接続 | 既存署名と分離し、検証済みAABをinternalへ配置する。外部認証設定・配布確認はC39で行う |
+| C39 | 検証済み同一AABの内部テスト配布Workflow | mainの必須CIと署名を確認し、WIFで一回だけ公開する。外部設定未完了では起動しない |
+| C40（未実装） | Android依存の更新検知 | Gradle依存と関連Actionを対象に、既存の依存更新処理と重複しない検知を追加する |
+| C41（未実施） | 利用者向け導入・更新・復旧手順 | インストール、更新、再認証、問題版の配布停止を案内する。機能文書をこの工程へ後回しにしない |
 | 後続 | 起動演出・人格アイコン・投票／親愛度表示・友人向け配布 | C37後に小さなPRで分けて進める。起動演出はAndroid SplashScreenからComposeへ接続する |
 | 後続：Navigation 3 | 一覧／詳細の画面遷移・戻る・状態寿命の標準化 | 未実装。ネイティブ画面を増やす前の独立工程として、後述の3つの通常PRに分ける。既存の配布工程は変更しない |
 
@@ -163,6 +167,14 @@ FastAPIへの全面移行、新しい認証基盤、ORMの導入もこの方針�
 - Markdownは長文・リンク・主要構文に加え、Releaseビルドでの表示を確認する。
 - 方針・文書だけの変更は文書整合・mirror・公開情報・差分を確認する。関連変更のない成功済み試験は繰り返さない。
 - 実署名・App Links・実Discordログインの確認は引き続きC19で行い、今回の文書整備の完了条件へ追加しない。
+
+## ローカル開発・配布の一時ビルド領域
+
+Androidのローカルビルドは、Git管理した`tools/run_android_build.py`を入口にする。標準の`TemporaryDirectory`とGradle init-scriptにより、ビルド出力・project cache・Kotlinのpersistent project data・JVM／native tempを専用ディスク領域へまとめる。Kotlin公式の`kotlin.project.persistent.dir`を使い、checkoutの`.kotlin`にも蓄積させない。`/tmp`のtmpfsや使い捨てworktreeには大きな中間生成物を残さず、処理終了を確認してから回収する。同時実行を排他し、強制終了の残骸は次回実行時に同じ入口の非使用領域だけを削除する。Wrapper取得失敗などinit前の通常終了は、launcherとprocess groupの終了を確認した記録がある場合だけ回収する。Gradleの単発JVMも使用権ロックを保持し、記録のある終了でも使用中の領域は削除しない。中断・状態不明の領域も自動削除せず、新たなビルドを止める。このローカル入口だけKotlin標準の`in-process`実行を使い、コンパイラを同じGradle JVMの使用権の中へ収める。依存バージョンやCIの実行方式は変更しない。
+
+完成したAPK／AAB、必要なLint報告とprivate logはリポジトリ外の固定出力先へ残し、ビルドごとの大きな履歴ディレクトリを作らない。配布ヘルパーもこの入口を使う。署名・versionCode・Play反映の確認は従来どおりとし、大きな配布成果物は直近2版に限定する。SHA・署名・反映結果などの小さな再送防止記録は保持する。
+
+ソースは既存worktreeを再利用する。配布専用の使い捨てworktreeと仮想環境は反映確認後に片付け、応答不明の状態ファイル・未コミット変更・実行中の参照は保護する。過去領域の掃除は、正確なpath・Git未追跡・非使用を確認できた生成物に限定する。SDK・JDK・共有Gradle cache・署名鍵・API認証JSONを削除せず、OS全体やCIのtemp設定も変更しない。具体的な実行方法はAndroid READMEを正とする。
 
 ## C02：CircuitとMetroの接続
 
@@ -929,6 +941,18 @@ Material／Compose標準のモーションを使い、Androidのアニメーシ�
 
 架空の認可済み状態で、メニューからのログアウト・状態欄の非表示・幅を変えた際のスクロール位置を確認する。実Webへの接続は内部テスト版で確認する。
 
+## C38：内部テスト配布の接続
+
+配布用のGradle Play Publisher（GPP）をVersion Catalogで固定し、既存のAGP・Kotlin・Materialとupload keyを維持する。GPPはMITでmaintenance modeにあるが、固定版の現行Wrapper対応と公開APIを確認して採用する。独自のAABアップロード処理を作らず、アプリの実行時依存には追加しない。
+
+- `shittimAndroidPublishArtifactDir`で検証済み署名付きAABを1個だけ指定した場合に限りGPPを適用する。公開入口は`:app:publishReleaseBundle`と資格情報なしの`:app:verifyInternalTestPublishing`に限定し、掲載情報・APK・内部アプリ共有・昇格や、PlayのCLI設定上書きを拒否する。
+- GPPの`artifactDir`で検証済みと同じAABを使い、提出段階では再ビルドしない。trackは`internal`、release statusは`completed`、版番号競合は`FAIL`で固定し、自動採番変更や競合の成功扱いをしない。
+- API認証は標準のApplication Default Credentials（ADC）を使う。C39でGitHub OIDCとWorkload Identity Federation（WIF）から短寿命認証を取得する。Play用の長期秘密鍵JSONや秘密値をGradle property・ログへ渡さない。実際のWIF・Play権限の外部設定はC39の運用として確認し、未設定なら配布を開始しない。
+- Play APIの認証とAAB署名は別の境界とする。API用認証にはupload keyを使わず、署名は既存のReleaseビルドで完了させる。署名済みAABの提出時にupload keyや署名パスワードを再取得しない。
+- 固定版GPPは安全な審査条件付きcommitに対応していないため、`commit=false`でアップロード・internal track配置・edit検証までを行う。C39が同じeditとAABを検証し、公式REST APIへ`changesInReviewBehavior=ERROR_IF_IN_REVIEW`を指定して1回だけcommitする。既存審査を取り消さず、条件を弱めて再送しない。GPP成功だけでは配布完了としない。
+
+関連確認は、通常ビルドでGPPが動かないこと、単一AABの指定、未指定・複数AAB・禁止task・CLI上書きの拒否、dry-runのtask graphにAAB再ビルドがないことを対象とする。架空AABによる接続確認は実署名・WIF・Play配布の受入とは区別する。手順と外部設定の詳細はAndroid READMEとC39に集約し、公開設計書へ実project ID・認証アカウント・ローカル保管場所を記載しない。
+
 ## Navigation 3への段階的移行
 
 ### 位置付けと範囲
@@ -937,7 +961,7 @@ Material／Compose標準のモーションを使い、Androidのアニメーシ�
 
 目的は、個別に制御している戻るアニメーション、画面状態の寿命、1ペイン／2ペインの切替を高レベルAPIへ寄せ、今後のランキング・モモトーク・討論開始などのネイティブ画面追加をしやすくすることとする。通信・復号の高速化や、既存の引っかかりの解消を導入だけで保証しない。
 
-この工程は未実装であり、今回の計画追記では依存を追加しない。ネイティブ画面を増やす前に独立した工程として進め、C38〜C41の配布自動化計画・番号・順序や、現在の内部テスト配布の条件は変更しない。Nav3とAdaptiveの依存は実装時に互換性・保守状況・安全性を確認してVersion Catalogで固定し、Kotlin・Compose・Materialの既定版を無断で変更しない。
+この工程は未実装であり、今回の計画追記では依存を追加しない。ネイティブ画面を増やす前に独立した工程として進め、冒頭の工程表にあるC38〜C41の配布工程・番号・順序や、現在の内部テスト配布の条件は変更しない。Nav3とAdaptiveの依存は実装時に互換性・保守状況・安全性を確認してVersion Catalogで固定し、Kotlin・Compose・Materialの既定版を無断で変更しない。
 
 ### 実装単位
 
@@ -1209,6 +1233,47 @@ Android設定はリポジトリ外の`google-services.json`を`SHITTIM_ANDROID_F
 有効化はFirebaseプロジェクト作成 → Androidアプリ登録 → FCM送信資格情報の安全な登録 → Records配信 → Firebase設定付きAndroid版配布 → 実機受入の順とする。
 Firebase未作成のため、コード試験と実FCM配送の確認を区別する。実機で前景・背景・アプリ終了中の通知、タップ先、通知拒否、ログアウト後の抑止を確認してから有効化完了とする。
 端末の強制停止やOS制限による遅延・未配送はアプリ内の同期で補い、到着時刻の保証とは扱わない。
+
+## C39：内部テスト配布の自動化
+
+`Android Internal Release`は手動実行専用とし、固定リポジトリの`main`と`android-internal` Environmentだけで動かす。既存のCore／Records配信とは分離し、Play掲載情報や本番トラックは変更しない。C38のGPP設定を先に取り込む。
+
+### 認証・外部設定
+
+Google Cloud管理者が既存Play用サービスアカウントへのWorkload Identity Federation（WIF）を設定する。GitHub OIDCから短寿命の資格情報を得て、公式認証Action、google-authのADC、GPPへ渡す。サービスアカウントJSONの秘密鍵はGitHubへ登録しない。Firebase送信用サービスアカウントも流用しない。
+
+WIFの条件は数値のリポジトリ／所有者ID、`main`、この配布Workflow、`workflow_dispatch`、`android-internal`のsubjectに限定する。サービスアカウントへの委譲は`roles/iam.workloadIdentityUser`だけとし、Owner／Editorや汎用Token Creatorは付けない。Play Consoleでは対象アプリの読取・テストトラック配信に限定する。内部トラックへの限定は、Play権限だけに頼らずWorkflowとGPPでも固定する。
+
+GitHub Environmentには次を登録し、`main`以外から利用できないbranch policyを設ける。登録値や実際のプロジェクト識別子は公開文書へ載せない。
+
+| 種別 | 名前 | 用途 |
+|---|---|---|
+| Variable | `PLAY_WORKLOAD_IDENTITY_PROVIDER`、`PLAY_SERVICE_ACCOUNT` | 短寿命のAPI認証 |
+| Variable | `ANDROID_UPLOAD_KEY_ALIAS`、`ANDROID_UPLOAD_CERT_SHA256` | 既存upload keyの指定と独立した署名照合 |
+| Variable | `ANDROID_RELEASE_ENABLED` | 外部設定と読取確認が完了するまで`false` |
+| Secret | `ANDROID_UPLOAD_KEYSTORE_BASE64`、`ANDROID_UPLOAD_STORE_PASSWORD` | AABの署名。API認証とは別に保護 |
+| Secret | `ANDROID_FIREBASE_CLIENT_CONFIG` | 既存AndroidアプリのFirebase設定 |
+
+WIF・Environment・Play権限の外部設定前は起動を拒否する。設定準備や架空データの試験を、実配布の成功とは扱わない。
+
+### 同一成果物の検証・配信
+
+1. 固定SHAの最新main CI・Records CI・既存CodeQLが成功したことを確認する。新しい失敗・実行中の試行を古い成功で置き換えない。
+2. Playの全トラック、現在のbundle／APKを読み、その最大値より大きい`versionCode`を決める。競合した場合は自動的な再番号付け・再ビルドをせず終了する。
+3. 既存upload keyでRelease AABを一度ビルドし、Release Lintを実行する。JDKとdigest固定の公式bundletoolで署名・証明書・パッケージ・版番号・非debugを検証する。pinした公開証明書のUTC有効期間を確認し、その証明書だけの一時truststoreを使ってJDKの厳格検証を行う。自己署名を理由に重大警告全体を許可せず、一時truststoreは検証後に回収する。
+4. 検証した同一AABだけをprivate directoryへ置き、hashを再照合する。WIF認証を配信直前に更新し、C38の固定GPP taskで内部トラックへのstage／validateを一度行う。
+5. GPPのprivateなeditを読み、bundle hashと内部トラック、他トラックに変更がないことを確認する。公式APIのcommitは一度だけ行い、`ERROR_IF_IN_REVIEW`で既存審査の取消を防ぎ、`changesNotSentForReview=true`で未送信のConsole変更を審査へ送らない。
+6. 新しい読取editで版番号・hash・内部トラックの`completed`を再取得する。これはstageの配置確認であり公開完了とは区別する。さらに`GET /tracks/internal/releases`の`activeArtifacts`に同じ`versionCode`があり、`releaseLifecycleState=RELEASE_LIFECYCLE_STATE_PUBLISHED`の場合だけ配布完了とする。既存の同一AABもこの公開確認を省略しない。
+
+commitの応答不明時は再送せず、Play側の状態を最大4回の読取だけで照合する。HTTP 401によるcommitの自動再送も無効とする。審査・公開待ちは`pending`かつ`verified=false`の安全なreceiptを残し、`play_publication_pending_do_not_resend`で終了する。却下・欠損・未知状態・API確認失敗も配布完了にせず、固定カテゴリと`doNotResend=true`のreceiptを残す。GPP stage失敗・応答不明や照合不一致は失敗として終了する。Workflowの「再実行」は拒否し、Play Consoleとreceiptで状態と副作用を確認してから新しい手動実行を判断する。実行中は同じアプリのPlay Console編集を避ける。
+
+公開artifactはSHA・版番号・AAB hash・検証結果とcommit試行の小さなreceiptだけとし、7日保持する。署名鍵、Firebase設定、WIF資格情報、GPP edit、Gradleログ、AABそのものを公開artifactへ含めない。秘密の入力とログは終了時に回収する。
+GPPを起動する前にも、非秘密の`stage-attempt.json`へSHA・版番号・hash・`doNotResend=true`を保存する。失敗・タイムアウト・取消後もupload開始記録を保持し、同じstateに試行記録があればアップロードを再送しない。
+通常の取消時も`always()`でreceiptを保存する。強制終了や保存失敗でreceiptが残らなくても、commit未実行とは判断せず、Play側の状態と副作用を確認してから次の実行を判断する。
+
+試験は全トラックの最大版番号、長期資格情報拒否、署名／manifest／hash、既存配信・競合、他トラック不変、単一commitと応答不明時の読取照合、公開ライフサイクルの審査待ち・却下・欠損・未知・API障害を架空データで確認する。既存API認証による現行公開版の公開状態読取のみ確認済みで、WIF提出・配布の受入とは区別する。最初のWIF実配布は外部設定・mainの検証完了後、別の配布依頼で行い、Playからの再取得と実機更新を確認する。
+
+公式仕様：[WIFとDeployment pipelines](https://docs.cloud.google.com/iam/docs/workload-identity-federation-with-deployment-pipelines)、[GitHub認証Action](https://github.com/google-github-actions/auth)、[Play editsと同時編集](https://developers.google.com/android-publisher/edits)、[安全なcommitパラメーター](https://developers.google.com/android-publisher/api-ref/rest/v3/edits/commit)、[公開ライフサイクル](https://developers.google.com/android-publisher/api-ref/rest/v3/applications.tracks.releases)、[トラックのrelease一覧](https://developers.google.com/android-publisher/api-ref/rest/v3/applications.tracks.releases/list)。
 
 ## 公式資料
 
