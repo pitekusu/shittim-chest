@@ -188,6 +188,18 @@ def test_android_release_cannot_widen_identity_or_secret_exposure(
 
 
 @pytest.mark.parametrize(
+    "condition", ("${{ always() && !cancelled() }}", "success()", "failure()")
+)
+def test_android_release_cannot_discard_receipts_after_cancellation(
+    directory: Path, android_release: Path, condition: str
+) -> None:
+    _replace(android_release, "        if: always()", f"        if: {condition}", 1)
+
+    with pytest.raises(WorkflowPolicyError, match="retain receipts even after cancellation"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
     "before,after",
     [
         ("--update", "--github-output /dev/null"),

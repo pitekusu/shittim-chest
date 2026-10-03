@@ -1228,6 +1228,7 @@ WIF・Environment・Play権限の外部設定前は起動を拒否する。設�
 commitの応答不明時は再送せず、Play側の状態を最大4回の読取だけで照合する。HTTP 401によるcommitの自動再送も無効とする。審査・公開待ちは`pending`かつ`verified=false`の安全なreceiptを残し、`play_publication_pending_do_not_resend`で終了する。却下・欠損・未知状態・API確認失敗も配布完了にせず、固定カテゴリと`doNotResend=true`のreceiptを残す。GPP stage失敗・応答不明や照合不一致は失敗として終了する。Workflowの「再実行」は拒否し、Play Consoleとreceiptで状態と副作用を確認してから新しい手動実行を判断する。実行中は同じアプリのPlay Console編集を避ける。
 
 公開artifactはSHA・版番号・AAB hash・検証結果とcommit試行の小さなreceiptだけとし、7日保持する。署名鍵、Firebase設定、WIF資格情報、GPP edit、Gradleログ、AABそのものを公開artifactへ含めない。秘密の入力とログは終了時に回収する。
+通常の取消時も`always()`でreceiptを保存する。強制終了や保存失敗でreceiptが残らなくても、commit未実行とは判断せず、Play側の状態と副作用を確認してから次の実行を判断する。
 
 試験は全トラックの最大版番号、長期資格情報拒否、署名／manifest／hash、既存配信・競合、他トラック不変、単一commitと応答不明時の読取照合、公開ライフサイクルの審査待ち・却下・欠損・未知・API障害を架空データで確認する。既存API認証による現行公開版の公開状態読取のみ確認済みで、WIF提出・配布の受入とは区別する。最初のWIF実配布は外部設定・mainの検証完了後、別の配布依頼で行い、Playからの再取得と実機更新を確認する。
 
