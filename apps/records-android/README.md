@@ -473,6 +473,8 @@ Play Consoleとreceiptを確認する。照合は最大4回の読取だけとし
 実行中は同じアプリのPlay Consoleを編集しない。既存審査を取り消したり、未送信の掲載情報を審査へ送ったりしない。
 失敗・応答不明では無条件にWorkflowを「再実行」しない。Play側の版番号・hash・internal trackとreceiptを確認し、
 副作用を把握してから新しい手動実行を判断する。自動再送・自動再番号付けは行わない。
+GPPを起動する前に非機密の`stage-attempt.json`を保存し、失敗・タイムアウト・取消後も保持する。
+同じstateに試行記録がある場合は、アップロードを再送しない。
 artifactは非機密receiptだけ7日保持し、鍵・資格情報・Firebase設定・GPP edit・AAB・Gradleログは含めない。
 通常の取消時も`always()`でreceiptを保存する。強制終了や保存失敗でreceiptが残らなくても、
 commit未実行とは判断せず、Play側の状態と副作用を確認してから次の実行を判断する。

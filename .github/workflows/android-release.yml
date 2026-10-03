@@ -120,6 +120,7 @@ jobs:
           name: android-internal-receipt-${{ github.sha }}-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/android-release/verification.json
+            ${{ runner.temp }}/android-release/stage-attempt.json
             ${{ runner.temp }}/android-release/commit-attempt.json
             ${{ runner.temp }}/android-release/receipt.json
           if-no-files-found: ignore

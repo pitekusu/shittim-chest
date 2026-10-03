@@ -350,7 +350,7 @@ def _validate_android_release(directory: Path) -> None:
     paths = re.search(r"(?m)^          path: \|\n((?: {12}.+\n)+)", receipts)
     expected_paths = tuple(
         f"${{{{ runner.temp }}}}/android-release/{name}.json"
-        for name in ("verification", "commit-attempt", "receipt")
+        for name in ("verification", "stage-attempt", "commit-attempt", "receipt")
     )
     if (
         text.count("uses: actions/upload-artifact@") != 1

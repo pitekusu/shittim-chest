@@ -173,6 +173,10 @@ def test_android_release_cannot_hide_floating_action_in_an_unnamed_step(
             "${{ runner.temp }}/android-release/",
         ),
         (
+            "            ${{ runner.temp }}/android-release/stage-attempt.json\n",
+            "",
+        ),
+        (
             'run: uv run --frozen python -m tools.android_release publish --state "${STATE}"',
             'run: echo "${{ github.event.inputs.untrusted }}"',
         ),
@@ -187,9 +191,7 @@ def test_android_release_cannot_widen_identity_or_secret_exposure(
         validate_notification_workflows(directory)
 
 
-@pytest.mark.parametrize(
-    "condition", ("${{ always() && !cancelled() }}", "success()", "failure()")
-)
+@pytest.mark.parametrize("condition", ("${{ always() && !cancelled() }}", "success()", "failure()"))
 def test_android_release_cannot_discard_receipts_after_cancellation(
     directory: Path, android_release: Path, condition: str
 ) -> None:
