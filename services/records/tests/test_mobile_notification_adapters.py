@@ -91,8 +91,11 @@ def test_resource_numbers_are_read_as_ints_for_outbox_deadlines():
 
 def test_firebase_sender_uses_current_fid_data_only_high_priority(monkeypatch):
     calls = []
-    monkeypatch.setattr(messaging, "send", lambda message, **kwargs: calls.append(message))
-    sender = FirebaseNotificationSender(cast(Any, object()))
+    monkeypatch.setattr(
+        messaging, "send", lambda message, **kwargs: calls.append((message, kwargs))
+    )
+    app = cast(Any, object())
+    sender = FirebaseNotificationSender(app)
     data = {
         "type": "record_published",
         "schemaVersion": "1",
@@ -101,13 +104,12 @@ def test_firebase_sender_uses_current_fid_data_only_high_priority(monkeypatch):
         "publishedAt": timestamp(datetime.now(UTC)),
     }
     sender.send(token="invented-fid", data=data)  # noqa: S106 - invented address.
-    message = calls[0]
+    message, kwargs = calls[0]
+    assert kwargs == {"app": app}
     assert message.fid == "invented-fid" and message.token is None
     assert message.notification is None and message.data == data
-    assert (
-        message.android.priority == "high"
-        and message.android.restricted_package_name == "dev.pitekusu.shittim.records"
-    )
+    assert message.android.priority == "high"
+    assert message.android.restricted_package_name is None
 
 
 @pytest.mark.parametrize(

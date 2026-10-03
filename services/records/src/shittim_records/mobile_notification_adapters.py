@@ -347,6 +347,9 @@ class FirebaseNotificationSender:
                     # Admin 7.7 uses the current high-level field, not deprecated token.
                     fid=token,
                     data=data,
+                    # FIDs are scoped to this credentialed Firebase project; dispatch
+                    # rechecks the authenticated session and binding. A release-only
+                    # package restriction would reject the registered .dev app.
                     android=messaging.AndroidConfig(
                         priority="high",
                         ttl=max(
@@ -354,7 +357,6 @@ class FirebaseNotificationSender:
                             timedelta(hours=24)
                             - (datetime.now(UTC) - datetime.fromisoformat(data["publishedAt"])),
                         ),
-                        restricted_package_name="dev.pitekusu.shittim.records",
                     ),
                 ),
                 app=self._app,

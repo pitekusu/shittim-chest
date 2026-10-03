@@ -25,6 +25,17 @@ import kotlinx.coroutines.withContext
 
 internal object RecordNotificationRegistration {
   private const val WORK = "records-notification-registration-v1"
+  fun onRegistered(context: Context, installationId: String) {
+    // register() itself emits this callback before the worker saves the new fingerprint.
+    // KEEP lets that running worker finish; replacing it would cancel its own registration.
+    val changed = synchronized(RecordNotifications.lock) {
+      val settings = RecordNotificationSettings(context)
+      settings.optedIn && settings.binding != null && settings.deliveryFingerprint !=
+        notificationSessionFingerprint(installationId)
+    }
+    if (changed) schedule(context)
+  }
+
   fun schedule(context: Context, replace: Boolean = false) {
     if (!RecordNotifications.configured(context)) return
     WorkManager.getInstance(context).enqueueUniqueWork(WORK,

@@ -25,16 +25,8 @@ internal fun recordNotificationIntent(context: Context, hint: RecordPublishedHin
     .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
 
 class RecordMessagingService : FirebaseMessagingService() {
-  override fun onRegistered(installationId: String) {
-    // register() invokes this callback even without a rotation: do not start a registration loop.
-    // The SDK owns the FID; retrieve its current value at worker execution, never in WorkData.
-    val changed = synchronized(RecordNotifications.lock) {
-      val settings = RecordNotificationSettings(this)
-      settings.optedIn && settings.binding != null && settings.deliveryFingerprint !=
-        notificationSessionFingerprint(installationId)
-    }
-    if (changed) RecordNotificationRegistration.schedule(this, replace = true)
-  }
+  override fun onRegistered(installationId: String) =
+    RecordNotificationRegistration.onRegistered(this, installationId)
 
   override fun onDeletedMessages() {
     if (hasLocalNotificationPermit(this)) RecordSyncScheduler.syncNow(this)
