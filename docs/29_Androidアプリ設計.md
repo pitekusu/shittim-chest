@@ -55,6 +55,7 @@ updated: 2026-10-03
 | C35 | NEW／OLD切替とログイン完了演出 | 新旧順の選択位置・形状変化と、保存tokenのサーバー確認後だけ出る短い完了通知を接続 |
 | C36 | 可変幅レイアウト・戻る操作の仕上げ | 一覧／詳細の標準Adaptive配置、Predictive Back、読み上げ・文字拡大を接続 |
 | C37 | Web機能への導線・アカウントメニュー | 記録閲覧中のメニューから固定Web機能を開き、ログアウトと表示切替を行う |
+| C38 | Gradle Play Publisher・短寿命API認証の接続 | 既存署名と分離し、検証済みAABをinternalへ配置する。外部認証設定・配布確認はC39で行う |
 | 後続 | 起動演出・人格アイコン・投票／親愛度表示・友人向け配布 | C37後に小さなPRで分けて進める。起動演出はAndroid SplashScreenからComposeへ接続する |
 
 ### PRの分割単位
@@ -932,6 +933,18 @@ Material／Compose標準のモーションを使い、Androidのアニメーシ�
 メニューには自動／ライト／ダークの表示切替とログアウトも設ける。閲覧中の常設ログイン状態パネルと表示切替を一覧から取り除く。オフライン閲覧中でも同じ既存ログアウト処理を使う。認可喪失時にはメニューを閉じ、旧アカウントの記録を表示しない。ログイン前にはブランド、ログインボタン、表示切替を残し、常時表示していた説明文を削除する。取消・期限切れ・通信障害の説明は必要な状態のときにだけ表示する。
 
 架空の認可済み状態で、メニューからのログアウト・状態欄の非表示・幅を変えた際のスクロール位置を確認する。実Webへの接続は内部テスト版で確認する。
+
+## C38：内部テスト配布の接続
+
+配布用のGradle Play Publisher（GPP）をVersion Catalogで固定し、既存のAGP・Kotlin・Materialとupload keyを維持する。GPPはMITでmaintenance modeにあるが、固定版の現行Wrapper対応と公開APIを確認して採用する。独自のAABアップロード処理を作らず、アプリの実行時依存には追加しない。
+
+- `shittimAndroidPublishArtifactDir`で検証済み署名付きAABを1個だけ指定した場合に限りGPPを適用する。公開入口は`:app:publishReleaseBundle`と資格情報なしの`:app:verifyInternalTestPublishing`に限定し、掲載情報・APK・内部アプリ共有・昇格や、PlayのCLI設定上書きを拒否する。
+- GPPの`artifactDir`で検証済みと同じAABを使い、提出段階では再ビルドしない。trackは`internal`、release statusは`completed`、版番号競合は`FAIL`で固定し、自動採番変更や競合の成功扱いをしない。
+- API認証は標準のApplication Default Credentials（ADC）を使う。C39でGitHub OIDCとWorkload Identity Federation（WIF）から短寿命認証を取得する。Play用の長期秘密鍵JSONや秘密値をGradle property・ログへ渡さない。実際のWIF・Play権限の外部設定はC39の運用として確認し、未設定なら配布を開始しない。
+- Play APIの認証とAAB署名は別の境界とする。API用認証にはupload keyを使わず、署名は既存のReleaseビルドで完了させる。署名済みAABの提出時にupload keyや署名パスワードを再取得しない。
+- 固定版GPPは安全な審査条件付きcommitに対応していないため、`commit=false`でアップロード・internal track配置・edit検証までを行う。C39が同じeditとAABを検証し、公式REST APIへ`changesInReviewBehavior=ERROR_IF_IN_REVIEW`を指定して1回だけcommitする。既存審査を取り消さず、条件を弱めて再送しない。GPP成功だけでは配布完了としない。
+
+関連確認は、通常ビルドでGPPが動かないこと、単一AABの指定、未指定・複数AAB・禁止task・CLI上書きの拒否、dry-runのtask graphにAAB再ビルドがないことを対象とする。架空AABによる接続確認は実署名・WIF・Play配布の受入とは区別する。手順と外部設定の詳細はAndroid READMEとC39に集約し、公開設計書へ実project ID・認証アカウント・ローカル保管場所を記載しない。
 
 ## 起動・ログインのブランド演出
 

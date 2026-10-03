@@ -228,6 +228,27 @@ C16のログイン画面（API 36、未認証・実データなし）：
 
 記録する受入結果は版番号、内部テストの状態、App Links検証、ログイン・記録復帰・更新の成否だけにする。署名鍵・パスワード・token・private Discord ID・実質問を記録しない。鍵が未作成、Play配布未実施、または実機未確認ならC20の配布受入は未完了として扱う。
 
+## C38：内部テスト配布の接続
+
+- [Gradle Play Publisher](https://github.com/Triple-T/gradle-play-publisher)（MIT）の安定版をVersion Catalogで固定する。upstreamはmaintenance modeだが、採用版は現行WrapperのGradle 9.7向け修正を含む。既存のAGP・Kotlin・Materialは変更しない。配布用pluginであり、APKの実行時依存には加えない。
+- API認証はGPPの[Application Default Credentials](https://github.com/Triple-T/gradle-play-publisher#application-default-credentials)を使用する。C39ではGitHub OIDCと[Workload Identity Federation](https://cloud.google.com/iam/docs/workload-identity-federation-with-deployment-pipelines#github-actions)から短寿命認証を取得し、`GOOGLE_APPLICATION_CREDENTIALS`へそのcredential設定のpathを渡す。サービスアカウントの長期秘密鍵JSONや`ANDROID_PUBLISHER_CREDENTIALS`は使わない。
+- Play側のサービスアカウント権限を本アプリのテストトラックに限定し、本番公開・掲載情報変更・財務権限を付けない。GitHub側のWIF条件はrepository・main・専用Environment・配布Workflowに限定する。外部設定が未完了なら配布受入は未完了とする。
+- upload keyと署名パスワードは引き続きC18のReleaseビルド専用。API用の短寿命認証はAABを署名せず、署名済みAABの提出にはupload keyを再読込する必要はない。
+- 正式な提出入口は`:app:publishReleaseBundle`と`shittimAndroidPublishArtifactDir`。そのdirectoryに**検証済みの署名付きAABを1個だけ**置く。GPPの`artifactDir`で同じ成果物を提出し、提出段階で再ビルドしない。通常ビルドではGPPを適用せず、掲載情報・APK・内部アプリ共有・昇格のtaskやCLI上書きを提出入口から実行できない。
+- trackは`internal`、statusは`completed`、版番号競合は`FAIL`。提出後に番号を自動変更したり競合を成功扱いしない。直前の全track・提出済みbundleの最大番号検査、AABのSHA-256／署名／package／versionCode検証、反映後のtrack再取得はC39が担当する。
+- GPPの`commit=false`でAABのアップロード・internal trackへの配置・edit検証までを行う。固定したGPP版は[commitの安全な審査条件](https://developers.google.com/android-publisher/api-ref/rest/v3/edits/commit)に未対応のため、C39が同じeditを`changesInReviewBehavior=ERROR_IF_IN_REVIEW`付きで1回だけcommitする。既存審査の取消や条件を弱めた自動再送は行わない。GPPの成功だけでは配布完了としない。
+
+資格情報を使わない接続確認は、一時ビルド管理ツールを取り込み、リポジトリrootから実行する。1個の架空`.aab`を置いたディスク上のdirectoryを指定する。ファイル内容の署名検証や実際のPlay提出の代替ではない。
+
+```sh
+uv run --frozen python -m tools.run_android_build -- :app:verifyInternalTestPublishing \
+  -PshittimAndroidPublishArtifactDir="$SHITTIM_ANDROID_VERIFIED_ARTIFACT_DIR"
+uv run --frozen python -m tools.run_android_build -- :app:publishReleaseBundle --dry-run \
+  -PshittimAndroidPublishArtifactDir="$SHITTIM_ANDROID_VERIFIED_ARTIFACT_DIR"
+```
+
+dry-runに`bundleRelease`や署名ビルドが含まれないことを確認する。実際の提出はC39の検証・認証・同時実行制御を備えたWorkflowから行い、この確認コマンドをそのまま配布に流用しない。
+
 ## C17の記録1件表示
 
 - `RecordsReadClient.kt`：既存の一覧から最新1件のIDを選び、詳細APIを取得。Ktor ContentNegotiationで必要な表示項目だけ変換する。
