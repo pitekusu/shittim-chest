@@ -30,7 +30,7 @@ def test_run_scratch_removed_on_success_failure_and_cancellation(paths, monkeypa
     project, output, cache = paths
     observed = []
 
-    def gradle(command, *, project, env, output, lock_descriptor):
+    def gradle(command, *, project, env, output, scratch, lock_descriptor):
         build = Path(
             next(
                 arg.split("=", 1)[1]
@@ -40,8 +40,11 @@ def test_run_scratch_removed_on_success_failure_and_cancellation(paths, monkeypa
         )
         observed.append(build.parent)
         (build.parent / runner.LIFETIME_STARTED).touch()
+        runner._record_launch_finished(build.parent)
         assert command[1:3] == ["--no-daemon", "--project-cache-dir"]
         assert "-Pkotlin.compiler.execution.strategy=in-process" in command
+        assert f"-Pkotlin.project.persistent.dir={scratch / 'kotlin'}" in command
+        assert "-Pkotlin.project.persistent.dir.gradle.disableWrite=true" in command
         assert env["TMPDIR"] == env["TMP"] == env["TEMP"] == str(build.parent / "tmp")
         assert str(build.parent / "tmp") in env["JAVA_TOOL_OPTIONS"]
         assert env["SHITTIM_ANDROID_UPLOAD_STORE_PASSWORD"] == "invented"  # noqa: S105
@@ -141,6 +144,7 @@ def test_detached_jvm_lease_prevents_cleanup_and_next_build_until_exit(paths):
     (live / runner.LIFETIME_LOCK).touch()
     (live / runner.LAUNCH_STARTED).touch()
     (live / runner.LIFETIME_STARTED).touch()
+    runner._record_launch_finished(live)
     with held_lifetime_lease(live / runner.LIFETIME_LOCK):
         assert not runner._remove_idle_run(live)
         with pytest.raises(runner.AndroidBuildError, match="android_build_already_running"):
@@ -167,6 +171,56 @@ def test_failure_before_init_retains_uncertain_run_and_refuses_another(paths, mo
         assert len(list(cache.glob("run-*"))) == 1
 
 
+def test_wrapper_failure_before_init_is_reclaimed_and_next_build_can_start(paths):
+    project, output, cache = paths
+    # Exercise the actual child/marker path, not a mock that fabricates the exit
+    # proof. A wrapper distribution failure exits without running Gradle init.
+    wrapper = project / "gradlew"
+    wrapper.write_text("#!/bin/sh\nexit 1\n")
+    wrapper.chmod(0o700)
+    for _attempt in range(2):
+        with pytest.raises(runner.AndroidBuildError, match=r"^android_build_failed$"):
+            runner.run_build(
+                project=project, output=output, cache=cache, arguments=[":app:assembleDebug"]
+            )
+        assert not list(cache.glob("run-*"))
+
+
+@pytest.mark.parametrize("proof", ["valid", "partial", "symlink"])
+def test_stale_preinit_run_requires_complete_owned_exit_proof(tmp_path, proof):
+    directory = tmp_path / "run-failed"
+    directory.mkdir()
+    (directory / runner.OWNER).write_text(runner.OWNER_VALUE)
+    (directory / runner.LIFETIME_LOCK).touch()
+    (directory / runner.LAUNCH_STARTED).touch()
+    marker = directory / runner.LAUNCH_FINISHED
+    if proof == "symlink":
+        outside = tmp_path / "outside"
+        outside.write_text(runner.LAUNCH_FINISHED_VALUE)
+        marker.symlink_to(outside)
+    else:
+        marker.write_text(runner.LAUNCH_FINISHED_VALUE if proof == "valid" else "partial")
+    if proof == "valid":
+        runner.cleanup_stale_runs(tmp_path)
+        assert not directory.exists()
+    else:
+        with pytest.raises(runner.AndroidBuildError, match="android_build_cleanup_needed"):
+            runner.cleanup_stale_runs(tmp_path)
+        assert directory.exists()
+
+
+def test_confirmed_launcher_exit_does_not_override_live_jvm_lease(tmp_path):
+    directory = tmp_path / "run-failed"
+    directory.mkdir()
+    (directory / runner.LIFETIME_LOCK).touch()
+    (directory / runner.LAUNCH_STARTED).touch()
+    runner._record_launch_finished(directory)
+    with held_lifetime_lease(directory / runner.LIFETIME_LOCK):
+        assert not runner._remove_idle_run(directory)
+        assert directory.exists()
+    assert runner._remove_idle_run(directory)
+
+
 def test_prelaunch_environment_failure_is_cleaned_without_uncertain_state(paths, monkeypatch):
     project, output, cache = paths
     monkeypatch.setenv("JAVA_TOOL_OPTIONS", "-Djava.io.tmpdir=/tmp/invented")
@@ -188,6 +242,9 @@ def test_prelaunch_environment_failure_is_cleaned_without_uncertain_state(paths,
         "-PshittimAndroidBuildRoot=/tmp/other",
         "-Pkotlin.compiler.execution.strategy=daemon",
         "-Dorg.gradle.project.kotlin.compiler.execution.strategy=out-of-process",
+        "-Pkotlin.project.persistent.dir=/tmp/other",
+        "-Dorg.gradle.project.kotlin.project.persistent.dir=/tmp/other",
+        "-Pkotlin.project.persistent.dir.gradle.disableWrite=false",
         "shittimAndroidBuildRoot=/tmp/other",
         "-Djava.io.tmpdir=/tmp/other",
         "-Dorg.gradle.jvmargs=-Djava.io.tmpdir=/tmp/other",
@@ -238,11 +295,13 @@ def test_cancellation_stops_child_before_return_and_does_not_leak_arguments(tmp_
             project=tmp_path,
             env={},
             output=tmp_path,
+            scratch=tmp_path,
             lock_descriptor=987654,
         )
     assert actions == ["wait", "stopped"]
     assert before == {sig: signal.getsignal(sig) for sig in before}
     assert (tmp_path / "build.log").stat().st_mode & 0o077 == 0
+    assert not (tmp_path / runner.LAUNCH_FINISHED).exists()
 
 
 def test_cancellation_during_process_start_keeps_handle_to_stop_child(tmp_path, monkeypatch):
@@ -259,9 +318,15 @@ def test_cancellation_during_process_start_keeps_handle_to_stop_child(tmp_path, 
     monkeypatch.setattr(runner, "_stop_process", stopped.append)
     with pytest.raises(runner.AndroidBuildError, match="android_build_interrupted"):
         runner._gradle(
-            ["wrapper"], project=tmp_path, env={}, output=tmp_path, lock_descriptor=987654
+            ["wrapper"],
+            project=tmp_path,
+            env={},
+            output=tmp_path,
+            scratch=tmp_path,
+            lock_descriptor=987654,
         )
     assert stopped == [child]
+    assert not (tmp_path / runner.LAUNCH_FINISHED).exists()
 
 
 @pytest.mark.parametrize("status", [0, 1])
@@ -277,17 +342,65 @@ def test_launcher_exit_stops_remaining_group_before_success_or_failure(
 
     child = Process()
     monkeypatch.setattr(runner.subprocess, "Popen", lambda *args, **kwargs: child)
-    monkeypatch.setattr(runner, "_stop_process", lambda process: actions.append("group_stopped"))
+
+    def stop(process):
+        actions.append("group_stopped")
+        return True
+
+    monkeypatch.setattr(runner, "_stop_process", stop)
     if status:
         with pytest.raises(runner.AndroidBuildError, match=r"^android_build_failed$"):
             runner._gradle(
-                ["wrapper"], project=tmp_path, env={}, output=tmp_path, lock_descriptor=987654
+                ["wrapper"],
+                project=tmp_path,
+                env={},
+                output=tmp_path,
+                scratch=tmp_path,
+                lock_descriptor=987654,
             )
     else:
         runner._gradle(
-            ["wrapper"], project=tmp_path, env={}, output=tmp_path, lock_descriptor=987654
+            ["wrapper"],
+            project=tmp_path,
+            env={},
+            output=tmp_path,
+            scratch=tmp_path,
+            lock_descriptor=987654,
         )
     assert actions == ["launcher_exited", "group_stopped"]
+    assert (tmp_path / runner.LAUNCH_FINISHED).read_text() == runner.LAUNCH_FINISHED_VALUE
+
+
+@pytest.mark.parametrize(
+    "status,group_finished,initialized",
+    [(1, False, False), (1, False, True), (-signal.SIGTERM, True, False)],
+)
+def test_unknown_or_live_group_exit_never_creates_reclamation_proof(
+    tmp_path, monkeypatch, status, group_finished, initialized
+):
+    (tmp_path / runner.LAUNCH_STARTED).touch()
+    (tmp_path / runner.LIFETIME_LOCK).touch()
+    if initialized:
+        (tmp_path / runner.LIFETIME_STARTED).touch()
+
+    class Process:
+        def wait(self, *, timeout):
+            return status
+
+    monkeypatch.setattr(runner.subprocess, "Popen", lambda *args, **kwargs: Process())
+    monkeypatch.setattr(runner, "_stop_process", lambda process: group_finished)
+    with pytest.raises(runner.AndroidBuildError):
+        runner._gradle(
+            ["wrapper"],
+            project=tmp_path,
+            env={},
+            output=tmp_path,
+            scratch=tmp_path,
+            lock_descriptor=987654,
+        )
+    assert not (tmp_path / runner.LAUNCH_FINISHED).exists()
+    with pytest.raises(runner.AndroidBuildError, match="android_build_cleanup_needed"):
+        runner._remove_idle_run(tmp_path)
 
 
 def test_finished_process_group_is_immediate_without_sleep(monkeypatch):
@@ -308,8 +421,21 @@ def test_finished_process_group_is_immediate_without_sleep(monkeypatch):
 
     monkeypatch.setattr(runner.os, "killpg", gone)
     monkeypatch.setattr(runner.time, "sleep", lambda seconds: pytest.fail("unexpected waiting"))
-    runner._stop_process(cast(Any, Process()))
+    assert runner._stop_process(cast(Any, Process()))
     assert actions == ["reaped"]
+
+
+def test_stopping_launcher_does_not_claim_remaining_process_group_terminated(monkeypatch):
+    class Process:
+        pid = 123456
+
+        def wait(self, *, timeout):
+            return 0
+
+    clock = iter((0, 10))
+    monkeypatch.setattr(runner.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(runner.os, "killpg", lambda *args: None)
+    assert not runner._stop_process(cast(Any, Process()))
 
 
 def test_fixed_artifact_names_overwrite_and_do_not_copy_other_build_data(tmp_path):

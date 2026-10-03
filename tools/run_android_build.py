@@ -26,6 +26,8 @@ DEFAULT_PROJECT = Path(__file__).resolve().parents[1] / "apps/records-android"
 LIFETIME_LOCK = "lifetime.lock"
 LIFETIME_STARTED = "lifetime.started"
 LAUNCH_STARTED = "launch.started"
+LAUNCH_FINISHED = "launch.finished"
+LAUNCH_FINISHED_VALUE = "shittim-android-launcher-exited-v1\n"
 
 
 class AndroidBuildError(RuntimeError):
@@ -52,6 +54,7 @@ def validate_arguments(arguments: list[str]) -> list[str]:
         "--settings-file",
         "-PshittimAndroidBuildRoot",
         "-Pkotlin.compiler.execution.strategy",
+        "-Pkotlin.project.persistent.dir",
         "-Djava.io.tmpdir",
         "-Dorg.gradle.daemon",
         "-Dorg.gradle.project.shittimAndroidBuildRoot",
@@ -67,6 +70,7 @@ def validate_arguments(arguments: list[str]) -> list[str]:
         or "org.gradle.daemon" in arg
         or "shittimAndroidBuildRoot" in arg
         or "kotlin.compiler.execution.strategy" in arg
+        or "kotlin.project.persistent.dir" in arg
         or re.search(r"(?i)(?:password|secret|token)=", arg)
         for arg in arguments
     ):
@@ -75,9 +79,17 @@ def validate_arguments(arguments: list[str]) -> list[str]:
 
 
 def _remove_idle_run(directory: Path, *, wait_seconds: float = 0) -> bool:
-    # A JVM that has not reached the init script may already have detached. Its
-    # liveness is unknown: retain this one run and require an operator check.
-    if (directory / LAUNCH_STARTED).exists() and not (directory / LIFETIME_STARTED).is_file():
+    finished = directory / LAUNCH_FINISHED
+    confirmed_exit = (
+        not finished.is_symlink()
+        and finished.is_file()
+        and finished.stat().st_uid == os.getuid()
+        and finished.stat().st_size == len(LAUNCH_FINISHED_VALUE)
+        and finished.read_bytes() == LAUNCH_FINISHED_VALUE.encode()
+    )
+    # Without a confirmed group exit, the lease alone cannot rule out residual
+    # launcher children. A pre-init interrupted JVM may also have detached.
+    if (directory / LAUNCH_STARTED).exists() and not confirmed_exit:
         raise AndroidBuildError("android_build_cleanup_needed")
     lock_path = directory / LIFETIME_LOCK
     if lock_path.is_symlink() or not lock_path.is_file():
@@ -143,7 +155,7 @@ def build_environment(scratch: Path) -> dict[str, str]:
     return environment
 
 
-def _stop_process(process: subprocess.Popen[bytes]) -> None:
+def _stop_process(process: subprocess.Popen[bytes]) -> bool:
     # Stop launcher descendants. A detached single-use Gradle JVM is separately
     # protected by its lifetime lease; never claim killpg stops that JVM.
     deadline = time.monotonic() + 10
@@ -160,10 +172,33 @@ def _stop_process(process: subprocess.Popen[bytes]) -> None:
         with suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGKILL)
     process.wait(timeout=5)
+    try:
+        os.killpg(process.pid, 0)
+    except ProcessLookupError:
+        return True
+    return False
+
+
+def _record_launch_finished(scratch: Path) -> None:
+    # Publish only the complete proof; interruption while writing must not make
+    # an unknown pre-init launch reclaimable on the next invocation.
+    pending = scratch / ".launch.finished"
+    descriptor = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "wb") as marker:
+        marker.write(LAUNCH_FINISHED_VALUE.encode())
+        marker.flush()
+        os.fsync(marker.fileno())
+    os.replace(pending, scratch / LAUNCH_FINISHED)
 
 
 def _gradle(
-    command: list[str], *, project: Path, env: dict[str, str], output: Path, lock_descriptor: int
+    command: list[str],
+    *,
+    project: Path,
+    env: dict[str, str],
+    output: Path,
+    scratch: Path,
+    lock_descriptor: int,
 ) -> None:
     descriptor = os.open(
         output / "build.log", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600
@@ -201,7 +236,11 @@ def _gradle(
                     continue
             # Stop any residual launcher group. The separate lifetime lease also
             # prevents scratch removal while a detached Gradle JVM shuts down.
-            _stop_process(process)
+            group_finished = _stop_process(process)
+            if group_finished and result >= 0 and not cancelled:
+                _record_launch_finished(scratch)
+            if not group_finished:
+                raise AndroidBuildError("android_build_cleanup_needed")
             if result != 0:
                 raise AndroidBuildError("android_build_failed")
     except BuildInterrupted, KeyboardInterrupt:
@@ -209,7 +248,11 @@ def _gradle(
         for sig in previous:
             signal.signal(sig, signal.SIG_IGN)
         if process is not None:
-            _stop_process(process)
+            group_finished = _stop_process(process)
+            # An initialized JVM has the lease. Before init, a detached JVM's
+            # liveness after cancellation remains unknown even if the group died.
+            if group_finished and (scratch / LIFETIME_STARTED).is_file():
+                _record_launch_finished(scratch)
         raise AndroidBuildError("android_build_interrupted") from None
     finally:
         for sig, handler in previous.items():
@@ -280,6 +323,8 @@ def run_build(*, project: Path, output: Path, arguments: list[str], cache: Path)
                 str(INIT_SCRIPT),
                 f"-PshittimAndroidBuildRoot={build}",
                 "-Pkotlin.compiler.execution.strategy=in-process",
+                f"-Pkotlin.project.persistent.dir={scratch / 'kotlin'}",
+                "-Pkotlin.project.persistent.dir.gradle.disableWrite=true",
                 *arguments,
             ]
             try:
@@ -292,6 +337,7 @@ def run_build(*, project: Path, output: Path, arguments: list[str], cache: Path)
                     project=project,
                     env=environment,
                     output=output,
+                    scratch=scratch,
                     lock_descriptor=lock.fileno(),
                 )
             except BaseException:
