@@ -132,7 +132,9 @@ HTTP関数のバージョン/エイリアス、SnapStart、各タイムアウト
 | タスク実行ロール | 本番イメージ取得、指定SSMの注入、ログ出力 | アプリケーション全体のデータ操作 |
 | タスクロール | 必要なDynamoDB区画、Status Publisher呼出し、指定の識別子HMAC設定読込 | SSMパスの列挙、任意Lambda呼出し |
 | 各Lambdaロール | ハンドラーごとのテーブルキー・関数・サービス・ログ | 関数間で共有した管理権限 |
-| Records Projector | 元討論の読込、Archiveのトランザクション書込、Statisticsの`RECORD_LINK_NOTIFICATION`、固定RuntimeConfig／モデレーターtokenの読込 | Backfillからの投稿、元討論の変更、任意SSM／Statistics操作 |
+| Records Projector | 元討論の読込、Archiveのトランザクション書込、Statisticsの`RECORD_LINK_NOTIFICATION`と`MOBILE_PUSH_OUTBOX`、通知FIFO送信、固定RuntimeConfig／モデレーターtokenの読込 | Backfillからの投稿、元討論の変更、通知端末登録の読込、Firebase資格情報取得、任意SSM／Statistics操作 |
+| Android通知登録（既存Auth） | 本人Sessionの条件確認、Statisticsの`MOBILE_PUSH_DEVICE`登録／解除 | 通知送信、Firebase資格情報取得、他機能の書込 |
+| Android通知Worker | 通知専用Statistics区画、Sessionの読込、Archiveの公開確認と依頼者表示名に限る属性、専用Firebase SSM、専用FIFO | 討論本文・本人専用画像の取得、セッションや親愛度の変更、任意SSM取得 |
 | Admin Config | セッションの`SESSION#*`読込、Statisticsの`ADMIN#PROMPT`操作、指定SSM | AWS状態収集や任意設定の書換え |
 | Admin Status | 許可リソースの状態とメトリクス読込 | メッセージ本文取得、シークレット復号、業務データ変更、任意呼出し |
 | Memorial API | セッション、本人の親愛度/チェックポイント、一時画像、生成キュー送信、完成画像読込 | 任意の所有者やバケット全体の列挙 |
@@ -173,10 +175,18 @@ RecordsEdgeはOACで非公開S3へ接続し、Route 53のA/AAAAレコードを�
 公開証明書はECDSA P-256、CloudFrontの閲覧者向けTLSポリシーは`TLSv1.3_2025`。
 `/api/*`はキャッシュせずCookieとAuthorizationをAPI Gatewayへ転送し、`/assets/*`だけを変更不能なアセットとしてキャッシュする。
 モバイル認証の5ルートは既存Auth Lambdaへ接続する。Session Table・限定SSM・アバター領域の既存権限で処理し、
-新規Lambda・IAM権限・環境変数・Statefulリソースは追加しない。認証の境界は[Android設計](29_Androidアプリ設計.md)を参照する。
+この5ルート自体は新規Lambda・Statefulリソースを追加しない。後続の通知端末登録は別途Statistics権限と環境変数を追加する。認証の境界は[Android設計](29_Androidアプリ設計.md)を参照する。
 過去のRSAからECDSAへの一度限りの変更を、今後の証明書置換への包括承認として扱わない。
 
 ## 7. 監視・費用・変更の検証
+
+Android議論通知にはRecordsStatefulの専用FIFO／FIFO DLQと、RecordsApplicationの送信Lambda・1分sweepを追加する。
+既存テーブルのschema・stream・TTL設定は変更しない。Archive保存と通知outboxを同じtransactionで確定し、送信失敗は公開処理から分離する。
+送信LambdaはARM64・1024 MiB・120秒・予約同時実行1、SQSはbatch size 1・visibility 720秒・保存1日、DLQは14日とする。
+sweepは本文を読まず未送信outboxを専用FIFOへ戻すだけとし、Firebase送信はSQSの固定groupへ集約する。
+Firebase資格情報の値はruntimeだけで取得し、未登録でも通常のRecords配信を妨げない。実通知の有効化には専用資格情報登録を先に行う。
+サービス状態確認の既存Lambda・SQS・EventBridge欄へ追加し、専用サービスカードやECSの責務は増やさない。
+詳細は[Android議論公開通知](29_Androidアプリ設計.md#android議論公開通知)を参照する。
 
 CloudWatch Logsはコンポーネント別に分け、保持期間とデータ保護ポリシーを設定する。
 EMFは固定した名前空間・ディメンション・メトリクスだけを使い、`_aws`をルートに持つ1行JSONとして出力する。

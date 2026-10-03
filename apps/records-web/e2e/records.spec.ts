@@ -227,6 +227,7 @@ const adminFunctionKeys = [
   "records_momotalk_worker",
   "records_momotalk_announcement",
   "records_admin_status",
+  "records_mobile_push_worker",
   "records_admin_config",
 ] as const;
 
@@ -483,6 +484,17 @@ const adminStatus = {
         { name: "memorial_dlq_oldest_message_age_seconds", value: "0.000" },
         { name: "memorial_dlq_encrypted", value: true },
         { name: "memorial_dlq_retention_seconds", value: 1_209_600 },
+        ...["mobile_push", "mobile_push_dlq"].flatMap((prefix) => [
+          { name: `${prefix}_visible_messages`, value: 0 },
+          { name: `${prefix}_inflight_messages`, value: 0 },
+          { name: `${prefix}_delayed_messages`, value: 0 },
+          { name: `${prefix}_oldest_message_age_seconds`, value: "0.000" },
+          { name: `${prefix}_encrypted`, value: true },
+          {
+            name: `${prefix}_retention_seconds`,
+            value: prefix.endsWith("dlq") ? 1_209_600 : 86_400,
+          },
+        ]),
         ...["momotalk", "momotalk_dlq"].flatMap((prefix) => [
           { name: `${prefix}_visible_messages`, value: prefix.endsWith("dlq") ? 2 : 0 },
           { name: `${prefix}_inflight_messages`, value: 0 },
@@ -546,6 +558,10 @@ const adminStatus = {
           { name: `${key}_day_invocations`, value: 0 },
           { name: `${key}_day_failures`, value: 0 },
         ]),
+        { name: "mobile_push_sweep_state", value: "ENABLED" },
+        { name: "mobile_push_sweep_expression", value: "rate(1 minute)" },
+        { name: "mobile_push_sweep_day_invocations", value: 1440 },
+        { name: "mobile_push_sweep_day_failures", value: 0 },
       ],
     },
     {
@@ -2377,7 +2393,10 @@ test("service status page presents localized visual status", async ({ page }, te
   await expect(page.getByRole("rowheader", { name: /^ランキング・親愛度集計/ })).toHaveCount(2);
   await expect(page.getByText("非同期処理・失敗イベント", { exact: true })).toBeVisible();
   const queues = page.getByRole("region", { name: "SQSキュー一覧" });
-  await expect(queues.getByRole("row")).toHaveCount(6);
+  await expect(queues.getByRole("row")).toHaveCount(8);
+  await expect(
+    queues.getByRole("rowheader", { name: "Android通知 通知キュー", exact: true }),
+  ).toBeVisible();
   await expect(
     queues.getByRole("rowheader", { name: "モモトーク 生成キュー", exact: true }),
   ).toBeVisible();
