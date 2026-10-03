@@ -102,6 +102,20 @@ class MobileExchangeResponse(MobileSessionResponse):
     return_to: ReturnDestination
 
 
+class MobileNotificationDeviceRequest(MobileModel):
+    """Private FCM address, never echoed in responses or validation errors."""
+
+    token: Annotated[
+        str, Field(min_length=1, max_length=2048, pattern=r"^[A-Za-z0-9:_\-.]+$", repr=False)
+    ]
+    binding_id: OpaqueValue
+
+
+class MobileNotificationDeviceResponse(MobileModel):
+    schema_version: Literal[1]
+    expires_at: AwareDatetime
+
+
 def parse_mobile_request[Model: MobileModel](model: type[Model], value: object) -> Model:
     """Expose only a stable category, never Pydantic's input-bearing error details."""
 
@@ -216,6 +230,8 @@ MOBILE_WIRE_MODELS = (
     MobileExchangeRequest,
     MobileSessionResponse,
     MobileExchangeResponse,
+    MobileNotificationDeviceRequest,
+    MobileNotificationDeviceResponse,
 )
 
 
