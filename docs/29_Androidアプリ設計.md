@@ -1263,15 +1263,17 @@ WIF・Environment・Play権限の外部設定前は起動を拒否する。設�
 ### 同一成果物の検証・配信
 
 1. 固定SHAの最新main CI・Records CI・既存CodeQLが成功したことを確認する。新しい失敗・実行中の試行を古い成功で置き換えない。
-2. Playの全トラック、現在のbundle／APKを読み、その最大値より大きい`versionCode`を決める。競合した場合は自動的な再番号付け・再ビルドをせず終了する。
+2. Playの全トラック、現在のbundle／APKを読み、その最大値より大きい`versionCode`を決める。通常は`minimum_version_code`を空欄とする。失敗後の新しい実行では、状態と副作用を確認した前回試行番号＋1を下限として指定できる。指定値はAPI読取前に検証し、現在の最大番号＋1との大きい方を使う。競合した場合は自動的な再番号付け・再ビルドをせず終了する。
 3. 既存upload keyでRelease AABを一度ビルドし、Release Lintを実行する。JDKとdigest固定の公式bundletoolで署名・証明書・パッケージ・版番号・非debugを検証する。pinした公開証明書のUTC有効期間を確認し、その証明書だけの一時truststoreを使ってJDKの厳格検証を行う。自己署名を理由に重大警告全体を許可せず、一時truststoreは検証後に回収する。
 4. 検証した同一AABだけをprivate directoryへ置き、hashを再照合する。WIF認証を配信直前に更新し、C38の固定GPP taskで内部トラックへのstage／validateを一度行う。
 5. GPPのprivateなeditを読み、bundle hashと内部トラック、他トラックに変更がないことを確認する。公式APIのcommitは一度だけ行い、`ERROR_IF_IN_REVIEW`で既存審査の取消を防ぎ、`changesNotSentForReview=true`で未送信のConsole変更を審査へ送らない。
-6. 新しい読取editで版番号・hash・内部トラックの`completed`を再取得する。これはstageの配置確認であり公開完了とは区別する。さらに`GET /tracks/internal/releases`の`activeArtifacts`に同じ`versionCode`があり、`releaseLifecycleState=RELEASE_LIFECYCLE_STATE_PUBLISHED`の場合だけ配布完了とする。既存の同一AABもこの公開確認を省略しない。
+6. 先に非editの`GET /tracks/internal/releases`を読み、`activeArtifacts`に同じ`versionCode`があり、`releaseLifecycleState=RELEASE_LIFECYCLE_STATE_PUBLISHED`であることを確認する。その後に新しい読取editで版番号・hash・内部トラックの`completed`を再取得し、一致した場合だけ配布完了とする。公開前に新しいeditを作って未確定の提出を無効化しない。既存の同一AABもこの公開確認を省略しない。
 
 commitの応答不明時は再送せず、Play側の状態を最大4回の読取だけで照合する。HTTP 401によるcommitの自動再送も無効とする。審査・公開待ちは`pending`かつ`verified=false`の安全なreceiptを残し、`play_publication_pending_do_not_resend`で終了する。却下・欠損・未知状態・API確認失敗も配布完了にせず、固定カテゴリと`doNotResend=true`のreceiptを残す。GPP stage失敗・応答不明や照合不一致は失敗として終了する。Workflowの「再実行」は拒否し、Play Consoleとreceiptで状態と副作用を確認してから新しい手動実行を判断する。実行中は同じアプリのPlay Console編集を避ける。
 
-公開artifactはSHA・版番号・AAB hash・検証結果とcommit試行の小さなreceiptだけとし、7日保持する。署名鍵、Firebase設定、WIF資格情報、GPP edit、Gradleログ、AABそのものを公開artifactへ含めない。秘密の入力とログは終了時に回収する。
+commitの結果は`commit-result.json`へ記録する。HTTP拒否はHTTP状態・有限の許可済みAPI状態／理由・固定分類のみを残し、`commit_rejected`かつ`verified=false`・`doNotResend=true`で終了する。408・5xxや応答不明は確定とみなさず、公開状態の読取照合へ進む。応答本文・message・metadata・edit ID・任意の例外文字列は保存・出力しない。審査条件の取消・緩和や別条件での自動再送は行わない。
+
+公開artifactはSHA・版番号・AAB hash・検証結果とstage／commitの試行・診断・receiptだけとし、7日保持する。署名鍵、Firebase設定、WIF資格情報、GPP edit、Gradleログ、AABそのものを公開artifactへ含めない。秘密の入力とログは終了時に回収する。
 GPPを起動する前にも、非秘密の`stage-attempt.json`へSHA・版番号・hash・`doNotResend=true`を保存する。失敗・タイムアウト・取消後もupload開始記録を保持し、同じstateに試行記録があればアップロードを再送しない。
 通常の取消時も`always()`でreceiptを保存する。強制終了や保存失敗でreceiptが残らなくても、commit未実行とは判断せず、Play側の状態と副作用を確認してから次の実行を判断する。
 

@@ -2,6 +2,12 @@ name: Android Internal Release
 
 on:
   workflow_dispatch:
+    inputs:
+      minimum_version_code:
+        description: "Previous attempted version + 1 when retrying after inspection; blank for normal release"
+        required: false
+        type: string
+        default: ""
 
 permissions: {}
 
@@ -73,6 +79,8 @@ jobs:
           export_environment_variables: true
       - name: Choose a version greater than all current tracks bundles and APKs
         id: version
+        env:
+          MINIMUM_VERSION_CODE: ${{ inputs.minimum_version_code }}
         run: uv run --frozen python -m tools.android_release preflight --state "${STATE}"
       - name: Build and lint the signed Release once
         env:
@@ -122,6 +130,7 @@ jobs:
             ${{ runner.temp }}/android-release/verification.json
             ${{ runner.temp }}/android-release/stage-attempt.json
             ${{ runner.temp }}/android-release/commit-attempt.json
+            ${{ runner.temp }}/android-release/commit-result.json
             ${{ runner.temp }}/android-release/receipt.json
           if-no-files-found: ignore
           retention-days: 7

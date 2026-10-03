@@ -25,6 +25,53 @@ from tools.verify_android_bundle import PACKAGE, digest, verify_bundle
 BASE = f"https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{PACKAGE}"
 SCOPE = "https://www.googleapis.com/auth/androidpublisher"
 PRIVATE_FILES = ("upload-key.p12", "google-services.json", "publish.log", "gradle-build.log")
+API_STATUSES = frozenset(
+    {
+        "INVALID_ARGUMENT",
+        "FAILED_PRECONDITION",
+        "PERMISSION_DENIED",
+        "UNAUTHENTICATED",
+        "NOT_FOUND",
+        "RESOURCE_EXHAUSTED",
+        "INTERNAL",
+        "UNAVAILABLE",
+        "DEADLINE_EXCEEDED",
+        "ABORTED",
+        "ALREADY_EXISTS",
+        "OUT_OF_RANGE",
+        "UNKNOWN",
+    }
+)
+
+
+class PlayHttpError(ValueError):
+    """Keep only finite diagnostics, never provider text, metadata or identifiers."""
+
+    def __init__(self, status_code: int, payload: object) -> None:
+        super().__init__(f"play_http_{status_code}")
+        error = payload.get("error", {}) if isinstance(payload, dict) else {}
+        if not isinstance(error, dict):
+            error = {}
+        status = error.get("status")
+        api_status = status if isinstance(status, str) and status in API_STATUSES else "UNKNOWN"
+        category = "api_rejected"
+        details = error.get("details", [])
+        in_review = isinstance(details, list) and any(
+            isinstance(detail, dict)
+            and detail.get("@type") == "type.googleapis.com/google.rpc.ErrorInfo"
+            and detail.get("reason") == "CHANGES_ALREADY_IN_REVIEW"
+            for detail in details
+        )
+        self.diagnostic: dict[str, Any] = {"httpStatus": status_code, "apiStatus": api_status}
+        if in_review:
+            category = "changes_already_in_review"
+            self.diagnostic["reason"] = "CHANGES_ALREADY_IN_REVIEW"
+        elif error.get("message") == (
+            "Changes are sent for review automatically. The query parameter "
+            "changesNotSentForReview must not be set."
+        ):
+            category = "changes_not_sent_for_review_not_allowed"
+        self.diagnostic["category"] = category
 
 
 def request(client: AuthorizedSession, method: str, path: str) -> dict[str, Any]:
@@ -35,7 +82,13 @@ def request(client: AuthorizedSession, method: str, path: str) -> dict[str, Any]
         allow_redirects=False,
     )
     if not 200 <= response.status_code < 300:
-        raise ValueError(f"play_http_{response.status_code}")
+        # A bounded error envelope can classify known failures; raw text is never
+        # retained or emitted, even when a provider embeds credentials/edit IDs.
+        payload = None
+        if len(response.content) <= 64 * 1024:
+            with suppress(ValueError):
+                payload = response.json()
+        raise PlayHttpError(response.status_code, payload)
     value = response.json() if response.content else {}
     if not isinstance(value, dict):
         raise ValueError("play_response_invalid")
@@ -178,9 +231,11 @@ def preflight(state: Path) -> None:
         or os.environ.get("GITHUB_REF") != "refs/heads/main"
     ):
         raise ValueError("play_requires_main_sha")
+    floor = os.environ.get("MINIMUM_VERSION_CODE", "")
+    minimum = version_code(floor) if floor else 1
     with client() as api, edit(api) as path:
         maximum, _, _ = inventory(api, path)
-    code = version_code(maximum + 1)
+    code = version_code(max(maximum + 1, minimum))
     write_json(state / "plan.json", {"sha": sha, "versionCode": code})
     with Path(os.environ["GITHUB_OUTPUT"]).open("a") as stream:
         stream.write(f"version_code={code}\n")
@@ -288,9 +343,8 @@ def publish(state: Path) -> None:
             ):
                 raise ValueError("play_staged_content_invalid")
             write_json(state / "commit-attempt.json", {**result, "phase": "commit_started"})
-            # Commit may succeed even if its response is lost. Suppress only to
-            # perform authoritative reads; success still requires the same hash.
-            with suppress(Exception):
+            diagnostic: dict[str, Any] = {"outcome": "accepted"}
+            try:
                 # Default commit behavior cancels existing reviews. Neither cancel
                 # those nor send pending Console changes for review from this job.
                 request(
@@ -299,16 +353,42 @@ def publish(state: Path) -> None:
                     path + ":commit?changesInReviewBehavior=ERROR_IF_IN_REVIEW"
                     "&changesNotSentForReview=true",
                 )
+            except PlayHttpError as error:
+                rejected = 400 <= error.diagnostic["httpStatus"] < 500 and (
+                    error.diagnostic["httpStatus"] != 408
+                )
+                diagnostic = {
+                    "outcome": "rejected" if rejected else "unknown",
+                    **error.diagnostic,
+                }
+            except Exception:
+                # Transport/malformed response may hide a successful commit.
+                diagnostic = {"outcome": "unknown", "category": "response_unavailable"}
+            write_json(state / "commit-result.json", {**result, **diagnostic})
+            if diagnostic["outcome"] != "accepted":
+                print("play_commit_diagnostic " + json.dumps(diagnostic, sort_keys=True))
+            if diagnostic["outcome"] == "rejected":
+                write_json(
+                    state / "receipt.json",
+                    {**result, "status": "commit_rejected", "verified": False, "doNotResend": True},
+                )
+                # A rejected edit can still exist. A new inspection edit would
+                # invalidate it, destroying useful state; stop without any resend.
+                raise ValueError("play_commit_rejected_do_not_resend")
         # Even an identical already-committed bundle must pass lifecycle checks.
         # Only reads are repeated: commit and upload are never resent for review.
         for attempt in range(4):
-            artifact_ready = False
             try:
-                with edit(api) as path:
-                    _, tracks, bundles = inventory(api, path)
-                artifact_ready = staged(tracks, bundles, code, checksum)
+                # Read the non-edit resource first: opening a new edit would
+                # invalidate the previous pending/response-unknown staged edit.
                 publication = publication_state(api, code)
-                confirmed = published(tracks, bundles, code, checksum, publication=publication)
+                confirmed = False
+                if publication == "published":
+                    with edit(api) as path:
+                        _, tracks, bundles = inventory(api, path)
+                    confirmed = published(tracks, bundles, code, checksum, publication=publication)
+                    if not confirmed:
+                        publication = "unconfirmed"
             except Exception:
                 publication, confirmed = "unavailable", False
             if confirmed:
@@ -316,9 +396,7 @@ def publish(state: Path) -> None:
             if attempt < 3:
                 time.sleep(5)
         else:
-            outcome = (
-                publication if artifact_ready or publication == "unavailable" else "unconfirmed"
-            )
+            outcome = publication
             write_json(
                 state / "receipt.json",
                 {**result, "status": outcome, "verified": False, "doNotResend": True},

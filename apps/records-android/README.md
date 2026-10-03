@@ -473,6 +473,11 @@ Play Consoleとreceiptを確認する。照合は最大4回の読取だけとし
 実行中は同じアプリのPlay Consoleを編集しない。既存審査を取り消したり、未送信の掲載情報を審査へ送ったりしない。
 失敗・応答不明では無条件にWorkflowを「再実行」しない。Play側の版番号・hash・internal trackとreceiptを確認し、
 副作用を把握してから新しい手動実行を判断する。自動再送・自動再番号付けは行わない。
+新しい実行の`minimum_version_code`には、確認済みの前回試行番号＋1を指定できる。
+通常は空欄とし、指定時も全トラック/bundle/APKの最大番号より大きい条件を維持する。
+commitのHTTP拒否は`commit-result.json`へHTTP状態・許可済みAPI状態／理由・固定分類だけを保存し、
+`commit_rejected`で終了する。本文・metadata・edit IDは残さず、審査条件を自動で変更しない。
+応答不明時は先に非editの公開状態を読み、公開を確認するまで新しいeditで未確定の提出を壊さない。
 GPPを起動する前に非機密の`stage-attempt.json`を保存し、失敗・タイムアウト・取消後も保持する。
 同じstateに試行記録がある場合は、アップロードを再送しない。
 artifactは非機密receiptだけ7日保持し、鍵・資格情報・Firebase設定・GPP edit・AAB・Gradleログは含めない。
