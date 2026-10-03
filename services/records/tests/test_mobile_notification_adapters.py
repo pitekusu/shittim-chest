@@ -173,7 +173,7 @@ def firebase_credential(monkeypatch):
             serialization.PrivateFormat.PKCS8,
             serialization.NoEncryption(),
         ).decode(),
-        "client_email": "notifications@invented-project.iam.gserviceaccount.com",
+        "client_email": "invented-service-account",
         "token_uri": "https://oauth2.googleapis.com/token",
     }
     with suppress(ValueError):
