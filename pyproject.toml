@@ -25,6 +25,7 @@ Repository = "https://github.com/pitekusu/shittim-chest"
 [dependency-groups]
 android-release = [
     "cryptography>=50.0.2,<51",
+    "google-api-python-client>=2.201.0,<3",
     "google-auth[requests]>=2.59.1,<3",
 ]
 dev = [

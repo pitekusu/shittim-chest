@@ -2,6 +2,12 @@ name: Android Internal Release
 
 on:
   workflow_dispatch:
+    inputs:
+      minimum_version_code:
+        description: Minimum versionCode after inspecting any previous failed submission
+        type: string
+        default: "1"
+        required: true
 
 permissions: {}
 
@@ -73,6 +79,8 @@ jobs:
           export_environment_variables: true
       - name: Choose a version greater than all current tracks bundles and APKs
         id: version
+        env:
+          MINIMUM_VERSION_CODE: ${{ inputs.minimum_version_code }}
         run: uv run --frozen python -m tools.android_release preflight --state "${STATE}"
       - name: Build and lint the signed Release once
         env:
@@ -105,23 +113,31 @@ jobs:
           ANDROID_UPLOAD_CERT_SHA256: ${{ vars.ANDROID_UPLOAD_CERT_SHA256 }}
         run: uv run --frozen python -m tools.android_release verify --state "${STATE}" --bundletool "${STATE}/bundletool.jar"
       - name: Renew federated credentials immediately before publishing
+        id: play-auth
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ vars.PLAY_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.PLAY_SERVICE_ACCOUNT }}
           create_credentials_file: true
           export_environment_variables: true
-      - name: Publish the verified AAB only to internal and read back Play state
-        run: uv run --frozen python -m tools.android_release publish --state "${STATE}"
-      - name: Retain only non-secret verification and attempt receipts
+      - name: Upload the verified AAB to internal with the maintained Action
+        uses: r0adkll/upload-google-play@744d577ff543375f35f60408e13fb32c7caa90ce # master (v1.1.5 + dependency updates)
+        with:
+          serviceAccountJson: ${{ steps.play-auth.outputs.credentials_file_path }}
+          packageName: dev.pitekusu.shittim.records
+          releaseFiles: ${{ runner.temp }}/android-release/verified/app-release.aab
+          tracks: internal
+          status: completed
+          releaseName: "0.0.${{ steps.version.outputs.version_code }}"
+      - name: Read back the submitted internal track and bundle digest
+        run: uv run --frozen python -m tools.android_release readback --state "${STATE}"
+      - name: Retain only non-secret verification and submission receipt
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: android-internal-receipt-${{ github.sha }}-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/android-release/verification.json
-            ${{ runner.temp }}/android-release/stage-attempt.json
-            ${{ runner.temp }}/android-release/commit-attempt.json
             ${{ runner.temp }}/android-release/receipt.json
           if-no-files-found: ignore
           retention-days: 7

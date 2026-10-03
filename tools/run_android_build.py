@@ -269,8 +269,7 @@ def _gradle(
 
 
 def builds_artifacts(arguments: list[str]) -> bool:
-    # Exact tasks for this project's debug/release variants, not Gradle task
-    # abbreviations or publishing tasks that consume an already verified AAB.
+    # Exact tasks for this project's debug/release variants, not Gradle task abbreviations.
     generating = {
         "assemble",
         "assembleDebug",
@@ -284,12 +283,7 @@ def builds_artifacts(arguments: list[str]) -> bool:
         "connectedDebugAndroidTest",
     }
     reporting = {"--dry-run", "-m", "--help", "-h", "--task", "-x", "--exclude-task"}
-    if os.environ.get("ORG_GRADLE_PROJECT_shittimAndroidPublishArtifactDir") or any(  # noqa: SIM112 - Gradle property is case-sensitive.
-        arg in reporting
-        or arg.startswith(("-x", "--exclude-task="))
-        or "shittimAndroidPublishArtifactDir" in arg
-        for arg in arguments
-    ):
+    if any(arg in reporting or arg.startswith(("-x", "--exclude-task=")) for arg in arguments):
         return False
     return any(
         not arg.startswith("-") and arg.rsplit(":", 1)[-1] in generating for arg in arguments

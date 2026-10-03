@@ -55,8 +55,8 @@ updated: 2026-10-04
 | C35 | NEW／OLD切替とログイン完了演出 | 新旧順の選択位置・形状変化と、保存tokenのサーバー確認後だけ出る短い完了通知を接続 |
 | C36 | 可変幅レイアウト・戻る操作の仕上げ | 一覧／詳細の標準Adaptive配置、Predictive Back、読み上げ・文字拡大を接続 |
 | C37 | Web機能への導線・アカウントメニュー | 記録閲覧中のメニューから固定Web機能を開き、ログアウトと表示切替を行う |
-| C38 | Gradle Play Publisher・短寿命API認証の接続 | 既存署名と分離し、検証済みAABをinternalへ配置する。外部認証設定・配布確認はC39で行う |
-| C39 | 検証済み同一AABの内部テスト配布Workflow | mainの必須CIと署名を確認し、WIFで一回だけ公開する。外部設定未完了では起動しない |
+| C38 | Google Play提出Action・短寿命API認証の接続 | 既存署名と分離し、検証済みAABのuploadとcommitを採用Actionへ任せる。外部認証設定・配布確認はC39で行う |
+| C39 | 検証済み同一AABの内部テスト配布Workflow | mainの必須CIと署名を確認し、WIFで同一AABを提出・照合する。外部設定未完了では起動しない |
 | C40 | Android依存の更新検知 | 既存のDependabot・Dependency Graph・固定ツール監視の担当範囲を整理。監視の重複追加や依存更新は行わない |
 | C41（未実施） | 利用者向け導入・更新・復旧手順 | インストール、更新、再認証、問題版の配布停止を案内する。機能文書をこの工程へ後回しにしない |
 | 後続 | 起動演出・人格アイコン・投票／親愛度表示・友人向け配布 | C37後に小さなPRで分けて進める。起動演出はAndroid SplashScreenからComposeへ接続する |
@@ -113,11 +113,11 @@ CodeQL互換性も別の条件であり、Native Imageを解析回避には使�
 
 ## 高レベルAPI・ライブラリ優先の開発方針
 
-対象はAndroidアプリと、それを支えるPythonの認証・閲覧APIとする。Coreの討論処理や無関係なRecords機能は含めない。
+本節はAndroidアプリと、それを支えるPythonの認証・閲覧APIの採用先を具体化する。リポジトリ全体に適用する既存module優先の共通方針は`AGENTS.md`を参照する。
 既存のMaterial 3 Expressive・Circuit・Metro・Ktor・kotlinx.serialization・Pydanticを活用し、全面的な作り直しは行わない。
 Authlib・Auth Tab・認証検証の共通化も維持する。この方針の追加では、公開API・保存形式・認可範囲を変更しない。
 
-実装前に既採用ライブラリと標準SDKの高レベルAPIを確認し、足りない場合は保守されている外部ライブラリを検討する。
+実装前に標準SDK・採用済みライブラリ・再利用可能な既存moduleを確認する。保守されている既成ライブラリ／Actionで満たせる責務は独自helperより優先し、重複する独自機能は維持を前提にせず置換・削除も検討する。
 採用時には保守状況・ライセンス・脆弱性・既存バージョンとの互換性・依存の増加・安全な設定の可否を確認する。
 独自実装は必要な安全条件・互換性・性能・端末機能を満たせない部分に限定し、理由を設計またはコードへ短く残す。
 行数削減や抽象化した見た目のために層を追加せず、専用の承認工程や大量の比較資料も設けない。
@@ -125,7 +125,7 @@ Authlib・Auth Tab・認証検証の共通化も維持する。この方針の�
 ### 用途ごとの採用先と責務
 
 「継続」は既存実装を利用する方針、「導入予定」は該当C工程で実装・検証する方針であり、導入済みとは扱わない。
-詳細な依存バージョンはVersion Catalog・lockfileを正とし、この表へ重複管理しない。
+詳細な依存バージョンはVersion Catalog・lockfile、Actionの固定SHAはWorkflowを正とし、この表へ重複管理しない。
 
 | 用途・工程 | 採用先 | 独自処理を残す理由・境界 |
 |---|---|---|
@@ -142,6 +142,7 @@ Authlib・Auth Tab・認証検証の共通化も維持する。この方針の�
 | C36：可変幅の一覧／詳細と戻る | Material 3 AdaptiveのListDetailPaneScaffold、AnimatedPane、ActivityのPredictiveBackHandler | 配置・遷移・pane focus・hinge回避とgesture配信を利用。選択先は既存Circuitを正とし、別のnavigation履歴は増やさない。確定時のCloseRecord接続と認可再確認だけをアプリ側で扱う |
 | 後続：画面遷移（導入予定） | Navigation 3のNavDisplay・NavEntry、Material 3 AdaptiveのListDetailSceneStrategy | Circuit／Metroを維持し、閲覧先の管理だけを単一back stackへ移す。認可、検証済みの認証復帰先、通知・App Linksの検証はアプリ側に残す。C36の現行遷移処理を段階的に置き換える |
 | 議論公開通知 | Firebase Cloud Messaging、Firebase Admin SDK、NotificationCompat、Activity Result、WorkManager | 配送・通知表示・権限要求・登録再試行を既存APIへ任せる。セッションへの束縛、公開済み記録の確認、重複防止とログアウト時の抑止をサービス側で管理 |
+| C38〜C39：内部テスト配布 | r0adkll/upload-google-play、Google認証Action、既存のgoogle-auth・Google API client | upload・track更新・commitは採用Actionへ任せる。helperは版番号読取・署名と同一AABの検証・提出後照合・秘密の準備と回収だけを担当し、独自の提出APIやedit受け渡しを作らない |
 
 ### C15までの独自処理を残す理由
 
@@ -943,15 +944,15 @@ Material／Compose標準のモーションを使い、Androidのアニメーシ�
 
 ## C38：内部テスト配布の接続
 
-配布用のGradle Play Publisher（GPP）をVersion Catalogで固定し、既存のAGP・Kotlin・Materialとupload keyを維持する。GPPはMITでmaintenance modeにあるが、固定版の現行Wrapper対応と公開APIを確認して採用する。独自のAABアップロード処理を作らず、アプリの実行時依存には追加しない。
+[r0adkll/upload-google-play](https://github.com/r0adkll/upload-google-play)（MIT）を配布Workflowの完全SHA付き`uses:`で固定する。既存の署名・CIを維持し、upload・track更新・commitを採用Actionへ任せる。Gradle Play Publisherと独自Pythonの提出処理は使わず、Gradle pluginやアプリの実行時依存を追加しない。
 
-- `shittimAndroidPublishArtifactDir`で検証済み署名付きAABを1個だけ指定した場合に限りGPPを適用する。公開入口は`:app:publishReleaseBundle`と資格情報なしの`:app:verifyInternalTestPublishing`に限定し、掲載情報・APK・内部アプリ共有・昇格や、PlayのCLI設定上書きを拒否する。
-- GPPの`artifactDir`で検証済みと同じAABを使い、提出段階では再ビルドしない。trackは`internal`、release statusは`completed`、版番号競合は`FAIL`で固定し、自動採番変更や競合の成功扱いをしない。
-- API認証は標準のApplication Default Credentials（ADC）を使う。C39でGitHub OIDCとWorkload Identity Federation（WIF）から短寿命認証を取得する。Play用の長期秘密鍵JSONや秘密値をGradle property・ログへ渡さない。実際のWIF・Play権限の外部設定はC39の運用として確認し、未設定なら配布を開始しない。
-- Play APIの認証とAAB署名は別の境界とする。API用認証にはupload keyを使わず、署名は既存のReleaseビルドで完了させる。署名済みAABの提出時にupload keyや署名パスワードを再取得しない。
-- 固定版GPPは安全な審査条件付きcommitに対応していないため、`commit=false`でアップロード・internal track配置・edit検証までを行う。C39が同じeditとAABを検証し、公式REST APIへ`changesInReviewBehavior=ERROR_IF_IN_REVIEW`を指定して1回だけcommitする。既存審査を取り消さず、条件を弱めて再送しない。GPP成功だけでは配布完了としない。
+- 提出Actionの`releaseFiles`へ検証済み署名付きAABの正確なpathを1個だけ渡し、glob・複数成果物・提出時の再ビルドを使わない。`packageName`、`tracks: internal`、`status: completed`をWorkflowで固定し、本番トラック・掲載情報・内部アプリ共有は変更しない。
+- GitHub OIDCとWorkload Identity Federation（WIF）から短寿命認証を取得し、Google認証Actionの`credentials_file_path`を提出Actionの`serviceAccountJson`へ渡す。長期秘密鍵JSONや`serviceAccountJsonPlainText`は使わない。WIF・Play権限の外部設定が未完了なら配布を開始しない。
+- upload keyとパスワードはC18のRelease署名専用であり、API認証で代用しない。提出は署名済み同一AABを使い、署名し直さない。
+- helperは既存の公式Google SDKによる版番号の事前読取、秘密入力の準備、AAB検証、提出後の再取得、後片付けに限定する。独自upload・commit、Actionとのedit受け渡し、試行状態機械は追加しない。
+- Actionは通常のcommitを行うため、既存審査を取り消して変更を送信し得る。起動前にPlay Consoleで他の審査が進行中でなく、未送信の掲載情報変更を意図せず送らない状態を確認する。これは運用上の前提であり、自動guardが防いでいるとは扱わない。
 
-関連確認は、通常ビルドでGPPが動かないこと、単一AABの指定、未指定・複数AAB・禁止task・CLI上書きの拒否、dry-runのtask graphにAAB再ビルドがないことを対象とする。架空AABによる接続確認は実署名・WIF・Play配布の受入とは区別する。手順と外部設定の詳細はAndroid READMEとC39に集約し、公開設計書へ実project ID・認証アカウント・ローカル保管場所を記載しない。
+関連試験は単一AAB・WIF入力・固定トラックとhelperの検証境界に絞る。Action内部のuploadやcommitを独自に複製して再試験せず、架空データの接続確認と実署名・WIF・Play配布の受入を区別する。詳細はAndroid READMEとC39に集約し、公開設計書へ実project ID・認証アカウント・ローカル保管場所を記載しない。
 
 ## Navigation 3への段階的移行
 
@@ -1237,13 +1238,13 @@ Firebase未作成のため、コード試験と実FCM配送の確認を区別す
 
 ## C39：内部テスト配布の自動化
 
-`Android Internal Release`は手動実行専用とし、固定リポジトリの`main`と`android-internal` Environmentだけで動かす。既存のCore／Records配信とは分離し、Play掲載情報や本番トラックは変更しない。C38のGPP設定を先に取り込む。
+`Android Internal Release`は手動実行専用とし、固定リポジトリの`main`と`android-internal` Environmentだけで動かす。既存のCore／Records配信とは分離し、Play掲載情報や本番トラックは変更しない。C38の提出Actionと既存helperを利用する。
 
 ### 認証・外部設定
 
-Google Cloud管理者が既存Play用サービスアカウントへのWorkload Identity Federation（WIF）を設定する。GitHub OIDCから短寿命の資格情報を得て、公式認証Action、google-authのADC、GPPへ渡す。サービスアカウントJSONの秘密鍵はGitHubへ登録しない。Firebase送信用サービスアカウントも流用しない。
+Google Cloud管理者が既存Play用サービスアカウントへのWorkload Identity Federation（WIF）を設定する。GitHub OIDCから公式認証Actionで短寿命の資格情報を得て、その設定ファイルのpathを提出Actionへ渡す。helperの読取にはgoogle-authと公式Google API clientを使う。サービスアカウントJSONの秘密鍵はGitHubへ登録しない。Firebase送信用サービスアカウントも流用しない。
 
-WIFの条件は数値のリポジトリ／所有者ID、`main`、この配布Workflow、`workflow_dispatch`、`android-internal`のsubjectに限定する。サービスアカウントへの委譲は`roles/iam.workloadIdentityUser`だけとし、Owner／Editorや汎用Token Creatorは付けない。Play Consoleでは対象アプリの読取・テストトラック配信に限定する。内部トラックへの限定は、Play権限だけに頼らずWorkflowとGPPでも固定する。
+WIFの条件は数値のリポジトリ／所有者ID、`main`、この配布Workflow、`workflow_dispatch`、`android-internal`のsubjectに限定する。サービスアカウントへの委譲は`roles/iam.workloadIdentityUser`だけとし、Owner／Editorや汎用Token Creatorは付けない。Play Consoleでは対象アプリの読取・テストトラック配信に限定する。内部トラックへの限定は、Play権限だけに頼らずWorkflowのAction入力でも固定する。
 
 subjectはGitHubのOIDC設定APIが返す`sub_claim_prefix`とEnvironmentから組み立て、provider条件と照合する。immutable subjectが有効な場合は、所有者名・リポジトリ名のそれぞれに`@数値ID`が入るため、旧形式の名前だけを固定しない。[GitHubのOIDC仕様](https://docs.github.com/en/actions/reference/security/oidc)を参照する。
 認証拒否時もJWT・token本文は取得・記録せず、GitHub設定とprovider条件を確認する。subjectの不一致なら、その一致条件だけを実際の形式へ合わせ、他の制限・mapping・IAM権限は緩めない。
@@ -1263,21 +1264,22 @@ WIF・Environment・Play権限の外部設定前は起動を拒否する。設�
 ### 同一成果物の検証・配信
 
 1. 固定SHAの最新main CI・Records CI・既存CodeQLが成功したことを確認する。新しい失敗・実行中の試行を古い成功で置き換えない。
-2. Playの全トラック、現在のbundle／APKを読み、その最大値より大きい`versionCode`を決める。競合した場合は自動的な再番号付け・再ビルドをせず終了する。
+2. Playの全トラック、現在のbundle／APKを読み、その最大値より大きい`versionCode`を決める。`minimum_version_code`は通常の最大値＋1に優先する下限指定であり、失敗後に状態と副作用を確認した前回試行番号＋1を指定して番号の再利用を防ぐ。指定値を検証し、現在の最大番号＋1との大きい方を使う。競合した場合は自動的な再番号付け・再ビルドをせず終了する。
 3. 既存upload keyでRelease AABを一度ビルドし、Release Lintを実行する。JDKとdigest固定の公式bundletoolで署名・証明書・パッケージ・版番号・非debugを検証する。pinした公開証明書のUTC有効期間を確認し、その証明書だけの一時truststoreを使ってJDKの厳格検証を行う。自己署名を理由に重大警告全体を許可せず、一時truststoreは検証後に回収する。
-4. 検証した同一AABだけをprivate directoryへ置き、hashを再照合する。WIF認証を配信直前に更新し、C38の固定GPP taskで内部トラックへのstage／validateを一度行う。
-5. GPPのprivateなeditを読み、bundle hashと内部トラック、他トラックに変更がないことを確認する。公式APIのcommitは一度だけ行い、`ERROR_IF_IN_REVIEW`で既存審査の取消を防ぎ、`changesNotSentForReview=true`で未送信のConsole変更を審査へ送らない。
-6. 新しい読取editで版番号・hash・内部トラックの`completed`を再取得する。これはstageの配置確認であり公開完了とは区別する。さらに`GET /tracks/internal/releases`の`activeArtifacts`に同じ`versionCode`があり、`releaseLifecycleState=RELEASE_LIFECYCLE_STATE_PUBLISHED`の場合だけ配布完了とする。既存の同一AABもこの公開確認を省略しない。
+4. 検証した同一AABのhashを再照合し、配信直前にWIF認証を更新する。C38の提出Actionへ単一AABと資格情報ファイルのpath、固定した内部トラック・statusを渡す。upload・track更新・commitはActionが担当し、helperから別のcommitを行わない。
+5. Action成功後に公式Google SDKでPlayの版番号・bundle hash・内部トラックの`completed`を再取得し、検証したAABと照合する。提出前の`verification.json`と、提出後照合が成功した場合の簡単な`receipt.json`を保持する。
 
-commitの応答不明時は再送せず、Play側の状態を最大4回の読取だけで照合する。HTTP 401によるcommitの自動再送も無効とする。審査・公開待ちは`pending`かつ`verified=false`の安全なreceiptを残し、`play_publication_pending_do_not_resend`で終了する。却下・欠損・未知状態・API確認失敗も配布完了にせず、固定カテゴリと`doNotResend=true`のreceiptを残す。GPP stage失敗・応答不明や照合不一致は失敗として終了する。Workflowの「再実行」は拒否し、Play Consoleとreceiptで状態と副作用を確認してから新しい手動実行を判断する。実行中は同じアプリのPlay Console編集を避ける。
+receiptの`status=submitted`・`verified=true`は、内部トラックと同一AABの提出後照合に成功したことを表す。審査済み・公開済み・端末で更新可能な証拠とは区別する。
 
-公開artifactはSHA・版番号・AAB hash・検証結果とcommit試行の小さなreceiptだけとし、7日保持する。署名鍵、Firebase設定、WIF資格情報、GPP edit、Gradleログ、AABそのものを公開artifactへ含めない。秘密の入力とログは終了時に回収する。
-GPPを起動する前にも、非秘密の`stage-attempt.json`へSHA・版番号・hash・`doNotResend=true`を保存する。失敗・タイムアウト・取消後もupload開始記録を保持し、同じstateに試行記録があればアップロードを再送しない。
-通常の取消時も`always()`でreceiptを保存する。強制終了や保存失敗でreceiptが残らなくても、commit未実行とは判断せず、Play側の状態と副作用を確認してから次の実行を判断する。
+起動前にPlay Consoleで他の審査が進行中でなく、未送信の掲載情報変更を意図せず送らない状態を確認する。通常のcommitは既存審査を取り消し、変更を審査へ送信し得るため、この運用確認を省略しない。専用の審査guardを実装済みとは扱わず、実行中は同じアプリのPlay Consoleを編集しない。
 
-試験は全トラックの最大版番号、長期資格情報拒否、署名／manifest／hash、既存配信・競合、他トラック不変、単一commitと応答不明時の読取照合、公開ライフサイクルの審査待ち・却下・欠損・未知・API障害を架空データで確認する。既存API認証による現行公開版の公開状態読取のみ確認済みで、WIF提出・配布の受入とは区別する。最初のWIF実配布は外部設定・mainの検証完了後、別の配布依頼で行い、Playからの再取得と実機更新を確認する。
+uploadの自動再送や競合時の自動再番号付けは行わない。失敗・タイムアウト・取消・応答不明ではWorkflowの「再実行」は使わず、Play Consoleと版番号・hash・internal track、残っているreceiptで副作用を確認してから新しい手動実行を判断する。receiptが残っていなくても、upload／commit未実行とは判断しない。
 
-公式仕様：[WIFとDeployment pipelines](https://docs.cloud.google.com/iam/docs/workload-identity-federation-with-deployment-pipelines)、[GitHub認証Action](https://github.com/google-github-actions/auth)、[Play editsと同時編集](https://developers.google.com/android-publisher/edits)、[安全なcommitパラメーター](https://developers.google.com/android-publisher/api-ref/rest/v3/edits/commit)、[公開ライフサイクル](https://developers.google.com/android-publisher/api-ref/rest/v3/applications.tracks.releases)、[トラックのrelease一覧](https://developers.google.com/android-publisher/api-ref/rest/v3/applications.tracks.releases/list)。
+公開artifactはSHA・版番号・AAB hash・署名／manifestの`verification.json`と簡単な`receipt.json`だけとし、7日保持する。署名鍵、Firebase設定、WIF資格情報、edit ID、Gradleログ、AABそのものを公開artifactへ含めず、秘密入力と一時ログは`always()`で回収する。
+
+試験は固定mainと必須CI、全トラックの最大版番号、長期資格情報拒否、署名／manifest／hash、単一AABと固定Action入力、提出後照合の不一致・API障害、取消時の後片付けを架空データで確認する。Action内部のupload・commitやライブラリの再試行機構を独自に再実装して試験しない。実配布ではPlay Consoleの審査・公開状態と内部トラックを確認し、Play内部テスト版の実機取得・更新を確認する。架空データの接続確認や提出receiptだけで配布受入を完了扱いにしない。最初のActionによるWIF実提出は外部設定・mainの検証完了後、別の配布依頼で行う。
+
+公式仕様：[提出ActionとWIF入力](https://github.com/r0adkll/upload-google-play)、[WIFとDeployment pipelines](https://docs.cloud.google.com/iam/docs/workload-identity-federation-with-deployment-pipelines)、[GitHub認証Action](https://github.com/google-github-actions/auth)、[Play editsと同時編集](https://developers.google.com/android-publisher/edits)、[commitの既定動作](https://developers.google.com/android-publisher/api-ref/rest/v3/edits/commit)。
 
 ## C40：Android依存の更新検知
 
@@ -1285,8 +1287,8 @@ GPPを起動する前にも、非秘密の`stage-attempt.json`へSHA・版番号
 
 | 対象 | 既存の検知先 | 固定値の正本 |
 |---|---|---|
-| Gradle Wrapper・プラグイン・ライブラリ（GPPを含む） | DependabotのGradle設定 | Wrapper・Version Catalog・Gradle設定 |
-| CI／配布のAction | DependabotのGitHub Actions設定 | Workflowの完全SHA付き`uses:` |
+| Gradle Wrapper・プラグイン・ライブラリ | DependabotのGradle設定 | Wrapper・Version Catalog・Gradle設定 |
+| CI／配布のAction（upload-google-playを含む） | DependabotのGitHub Actions設定 | Workflowの完全SHA付き`uses:` |
 | JDK・SDK Platform／Build Tools・bundletool | Release Tool Versionsの単一Issue | `apps/records-android/.java-version`、アプリのGradle設定、`.github/tool-versions.json` |
 | 推移的依存の脆弱性 | Dependency GraphへのGradle解決結果の送信 | 実際の解決結果。更新には親依存・制約の確認が必要 |
 

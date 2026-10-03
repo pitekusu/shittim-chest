@@ -535,17 +535,13 @@ def test_clearing_artifacts_preserves_links_and_files_outside_fixed_layout(tmp_p
     [
         ["help"],
         [":app:bundleRelease", "--dry-run"],
-        [":app:verifyInternalTestPublishing", "-PshittimAndroidPublishArtifactDir=prebuilt"],
-        [":app:publishReleaseBundle", "-PshittimAndroidPublishArtifactDir=prebuilt"],
-        [":app:bundleRelease", "-PshittimAndroidPublishArtifactDir=prebuilt"],
     ],
 )
-def test_non_generating_tasks_preserve_prebuilt_artifact_input(paths, monkeypatch, arguments):
+def test_non_generating_tasks_preserve_existing_artifacts(paths, monkeypatch, arguments):
     project, output, cache = paths
     prebuilt = output / "app/app-release.aab"
     prebuilt.parent.mkdir(parents=True)
     prebuilt.write_bytes(b"previous verified bundle")
-    arguments = [arg.replace("=prebuilt", f"={prebuilt.parent}") for arg in arguments]
 
     def gradle(*args, scratch, **kwargs):
         assert prebuilt.read_bytes() == b"previous verified bundle"

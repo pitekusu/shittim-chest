@@ -1,8 +1,3 @@
-import com.github.triplet.gradle.androidpublisher.ReleaseStatus
-import com.github.triplet.gradle.androidpublisher.ResolutionStrategy
-import com.github.triplet.gradle.play.PlayPublisherExtension
-import java.nio.file.Files
-
 plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.compose.compiler)
@@ -10,48 +5,6 @@ plugins {
   alias(libs.plugins.metro)
   alias(libs.plugins.ksp)
   alias(libs.plugins.room3)
-}
-
-// Publishing accepts a previously verified, signed AAB; it must never build a
-// different artifact or publish listings/APKs/promotions through a lifecycle task.
-val publishArtifactDirectory = providers.gradleProperty("shittimAndroidPublishArtifactDir").orNull
-  ?.takeIf { it.isNotBlank() }?.let { file(it).canonicalFile }
-val publishTask = ":app:publishReleaseBundle"
-val verifyPublishTask = ":app:verifyInternalTestPublishing"
-if (publishArtifactDirectory != null) {
-  if (gradle.startParameter.excludedTaskNames.isNotEmpty() ||
-    gradle.startParameter.taskNames.any { it !in setOf(publishTask, verifyPublishTask) } ||
-    gradle.startParameter.taskRequests.flatMap { it.args }.any { it.startsWith("--") }) {
-    throw GradleException("Only the fixed internal-test bundle task is allowed; Play CLI overrides are disabled")
-  }
-  val bundles = publishArtifactDirectory.listFiles()?.filter { it.extension == "aab" }
-  if (!publishArtifactDirectory.isDirectory || bundles?.size != 1 ||
-    bundles.single().let { !it.isFile || Files.isSymbolicLink(it.toPath()) }) {
-    throw GradleException("Internal-test publishing requires a directory containing exactly one verified AAB")
-  }
-  apply(plugin = "com.github.triplet.play")
-  extensions.configure<PlayPublisherExtension> {
-    // ADC consumes the short-lived OIDC/WIF credential file from GOOGLE_APPLICATION_CREDENTIALS.
-    // API identity is independent of the upload key that already signed the AAB.
-    useApplicationDefaultCredentials.set(true)
-    track.set("internal")
-    releaseStatus.set(ReleaseStatus.COMPLETED)
-    // GPP cannot request ERROR_IF_IN_REVIEW. Stage/validate only; C39 commits
-    // this edit once through the official API without cancelling an existing review.
-    commit.set(false)
-    resolutionStrategy.set(ResolutionStrategy.FAIL)
-    defaultToAppBundles.set(true)
-    artifactDir.set(publishArtifactDirectory)
-    releaseName.set(providers.gradleProperty("shittimAndroidPublishReleaseName"))
-  }
-}
-// This task checks the local publishing boundary without requesting credentials or using Play.
-tasks.register("verifyInternalTestPublishing") {
-  doLast {
-    if (publishArtifactDirectory == null) {
-      throw GradleException("shittimAndroidPublishArtifactDir is required for internal-test publishing")
-    }
-  }
 }
 
 room3 { schemaDirectory("$projectDir/schemas") }

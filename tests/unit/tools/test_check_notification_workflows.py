@@ -19,6 +19,7 @@ from tools.check_notification_workflows import (
     WORKFLOW_RUN_NOTIFICATION,
     WorkflowPolicyError,
     _workflow_job_block,
+    _workflow_step_block,
     validate_notification_workflows,
 )
 
@@ -173,11 +174,11 @@ def test_android_release_cannot_hide_floating_action_in_an_unnamed_step(
             "${{ runner.temp }}/android-release/",
         ),
         (
-            "            ${{ runner.temp }}/android-release/stage-attempt.json\n",
+            "            ${{ runner.temp }}/android-release/verification.json\n",
             "",
         ),
         (
-            'run: uv run --frozen python -m tools.android_release publish --state "${STATE}"',
+            'run: uv run --frozen python -m tools.android_release readback --state "${STATE}"',
             'run: echo "${{ github.event.inputs.untrusted }}"',
         ),
     ),
@@ -198,6 +199,116 @@ def test_android_release_cannot_discard_receipts_after_cancellation(
     _replace(android_release, "        if: always()", f"        if: {condition}", 1)
 
     with pytest.raises(WorkflowPolicyError, match="retain receipts even after cancellation"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "before,after",
+    (
+        ("id: play-auth", "id: another-auth"),
+        (
+            "serviceAccountJson: ${{ steps.play-auth.outputs.credentials_file_path }}",
+            "serviceAccountJson: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}",
+        ),
+        ("packageName: dev.pitekusu.shittim.records", "packageName: another.package"),
+        (
+            "releaseFiles: ${{ runner.temp }}/android-release/verified/app-release.aab",
+            "releaseFiles: ${{ runner.temp }}/android-release/**/*.aab",
+        ),
+        ("tracks: internal", "tracks: production"),
+        ("status: completed", "status: draft"),
+        ("retention-days: 7", "retention-days: 90"),
+        (
+            "      - name: Upload the verified AAB to internal with the maintained Action\n",
+            "      - name: Upload the verified AAB to internal with the maintained Action\n"
+            "        if: always()\n",
+        ),
+        (
+            "      - name: Read back the submitted internal track and bundle digest\n",
+            "      - name: Read back the submitted internal track and bundle digest\n"
+            "        if: always()\n",
+        ),
+        (
+            "      - name: Remove private signing Firebase and Gradle log files\n"
+            "        if: always()",
+            "      - name: Remove private signing Firebase and Gradle log files\n"
+            "        if: success()",
+        ),
+    ),
+)
+def test_android_release_preserves_the_action_upload_and_readback_boundary(
+    directory: Path, android_release: Path, before: str, after: str
+) -> None:
+    _replace(android_release, before, after, 1)
+
+    with pytest.raises(WorkflowPolicyError, match="Android Release"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "extra_input",
+    (
+        "serviceAccountJsonPlainText: unsafe",
+        "existingEditId: unrelated-edit",
+        "mappingFile: app/build/outputs/mapping/release/mapping.txt",
+        "whatsNewDirectory: listings",
+        "versionCodesToRetain: 1",
+        "inAppUpdatePriority: 5",
+    ),
+)
+def test_android_release_rejects_extra_play_mutation_inputs(
+    directory: Path, android_release: Path, extra_input: str
+) -> None:
+    _replace(
+        android_release,
+        "          status: completed",
+        f"          status: completed\n          {extra_input}",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="only WIF inputs"):
+        validate_notification_workflows(directory)
+
+
+def test_android_release_upload_action_must_be_full_sha_pinned(
+    directory: Path, android_release: Path
+) -> None:
+    _replace(
+        android_release,
+        "uses: r0adkll/upload-google-play@",
+        "uses: r0adkll/upload-google-play@v1 # ",
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="Android Release action is not pinned"):
+        validate_notification_workflows(directory)
+
+
+def test_android_release_cannot_upload_twice(directory: Path, android_release: Path) -> None:
+    text = android_release.read_text(encoding="utf-8")
+    upload = _workflow_step_block(
+        text, "Upload the verified AAB to internal with the maintained Action"
+    )
+    android_release.write_text(
+        text + "\n" + upload.replace("maintained Action", "second Action"), encoding="utf-8"
+    )
+
+    with pytest.raises(WorkflowPolicyError, match=r"upload.*once"):
+        validate_notification_workflows(directory)
+
+
+def test_android_release_cannot_read_back_before_upload(
+    directory: Path, android_release: Path
+) -> None:
+    upload_name = "Upload the verified AAB to internal with the maintained Action"
+    readback_name = "Read back the submitted internal track and bundle digest"
+    text = android_release.read_text(encoding="utf-8")
+    text = (
+        text.replace(upload_name, "temporary-step")
+        .replace(readback_name, upload_name)
+        .replace("temporary-step", readback_name)
+    )
+    android_release.write_text(text, encoding="utf-8")
+
+    with pytest.raises(WorkflowPolicyError, match="verify its bundle before"):
         validate_notification_workflows(directory)
 
 
