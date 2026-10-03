@@ -440,6 +440,50 @@ API 36・架空データ。標準のテスト用window／font scale overrideで�
 - ログイン前の常設説明文を削除。期限切れ・取消・失敗・ブラウザー不可の状態表示は残す。C35の短い完了通知は次の起動／ログイン演出PRで置き換える。
 - 架空データの画面試験でメニューの導線とログアウト操作、一覧・詳細のスクロール維持を確認する。実Webへの接続とブラウザーからの復帰は内部テスト版で確認する。
 
+## C39：GitHubからの内部テスト配布
+
+C38を先に取り込み、`.github/workflows/android-release.yml`を`main`から手動実行する。
+通常のCIやPRではPlay認証・署名・提出を行わない。Play掲載情報や本番トラックも変更しない。
+
+管理者がGoogle WIFを、固定リポジトリ・数値repository/owner ID・`main`・このWorkflow・
+`workflow_dispatch`・`android-internal` Environmentだけに限定する。
+既存Play用サービスアカウントに`roles/iam.workloadIdentityUser`を付け、Play Consoleでは
+対象アプリの読取・テストトラックへの配信だけを許可する。長期API秘密鍵をGitHubへ登録しない。
+
+Environmentはmain限定とし、次を安全に登録する。
+
+- Variables：`PLAY_WORKLOAD_IDENTITY_PROVIDER`、`PLAY_SERVICE_ACCOUNT`、
+  `ANDROID_UPLOAD_KEY_ALIAS`、`ANDROID_UPLOAD_CERT_SHA256`、`ANDROID_RELEASE_ENABLED`。
+- Secrets：`ANDROID_UPLOAD_KEYSTORE_BASE64`、`ANDROID_UPLOAD_STORE_PASSWORD`、
+  `ANDROID_FIREBASE_CLIENT_CONFIG`。API認証とAAB署名は別物として扱う。
+
+外部設定と読取確認が終わるまでは`ANDROID_RELEASE_ENABLED=false`を維持する。
+有効化後も、配布は別の明示的な手動実行で行う。
+固定SHAの最新main CI・Records CI・既存CodeQL成功を確認し、全トラック/bundle/APKの最大版番号より
+大きいAABを一度ビルドする。Release Lint、JDK署名、固定bundletoolのmanifest、upload証明書とhashを検証し、
+検証した同一AABだけをGPPでstageする。安全なREST commitを一度行い、Play再取得が一致してから完了とする。
+署名検証はpinした公開証明書のUTC有効期間を確認し、その証明書だけの一時truststoreでJDKの厳格検証を行う。
+自己署名を理由にexit code 4全体を許可せず、期限切れ・未有効やその他の重大警告は拒否する。一時truststoreは回収する。
+edit内の`completed`だけでは審査済みと判断しない。`GET /tracks/internal/releases`の`activeArtifacts`に
+同じ`versionCode`があり、`releaseLifecycleState=RELEASE_LIFECYCLE_STATE_PUBLISHED`の場合だけ配布完了とする。
+既存の同一AABもこの公開確認を省略しない。審査・公開待ちは`pending`かつ`verified=false`のreceiptを残し、
+`play_publication_pending_do_not_resend`で終了する。却下・欠損・未知状態・API確認失敗も完了扱いにせず、
+Play Consoleとreceiptを確認する。照合は最大4回の読取だけとし、uploadやcommitを再送しない。
+
+実行中は同じアプリのPlay Consoleを編集しない。既存審査を取り消したり、未送信の掲載情報を審査へ送ったりしない。
+失敗・応答不明では無条件にWorkflowを「再実行」しない。Play側の版番号・hash・internal trackとreceiptを確認し、
+副作用を把握してから新しい手動実行を判断する。自動再送・自動再番号付けは行わない。
+GPPを起動する前に非機密の`stage-attempt.json`を保存し、失敗・タイムアウト・取消後も保持する。
+同じstateに試行記録がある場合は、アップロードを再送しない。
+artifactは非機密receiptだけ7日保持し、鍵・資格情報・Firebase設定・GPP edit・AAB・Gradleログは含めない。
+通常の取消時も`always()`でreceiptを保存する。強制終了や保存失敗でreceiptが残らなくても、
+commit未実行とは判断せず、Play側の状態と副作用を確認してから次の実行を判断する。
+
+既存API認証による現行公開版の公開状態読取は確認済み。これはWIFによる提出・配布の受入とは区別し、
+WIF提出の実確認は別の配布依頼で行う。
+
+詳しい外部設定と検証境界は[Androidアプリ設計](../../docs/29_Androidアプリ設計.md#c39内部テスト配布の自動化)を参照する。
+
 ## 起動・ログインのブランド演出
 
 - Android標準SplashScreenから全画面のシッテム演出につなぐ。起動は約1秒、対話的ログインが確認・保存まで成功したときは約1.5秒。認可確認や保存済み記録の表示は演出と並行して進む。

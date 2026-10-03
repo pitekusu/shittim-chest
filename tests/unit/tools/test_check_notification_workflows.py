@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from tools.check_notification_workflows import (
     ALLOWED_TARGET_WORKFLOW,
+    ANDROID_RELEASE_WORKFLOW,
     DEPLOY_GUARD_WORKFLOW,
     DRIFT_WORKFLOW,
     RECORDS_BACKFILL_WORKFLOW,
@@ -37,6 +38,7 @@ def directory(tmp_path: Path) -> Path:
         RECORDS_CI_WORKFLOW,
         RECORDS_RELEASE_WORKFLOW,
         RECORDS_BACKFILL_WORKFLOW,
+        ANDROID_RELEASE_WORKFLOW,
     ):
         (directory / name).write_bytes((WORKFLOW_DIRECTORY / name).read_bytes())
     shutil.copytree(WORKFLOW_DIRECTORY.parent / "actions", directory.parent / "actions")
@@ -51,6 +53,152 @@ def _replace(path: Path, old: str, new: str, count: int = -1) -> None:
 
 def test_repository_target_workflow_is_accepted(directory: Path) -> None:
     assert validate_notification_workflows(directory) == 1
+
+
+@pytest.fixture
+def android_release(directory: Path) -> Path:
+    return directory / ANDROID_RELEASE_WORKFLOW
+
+
+def test_android_release_can_use_only_its_canonical_oidc_scope(
+    directory: Path, android_release: Path
+) -> None:
+    assert android_release.is_file()
+    assert validate_notification_workflows(directory) == 1
+
+
+@pytest.mark.parametrize("trigger", ("pull_request", "push", "workflow_run", "workflow_call"))
+def test_android_release_cannot_use_untrusted_or_indirect_triggers(
+    directory: Path, android_release: Path, trigger: str
+) -> None:
+    _replace(android_release, "  workflow_dispatch:", f"  {trigger}:")
+
+    with pytest.raises(WorkflowPolicyError, match="Android Release must use exactly"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "before,after",
+    (
+        ("actions: read", "actions: write"),
+        ("contents: read", "contents: write"),
+        ("id-token: write", "id-token: read"),
+        ("permissions: {}", "permissions:\n  id-token: write"),
+    ),
+)
+def test_android_release_cannot_widen_or_move_its_permissions(
+    directory: Path, android_release: Path, before: str, after: str
+) -> None:
+    _replace(android_release, before, after)
+
+    with pytest.raises(WorkflowPolicyError, match="Android Release permissions"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "capability",
+    (
+        "      - run: aws dynamodb put-item --table-name unsafe\n",
+        "      - run: cdk deploy\n",
+        "      - env:\n          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET }}\n",
+    ),
+)
+def test_android_oidc_exception_does_not_exempt_aws_or_deploy_capability(
+    directory: Path, android_release: Path, capability: str
+) -> None:
+    android_release.write_text(android_release.read_text() + capability, encoding="utf-8")
+
+    with pytest.raises(WorkflowPolicyError, match="AWS or deployment capability"):
+        validate_notification_workflows(directory)
+
+
+def test_android_oidc_exception_does_not_apply_to_another_workflow(
+    directory: Path, android_release: Path
+) -> None:
+    android_release.rename(directory / "other-release.yml")
+
+    with pytest.raises(WorkflowPolicyError, match="AWS or deployment capability"):
+        validate_notification_workflows(directory)
+
+
+def test_android_release_requires_full_sha_action_pins(
+    directory: Path, android_release: Path
+) -> None:
+    _replace(android_release, "7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0", "v3")
+
+    with pytest.raises(WorkflowPolicyError, match="Android Release action is not pinned"):
+        validate_notification_workflows(directory)
+
+
+def test_android_release_cannot_hide_floating_action_in_an_unnamed_step(
+    directory: Path, android_release: Path
+) -> None:
+    android_release.write_text(
+        android_release.read_text() + "      - uses: actions/checkout@v7\n", encoding="utf-8"
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="Android Release action is not pinned"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "before,after",
+    (
+        (
+            "if: github.repository == 'pitekusu/shittim-chest' && github.ref == 'refs/heads/main'",
+            "if: true",
+        ),
+        ("github.ref == 'refs/heads/main'", "github.ref == 'refs/heads/main' || true"),
+        ("environment: android-internal", "environment: another-environment"),
+        ("python tools/check_release_ci.py", "python -c 'pass'"),
+        ('test "${RELEASE_ENABLED}" = true', "true"),
+        ("-m tools.android_release verify --state", "-m tools.android_release cleanup --state"),
+        (
+            "      - name: Verify signature certificate package version "
+            "and immutable bundle digest",
+            "      - name: Verify signature certificate package version "
+            "and immutable bundle digest\n"
+            "        if: false",
+        ),
+        (
+            "          create_credentials_file: true",
+            "          create_credentials_file: true\n          credentials_json: unsafe",
+        ),
+        (
+            "          export_environment_variables: true",
+            "          export_environment_variables: true\n          token_format: access_token",
+        ),
+        (
+            "${{ runner.temp }}/android-release/receipt.json",
+            "${{ runner.temp }}/android-release/",
+        ),
+        (
+            "            ${{ runner.temp }}/android-release/stage-attempt.json\n",
+            "",
+        ),
+        (
+            'run: uv run --frozen python -m tools.android_release publish --state "${STATE}"',
+            'run: echo "${{ github.event.inputs.untrusted }}"',
+        ),
+    ),
+)
+def test_android_release_cannot_widen_identity_or_secret_exposure(
+    directory: Path, android_release: Path, before: str, after: str
+) -> None:
+    _replace(android_release, before, after, 1)
+
+    with pytest.raises(WorkflowPolicyError, match="Android Release"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize("condition", ("${{ always() && !cancelled() }}", "success()", "failure()"))
+def test_android_release_cannot_discard_receipts_after_cancellation(
+    directory: Path, android_release: Path, condition: str
+) -> None:
+    _replace(android_release, "        if: always()", f"        if: {condition}", 1)
+
+    with pytest.raises(WorkflowPolicyError, match="retain receipts even after cancellation"):
+        validate_notification_workflows(directory)
 
 
 @pytest.mark.parametrize(
