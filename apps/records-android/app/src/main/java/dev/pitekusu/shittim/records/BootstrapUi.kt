@@ -93,12 +93,9 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
         if (state.canReadRecords) RecordsAppBar { menuOpen = true }
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
           val listScrollState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
-          val detailScrollState = rememberSaveable(state.selectedRecordId, saver = LazyListState.Saver) {
-            LazyListState()
-          }
           val transientScrollState = rememberLazyListState()
           if (state.canReadRecords) {
-            AdaptiveRecordsUi(state, pagingItems, listScrollState, detailScrollState,
+            AdaptiveRecordsUi(state, pagingItems, listScrollState,
               Modifier.fillMaxSize(), playedSections.toSet(), motionAllowed = !menuOpen) { key ->
                 if (key !in playedSections) playedSections = ArrayList(playedSections).apply { add(key) }
               }

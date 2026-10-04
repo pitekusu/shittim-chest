@@ -15,6 +15,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.platform.LocalContext
 import androidx.navigation3.runtime.rememberNavBackStack
+import androidx.navigation3.runtime.NavKey
 import com.slack.circuit.runtime.CircuitUiEvent
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.presenter.Presenter
@@ -49,6 +50,9 @@ internal data object BootstrapScreen : Screen {
     val requesters: List<RecordRequesterChoice> = emptyList(),
     val searching: Boolean = false,
     val loginCompletion: Int = 0,
+    // The presenter supplies its real stack; this default is for static previews only.
+    val backStack: List<NavKey> = listOf(RecordsList) + listOfNotNull(selectedRecordId?.let(::RecordDetail)),
+    val recordOwner: String? = (session as? SessionState.SignedIn)?.cacheAccountId,
     val eventSink: (Event) -> Unit,
   ) : CircuitUiState
 
@@ -263,7 +267,7 @@ internal class BootstrapPresenter(
     return BootstrapScreen.State(themeChoice, sessionState, visibleList, record, selectedRecordId, syncState,
       canReadRecords = cacheAccountId != null, listQuery = listQuery, searching = searching,
       requesters = if (cacheAccountId != null) requesters else emptyList(),
-      loginCompletion = loginCompletion) { event ->
+      loginCompletion = loginCompletion, backStack = backStack.toList(), recordOwner = cacheAccountId) { event ->
       when (event) {
         is BootstrapScreen.Event.SelectTheme -> themeChoice = event.choice
         BootstrapScreen.Event.Login -> if (session.beginLogin(

@@ -1,13 +1,14 @@
 package dev.pitekusu.shittim.records
 
 import android.animation.ValueAnimator
-import androidx.activity.compose.PredictiveBackHandler
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -20,14 +21,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2
-import androidx.compose.material3.adaptive.layout.AnimatedPane
-import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffold
-import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldDefaults
-import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldRole
-import androidx.compose.material3.adaptive.layout.MutableThreePaneScaffoldState
-import androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem
 import androidx.compose.material3.adaptive.layout.calculatePaneScaffoldDirective
-import androidx.compose.material3.adaptive.layout.calculateThreePaneScaffoldValue
+import androidx.compose.material3.adaptive.layout.PaneScaffoldDirective
+import androidx.compose.material3.adaptive.navigation.BackNavigationBehavior
+import androidx.compose.material3.adaptive.navigation3.ListDetailSceneStrategy
+import androidx.compose.material3.adaptive.navigation3.rememberListDetailSceneStrategy
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
@@ -35,35 +33,38 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.LookaheadScope
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.navigation3.runtime.NavKey
+import androidx.navigation3.runtime.entryProvider
+import androidx.navigation3.runtime.rememberDecoratedNavEntries
+import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
+import androidx.navigation3.scene.NavigationBackHandler
+import androidx.navigation3.scene.rememberNavigationEventState
+import androidx.navigation3.scene.rememberSceneState
+import androidx.navigation3.ui.NavDisplay
 import androidx.paging.compose.LazyPagingItems
 import dev.pitekusu.shittim.records.auth.SessionState
 import dev.pitekusu.shittim.records.ui.ShittimSpacing
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.util.UUID
 
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
@@ -71,40 +72,29 @@ internal fun AdaptiveRecordsUi(
   state: BootstrapScreen.State,
   pagingItems: LazyPagingItems<RecordJournalRow>?,
   listScrollState: LazyListState,
-  detailScrollState: LazyListState,
   modifier: Modifier = Modifier,
   playedSections: Set<String> = emptySet(),
   motionAllowed: Boolean = true,
   onSectionSeen: (String) -> Unit = {},
 ) {
   val windowDirective = calculatePaneScaffoldDirective(currentWindowAdaptiveInfoV2())
-  // AnimatedPane retains its role bucket while hidden. Own a bounded detail bucket outside
-  // that pane so reopening resets the reader and old visits do not accumulate in SavedState.
-  val detailStateHolder = rememberSaveableStateHolder()
-  val detailVisit = rememberSaveable(state.selectedRecordId) { UUID.randomUUID().toString() }
-  var previousDetailVisit by rememberSaveable { mutableStateOf(detailVisit) }
-  LaunchedEffect(detailVisit) {
-    if (previousDetailVisit != detailVisit) detailStateHolder.removeState(previousDetailVisit)
-    previousDetailVisit = detailVisit
-  }
   BoxWithConstraints(modifier) {
     // Use the available content width, not physical screen size; preserve standard hinge avoidance.
     val twoPanes = maxWidth >= 840.dp && LocalDensity.current.fontScale < 1.5f
-    val directive = windowDirective.copy(maxHorizontalPartitions = if (twoPanes) 2 else 1)
-    val destination = if (state.selectedRecordId == null) ListDetailPaneScaffoldRole.List
-      else ListDetailPaneScaffoldRole.Detail
-    val value = calculateThreePaneScaffoldValue(directive.maxHorizontalPartitions,
-      ListDetailPaneScaffoldDefaults.adaptStrategies(), ThreePaneScaffoldDestinationItem<Unit>(destination))
-    val listValue = calculateThreePaneScaffoldValue(directive.maxHorizontalPartitions,
-      ListDetailPaneScaffoldDefaults.adaptStrategies(),
-      ThreePaneScaffoldDestinationItem<Unit>(ListDetailPaneScaffoldRole.List))
-    // Nav3 owns the selection; Adaptive temporarily owns only the visual transition.
-    val scaffoldState = remember { MutableThreePaneScaffoldState(value) }
+    val directive = PaneScaffoldDirective(maxHorizontalPartitions = if (twoPanes) 2 else 1,
+      horizontalPartitionSpacerSize = windowDirective.horizontalPartitionSpacerSize,
+      maxVerticalPartitions = windowDirective.maxVerticalPartitions,
+      verticalPartitionSpacerSize = windowDirective.verticalPartitionSpacerSize,
+      defaultPanePreferredWidth = windowDirective.defaultPanePreferredWidth,
+      defaultPanePreferredHeight = windowDirective.defaultPanePreferredHeight,
+      excludedBounds = windowDirective.excludedBounds, shouldAutoFocusCurrentDestination = false)
+    // Compact layouts use NavDisplay's slide without Adaptive's predictive scale restoration.
+    val sceneStrategy = rememberListDetailSceneStrategy<NavKey>(directive = directive,
+      backNavigationBehavior = BackNavigationBehavior.PopLatest)
     val currentState = rememberUpdatedState(state)
-    val currentValue = rememberUpdatedState(value)
     val focusManager = LocalFocusManager.current
     // Disclosure state is visual only; search text remains in Circuit's screen-lifetime state.
-    var queryMode by remember { mutableStateOf(RecordQueryMode.Closed) }
+    var queryMode by remember(state.recordOwner) { mutableStateOf(RecordQueryMode.Closed) }
     val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
     val visibleMotion = motionAllowed && lifecycle.isAtLeast(Lifecycle.State.STARTED) &&
       ValueAnimator.areAnimatorsEnabled()
@@ -126,50 +116,20 @@ internal fun AdaptiveRecordsUi(
         searchScrollState.scrollToItem(0)
       }
     }
-    LaunchedEffect(value, state.selectedRecordId) {
+    LaunchedEffect(state.selectedRecordId, state.recordOwner) {
       if (state.selectedRecordId != null) {
         queryMode = RecordQueryMode.Closed
         focusManager.clearFocus(force = true)
         keyboard?.hide()
       }
-      scaffoldState.animateTo(value)
-    }
-    PredictiveBackHandler(enabled = state.selectedRecordId != null) { progress ->
-      val selectedAtStart = currentState.value.selectedRecordId
-      var gestureInProgress = false
-      try {
-        progress.collect { event ->
-          gestureInProgress = true
-          scaffoldState.seekTo(event.progress, listValue, isPredictiveBackInProgress = true)
-        }
-        // A completed gesture must not close another record or act after authentication is lost.
-        if (selectedAtStart != null && currentState.value.canReadRecords &&
-          currentState.value.selectedRecordId == selectedAtStart) {
-          // Keep the outgoing detail until its short slide finishes, rather than swapping
-          // it for a placeholder. A bounded tween avoids the old long spring tail;
-          // the compact list never renders a selected-card highlight during the return.
-          if (ValueAnimator.areAnimatorsEnabled()) {
-            scaffoldState.animateTo(listValue,
-              animationSpec = tween(280, easing = FastOutSlowInEasing),
-              // A button-only Back has no predictive preview. Marking it as one
-              // shrinks the list, then adds a separate scale-restoring spring.
-              isPredictiveBackInProgress = gestureInProgress)
-          } else scaffoldState.snapTo(listValue)
-          if (currentState.value.canReadRecords && currentState.value.selectedRecordId == selectedAtStart) {
-            currentState.value.eventSink(BootstrapScreen.Event.CloseRecord)
-          } else scaffoldState.snapTo(currentValue.value)
-        } else scaffoldState.snapTo(currentValue.value)
-      } catch (cancelled: CancellationException) {
-        // Restore without waiting for frames: composition may already be removed after logout.
-        withContext(NonCancellable) { scaffoldState.snapTo(currentValue.value) }
-        throw cancelled
-      }
     }
     val listTitle = stringResource(R.string.record_title)
     val detailTitle = stringResource(R.string.record_detail_title)
-    ListDetailPaneScaffold(directive, scaffoldState, modifier = Modifier.fillMaxSize(),
-      listPane = {
-        AnimatedPane(Modifier.preferredWidth(400.dp).semantics {
+    // A new account cannot inherit outgoing entries or their in-memory decrypted previews.
+    key(state.recordOwner) {
+      // Cached NavEntries keep their lifetime while their content observes the latest inputs.
+      val listContent = rememberUpdatedState<@Composable () -> Unit> {
+        Box(Modifier.fillMaxSize().semantics {
           paneTitle = listTitle
           isTraversalGroup = true
         }) {
@@ -205,31 +165,72 @@ internal fun AdaptiveRecordsUi(
             if (queryAvailable && state.selectedRecordId == null && queryMode == RecordQueryMode.Closed && motionAllowed) {
               Box(Modifier.align(Alignment.BottomCenter).widthIn(max = 560.dp).fillMaxWidth(),
                 contentAlignment = Alignment.BottomEnd) {
-                RecordQueryToolbar(state.listQuery, Modifier.padding(ShittimSpacing.Medium),
-                  onSearch = { queryMode = RecordQueryMode.Search },
-                  onFilters = { focusManager.clearFocus(force = true); queryMode = RecordQueryMode.Filters })
+                // Nav3 moves this entry between single- and two-pane lookahead roots. A local
+                // root keeps Material's toolbar alignment-line owner valid across that move.
+                LookaheadScope {
+                  RecordQueryToolbar(state.listQuery, Modifier.padding(ShittimSpacing.Medium),
+                    onSearch = { queryMode = RecordQueryMode.Search },
+                    onFilters = { focusManager.clearFocus(force = true); queryMode = RecordQueryMode.Filters })
+                }
               }
             }
           }
         }
-      },
-      detailPane = {
-        AnimatedPane(Modifier.semantics { paneTitle = detailTitle; isTraversalGroup = true }) {
-          if (state.selectedRecordId == null) {
+      }
+      val detailContent = rememberUpdatedState<@Composable (RecordDetail) -> Unit> { route ->
+        // Pop changes the live selection immediately; NavDisplay retains this entry until
+        // its slide finishes. Keep only this entry's preview in memory, never SavedState.
+        var preview by remember { mutableStateOf(
+          if (state.selectedRecordId == route.recordId) state.record else RecordPreviewState.Idle) }
+        if (state.selectedRecordId == route.recordId) preview = state.record
+        val entryLifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
+        Box(Modifier.fillMaxSize().semantics { paneTitle = detailTitle; isTraversalGroup = true },
+          contentAlignment = Alignment.TopCenter) {
+          RecordDetailScreen(preview, route.recordId, state.eventSink,
+            Modifier.widthIn(max = 760.dp).fillMaxSize(), rememberLazyListState(),
+            scrollTag = if (twoPanes) "record-detail-content" else "bootstrap-content",
+            motionAllowed = motionAllowed && state.selectedRecordId == route.recordId &&
+              entryLifecycle.isAtLeast(Lifecycle.State.RESUMED), playedSections = playedSections,
+            onSectionSeen = onSectionSeen)
+        }
+      }
+      val entries = rememberDecoratedNavEntries(backStack = state.backStack,
+        entryDecorators = listOf(rememberSaveableStateHolderNavEntryDecorator()),
+        entryProvider = entryProvider {
+          entry<RecordsList>(metadata = ListDetailSceneStrategy.listPane(detailPlaceholder = {
             Box(Modifier.fillMaxSize().padding(ShittimSpacing.Large), contentAlignment = Alignment.Center) {
               Text(stringResource(R.string.record_select), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-          } else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-            detailStateHolder.SaveableStateProvider(detailVisit) {
-              RecordDetailScreen(state.record, state.selectedRecordId, state.eventSink,
-                Modifier.widthIn(max = 760.dp).fillMaxSize(), detailScrollState,
-                scrollTag = if (twoPanes) "record-detail-content" else "bootstrap-content",
-                motionAllowed = motionAllowed, playedSections = playedSections,
-                onSectionSeen = onSectionSeen)
-            }
-          }
+          }) + ListDetailSceneStrategy.preferredPaneSize(width = 400.dp)) { listContent.value() }
+          entry<RecordDetail>(metadata = ListDetailSceneStrategy.detailPane()) { detailContent.value(it) }
+        })
+      val onBack = { state.eventSink(BootstrapScreen.Event.CloseRecord) }
+      val sceneState = rememberSceneState(entries, listOf(sceneStrategy), onBack = onBack)
+      // Wide scenes own their Back handler internally. Rehost only their visual scope on a
+      // route change to cancel a gesture against the old detail; keep decorated entry state
+      // outside this key so resize and selection do not discard reading state. Compact hosts
+      // stay alive across pops to retain their outgoing slide.
+      key(if (twoPanes) state.backStack.last() else RecordsList) {
+        val navigationEventState = key(state.backStack.last()) { rememberNavigationEventState(sceneState) }
+        key(navigationEventState) {
+          // Match NavDisplay's standard order: the Adaptive scene's internal handler wins.
+          NavigationBackHandler(sceneState, navigationEventState, onBackCompleted = onBack)
         }
-      })
+        NavDisplay(sceneState, navigationEventState, modifier = Modifier.fillMaxSize(), sizeTransform = null,
+          transitionSpec = {
+            slideInHorizontally(tween(280, easing = FastOutSlowInEasing)) { it } togetherWith
+              slideOutHorizontally(tween(280, easing = FastOutSlowInEasing)) { -it / 4 }
+          },
+          popTransitionSpec = {
+            slideInHorizontally(tween(280, easing = FastOutSlowInEasing)) { -it / 4 } togetherWith
+              slideOutHorizontally(tween(280, easing = FastOutSlowInEasing)) { it }
+          },
+          predictivePopTransitionSpec = {
+            slideInHorizontally(tween(280, easing = FastOutSlowInEasing)) { -it / 4 } togetherWith
+              slideOutHorizontally(tween(280, easing = FastOutSlowInEasing)) { it }
+          })
+      }
+    }
     if (state.canReadRecords && state.selectedRecordId == null) {
       when (queryMode) {
         RecordQueryMode.Filters -> RecordFilterSheet(state.listQuery,
@@ -243,10 +244,12 @@ internal fun AdaptiveRecordsUi(
               val index = pagingItems?.itemSnapshotList?.items?.indexOfFirst { it.stableKey == anchor?.key } ?: -1
               val prefix = 2 + if (state.listQuery.isDefault) 0 else 1 // brand, optional chips, context
               val offset = searchScrollState.firstVisibleItemScrollOffset
+              val ownerAtStart = state.recordOwner
               scope.launch {
                 if (index >= 0) listScrollState.scrollToItem(prefix + index, offset)
                 else listScrollState.scrollToItem(0)
-                if (currentState.value.canReadRecords && currentState.value.selectedRecordId == null) {
+                if (currentState.value.canReadRecords && currentState.value.selectedRecordId == null &&
+                  currentState.value.recordOwner == ownerAtStart) {
                   currentState.value.eventSink(event)
                 }
               }
