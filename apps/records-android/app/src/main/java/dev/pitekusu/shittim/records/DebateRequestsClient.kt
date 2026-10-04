@@ -134,7 +134,11 @@ internal class DebateRequestsClient(private val engine: HttpClientEngine = OkHtt
           val code = json.decodeFromString<ErrorEnvelope>(text).error.code
           throw DebateRequestException(when (response.status.value) {
             401 -> DebateFailure.AUTH_REQUIRED
-            403 -> if (code == "DEBATE_START_REAUTH_REQUIRED") DebateFailure.REAUTH_REQUIRED else DebateFailure.FORBIDDEN
+            403 -> when (code) {
+              "GUILD_MEMBERSHIP_REQUIRED" -> DebateFailure.AUTH_REQUIRED
+              "DEBATE_START_REAUTH_REQUIRED" -> DebateFailure.REAUTH_REQUIRED
+              else -> DebateFailure.FORBIDDEN
+            }
             404 -> DebateFailure.NOT_FOUND
             409 -> DebateFailure.CONFLICT
             429 -> if (code == "DEBATE_QUEUE_FULL") DebateFailure.QUEUE_FULL else DebateFailure.UNAVAILABLE

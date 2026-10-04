@@ -149,7 +149,7 @@ internal class BootstrapPresenter(
               val result = session.withAuthorizedToken { Lookup(client.find(it, id)) }
                 ?: throw DebateRequestException(DebateFailure.AUTH_REQUIRED)
               result.value
-            }, { store?.close(); client.close() })
+            }, { store?.close(); client.close() }, authenticationRequired = session::onAuthenticationRequired)
         } }
         ViewModelProvider(modelOwner, factory)["debate-$owner", DebateSubmissionModel::class.java]
       }

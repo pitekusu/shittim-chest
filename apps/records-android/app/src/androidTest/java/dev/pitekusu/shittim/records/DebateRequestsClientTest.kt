@@ -72,4 +72,20 @@ class DebateRequestsClientTest {
     }
     assertEquals(1, calls)
   }
+
+  @Test fun onlyDefinitiveAuthenticationOrGuildDenialInvalidatesTheSession() = runBlocking<Unit> {
+    for ((status, code, expected) in listOf(
+      Triple(HttpStatusCode.Unauthorized, "AUTHENTICATION_REQUIRED", DebateFailure.AUTH_REQUIRED),
+      Triple(HttpStatusCode.Forbidden, "GUILD_MEMBERSHIP_REQUIRED", DebateFailure.AUTH_REQUIRED),
+      Triple(HttpStatusCode.Forbidden, "CHANNEL_PERMISSION_REQUIRED", DebateFailure.FORBIDDEN),
+      Triple(HttpStatusCode.Forbidden, "DEBATE_START_REAUTH_REQUIRED", DebateFailure.REAUTH_REQUIRED),
+    )) {
+      DebateRequestsClient(MockEngine {
+        respond("""{"schemaVersion":1,"error":{"code":"$code","requestId":"synthetic"}}""", status, headers)
+      }).use { client ->
+        try { client.submit(token, id, "架空の相談"); fail("denial accepted") }
+        catch (error: DebateRequestException) { assertEquals(expected, error.failure) }
+      }
+    }
+  }
 }

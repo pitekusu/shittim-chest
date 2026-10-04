@@ -24,6 +24,7 @@ internal class DebateSubmissionModel(
   private val send: suspend (String, String) -> DebateRequest?,
   private val find: suspend (String) -> DebateRequest?,
   private val close: () -> Unit,
+  private val authenticationRequired: () -> Unit = {},
 ) : ViewModel() {
   private val mutable = MutableStateFlow(DebateSubmissionState())
   val state = mutable.asStateFlow()
@@ -72,7 +73,9 @@ internal class DebateSubmissionModel(
   }
 
   fun flush(afterSave: () -> Unit) {
-    val value = mutable.value.workspace ?: return
+    // No edits are possible before restoration. A failed or pending read has no
+    // unsaved workspace to protect, so it must not trap Back on this screen.
+    val value = mutable.value.workspace ?: run { afterSave(); return }
     val flushingOperation = mutable.value.busy
     if (!flushingOperation && committed === value) { afterSave(); return }
     autosave?.cancel()
@@ -124,6 +127,7 @@ internal class DebateSubmissionModel(
         if (authorized()) mutable.value = DebateSubmissionState(accepted)
       } catch (error: CancellationException) { throw error }
       catch (error: DebateRequestException) {
+        if (error.failure == DebateFailure.AUTH_REQUIRED && authorized()) authenticationRequired()
         if (authorized()) mutable.value = DebateSubmissionState(mutable.value.workspace,
           failure = error.failure)
       } catch (_: Exception) {
@@ -156,6 +160,7 @@ internal class DebateSubmissionModel(
         }
       } catch (error: CancellationException) { throw error }
       catch (error: DebateRequestException) {
+        if (error.failure == DebateFailure.AUTH_REQUIRED && authorized()) authenticationRequired()
         if (authorized()) mutable.value = DebateSubmissionState(value, failure = error.failure)
       } catch (_: Exception) {
         if (authorized()) mutable.value = DebateSubmissionState(value, failure = DebateFailure.STORAGE)

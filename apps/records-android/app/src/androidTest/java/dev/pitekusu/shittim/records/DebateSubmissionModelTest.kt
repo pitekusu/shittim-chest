@@ -28,11 +28,14 @@ class DebateSubmissionModelTest {
       { _, _ -> calls++; null }, { null }, {})
     withContext(Dispatchers.Main) { model.restore() }
     await { model.state.value.workspace != null }
-    withContext(Dispatchers.Main) { model.submit(); model.submit() }
+    withContext(Dispatchers.Main) { model.edit("架空の編集済み議題"); model.submit(); model.submit() }
     await { !model.state.value.busy }
     assertEquals(0, calls)
     assertEquals(DebateFailure.STORAGE, model.state.value.failure)
     assertNull(model.state.value.workspace?.requestId)
+    var navigated = false
+    withContext(Dispatchers.Main) { model.flush { navigated = true } }
+    assertFalse(navigated) // A loaded draft still requires a successful durable write.
     withContext(Dispatchers.Main) { ViewModelStore().apply { put("test", model); clear() } }
   }
 
@@ -103,5 +106,75 @@ class DebateSubmissionModelTest {
     assertTrue(model.state.value.busy)
     assertFalse(response.isCompleted)
     withContext(Dispatchers.Main) { ViewModelStore().apply { put("model", model); clear() } }
+  }
+
+  @Test fun failedWorkspaceRestorationDoesNotTrapBackOrWriteAnEmptyReplacement() = runBlocking<Unit> {
+    var saves = 0
+    var navigated = false
+    val model = DebateSubmissionModel({ true }, { throw IllegalStateException("synthetic_storage_failure") },
+      { saves++ }, { _, _ -> null }, { null }, {})
+    withContext(Dispatchers.Main) { model.restore() }
+    await { model.state.value.failure == DebateFailure.STORAGE }
+    withContext(Dispatchers.Main) { model.flush { navigated = true } }
+    assertTrue(navigated)
+    assertEquals(0, saves)
+    withContext(Dispatchers.Main) { ViewModelStore().apply { put("model", model); clear() } }
+  }
+
+  @Test fun backDuringWorkspaceRestorationDoesNotWaitForOrOverwriteTheRead() = runBlocking<Unit> {
+    val loading = CompletableDeferred<Unit>()
+    val loaded = CompletableDeferred<DebateWorkspace>()
+    var saves = 0
+    var navigated = false
+    val model = DebateSubmissionModel({ true }, { loading.complete(Unit); loaded.await() },
+      { saves++ }, { _, _ -> null }, { null }, {})
+    withContext(Dispatchers.Main) { model.restore() }
+    loading.await()
+    withContext(Dispatchers.Main) { model.flush { navigated = true } }
+    assertTrue(navigated)
+    assertEquals(0, saves)
+    loaded.complete(DebateWorkspace(draft = "架空の保存済み下書き"))
+    await { model.state.value.workspace != null }
+    assertEquals("架空の保存済み下書き", model.state.value.workspace?.draft)
+    assertEquals(0, saves)
+    withContext(Dispatchers.Main) { ViewModelStore().apply { put("model", model); clear() } }
+  }
+
+  @Test fun submissionAndLookupRouteAuthenticationDenialToTheExistingSessionLock() = runBlocking<Unit> {
+    for (lookup in listOf(false, true)) {
+      var permitted = true
+      var locked = 0
+      var saved = if (lookup) DebateWorkspace(draft = "架空の議題", requestId = id, frozenQuestion = "架空の議題")
+        else DebateWorkspace(draft = "架空の議題")
+      val model = DebateSubmissionModel({ permitted }, { saved }, { saved = it },
+        { _, _ -> throw DebateRequestException(DebateFailure.AUTH_REQUIRED) },
+        { throw DebateRequestException(DebateFailure.AUTH_REQUIRED) }, {},
+        authenticationRequired = { locked++; permitted = false })
+      withContext(Dispatchers.Main) { model.restore() }
+      await { model.state.value.workspace != null }
+      withContext(Dispatchers.Main) { if (lookup) model.reconcile() else model.submit() }
+      await { locked == 1 }
+      assertFalse(permitted)
+      assertEquals("架空の議題", saved.frozenQuestion) // Denial locks reads, without deleting the draft.
+      withContext(Dispatchers.Main) { ViewModelStore().apply { put("model", model); clear() } }
+    }
+  }
+
+  @Test fun channelOrLegacyPermissionFailureKeepsRecordAuthorization() = runBlocking<Unit> {
+    for (failure in listOf(DebateFailure.FORBIDDEN, DebateFailure.REAUTH_REQUIRED)) {
+      var locked = 0
+      var saved = DebateWorkspace(draft = "架空の議題")
+      val model = DebateSubmissionModel({ true }, { saved }, { saved = it },
+        { _, _ -> throw DebateRequestException(failure) }, { null }, {},
+        authenticationRequired = { locked++ })
+      withContext(Dispatchers.Main) { model.restore() }
+      await { model.state.value.workspace != null }
+      withContext(Dispatchers.Main) { model.submit() }
+      await { !model.state.value.busy }
+      assertEquals(failure, model.state.value.failure)
+      assertEquals(0, locked)
+      assertEquals("架空の議題", saved.frozenQuestion)
+      withContext(Dispatchers.Main) { ViewModelStore().apply { put("model", model); clear() } }
+    }
   }
 }
