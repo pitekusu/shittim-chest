@@ -8,6 +8,7 @@ from typing import Any, Protocol
 from shittim_records.contracts import MomotalkWeek
 from shittim_records.momotalk import (
     MAX_ATTEMPTS,
+    MAX_CHAIN_STEPS,
     ConversationPlan,
     ImageChoice,
     MomotalkFailure,
@@ -74,7 +75,9 @@ class InputSource(Protocol):
 
 
 class JobQueue(Protocol):
-    def send(self, week_id: date, room_id: str) -> None: ...
+    def send(
+        self, week_id: date, room_id: str, *, steps_remaining: int = MAX_CHAIN_STEPS
+    ) -> None: ...
 
 
 class Generator(Protocol):
@@ -130,6 +133,21 @@ def collect_week(
     return len(snapshot.requesters)
 
 
+def continue_week(week_id: date, store: Store, queue: JobQueue, *, now: datetime) -> int:
+    """Resume only deliberately paused work from an independent scheduled event."""
+    week = store.get_week(week_id)
+    if week is None or not week["enqueued"]:
+        return 0
+    count = 0
+    for room in store.all_rooms(week_id):
+        if not room.complete and room.continuation_pending and room.lease_until <= now.timestamp():
+            # Keep the marker until a worker starts. Failed/unknown sends are
+            # recoverable at the next tick; conditional claims handle duplicates.
+            queue.send(week_id, room.room_id)
+            count += 1
+    return count
+
+
 class MomotalkGenerationService:
     def __init__(self, store: Store, assets: Assets, queue: JobQueue, generator: Generator) -> None:
         self.store = store
@@ -137,8 +155,17 @@ class MomotalkGenerationService:
         self.queue = queue
         self.generator = generator
 
-    def run(self, week_id: date, room_id: str, *, now: datetime) -> bool:
+    def run(
+        self,
+        week_id: date,
+        room_id: str,
+        *,
+        now: datetime,
+        steps_remaining: int = MAX_CHAIN_STEPS,
+    ) -> bool:
         """Return false for a bounded SQS retry; never log the provider's exception."""
+        if not 1 <= steps_remaining <= MAX_CHAIN_STEPS:
+            raise MomotalkFailure("MOMOTALK_JOB_INVALID")
         room = self.store.get_room(week_id, room_id)
         week = self.store.get_week(week_id)
         if room is None or week is None:
@@ -150,6 +177,7 @@ class MomotalkGenerationService:
         if claimed is None:
             return False
         room = claimed
+        room.continuation_pending = False
         if room.attempts > MAX_ATTEMPTS:
             self._fail_step(room)
         else:
@@ -168,12 +196,13 @@ class MomotalkGenerationService:
         room.attempts = 0
         if room.state == "ready" and all(image.state != "pending" for image in room.images):
             room.complete = True
+        room.continuation_pending = not room.complete and steps_remaining == 1
         self.store.save(room)
         # Enqueue after saving. If this send fails, redelivery resumes the saved next
         # step rather than re-running the expensive completed provider request.
-        if not room.complete:
-            self.queue.send(week_id, room_id)
-        else:
+        if not room.complete and not room.continuation_pending:
+            self.queue.send(week_id, room_id, steps_remaining=steps_remaining - 1)
+        elif room.complete:
             self._cleanup(week_id, week)
         return True
 
@@ -246,8 +275,8 @@ class MomotalkGenerationService:
                 room.digest = result
             return
         if len(room.messages) < len(room.plan.turns):
-            # Keep the 15-turn conversation plus two image fallbacks below Lambda's
-            # recursive-invocation limit, without disabling recursion protection.
+            # Two requests fit the worker deadline. The job budget, rather than
+            # preparation or turn counts, bounds the SQS invocation chain.
             for offset in range(min(2, len(room.plan.turns) - len(room.messages))):
                 if offset:
                     # The next turn starts its own first attempt in this claim.

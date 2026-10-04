@@ -18,14 +18,25 @@ from shittim_records.memorial_adapters import (
     MemorialConfigurationRepository,
     S3MemorialAssetStore,
 )
-from shittim_records.momotalk import OpaqueId, StoredModel, validate_week_id, week_for_schedule
+from shittim_records.momotalk import (
+    MAX_CHAIN_STEPS,
+    TOKYO,
+    OpaqueId,
+    StoredModel,
+    validate_week_id,
+    week_for_schedule,
+)
 from shittim_records.momotalk_adapters import (
     DynamoMomotalkStore,
     MomotalkAssets,
     MomotalkInputSource,
     MomotalkQueue,
 )
-from shittim_records.momotalk_generation import MomotalkGenerationService, collect_week
+from shittim_records.momotalk_generation import (
+    MomotalkGenerationService,
+    collect_week,
+    continue_week,
+)
 from shittim_records.momotalk_openai import OpenAIMomotalkGenerator
 from shittim_records.read_adapters import DynamoRecordsReader
 
@@ -39,6 +50,9 @@ S3_CONFIG = SDK_CONFIG.merge(Config(signature_version="s3v4", s3={"addressing_st
 class Job(StoredModel):
     week_id: str = Field(alias="weekId")
     room_id: OpaqueId = Field(alias="roomId")
+    steps_remaining: int = Field(
+        default=MAX_CHAIN_STEPS, alias="stepsRemaining", strict=True, ge=1, le=MAX_CHAIN_STEPS
+    )
 
 
 @lru_cache(maxsize=1)
@@ -90,14 +104,20 @@ def _components() -> tuple[
 
 def collect_handler(event: Mapping[str, Any], _context: object) -> dict[str, Any]:
     try:
-        if event.get("source") != "aws.events" or event.get("detail-type") != "Scheduled Event":
-            raise ValueError("invalid scheduled event")
         scheduled_at = datetime.fromisoformat(event["time"])
         now = datetime.now(UTC)
         if scheduled_at.tzinfo is None or not timedelta(0) <= now - scheduled_at <= timedelta(
             days=1
         ):
             raise ValueError("invalid scheduled time")
+        if event.get("source") == "shittim.momotalk.continuation":
+            local = scheduled_at.astimezone(TOKYO)
+            week_id = local.date() - timedelta(days=(local.weekday() + 1) % 7)
+            store, _assets, queue, _reader, _configuration, _references = _components()
+            count = continue_week(week_id, store, queue, now=now)
+            return {"state": "continued", "rooms": count}
+        if event.get("source") != "aws.events" or event.get("detail-type") != "Scheduled Event":
+            raise ValueError("invalid scheduled event")
         week = week_for_schedule(scheduled_at)
         store, assets, queue, reader, configuration, _references = _components()
         source = MomotalkInputSource(
@@ -124,6 +144,7 @@ def worker_handler(event: Mapping[str, Any], _context: object) -> dict[str, Any]
                     week_id,
                     job.room_id,
                     now=datetime.now(UTC),
+                    steps_remaining=job.steps_remaining,
                 )
             finally:
                 generator.close()

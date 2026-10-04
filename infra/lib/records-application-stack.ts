@@ -1428,6 +1428,17 @@ export class RecordsApplicationStack extends Stack {
         retryAttempts: 2, maxEventAge: Duration.hours(6),
       })],
     });
+    new events.Rule(this, "MomotalkContinuationRule", {
+      description: "Resume checkpointed MomoTalk after bounded SQS invocation chains",
+      schedule: events.Schedule.rate(Duration.minutes(5)),
+      targets: [new eventTargets.LambdaFunction(momotalkCollector, {
+        event: events.RuleTargetInput.fromObject({
+          source: "shittim.momotalk.continuation",
+          time: events.EventField.time,
+        }),
+        retryAttempts: 2, maxEventAge: Duration.minutes(10),
+      })],
+    });
     for (const fn of [momotalkCollector, momotalkWorker]) {
       fn.role!.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, Object.fromEntries(
         ["arn:aws", "arn:<AWS::Partition>"].flatMap((partition) => [

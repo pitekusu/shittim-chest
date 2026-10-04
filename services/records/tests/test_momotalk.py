@@ -179,7 +179,7 @@ class State:
     def save(self, room):
         self.room = Room.model_validate_json(room.model_dump_json())
 
-    def send(self, *args):
+    def send(self, *args, **_kwargs):
         self.jobs.append(args)
 
     def prepare(self, _snapshot, requester, room, questions, *, final):

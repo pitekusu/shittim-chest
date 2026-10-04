@@ -1,12 +1,27 @@
 """Moderation changes the subject once, with durable checkpoints and bounded cost."""
 
+from datetime import timedelta
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 from tests.test_momotalk import ROOM_ID, START, WEEK, State, snapshot
 
-from shittim_records.momotalk import PARTICIPANTS, ImageChoice, MomotalkFailure, Room, Turn
-from shittim_records.momotalk_generation import MomotalkGenerationService, collect_week
+from shittim_records.momotalk import (
+    MAX_CHAIN_STEPS,
+    PARTICIPANTS,
+    ImageChoice,
+    MomotalkFailure,
+    Room,
+    Turn,
+    WeekDigest,
+    question_chunks,
+)
+from shittim_records.momotalk_generation import (
+    MomotalkGenerationService,
+    collect_week,
+    continue_week,
+)
 
 
 class FallbackState(State):
@@ -266,7 +281,7 @@ def test_enqueue_failure_after_rejection_resumes_without_resending_the_subject(m
     service.run(WEEK.week_id, ROOM_ID, now=START)
     original_send = state.send
 
-    def unavailable(*_args):
+    def unavailable(*_args, **_kwargs):
         raise RuntimeError("queue unavailable")
 
     monkeypatch.setattr(state, "send", unavailable)
@@ -309,15 +324,131 @@ def test_operator_claim_loss_keeps_the_rejection_for_the_next_repair(monkeypatch
     assert state.image_calls == [("unhappy", "q" * 43), ("unhappy", "r" * 43)]
 
 
+@pytest.mark.parametrize("chunk_count", [2, 12])
+def test_long_preparation_and_image_fallbacks_resume_in_bounded_chains(chunk_count):
+    class QueuedState(FallbackState):
+        def send(self, week_id, room_id, *, steps_remaining=MAX_CHAIN_STEPS):
+            self.jobs.append((week_id, room_id, steps_remaining))
+
+        def prepare(self, *args, final, **kwargs):
+            result = super().prepare(*args, final=True, **kwargs)
+            return result if final else WeekDigest(summary=result.summary, images=result.images)
+
+    state = cast(Any, QueuedState(both_images=True, turns=15))
+    requester = state.snapshot.requesters[0]
+    original = requester.questions[0]
+    # Each synthetic record fits one chunk; pairs exceed its byte budget.
+    requester.questions = [
+        original.model_copy(
+            update={
+                "record_id": f"{index:043d}",
+                "text": "読書の相談" * 200,
+                "affection": {"synthetic": "x" * 13_000},
+            }
+        )
+        for index in range(chunk_count)
+    ]
+    requester.questions[0] = original.model_copy(
+        update={"text": "散歩の相談" * 200, "affection": {"synthetic": "x" * 13_000}}
+    )
+    assert len(question_chunks(requester.questions)) == chunk_count
+    collect_week(WEEK, state, state, state, state)
+    service = MomotalkGenerationService(state, state, state, state)
+    chains = []
+    while not state.room.complete:
+        invocations = 0
+        while state.jobs:
+            week_id, room_id, remaining = state.jobs.pop(0)
+            assert service.run(week_id, room_id, now=START, steps_remaining=remaining)
+            invocations += 1
+        chains.append(invocations)
+        assert invocations <= MAX_CHAIN_STEPS
+        if not state.room.complete:
+            assert state.room.continuation_pending and state.room.lease_until == 0
+            assert continue_week(WEEK.week_id, state, state, now=START) == 1
+    assert len(chains) >= 2
+    assert state.room.state == "ready" and len(state.room.messages) == 15
+    assert all(image.state == "ready" for image in state.room.images)
+    assert not state.room.continuation_pending
+    assert len(state.image_calls) == 4 and len(state.reselections) == 2
+    assert continue_week(WEEK.week_id, state, state, now=START) == 0
+
+
+def test_continuation_tick_skips_unpaused_and_leased_rooms_and_recovers_failed_send(monkeypatch):
+    state = cast(Any, FallbackState())
+    service = published(state)
+    assert continue_week(WEEK.week_id, state, state, now=START) == 0
+    service.run(WEEK.week_id, ROOM_ID, now=START, steps_remaining=1)
+    assert state.room.continuation_pending
+    state.room.lease_until = int(START.timestamp()) + 1
+    assert continue_week(WEEK.week_id, state, state, now=START) == 0
+    state.room.lease_until = 0
+    original_send = state.send
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("queue unavailable")
+
+    monkeypatch.setattr(state, "send", unavailable)
+    with pytest.raises(RuntimeError, match="queue unavailable"):
+        continue_week(WEEK.week_id, state, state, now=START)
+    assert state.room.continuation_pending
+    monkeypatch.setattr(state, "send", original_send)
+    assert continue_week(WEEK.week_id, state, state, now=START) == 1
+    service.run(WEEK.week_id, ROOM_ID, now=START)
+    assert not state.room.continuation_pending
+
+
+@pytest.mark.parametrize("event_age", [timedelta(0), timedelta(days=2), timedelta(seconds=-1)])
+def test_continuation_handler_uses_fresh_schedule_and_never_collects_inputs(monkeypatch, event_age):
+    from shittim_records import momotalk_handlers as handlers
+
+    state = cast(Any, FallbackState())
+    service = published(state)
+    service.run(WEEK.week_id, ROOM_ID, now=START, steps_remaining=1)
+    monkeypatch.setattr(handlers, "_components", lambda: (state, None, state, None, None, None))
+    from datetime import datetime
+
+    monkeypatch.setattr(
+        handlers,
+        "datetime",
+        SimpleNamespace(now=lambda _zone: START, fromisoformat=datetime.fromisoformat),
+    )
+    event = {
+        "source": "shittim.momotalk.continuation",
+        "time": (START - event_age).isoformat(),
+    }
+    before = state.calls.copy()
+    if event_age == timedelta(0):
+        assert handlers.collect_handler(event, None) == {"state": "continued", "rooms": 1}
+    else:
+        with pytest.raises(RuntimeError, match="MOMOTALK_COLLECTION_FAILED"):
+            handlers.collect_handler(event, None)
+    assert state.calls == before
+
+
 def test_preexisting_checkpoints_load_without_moderation_metadata():
     state = cast(Any, FallbackState())
     published(state)
     payload = state.room.model_dump()
+    del payload["continuation_pending"]
     for image in payload["images"]:
         del image["moderation_blocked"]
         del image["alternate_topic_used"]
     restored = Room.model_validate(payload)
     assert restored.messages == state.room.messages and restored.plan == state.room.plan
+    assert not restored.continuation_pending
     assert all(
         not image.moderation_blocked and not image.alternate_topic_used for image in restored.images
     )
+
+
+def test_worker_job_accepts_old_messages_and_rejects_invalid_chain_budgets():
+    from pydantic import ValidationError
+
+    from shittim_records.momotalk_handlers import Job
+
+    payload = {"weekId": str(WEEK.week_id), "roomId": ROOM_ID}
+    assert Job.model_validate(payload).steps_remaining == MAX_CHAIN_STEPS
+    for remaining in (0, MAX_CHAIN_STEPS + 1, True, "8"):
+        with pytest.raises(ValidationError):
+            Job.model_validate({**payload, "stepsRemaining": remaining})

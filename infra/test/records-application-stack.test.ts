@@ -205,6 +205,17 @@ describe("RecordsApplicationStack", () => {
       ScheduleExpression: "cron(0 9 ? * SUN *)",
       Description: "Collect weekly MomoTalk inputs at 18:00 JST Sunday",
     });
+    template.hasResourceProperties("AWS::Events::Rule", {
+      ScheduleExpression: "rate(5 minutes)",
+      Description: "Resume checkpointed MomoTalk after bounded SQS invocation chains",
+      Targets: Match.arrayWith([Match.objectLike({
+        InputTransformer: {
+          InputPathsMap: { time: "$.time" },
+          InputTemplate: '{"source":"shittim.momotalk.continuation","time":<time>}',
+        },
+        RetryPolicy: { MaximumRetryAttempts: 2, MaximumEventAgeInSeconds: 600 },
+      })]),
+    });
     template.hasResourceProperties("AWS::Lambda::EventSourceMapping", {
       BatchSize: 1, FunctionResponseTypes: ["ReportBatchItemFailures"],
       ScalingConfig: { MaximumConcurrency: 2 },
@@ -421,7 +432,7 @@ describe("RecordsApplicationStack", () => {
         },
       },
     });
-    template.resourceCountIs("AWS::Events::Rule", 7);
+    template.resourceCountIs("AWS::Events::Rule", 8);
     template.hasResourceProperties("AWS::Events::Rule", {
       ScheduleExpression: "rate(15 minutes)",
       State: "ENABLED",
