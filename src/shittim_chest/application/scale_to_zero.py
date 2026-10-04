@@ -73,6 +73,12 @@ def mobile_ingress_id(owner_key: str, request_id: str) -> str:
     return "m_" + hashlib.sha256(f"{owner_key}:{request_id}".encode()).hexdigest()
 
 
+def is_mobile_ingress_id(value: object) -> bool:
+    """Recognize the reserved, content-free internal mobile operation namespace."""
+
+    return isinstance(value, str) and re.fullmatch(r"m_[0-9a-f]{64}", value) is not None
+
+
 @unique
 class IngressStatus(StrEnum):
     """Durable lifecycle of one HTTP interaction operation."""
@@ -230,6 +236,7 @@ class IngressRequest:
     source: IngressSource = IngressSource.DISCORD
     owner_key: str | None = None
     mobile_request_id: str | None = None
+    history_after_snowflake: str | None = None
 
     def __post_init__(self) -> None:
         if self.source is IngressSource.MOBILE:
@@ -240,8 +247,13 @@ class IngressRequest:
                 raise ValueError("mobile ingress operation identity is inconsistent")
             if self.kind is not IngressKind.NEW_DEBATE:
                 raise ValueError("mobile ingress only supports new debates")
+            if self.history_after_snowflake is not None:
+                _require_canonical_snowflake(
+                    self.history_after_snowflake, label="mobile history lower bound"
+                )
         elif self.source is not IngressSource.DISCORD or any(
-            value is not None for value in (self.owner_key, self.mobile_request_id)
+            value is not None
+            for value in (self.owner_key, self.mobile_request_id, self.history_after_snowflake)
         ):
             raise ValueError("Discord ingress cannot contain mobile ownership")
         for label, value in (
@@ -677,8 +689,24 @@ class IngressStatusPublication:
     incarnation: int = 0
     error_code: str | None = None
     schema_version: int = 3
+    history_after_snowflake: str | None = None
+
+    @property
+    def history_after_message_id(self) -> str:
+        """Discord scan bound is distinct from a mobile operation identity."""
+
+        return self.history_after_snowflake or self.canonical_interaction_id
 
     def __post_init__(self) -> None:
+        if (
+            is_mobile_ingress_id(self.canonical_interaction_id)
+            and self.history_after_snowflake is None
+        ):
+            raise ValueError("mobile status publication requires a Discord history lower bound")
+        if self.history_after_snowflake is not None:
+            _require_canonical_snowflake(
+                self.history_after_snowflake, label="status history lower bound"
+            )
         for label, value in (
             ("canonical interaction ID", self.canonical_interaction_id),
             ("request sort key", self.request_sort_key),
@@ -714,10 +742,10 @@ class IngressStatusPublication:
             if not self.history_reconciliation_required or self.status_message_id is not None:
                 raise ValueError("history checkpoint requires an unresolved status message scan")
             _require_canonical_snowflake(
-                self.canonical_interaction_id,
+                self.history_after_message_id,
                 label="history checkpoint interaction ID",
             )
-            interaction_id = int(self.canonical_interaction_id)
+            interaction_id = int(self.history_after_message_id)
             verified_head = int(self.history_checkpoint.history_verified_head_message_id)
             if verified_head <= interaction_id:
                 raise ValueError("history verified head must follow the interaction")
@@ -797,6 +825,7 @@ class IngressStatusPublication:
             created_at=request.created_at,
             updated_at=request.created_at,
             next_attempt_at=request.created_at,
+            history_after_snowflake=request.history_after_snowflake,
         )
 
 
@@ -810,6 +839,8 @@ class StatusPublicationWork:
     def __post_init__(self) -> None:
         if self.request.interaction_id != self.publication.canonical_interaction_id:
             raise ValueError("status publication belongs to another request")
+        if self.request.history_after_snowflake != self.publication.history_after_snowflake:
+            raise ValueError("status publication history bound is inconsistent")
         expected_sort_key = (
             "REQUEST#"
             f"{self.request.created_at.isoformat(timespec='microseconds').replace('+00:00', 'Z')}#"

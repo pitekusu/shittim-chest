@@ -1,20 +1,26 @@
 """Mobile ownership is additive; legacy ingress serialization stays unchanged."""
 
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
+from discord.utils import time_snowflake
 
 from shittim_chest.adapters.dynamodb.serializer import (
     PersistenceFormatError,
     deserialize_ingress_request,
+    deserialize_ingress_status_publication,
     serialize_ingress_request,
+    serialize_ingress_status_publication,
 )
 from shittim_chest.application.scale_to_zero import (
     IngressRequest,
     IngressSource,
+    IngressStatusPublication,
+    StatusHistoryCheckpoint,
     mobile_ingress_id,
 )
+from shittim_chest.application.status_publication import render_public_status
 
 NOW = datetime(2026, 10, 4, tzinfo=UTC)
 OWNER = "a" * 43
@@ -84,3 +90,34 @@ def test_only_canonical_uuidv4_is_accepted(request_id: str) -> None:
 def test_discord_cannot_acquire_mobile_ownership_without_source() -> None:
     with pytest.raises(ValueError):
         replace(mobile_request(), source=IngressSource.DISCORD)
+
+
+def test_mobile_history_checkpoint_uses_separate_snowflake_bound_and_round_trips() -> None:
+    boundary = str(time_snowflake(NOW - timedelta(seconds=1)))
+    request = replace(mobile_request(), history_after_snowflake=boundary)
+    publication = IngressStatusPublication.prepared(
+        request, content=render_public_status(request, request.status_message_state)
+    )
+    progress = replace(
+        publication,
+        history_reconciliation_required=True,
+        history_checkpoint=StatusHistoryCheckpoint(
+            history_cursor_message_id=str(int(boundary) + 1),
+            history_verified_head_message_id=str(int(boundary) + 2),
+        ),
+    )
+    assert progress.history_after_message_id == boundary
+    assert progress.canonical_interaction_id != boundary
+    assert (
+        deserialize_ingress_status_publication(serialize_ingress_status_publication(progress))
+        == progress
+    )
+    assert deserialize_ingress_request(serialize_ingress_request(request)) == request
+    with pytest.raises(ValueError, match="follow the interaction"):
+        replace(
+            progress,
+            history_checkpoint=StatusHistoryCheckpoint(
+                history_cursor_message_id=boundary,
+                history_verified_head_message_id=str(int(boundary) + 2),
+            ),
+        )
