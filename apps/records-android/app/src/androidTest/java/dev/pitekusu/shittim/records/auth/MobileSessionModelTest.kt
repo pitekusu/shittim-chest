@@ -14,6 +14,9 @@ import java.time.ZoneOffset
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -100,21 +103,26 @@ class MobileSessionModelTest {
 
   @Test
   fun denialAfterSessionResponseCannotPublishItsOlderPermit() = runBlocking {
+    suspend fun awaitStage(stage: String, action: suspend () -> Unit) {
+      try { withTimeout(5_000) { action() } }
+      catch (error: TimeoutCancellationException) { throw AssertionError("session_test_wait:$stage", error) }
+    }
     withContext(Dispatchers.Main) {
       Fixture().use { fixture ->
         fixture.stored = fixture.validToken
         val model = fixture.start()
-        model.await<SessionState.SignedIn>()
-        yield()
+        awaitStage("signed_in") { model.await<SessionState.SignedIn>() }
+        // SignedIn is emitted before the refresh Job completes; one yield is not a completion barrier.
+        awaitStage("initial_refresh_finished") { checkNotNull(fixture.activationJob).join() }
         fixture.activationGate = CompletableDeferred()
         fixture.activationStarted = CompletableDeferred()
         model.onForeground()
-        withTimeout(5_000) { fixture.activationStarted.await() }
+        awaitStage("cache_activation") { fixture.activationStarted.await() }
         model.onAuthenticationRequired()
         assertNull(model.cachePermit.value)
         fixture.status = HttpStatusCode.Forbidden
         fixture.activationGate!!.complete(Unit)
-        model.await<SessionState.SignedOut>()
+        awaitStage("signed_out") { model.await<SessionState.SignedOut>() }
         assertNull(model.cachePermit.value)
         assertNull(fixture.stored)
         assertEquals(3, fixture.gets) // The final check starts after the denial.
@@ -703,6 +711,7 @@ class MobileSessionModelTest {
     var sessionStarted = CompletableDeferred<Unit>()
     var activationGate: CompletableDeferred<Unit>? = null
     var activationStarted = CompletableDeferred<Unit>()
+    var activationJob: Job? = null
     var logoutGate: CompletableDeferred<Unit>? = null
     val postStarted = CompletableDeferred<Unit>()
     val owner = ViewModelStore()
@@ -743,7 +752,10 @@ class MobileSessionModelTest {
       assertNull(stored)
       assertFalse(cacheClearFails)
       logoutPending = false
-    }, { activationStarted.complete(Unit); activationGate?.await(); activatedAccounts.add(it) }, {
+    }, {
+      activationJob = currentCoroutineContext()[Job]
+      activationStarted.complete(Unit); activationGate?.await(); activatedAccounts.add(it)
+    }, {
       cacheClears++
       if (cacheClearFails) throw dev.pitekusu.shittim.records.storage.RecordCacheException()
     }, Clock.fixed(now, ZoneOffset.UTC), revokeNotifications = { notificationRevocations++ })
