@@ -43,6 +43,7 @@ import org.junit.runner.RunWith
 
 /** Only synthetic metadata is rendered here; decorating the list must not require record details. */
 @RunWith(AndroidJUnit4::class)
+@ScreenTest
 class RecordJournalVisualTest {
   @get:Rule val compose = createAndroidComposeRule<MainActivity>()
 

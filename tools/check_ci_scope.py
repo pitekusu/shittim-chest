@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
@@ -54,6 +55,40 @@ def check_jobs(changes_result: str, scopes: object, results: object, jobs: list[
         print(f"{job}: {'verified' if required else 'not applicable'}")
 
 
+def check_junit_reports(directory: Path) -> int:
+    """Require real passing cases: a successful Gradle task can contain no executed tests."""
+
+    reports = sorted(directory.rglob("TEST*.xml"))
+    if not reports:
+        raise ValueError("JUnit execution reports are missing")
+    executed = 0
+    for report in reports:
+        try:
+            root = ET.parse(report).getroot()  # noqa: S314 - local AGP-produced reports only
+        except ET.ParseError, OSError:
+            raise ValueError("JUnit execution report cannot be parsed") from None
+        cases = list(root.iter("testcase"))
+        if root.tag not in {"testsuite", "testsuites"} or not cases:
+            raise ValueError("JUnit execution report contains no test cases")
+        for summary in root.iter():
+            if summary.tag not in {"testsuite", "testsuites"}:
+                continue
+            for field in ("tests", "failures", "errors", "skipped"):
+                if field not in summary.attrib:
+                    continue
+                try:
+                    declared = int(summary.attrib[field])
+                except ValueError:
+                    raise ValueError("JUnit execution report has invalid counts") from None
+                expected = len(list(summary.iter("testcase"))) if field == "tests" else 0
+                if declared != expected:
+                    raise ValueError("JUnit execution report counts do not show passing tests")
+        if any(child.tag in {"failure", "error", "skipped"} for case in cases for child in case):
+            raise ValueError("JUnit execution report contains failed or skipped tests")
+        executed += len(cases)
+    return executed
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--require-dependency", action="append", default=[])
@@ -62,6 +97,7 @@ def main() -> int:
         "--job", action="append", default=[], help="job=scope for an aggregate gate"
     )
     parser.add_argument("--github-output", type=Path)
+    parser.add_argument("--junit-reports", type=Path, help="require executed passing test cases")
     args = parser.parse_args()
     if args.job:
         check_jobs(
@@ -80,6 +116,8 @@ def main() -> int:
         args.require_dependency,
     )
     check_steps(required, json.loads(os.environ.get("CI_STEP_RESULTS", "{}")), args.require_step)
+    if args.junit_reports is not None and required:
+        print(f"Android tests executed: {check_junit_reports(args.junit_reports)}")
     if args.github_output is not None:
         with args.github_output.open("a") as output:
             output.write(f"required={str(required).lower()}\n")

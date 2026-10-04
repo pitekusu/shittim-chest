@@ -201,11 +201,13 @@ flowchart LR
 ## C03：Android CI
 
 [CI設計](15_GitHub・CI-CD詳細設計.md)の`android-gate`で、ローカルと同じJDK・Wrapper・SDKを使い、
-debug APK／テストAPK・LintとAPI 36の画面テストを実行する。画面・認証・配布機能は追加しない。
+debug APK／テストAPK・LintとAPI 36の非画面instrumentation testを実行する。CIの検証範囲変更だけで、画面・認証・配布機能は追加しない。
 
-- C02の既存2件をそのまま実行し、別の大量のテストや端末matrixは設けない。
+- 認証・鍵・暗号化保存・DB・API・同期などの非画面試験は必須として維持する。大量のテストや端末matrixは追加しない。
+- Composeの画面・操作試験は`@ScreenTest`で区別して残す。通常のPR／mainでは全件実行せず、UI変更時と配布前に影響する画面を選んで確認する。
+- 選択はAndroidJUnitRunnerの標準フィルターに任せる。手動CIの`android_screen_tests`は既定false、trueでは画面を含む全試験を実行する。具体的なコマンドはAndroid READMEに示す。
 - Android専用差分では無関係なCore／Recordsの全試験を実行しない。共通CI・分類器の変更は両側を検証する。
-- `android-gate`は必要なビルドの失敗・取消・skipや分類失敗を成功扱いしない。
+- `android-gate`は必要なビルドの失敗・取消・skipや分類失敗を成功扱いしない。Gradleの成功終了だけでは合格にせず、実行済みJUnit結果を確認し、結果欠落・0件・失敗・skipを拒否する。
 - レポートのみを短期保存し、APK／署名済み配布は後続工程に残す。
 - Kotlin 2.4.20とMaterial 3 1.5.0-alpha28は維持する。CodeQL対応待ちのC04は分離する。
 
