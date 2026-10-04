@@ -323,16 +323,16 @@ jobs:
                   | .ParameterValue
                 ' "${RUNNER_TEMP}/${logical_name}-stack.json")
                 [[ "${mobile_debate_enabled}" =~ ^(false|true)$ ]]
-                mobile_debate_parameters+=(ParameterKey=MobileDebateEnabled,UsePreviousValue=true)
+                mobile_debate_parameters+=("ParameterKey=MobileDebateEnabled,UsePreviousValue=true")
               else
-                mobile_debate_parameters+=(ParameterKey=MobileDebateEnabled,ParameterValue=false)
+                mobile_debate_parameters+=("ParameterKey=MobileDebateEnabled,ParameterValue=false")
               fi
               if [ "${type}" = UPDATE ] && jq --exit-status '
                 any(.Stacks[0].Parameters[]; .ParameterKey == "MobileDebateChannelId")
               ' "${RUNNER_TEMP}/${logical_name}-stack.json" >/dev/null; then
-                mobile_debate_parameters+=(ParameterKey=MobileDebateChannelId,UsePreviousValue=true)
+                mobile_debate_parameters+=("ParameterKey=MobileDebateChannelId,UsePreviousValue=true")
               else
-                mobile_debate_parameters+=(ParameterKey=MobileDebateChannelId,ParameterValue=)
+                mobile_debate_parameters+=("ParameterKey=MobileDebateChannelId,ParameterValue=")
               fi
             fi
             arn=$(aws cloudformation create-change-set \
