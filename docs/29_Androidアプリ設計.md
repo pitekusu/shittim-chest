@@ -60,7 +60,7 @@ updated: 2026-10-04
 | C40 | Android依存の更新検知 | 既存のDependabot・Dependency Graph・固定ツール監視の担当範囲を整理。監視の重複追加や依存更新は行わない |
 | C41（スキップ） | 利用者向け導入・更新・復旧手順 | 利用者の指定で今回は実施しない。既存の配布・認証・復旧手順は維持する |
 | 後続 | 起動演出・人格アイコン・投票／親愛度表示・友人向け配布 | C37後に小さなPRで分けて進める。起動演出はAndroid SplashScreenからComposeへ接続する |
-| 後続：Navigation 3 | 一覧／詳細の画面遷移・戻る・状態寿命の標準化 | 第1段階で閲覧先を型付きの単一back stackへ移す。描画・Adaptive Scene・状態寿命の仕上げは後述の第2・第3段階で行う。既存の配布工程は変更しない |
+| 後続：Navigation 3 | 一覧／詳細の画面遷移・戻る・状態寿命の標準化 | 第1段階で型付きの単一back stack、第2段階でNavDisplay・Adaptive Sceneへ接続する。復帰経路の横断確認は第3段階で行い、既存の配布工程は変更しない |
 
 ### PRの分割単位
 
@@ -139,8 +139,8 @@ Authlib・Auth Tab・認証検証の共通化も維持する。この方針の�
 | C23：Markdown（接続済み） | [Compose Markdown RendererのMaterial 3対応](https://github.com/mikepenz/multiplatform-markdown-renderer) | 独自パーサー・WebViewは追加しない。外部リンクはHTTPSの絶対URLだけを許可し、Markdown画像URLは取得しない |
 | C26〜29：暗号化保存（導入予定） | Bouncy Castle、Android Keystore、[Room](https://developer.android.com/training/data-storage/room) | 独自暗号方式・DBアクセス基盤は作らない。保存形式・鍵の取り扱いを管理し、Roomには暗号化済み本文を保存 |
 | C31〜C32：同期 | Coroutines、WorkManager、保存済み進捗からの再開 | バックグラウンド継続を新要件として受け、予約・制約・再試行をWorkManagerへ任せる。差分照合・本人認可・暗号化の再開点だけをサービス側で管理 |
-| C36：可変幅の一覧／詳細と戻る | Material 3 AdaptiveのListDetailPaneScaffold、AnimatedPane、ActivityのPredictiveBackHandler | 配置・遷移・pane focus・hinge回避とgesture配信を利用。Nav3第1段階では描画と約280msの戻りを維持し、選択先だけを単一back stackから得る。確定時のCloseRecord接続と認可再確認はアプリ側で扱う |
-| 後続：画面遷移（段階的に導入） | 第1段階はNavigation 3 runtimeのNavKey／rememberNavBackStack。第2段階でNavDisplay・NavEntryとMaterial 3 AdaptiveのListDetailSceneStrategy | Circuit／Metroを維持し、閲覧先を単一back stackへ移す。認可、検証済みの一回限り復帰先、通知・App Linksの検証はアプリ側に残す。描画とSceneの依存は実際に使う第2段階で追加する |
+| C36：可変幅の一覧／詳細と戻る | NavDisplay・NavEntry、Material 3 AdaptiveのListDetailSceneStrategy | 配置・遷移・pane focus・hinge回避・予測型Backを標準部品へ任せる。840dp／文字倍率の表示条件と戻る確定時の認可再確認はアプリ側で維持し、独自の進捗・取消処理を重ねない |
+| 後続：画面遷移（段階的に導入） | Navigation 3のNavKey／rememberNavBackStack、NavDisplayのentryと標準SaveableStateHolder decorator | Circuit／Metroを維持し、閲覧先を単一back stackへ移す。認可、一回限りの復帰先、通知・App Linksの検証はアプリ側に残す。独自UUIDによる詳細寿命を撤去し、entryのpop後に状態を解放する |
 | 議論公開通知 | Firebase Cloud Messaging、Firebase Admin SDK、NotificationCompat、Activity Result、WorkManager | 配送・通知表示・権限要求・登録再試行を既存APIへ任せる。セッションへの束縛、公開済み記録の確認、重複防止とログアウト時の抑止をサービス側で管理 |
 | C38〜C39：内部テスト配布 | r0adkll/upload-google-play、Google認証Action、既存のgoogle-auth・Google API client | upload・track更新・commitは採用Actionへ任せる。helperは版番号読取・署名と同一AABの検証・提出後照合・秘密の準備と回収だけを担当し、独自の提出APIやedit受け渡しを作らない |
 
@@ -916,9 +916,9 @@ Material／Compose標準のモーションを使い、Androidのアニメーシ�
 
 ## C36：可変幅レイアウト・画面操作の仕上げ
 
-この節はC36から継続するAdaptive描画・操作を記載する。Navigation 3の第1段階では閲覧先だけを移し、ここにある配置と戻り演出は第2段階のNavDisplay／Scene接続まで維持する。
+この節はC36から継続する表示条件・操作を記載する。Navigation 3の第1段階で閲覧先を一本化し、第2段階では描画・戻る・詳細状態の寿命も標準NavDisplay／Adaptive Sceneへ移す。
 
-認証後の記録画面は、標準`ListDetailPaneScaffold`と`AnimatedPane`で一覧／詳細を配置する。利用できる幅840dp以上かつ文字倍率1.5未満では左右2ペインとし、それ以外は選択先だけを1ペインで表示する。幅の判定は物理画面ではなく、system bar・IMEを避けた内容領域を使う。標準のwindow postureからhingeの除外領域を取り込み、本文は詳細760dp・単独一覧560dpまでに制限する。ログイン前は従来のブランドと操作の配置を維持する。
+認証後の記録画面は、標準`NavDisplay`と`ListDetailSceneStrategy`で一覧／詳細のentryを配置する。利用できる幅840dp以上かつ文字倍率1.5未満では左右2ペインとし、それ以外は選択先だけを1ペインで表示する。幅の判定は物理画面ではなく、system bar・IMEを避けた内容領域を使う。標準のwindow postureからhingeの除外領域を取り込み、本文は詳細760dp・単独一覧560dpまでに制限する。ログイン前は従来のブランドと操作の配置を維持する。
 
 上部アプリバーは画面名とメニューに絞り、重複する左側の装飾アイコンを置かない。一覧・ログインのブランド見出しはWeb版と同じ二重円枠と斜め四角のマークを使用し、`THE SHITTIM CHEST`をその右側に配置する。日本語アプリ名はログイン前だけ下段に残す。
 
@@ -929,7 +929,7 @@ Material／Compose標準のモーションを使い、Androidのアニメーシ�
 
 ランチャーアイコンはDelogy Regularの「S」を字形からベクター化し、ライトカラーの背景に薄いシアンの曲線・菱形を重ねる。「S」は青色とし、108dpのAdaptive Iconの前景を中央の安全領域へ収め、背景と分離して端末のマスクに対応する。単色アイコンでは同じ字形を用いる。起動画面も同じ意匠を使い、フォントの出典とライセンスは同梱の`FONTS.md`を正とする。Google Playの掲載アイコンは同じ図形を512×512pxのPNGにした`apps/records-android/play/store-icon.png`を使い、編集元のSVGも隣に置く。Play掲載アイコンはAAB内のランチャーアイコンとは別に更新する。
 
-システムの戻るgestureは`PredictiveBackHandler`から受け、標準`MutableThreePaneScaffoldState.seekTo()`で一覧への遷移をプレビューする。途中で取り消せば選択・スクロールは変えず、視覚状態だけ元へ戻す。確定した場合だけ既存`CloseRecord`を送る。アニメーション中の認可喪失・別記録への切替を再確認し、古いgestureで新しい記録を閉じない。処理の中断やcomposition解除ではframe待ちをせず標準状態を復元する。MainActivityだけにAndroid 13〜15でも利用できる予測型戻るのopt-inを設定し、認証ブラウザーのActivityは変更しない。アニメーション無効時も通常の戻ると確定・取消は機能する。
+システムの戻るgestureと取消はNavDisplayと標準NavigationBackHandlerを使い、独自の`PredictiveBackHandler`・`seekTo()`・取消時の復元処理は撤去する。標準handlerをNavDisplayより前に置き、広幅ではAdaptive Scene内部のBack処理を優先する。現在のroute識別子に結び付くnavigation event状態を使い、広幅の描画scopeもroute変更時に交換して古いgestureを取り消す。狭幅ではNavDisplayを維持し、通常の戻るは約280msの横スライドで一覧へ移る。予測型Backの途中取消ではentry・選択・スクロールを維持し、確定時は閲覧認可を確認する既存`CloseRecord`へ接続する。NavDisplayの退出中のentry保持を利用し、本文を空欄へ差し替えるための独自遅延を追加しない。MainActivityの予測型戻るopt-inと認証ブラウザーのActivityは変更しない。アニメーション無効時は即時に戻り、通常の戻ると確定・取消は機能する。
 
 試験用の架空記録で広幅から狭幅への切替・選択先と一覧スクロールの維持・認可喪失後の非表示・320dp／文字2倍・keyboard操作・gesture取消と確定を確認する。ヘッドレスエミュレーターでのsemantics確認をTalkBackの実聴確認とは扱わない。認証・API・同期・暗号化保存・Material／Composeの既定版・C37と配布処理は変更しない。
 
@@ -962,7 +962,7 @@ Material／Compose標準のモーションを使い、Androidのアニメーシ�
 
 目的は、個別に制御している戻るアニメーション、画面状態の寿命、1ペイン／2ペインの切替を高レベルAPIへ寄せ、今後のランキング・モモトーク・討論開始などのネイティブ画面追加をしやすくすることとする。通信・復号の高速化や、既存の引っかかりの解消を導入だけで保証しない。
 
-ネイティブ画面を増やす前の独立工程として進める。第1段階ではNavigation 3 runtimeだけを追加し、型付きの閲覧先と状態保持を接続する。第2段階でNavDisplayとAdaptive Sceneを同時に導入するため、それまでは既存の描画と戻り演出を維持する。C41は利用者の指定でスキップし、C38〜C40の配布工程と内部テスト配布の条件は変更しない。依存は必要な段階で互換性・保守状況・安全性を確認してVersion Catalogで固定し、Kotlin・Compose・Materialの既定版を無断で変更しない。
+ネイティブ画面を増やす前の独立工程として進める。第1段階ではNavigation 3 runtimeで型付きの閲覧先と状態保持を接続し、第2段階でNavDisplayとAdaptive Sceneを同時に導入する。C41は利用者の指定でスキップし、C38〜C40の配布工程と内部テスト配布の条件は変更しない。依存は必要な段階で互換性・保守状況・安全性を確認してVersion Catalogで固定し、Kotlin・Compose・Materialの既定版を無断で変更しない。
 
 ### 実装単位
 
@@ -973,6 +973,12 @@ Material／Compose標準のモーションを使い、Androidのアニメーシ�
 | 1 | 型付きrouteと単一back stack、認証状態から閲覧先を分離 | rememberNavBackStackを唯一の閲覧先とする。既存の認可・一回限りのログイン復帰・外部リンクへ接続し、Circuit／Metroと現行Adaptive描画を維持する |
 | 2 | NavDisplay・NavEntryとAdaptiveのSceneStrategy、1ペイン／2ペイン、戻る演出 | 描画の置換を一度に行い、標準のListDetailSceneStrategyを優先する。約280msのスライド、予測型Backの確定・取消、幅変更時の選択と読位置を維持する |
 | 3 | 状態寿命と復帰経路の仕上げ、代表画面・実機確認 | 詳細の再訪と回転を区別する。一覧・検索・通知タップ・認証／Web復帰を横断確認し、完了後に不要な旧遷移処理を取り除く |
+
+### 第2段階の描画とentry寿命
+
+一覧と詳細をNavDisplayのentryへ接続し、一覧／詳細のSceneは標準ListDetailSceneStrategyへ任せる。1ペインと2ペインのために別の閲覧先・履歴を作らず、検索・絞り込みは現在の画面内状態として維持する。Sceneの自動focus移動を無効にし、検索欄のfocusを復活させない。表示許可がなくなった時点でNavDisplay全体を外し、退出中のentryを含め実記録を非表示にする。確認済みアカウントが変わったときも、メモリ内のownerに結び付くNavDisplayとentryを破棄し、旧利用者の退出本文を残さない。
+
+詳細のSaveable状態は標準entry decoratorへ寄せる。decorated entry・SaveableStateHolder・scene状態は描画scopeのroute keyより外側に置き、同じentryのリサイズ・回転・同期では読み位置を維持する。popして開き直した場合はアロナの初回意見から始める。旧実装の詳細UUID・手動removeStateは撤去する。一覧のPaging Flow・アカウントに結び付く検索条件・読位置を詳細entryの寿命へ巻き込まない。本文・検索語・token・アカウント識別子は保存対象にしない。
 
 ### 維持する境界
 
@@ -987,7 +993,7 @@ Material／Compose標準のモーションを使い、Androidのアニメーシ�
 
 ### 検証と完了条件
 
-関連Android試験・Lint・Debug／Releaseビルド・必須CIで、一覧／詳細往復、戻る確定・取消、認可喪失、通知／App Links／ログイン復帰、詳細再訪の初期化と検索フォーカス抑止を確認する。ローカル先行表示と同期中の読位置、狭幅・文字拡大・2ペイン・回転・アニメーション無効も維持し、内部テスト版で主要経路を短く実機確認する。ライブラリ内部の再試験や新しい件数・カバレッジ目標は追加しない。
+関連Android試験・Lint・Debug／Releaseビルド・必須CIで、一覧／詳細往復、戻る確定・取消、戻るプレビュー中の認可喪失・アカウント切替、通知／App Links／ログイン復帰、詳細再訪の初期化と検索フォーカス抑止を確認する。ローカル先行表示と同期中の読位置、狭幅・文字拡大・2ペイン・回転・アニメーション無効も維持し、内部テスト版で主要経路を短く実機確認する。ライブラリ内部の再試験や新しい件数・カバレッジ目標は追加しない。
 
 完了は、一覧／詳細の閲覧先と遷移がNav3へ一本化され、既存の閲覧・認証・通知・状態保持を維持したまま不要な旧遷移管理を取り除けた状態とする。
 
@@ -1141,9 +1147,9 @@ HTTPSはOS標準TLSを使い、アプリ全体の暗号プロバイダーは置�
 
 ## 議論詳細の4画面化
 
-詳細は下部の「意見／投票／結果／親愛度」と左右スワイプで切り替える。6つの意見→投票→結果→3人の親愛度を1つの非ループHorizontalPagerでつなぎ、端は標準のoverscrollだけで遷移しない。初期表示はアロナの初回意見とし、人物色・配色・フォントを継続する。Material 3のShortNavigationBarとCompose標準HorizontalPagerを使用する。意見は回答を切り替えるたびに本文先頭へ戻すが、同じ回答の同期・回転では読位置を維持する。新規・同じ記録の開き直しともアロナの初回意見から始める。AnimatedPaneが非表示時に保持する選択状態は、常時構成する親で閲覧keyを作り、詳細の状態だけを分離する。一覧の読位置・検索条件・退場アニメーションを初期化しない。
+詳細は下部の「意見／投票／結果／親愛度」と左右スワイプで切り替える。6つの意見→投票→結果→3人の親愛度を1つの非ループHorizontalPagerでつなぎ、端は標準のoverscrollだけで遷移しない。初期表示はアロナの初回意見とし、人物色・配色・フォントを継続する。Material 3のShortNavigationBarとCompose標準HorizontalPagerを使用する。意見は回答を切り替えるたびに本文先頭へ戻すが、同じ回答の同期・回転では読位置を維持する。新規・同じ記録の開き直しともアロナの初回意見から始める。詳細の状態はNavDisplayのentry単位で分離し、一覧の読位置・検索条件・退場アニメーションを初期化しない。
 
-閲覧ごとの詳細状態は標準SaveableStateHolderで管理し、閲覧keyが変わったら旧状態をremoveStateで破棄する。非表示paneの固定roleへ過去の閲覧状態を蓄積させず、現在の閲覧だけを回転時に復元する。起動・回転時に保存済み本文を読み込んでいる間は既存の状態表示だけを描画し、本文が揃ってからPagerと回答の読位置を復元する。仮のページ数で保存された選択を消費・補正せず、遅れて本文が届いても選択と読位置を保持する。
+閲覧ごとの詳細状態はNavDisplayの標準SaveableStateHolder decoratorで管理し、entryのpop後に解放する。非表示paneの固定roleへ過去の閲覧状態を蓄積させず、現在のentryだけを回転時に復元する。起動・回転時に保存済み本文を読み込んでいる間は既存の状態表示だけを描画し、本文が揃ってからPagerと回答の読位置を復元する。仮のページ数で保存された選択を消費・補正せず、遅れて本文が届いても選択と読位置を保持する。
 
 選択中のページが停止し、Activityが表示中で、メニューなどのシートが閉じている場合にだけ装飾演出を許可する。Pagerの先読みで親愛度の一度限り演出を消費しない。既存の認可、暗号化保存、差分同期、一覧へのPredictive Backと検索のfocus復帰抑止は維持する。本文を画面状態やログへ保存しない。
 

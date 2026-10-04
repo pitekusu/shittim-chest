@@ -48,6 +48,9 @@ import androidx.compose.ui.test.then
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import androidx.navigation3.runtime.NavBackStack
+import androidx.navigation3.runtime.NavKey
+import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.pitekusu.shittim.records.auth.MobileAvatar
@@ -74,8 +77,10 @@ class AdaptiveRecordsUiTest {
     "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"))
 
   private fun screen(selected: String? = null, theme: ThemeChoice = ThemeChoice.Dark,
+    backStack: List<NavKey> = listOf(RecordsList) + listOfNotNull(selected?.let(::RecordDetail)),
     onEvent: (BootstrapScreen.Event) -> Unit = {}): BootstrapScreen.State =
-    BootstrapScreen.State(theme, session, records = records, selectedRecordId = selected,
+    BootstrapScreen.State(theme, session, records = records,
+      selectedRecordId = (backStack.lastOrNull() as? RecordDetail)?.recordId, backStack = backStack,
       record = RecordPreviewState.Ready(RecordPreview("架空の議題：休日に楽しむ散歩と読書",
         "天気と気分に合わせて、無理のない小さな楽しみを選びましょう。", "アロナ"), saved = true),
       eventSink = onEvent)
@@ -115,12 +120,15 @@ class AdaptiveRecordsUiTest {
 
   @Test fun largeTextUsesOnePaneAndSystemBackWorksWhileReading() {
     val window = mutableStateOf(DpSize(1000.dp, 700.dp))
-    val state = mutableStateOf(screen(entries.first().recordId, ThemeChoice.Light))
+    val backStack = NavBackStack<NavKey>(RecordsList, RecordDetail(entries.first().recordId))
     val events = mutableListOf<BootstrapScreen.Event>()
     compose.activityRule.scenario.onActivity { activity -> activity.setContent {
       DeviceConfigurationOverride(DeviceConfigurationOverride.WindowSize(window.value) then
         DeviceConfigurationOverride.FontScale(2f)) {
-        BootstrapUi(screen(state.value.selectedRecordId, state.value.themeChoice, events::add))
+        BootstrapUi(screen(theme = ThemeChoice.Light, backStack = backStack.toList(), onEvent = { event ->
+          events += event
+          if (event == BootstrapScreen.Event.CloseRecord) backStack.closeRecord()
+        }))
       }
     } }
     compose.onNodeWithTag("record-detail-content").assertDoesNotExist()
@@ -156,14 +164,14 @@ class AdaptiveRecordsUiTest {
   }
 
   @Test fun predictiveBackCanBeCancelledAndThenCommittedWithoutLosingListPosition() {
-    val state = mutableStateOf(screen())
+    val backStack = NavBackStack<NavKey>(RecordsList)
     val events = mutableListOf<BootstrapScreen.Event>()
     val selected = entries.last().recordId
     compose.activityRule.scenario.onActivity { activity -> activity.setContent {
-      BootstrapUi(screen(state.value.selectedRecordId, onEvent = { event ->
+      BootstrapUi(screen(backStack = backStack.toList(), onEvent = { event ->
         events.add(event)
-        if (event is BootstrapScreen.Event.OpenRecord) state.value = screen(event.recordId)
-        if (event == BootstrapScreen.Event.CloseRecord) state.value = screen()
+        if (event is BootstrapScreen.Event.OpenRecord) backStack.openRecord(event.recordId)
+        if (event == BootstrapScreen.Event.CloseRecord) backStack.closeRecord()
       }))
     } }
     val question = entries.last().questionPreview
@@ -173,7 +181,7 @@ class AdaptiveRecordsUiTest {
     val dispatcher = compose.activity.onBackPressedDispatcher
     compose.runOnIdle { dispatcher.dispatchOnBackStarted(BackEventCompat(0f, 0f, 0f, BackEventCompat.EDGE_LEFT)) }
     compose.runOnIdle { dispatcher.dispatchOnBackProgressed(BackEventCompat(120f, 0f, 0.65f, BackEventCompat.EDGE_LEFT)) }
-    compose.runOnIdle { assertEquals(selected, state.value.selectedRecordId) }
+    compose.runOnIdle { assertEquals(RecordDetail(selected), backStack.last()) }
     capture("adaptive-back-preview")
     compose.runOnIdle { dispatcher.dispatchOnBackCancelled() }
     compose.waitForIdle()
@@ -185,18 +193,18 @@ class AdaptiveRecordsUiTest {
     compose.waitForIdle()
     compose.onNodeWithText(question).assertIsDisplayed()
     compose.runOnIdle {
-      assertEquals(null, state.value.selectedRecordId)
+      assertEquals(listOf(RecordsList), backStack.toList())
       assertEquals(1, events.count { it == BootstrapScreen.Event.CloseRecord })
     }
   }
 
   @Test fun returningFromDetailKeepsSearchClosedAndUnfocused() {
-    val state = mutableStateOf(screen())
+    val backStack = NavBackStack<NavKey>(RecordsList)
     compose.activityRule.scenario.onActivity { activity -> activity.setContent {
       DeviceConfigurationOverride(DeviceConfigurationOverride.WindowSize(DpSize(420.dp, 1000.dp))) {
-        BootstrapUi(screen(state.value.selectedRecordId, onEvent = { event ->
-          if (event is BootstrapScreen.Event.OpenRecord) state.value = screen(event.recordId)
-          if (event == BootstrapScreen.Event.CloseRecord) state.value = screen()
+        BootstrapUi(screen(backStack = backStack.toList(), onEvent = { event ->
+          if (event is BootstrapScreen.Event.OpenRecord) backStack.openRecord(event.recordId)
+          if (event == BootstrapScreen.Event.CloseRecord) backStack.closeRecord()
         }))
       }
     } }
@@ -226,7 +234,7 @@ class AdaptiveRecordsUiTest {
   }
 
   @Test fun reopeningTheSameCompactRecordStartsAtAronasInitialAnswerAndKeepsListPosition() {
-    val selected = mutableStateOf<String?>(null)
+    val backStack = NavBackStack<NavKey>(RecordsList)
     val opinions = listOf("アロナ", "プラナ", "安倍晋三AI").mapIndexed { index, name ->
       RecordOpinion(name, "再入場試験の初回意見$index",
         "架空の初回本文$index。読み位置の確認用です。\n\n".repeat(40) + "初回本文の末尾$index",
@@ -239,10 +247,11 @@ class AdaptiveRecordsUiTest {
     compose.activityRule.scenario.onActivity { activity -> activity.setContent {
       DeviceConfigurationOverride(DeviceConfigurationOverride.WindowSize(DpSize(420.dp, 850.dp))) {
         BootstrapUi(BootstrapScreen.State(ThemeChoice.Dark, session, records = records,
-          selectedRecordId = selected.value, record = preview, eventSink = { event ->
+          selectedRecordId = (backStack.lastOrNull() as? RecordDetail)?.recordId,
+          backStack = backStack.toList(), record = preview, eventSink = { event ->
             when (event) {
-              is BootstrapScreen.Event.OpenRecord -> selected.value = event.recordId
-              BootstrapScreen.Event.CloseRecord -> selected.value = null
+              is BootstrapScreen.Event.OpenRecord -> backStack.openRecord(event.recordId)
+              BootstrapScreen.Event.CloseRecord -> backStack.closeRecord()
               else -> Unit
             }
           }))
@@ -276,7 +285,7 @@ class AdaptiveRecordsUiTest {
     }
     fun closeAndReopen() {
       compose.runOnIdle { compose.activity.onBackPressedDispatcher.onBackPressed() }
-      compose.waitUntil(10_000) { selected.value == null && compose.onNodeWithText(question).isDisplayed() }
+      compose.waitUntil(10_000) { backStack.last() == RecordsList && compose.onNodeWithText(question).isDisplayed() }
       compose.waitForIdle()
       compose.onNodeWithTag("detail-pager").assertDoesNotExist()
       assertEquals(listPosition, readingPosition(), .01f)
@@ -286,7 +295,7 @@ class AdaptiveRecordsUiTest {
     compose.onNodeWithText(question).performClick()
     assertInitialAnswer()
     readPartway("初回本文の末尾0")
-    // Exercise AnimatedPane's saved role bucket even when the current page is already Arona.
+    // A popped NavEntry must discard its reader state even when the previous answer was Arona.
     closeAndReopen()
     compose.onNodeWithTag("opinion-person-2").performClick()
     compose.waitUntil(10_000) { compose.onNodeWithText("再入場試験の初回意見2").isDisplayed() }
@@ -320,8 +329,10 @@ class AdaptiveRecordsUiTest {
         onDispose { if (restoreWithLoading) record.value = RecordPreviewState.Loading }
       }
       DeviceConfigurationOverride(DeviceConfigurationOverride.WindowSize(DpSize(420.dp, 850.dp))) {
+        val backStack = rememberNavBackStack(RecordsList, RecordDetail(entries.last().recordId))
         BootstrapUi(BootstrapScreen.State(ThemeChoice.Dark, session, records = records,
-          selectedRecordId = entries.last().recordId, record = record.value, eventSink = {}))
+          selectedRecordId = (backStack.lastOrNull() as? RecordDetail)?.recordId,
+          backStack = backStack.toList(), record = record.value, eventSink = {}))
       }
     }
     compose.waitUntil(10_000) { compose.onNodeWithText("復元試験の初回意見0").isDisplayed() }
@@ -360,14 +371,14 @@ class AdaptiveRecordsUiTest {
     assertEquals(position, readingPosition(), .01f)
   }
 
-  @Test fun threeButtonBackSlidesBeforeClosingWithoutLeavingASelectedListCard() {
-    val state = mutableStateOf(screen())
+  @Test fun threeButtonBackPopsOnceAndSlidesWithoutLeavingASelectedListCard() {
+    val backStack = NavBackStack<NavKey>(RecordsList)
     val events = mutableListOf<BootstrapScreen.Event>()
     compose.activityRule.scenario.onActivity { it.setContent {
-      BootstrapUi(screen(state.value.selectedRecordId, onEvent = { event ->
+      BootstrapUi(screen(backStack = backStack.toList(), onEvent = { event ->
         events += event
-        if (event is BootstrapScreen.Event.OpenRecord) state.value = screen(event.recordId)
-        if (event == BootstrapScreen.Event.CloseRecord) state.value = screen()
+        if (event is BootstrapScreen.Event.OpenRecord) backStack.openRecord(event.recordId)
+        if (event == BootstrapScreen.Event.CloseRecord) backStack.closeRecord()
       }))
     } }
     val question = entries.last().questionPreview
@@ -384,11 +395,11 @@ class AdaptiveRecordsUiTest {
     try {
       compose.runOnIdle { compose.activity.onBackPressedDispatcher.onBackPressed() }
       compose.mainClock.advanceTimeBy(96)
+      compose.runOnIdle {
+        assertEquals(listOf(RecordsList), backStack.toList())
+        assertEquals(1, events.count { it == BootstrapScreen.Event.CloseRecord })
+      }
       if (ValueAnimator.areAnimatorsEnabled()) {
-        compose.runOnIdle {
-          assertEquals(entries.last().recordId, state.value.selectedRecordId)
-          assertEquals(0, events.count { it == BootstrapScreen.Event.CloseRecord })
-        }
         // A moving outgoing pane, not a frozen selected card or a placeholder flash.
         assertTrue(compose.onNodeWithText(detailQuestion, useUnmergedTree = true)
           .fetchSemanticsNode().boundsInRoot.left > detailLeft + 1f)
@@ -401,7 +412,7 @@ class AdaptiveRecordsUiTest {
       }
       compose.mainClock.advanceTimeBy(320)
       compose.runOnIdle {
-        assertEquals(null, state.value.selectedRecordId)
+        assertEquals(listOf(RecordsList), backStack.toList())
         assertEquals(1, events.count { it == BootstrapScreen.Event.CloseRecord })
       }
       compose.onNodeWithText(question).assertIsDisplayed().assertIsNotSelected()
@@ -415,19 +426,28 @@ class AdaptiveRecordsUiTest {
     }
   }
 
-  @Test fun revocationDuringTheReturnSlideHidesTheRecordWithoutClosingANewDestination() {
+  @Test fun revocationDuringTheReturnSlideHidesTheOutgoingRecordWithoutAnotherPop() {
     val events = mutableListOf<BootstrapScreen.Event>()
-    val state = mutableStateOf(screen(entries.first().recordId, onEvent = events::add))
-    compose.activityRule.scenario.onActivity { it.setContent { BootstrapUi(state.value) } }
+    val backStack = NavBackStack<NavKey>(RecordsList, RecordDetail(entries.first().recordId))
+    val authorized = mutableStateOf(true)
+    compose.activityRule.scenario.onActivity { it.setContent {
+      BootstrapUi(if (authorized.value) screen(backStack = backStack.toList(), onEvent = { event ->
+        events += event
+        if (event == BootstrapScreen.Event.CloseRecord) backStack.closeRecord()
+      }) else BootstrapScreen.State(ThemeChoice.Dark) {})
+    } }
+    compose.onNodeWithText("架空の議題：休日に楽しむ散歩と読書").assertIsDisplayed()
+    compose.waitForIdle() // Let the initial entry and its standard Back handler become active.
     compose.mainClock.autoAdvance = false
     try {
       compose.runOnIdle { compose.activity.onBackPressedDispatcher.onBackPressed() }
       compose.mainClock.advanceTimeBy(64)
-      compose.runOnIdle { state.value = BootstrapScreen.State(ThemeChoice.Dark) {} }
+      compose.runOnIdle { authorized.value = false }
       compose.mainClock.advanceTimeBy(400)
       compose.onNodeWithText("架空の議題：休日に楽しむ散歩と読書").assertDoesNotExist()
-      if (ValueAnimator.areAnimatorsEnabled()) {
-        compose.runOnIdle { assertEquals(0, events.count { it == BootstrapScreen.Event.CloseRecord }) }
+      compose.runOnIdle {
+        assertEquals(listOf(RecordsList), backStack.toList())
+        assertEquals(1, events.count { it == BootstrapScreen.Event.CloseRecord })
       }
     } finally {
       compose.mainClock.autoAdvance = true
@@ -436,35 +456,194 @@ class AdaptiveRecordsUiTest {
 
   @Test fun revocationDuringTheBackGestureHidesTheRecordAndDoesNotCommitIt() {
     val events = mutableListOf<BootstrapScreen.Event>()
-    val state = mutableStateOf(screen(entries.first().recordId, onEvent = events::add))
-    compose.activityRule.scenario.onActivity { activity -> activity.setContent { BootstrapUi(state.value) } }
+    val backStack = NavBackStack<NavKey>(RecordsList, RecordDetail(entries.first().recordId))
+    val authorized = mutableStateOf(true)
+    compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+      BootstrapUi(if (authorized.value) screen(backStack = backStack.toList(), onEvent = { event ->
+        events += event
+        if (event == BootstrapScreen.Event.CloseRecord) backStack.closeRecord()
+      }) else BootstrapScreen.State(ThemeChoice.Dark) {})
+    } }
+    compose.onNodeWithText("架空の議題：休日に楽しむ散歩と読書").assertIsDisplayed()
+    compose.waitForIdle()
     val dispatcher = compose.activity.onBackPressedDispatcher
     compose.runOnIdle { dispatcher.dispatchOnBackStarted(BackEventCompat(0f, 0f, 0f, BackEventCompat.EDGE_LEFT)) }
     compose.runOnIdle { dispatcher.dispatchOnBackProgressed(BackEventCompat(100f, 0f, 0.4f, BackEventCompat.EDGE_LEFT)) }
-    compose.runOnIdle { state.value = BootstrapScreen.State(ThemeChoice.Dark) {} }
+    compose.runOnIdle { authorized.value = false }
     compose.waitForIdle()
     compose.onNodeWithText("架空の議題：休日に楽しむ散歩と読書").assertDoesNotExist()
     compose.runOnIdle {
       dispatcher.dispatchOnBackCancelled()
+      assertEquals(RecordDetail(entries.first().recordId), backStack.last())
       assertEquals(0, events.count { it == BootstrapScreen.Event.CloseRecord })
     }
   }
 
   @Test fun anOldGestureDoesNotCloseTheNewlySelectedRecord() {
     val events = mutableListOf<BootstrapScreen.Event>()
-    val state = mutableStateOf(screen(entries.first().recordId, onEvent = events::add))
-    compose.activityRule.scenario.onActivity { activity -> activity.setContent { BootstrapUi(state.value) } }
+    val backStack = NavBackStack<NavKey>(RecordsList, RecordDetail(entries.first().recordId))
+    compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+      BootstrapUi(screen(backStack = backStack.toList(), onEvent = { event ->
+        events += event
+        if (event == BootstrapScreen.Event.CloseRecord) backStack.closeRecord()
+      }))
+    } }
+    compose.onNodeWithText("架空の議題：休日に楽しむ散歩と読書").assertIsDisplayed()
+    compose.waitForIdle()
     val dispatcher = compose.activity.onBackPressedDispatcher
     compose.runOnIdle { dispatcher.dispatchOnBackStarted(BackEventCompat(0f, 0f, 0f, BackEventCompat.EDGE_LEFT)) }
     compose.runOnIdle { dispatcher.dispatchOnBackProgressed(BackEventCompat(100f, 0f, 0.4f, BackEventCompat.EDGE_LEFT)) }
-    compose.runOnIdle { state.value = screen(entries.last().recordId, onEvent = events::add) }
+    compose.runOnIdle { backStack.openRecord(entries.last().recordId) }
     compose.runOnIdle { dispatcher.onBackPressed() }
     compose.waitForIdle()
     compose.runOnIdle {
-      assertEquals(entries.last().recordId, state.value.selectedRecordId)
+      assertEquals(RecordDetail(entries.last().recordId), backStack.last())
       assertEquals(0, events.count { it == BootstrapScreen.Event.CloseRecord })
     }
     compose.onNodeWithText("架空の議題：休日に楽しむ散歩と読書").assertIsDisplayed()
+  }
+
+  @Test fun switchingAccountsDuringBackPreviewNeverKeepsTheOldOutgoingBody() {
+    val events = mutableListOf<BootstrapScreen.Event>()
+    val backStack = NavBackStack<NavKey>(RecordsList, RecordDetail(entries.first().recordId))
+    val state = mutableStateOf(screen(backStack = backStack.toList(), onEvent = events::add))
+    compose.activityRule.scenario.onActivity { it.setContent { BootstrapUi(state.value) } }
+    compose.onNodeWithText("架空の議題：休日に楽しむ散歩と読書").assertIsDisplayed()
+    compose.waitForIdle()
+    val dispatcher = compose.activity.onBackPressedDispatcher
+    compose.runOnIdle { dispatcher.dispatchOnBackStarted(BackEventCompat(0f, 0f, 0f, BackEventCompat.EDGE_LEFT)) }
+    compose.runOnIdle { dispatcher.dispatchOnBackProgressed(BackEventCompat(100f, 0f, 0.4f, BackEventCompat.EDGE_LEFT)) }
+    val nextAccount = "v".repeat(43)
+    val nextEntry = RecordListEntry(entries.first().recordId, "新しいアカウントの架空の一覧",
+      "新しい架空の依頼者", RecordAvatar(null, "pink"), Instant.parse("2026-09-27T00:00:00Z"), "プラナ")
+    compose.mainClock.autoAdvance = false
+    try {
+      compose.runOnIdle {
+        backStack.closeRecord()
+        state.value = BootstrapScreen.State(ThemeChoice.Dark, SessionState.SignedIn(
+          MobileSessionUser("新しい架空の利用者", MobileAvatar("placeholder", "確認用", "pink")),
+          nextAccount, Instant.parse("2027-01-01T00:00:00Z")),
+          records = RecordListState.Ready.fromSaved(listOf(nextEntry)), backStack = backStack.toList(),
+          recordOwner = nextAccount, eventSink = events::add)
+      }
+      compose.mainClock.advanceTimeBy(32)
+      compose.onNodeWithText("架空の議題：休日に楽しむ散歩と読書", useUnmergedTree = true).assertDoesNotExist()
+      compose.onNodeWithText(nextEntry.questionPreview).assertIsDisplayed()
+      compose.runOnIdle {
+        dispatcher.dispatchOnBackCancelled()
+        assertEquals(0, events.count { it == BootstrapScreen.Event.CloseRecord })
+      }
+    } finally { compose.mainClock.autoAdvance = true }
+  }
+
+  @Test fun movingBetweenCompactAndWideKeepsTheCurrentAnswerAndReadingPosition() {
+    val window = mutableStateOf(DpSize(420.dp, 850.dp))
+    val backStack = NavBackStack<NavKey>(RecordsList, RecordDetail(entries.first().recordId))
+    val opinions = listOf("アロナ", "プラナ", "安倍晋三AI").mapIndexed { index, name ->
+      RecordOpinion(name, "幅変更試験の初回意見$index", "架空の初回本文$index",
+        "幅変更試験の最終案$index", "幅変更試験の架空本文$index。読み位置の確認用です。\n\n".repeat(40) + "幅変更本文の末尾$index",
+        participantSlot = "participant-${('a'.code + index).toChar()}")
+    }
+    val record = RecordPreviewState.Ready(RecordPreview("幅変更試験の架空の議題", "架空の結論", "アロナ",
+      opinions = opinions, winnerSlot = "participant-a"))
+    compose.activityRule.scenario.onActivity { it.setContent {
+      DeviceConfigurationOverride(DeviceConfigurationOverride.WindowSize(window.value)) {
+        BootstrapUi(BootstrapScreen.State(ThemeChoice.Dark, session, records = records,
+          selectedRecordId = (backStack.lastOrNull() as? RecordDetail)?.recordId,
+          backStack = backStack.toList(), record = record, eventSink = {}))
+      }
+    } }
+    compose.onNodeWithTag("opinion-person-2").performClick()
+    compose.waitUntil(10_000) { compose.onNodeWithText("幅変更試験の初回意見2").isDisplayed() }
+    compose.onNodeWithText(compose.activity.getString(R.string.record_final_proposal)).performClick()
+    compose.waitUntil(10_000) {
+      compose.onAllNodesWithText("幅変更本文の末尾2", substring = true).fetchSemanticsNodes().isNotEmpty() &&
+        compose.onNodeWithTag("bootstrap-content").fetchSemanticsNode()
+          .config[SemanticsProperties.VerticalScrollAxisRange].maxValue() > 0f
+    }
+    fun readingPosition(tag: String) = compose.onNodeWithTag(tag).fetchSemanticsNode()
+      .config[SemanticsProperties.VerticalScrollAxisRange].value()
+    compose.onNodeWithTag("bootstrap-content").performTouchInput {
+      swipe(center, center.copy(y = center.y - 120f), durationMillis = 1_000)
+    }
+    val compactPosition = readingPosition("bootstrap-content")
+    assertTrue(compactPosition > 0f)
+    compose.runOnIdle { window.value = DpSize(1000.dp, 850.dp) }
+    compose.onNodeWithTag("record-detail-content").assertIsDisplayed()
+    compose.waitForIdle()
+    compose.onNodeWithTag("opinion-person-2").assertIsSelected()
+    compose.onNodeWithText(compose.activity.getString(R.string.record_final_proposal)).assertIsOn()
+    assertTrue(readingPosition("record-detail-content") > 0f)
+    compose.runOnIdle { window.value = DpSize(420.dp, 850.dp) }
+    compose.waitForIdle()
+    compose.onNodeWithTag("opinion-person-2").assertIsSelected()
+    compose.onNodeWithText(compose.activity.getString(R.string.record_final_proposal)).assertIsOn()
+    assertEquals(compactPosition, readingPosition("bootstrap-content"), .01f)
+    compose.runOnIdle { assertEquals(RecordDetail(entries.first().recordId), backStack.last()) }
+  }
+
+  @Test fun unchangedRouteDisplaysTheLoadedBodyAndLaterUpdatesWithoutReopening() {
+    val backStack = NavBackStack<NavKey>(RecordsList, RecordDetail(entries.first().recordId))
+    val record = mutableStateOf<RecordPreviewState>(RecordPreviewState.Loading)
+    fun ready(question: String, body: String) = RecordPreviewState.Ready(RecordPreview(
+      question, "架空の結論", "アロナ", opinions = listOf(RecordOpinion(
+        "アロナ", "架空の初回意見", body, "架空の最終案", "架空の最終本文", participantSlot = "participant-a"))))
+    compose.activityRule.scenario.onActivity { it.setContent {
+      DeviceConfigurationOverride(DeviceConfigurationOverride.WindowSize(DpSize(420.dp, 850.dp))) {
+        BootstrapUi(BootstrapScreen.State(ThemeChoice.Dark, session, records = records,
+          selectedRecordId = (backStack.lastOrNull() as? RecordDetail)?.recordId,
+          backStack = backStack.toList(), record = record.value, eventSink = {}))
+      }
+    } }
+    compose.onNodeWithText(compose.activity.getString(R.string.record_loading)).assertIsDisplayed()
+    compose.runOnIdle { record.value = ready("最初に読み込んだ架空の議題", "最初の架空本文") }
+    compose.waitUntil(10_000) {
+      compose.onNodeWithText("最初に読み込んだ架空の議題").isDisplayed() &&
+        compose.onNodeWithText("最初の架空本文").isDisplayed()
+    }
+    compose.runOnIdle { record.value = ready("更新された架空の議題", "更新された架空本文") }
+    compose.waitUntil(10_000) {
+      compose.onNodeWithText("更新された架空の議題").isDisplayed() &&
+        compose.onNodeWithText("更新された架空本文").isDisplayed()
+    }
+    compose.onNodeWithText("最初に読み込んだ架空の議題").assertDoesNotExist()
+    compose.onNodeWithText("最初の架空本文").assertDoesNotExist()
+    compose.runOnIdle { assertEquals(listOf(RecordsList, RecordDetail(entries.first().recordId)), backStack.toList()) }
+  }
+
+  @Test fun wideSceneBackClosesSelectionAndAnOldGestureCannotCloseItsReplacement() {
+    val events = mutableListOf<BootstrapScreen.Event>()
+    val backStack = NavBackStack<NavKey>(RecordsList, RecordDetail(entries.first().recordId))
+    compose.activityRule.scenario.onActivity { it.setContent {
+      DeviceConfigurationOverride(DeviceConfigurationOverride.WindowSize(DpSize(1000.dp, 700.dp))) {
+        BootstrapUi(screen(backStack = backStack.toList(), onEvent = { event ->
+          events += event
+          if (event == BootstrapScreen.Event.CloseRecord) backStack.closeRecord()
+        }))
+      }
+    } }
+    compose.onNodeWithTag("record-detail-content").assertIsDisplayed()
+    compose.waitForIdle()
+    val dispatcher = compose.activity.onBackPressedDispatcher
+    compose.runOnIdle { dispatcher.dispatchOnBackStarted(BackEventCompat(0f, 0f, 0f, BackEventCompat.EDGE_LEFT)) }
+    compose.runOnIdle { dispatcher.dispatchOnBackProgressed(BackEventCompat(100f, 0f, 0.4f, BackEventCompat.EDGE_LEFT)) }
+    compose.runOnIdle { backStack.openRecord(entries.last().recordId) }
+    compose.runOnIdle { dispatcher.onBackPressed() }
+    compose.waitForIdle()
+    compose.runOnIdle {
+      assertEquals(RecordDetail(entries.last().recordId), backStack.last())
+      assertEquals(0, events.count { it == BootstrapScreen.Event.CloseRecord })
+    }
+    compose.runOnIdle { dispatcher.onBackPressed() }
+    compose.waitForIdle()
+    compose.runOnIdle {
+      assertEquals(listOf(RecordsList), backStack.toList())
+      assertEquals(1, events.count { it == BootstrapScreen.Event.CloseRecord })
+    }
+    compose.onNodeWithText(compose.activity.getString(R.string.record_select)).assertIsDisplayed()
+    compose.onNodeWithText("架空の議題：休日に楽しむ散歩と読書").assertDoesNotExist()
+    compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText(entries.last().questionPreview))
+    compose.onNodeWithText(entries.last().questionPreview).assertIsNotSelected()
   }
 
   private fun capture(name: String) {

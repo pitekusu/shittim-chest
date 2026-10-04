@@ -411,7 +411,7 @@ API 36・架空データによる画面確認。実DiscordログインやPlay配
 
 ## C36：可変幅レイアウトと画面操作
 
-- Material 3 Adaptiveの標準一覧／詳細配置を利用。幅840dp以上・文字倍率1.5未満は左右2ペイン、それ以外は選択先を1ペインで表示する。詳細の本文幅は760dpまでとし、長文でも「一覧に戻る」を常時操作できる。
+- NavDisplayとMaterial 3 Adaptiveの標準ListDetailSceneStrategyで一覧／詳細を配置する。幅840dp以上・文字倍率1.5未満は左右2ペイン、それ以外は選択先を1ペインで表示する。詳細の本文幅は760dpまでとし、端末の戻る操作を使う。
 - リサイズや詳細往復で選択・検索条件・一覧スクロールを維持する。認可を失えば両ペインを直ちに取り除く。認証・API・同期・保存形式は変更しない。
 - 戻るgestureで標準ペイン遷移をプレビューし、確定時だけ一覧へ戻る。キャンセルでは詳細を開いたままにし、認可喪失や別記録への切替後に古いgestureを確定しない。通常の戻るボタンとアニメーション無効時も同じ選択・スクロールを維持する。
 - 日本語のpane名・見出し・表示中の選択状態をsemanticsへ設定し、装飾アイコンの代替イニシャルを重複して読ませない。文字拡大時は1列へ戻して折り返す。TalkBack実聴と実機・Play配布はエミュレーターのsemantics確認と区別する。
@@ -502,10 +502,18 @@ Kotlin・Compose・Materialの既定版、Actionの完全SHA、配布ツール�
 - Navigation 3 runtimeの`NavKey`と`rememberNavBackStack`で、一覧とopaqueな記録IDを持つ詳細を管理する。Circuit／Metroは描画状態・イベント・依存接続に継続使用し、別のback stackを追加しない。
 - セッションモデルの現在の閲覧先を撤去する。検証済みApp Link・ログイン結果は一回限りの復帰先として受け渡し、有効なローカル閲覧許可の下で消費する。期限切れ中のrouteは非表示にし、明示ログアウトと確認済みアカウント切替で破棄する。
 - back stackの保存対象はroute識別子だけ。質問・回答・検索語・token・アカウント識別子をSavedStateへ入れない。詳細を開き直すとアロナの初回意見から開始し、同じ閲覧中の回転・同期では位置を維持する。
-- この段階では既存のAdaptive描画・約280msの戻りを維持する。NavDisplayと標準ListDetailSceneStrategyへの置換は第2段階でまとめて行い、未使用のUI依存や独自navigation wrapperを先行追加しない。
+- 第1段階では既存のAdaptive描画・約280msの戻りを維持し、描画の置換を第2段階へ分離した。未使用のUI依存や独自navigation wrapperは先行追加しない。
 - 関連試験で一覧／詳細往復、認可喪失、一回限りの復帰先、ログアウト・アカウント切替を確認する。残りの復帰経路・状態寿命・画面資料の横断確認は第3段階で行う。C41は指定によりスキップし、Playへの配布は別操作とする。
 
 詳細は[Androidアプリ設計のNav3移行](../../docs/29_Androidアプリ設計.md#navigation-3への段階的移行)を参照する。
+
+## Navigation 3：描画・Adaptive Scene（第2段階）
+
+- 一覧／詳細をNavDisplayのentryへ接続し、標準ListDetailSceneStrategyで1ペイン／2ペインを切り替える。内容幅840dp・文字倍率1.5の境界、hinge回避、一覧・本文の最大幅は維持する。
+- 予測型Backの進捗・取消と退出中のentry保持は標準処理へ任せる。NavigationBackHandlerをNavDisplayより前に置き、広幅はAdaptive Scene内部のBack処理を優先する。現在のrouteでnavigation event状態と広幅の描画scopeを切り替えて古いgestureを取り消し、狭幅のNavDisplayは維持して約280msの戻りスライドを保つ。独自PredictiveBackHandler・seekTo・取消時の復元は撤去し、確定時は認可確認済みの既存CloseRecordへ接続する。
+- 詳細のSaveable状態は標準entry decoratorで管理する。decorated entry・SaveableStateHolder・scene状態は描画scopeのroute keyより外側に置き、同じentryのリサイズ・回転・同期では読み位置を維持する。独自の詳細UUID・手動removeStateは使わず、pop後の再訪は初回意見から開始する。一覧のPaging・検索・読位置はdetail entryから独立して保持する。
+- 認可喪失では退出中のentryも含め記録画面を直ちに外し、アカウント切替ではNavDisplayと旧entryを破棄する。検索語・本文・token・アカウント識別子をentryの保存状態へ追加しない。Sceneの自動focus移動を無効にし、検索画面から詳細へ進んだ後も一覧復帰時にキーボードやフォーカスを復活させない。
+- 境界幅、文字拡大、戻る確定・取消、プレビュー中の認可喪失・アカウント切替、詳細再訪・回転を関連試験で確認する。外部リンク・認証・オフライン復帰と代表画面の横断確認は第3段階で行う。
 
 ## 起動・ログインのブランド演出
 
@@ -619,17 +627,17 @@ API 36の架空データで、日付境界・議題の4行上限・全人格と�
 
 ## 議論詳細の4画面
 
-- 下部の意見／投票／結果／親愛度で切り替える。6つの意見→投票→結果→3人の親愛度を横スワイプで読み、先頭と末尾は循環しない。意見の切替では本文先頭へ戻り、詳細を開き直すと同じ記録でもアロナ初回から始まる。Adaptiveの非表示paneに保存された前回の選択は、詳細だけの閲覧keyで分離する。一覧の読位置は変えない。議題はPager外の共通領域へ固定し、タブ切替中も動かさない。長文は省略せず、高さを抑えた議題領域だけを縦にスクロールでき、Bottom Sheetでも全文を読める。議題の読位置はタブ切替で保持する。
+- 下部の意見／投票／結果／親愛度で切り替える。6つの意見→投票→結果→3人の親愛度を横スワイプで読み、先頭と末尾は循環しない。意見の切替では本文先頭へ戻り、詳細を開き直すと同じ記録でもアロナ初回から始まる。詳細の状態はNavDisplayのentry単位で分離し、一覧の読位置は変えない。議題はPager外の共通領域へ固定し、タブ切替中も動かさない。長文は省略せず、高さを抑えた議題領域だけを縦にスクロールでき、Bottom Sheetでも全文を読める。議題の読位置はタブ切替で保持する。
 - 親愛度は顔と実増減のChipまたは横スワイプから1人を選ぶ。直接タブを押した初期人物は勝者とし、選択・人物別の読位置を同期や回転で保持する。スワイプはアロナ→プラナ→安倍晋三AIの順で、安倍晋三AIの先には進まない。人物切替と親愛度画面・記録の開き直しではアニメーションを再生する。
 - 投票画面にアイコンをタップすると投票理由・採点内訳を確認できる案内を表示する。採点のない旧記録では投票理由だけを案内する。投票理由の選択と人物別の読位置も保持し、Androidの戻る1回でシートを閉じる。旧記録の欠損情報を補完しない。
 - 投票図は完全表示時だけ描画1.8秒＋静止0.9秒を繰り返し、親愛度は完全表示時に約1.1秒で一度だけ動かす。非選択ページ・移動中・非表示・シート表示中は停止する。
 - API・認証・暗号化保存形式・差分同期・一覧の検索focus復帰抑止は変更しない。架空データによる画面確認と実機・Play配布は区別する。
-- Androidの戻り確定後は、約280msのスライドで詳細を退場させてから選択を解除する。長いspringの余韻や退場中の空欄への切替を避ける。通常の戻るボタンでは予測型ジェスチャーの縮小を適用せず、元の大きさのまま横スライドする。予測型の縮小・復元は実際にジェスチャーの進捗が届いた場合だけに限定する。アニメーション無効時は即時に戻る。狭幅の一覧に選択色を残さず、広幅では2ペインの選択強調を維持する。戻るジェスチャーの追従・取消、認可喪失時の非表示、一覧の読位置と検索focus抑止も維持する。
+- Androidの戻りはNavDisplayの約280msのスライドと標準の退出entry保持を使い、退場中に本文を空欄へ差し替えない。通常の戻るボタンでは予測型ジェスチャーの縮小を適用せず、元の大きさのまま横スライドする。予測型の追従・取消は標準処理へ任せ、アニメーション無効時は即時に戻る。狭幅の一覧に選択色を残さず、広幅では2ペインの選択強調を維持する。認可喪失時の非表示、一覧の読位置と検索focus抑止も維持する。
 
 API 36・架空データで、[意見](screenshots/detail-opinions-light.png)、[投票](screenshots/detail-voting-light.png)、[結果](screenshots/detail-result-dark.png)、[開閉カード](screenshots/detail-result-expanded-dark.png)、[親愛度](screenshots/detail-affection-dark.png)、[320dp・文字2倍](screenshots/detail-large-text.png)を確認する。[前版の操作録画](screenshots/detail-pages.mp4)とは画面順と初期段階が異なる。
 プレビューは`RecordDetailVisualTest`に`shittimCaptureUi=true`を渡して再取得できる。録画時だけ`shittimRecordUi=true`も渡す。通常CIでは録画用の待機や実時間フレーム送りを行わない。
 
-戻りスライドの[途中](screenshots/adaptive-back-slide-middle.png)と[完了後](screenshots/adaptive-back-slide-complete.png)も架空データで確認する。`AdaptiveRecordsUiTest.threeButtonBackSlidesBeforeClosingWithoutLeavingASelectedListCard`へ`shittimCaptureAdaptive=true`を渡して再取得できる。
+戻りスライドの[途中](screenshots/adaptive-back-slide-middle.png)と[完了後](screenshots/adaptive-back-slide-complete.png)も架空データで確認する。`AdaptiveRecordsUiTest.threeButtonBackPopsOnceAndSlidesWithoutLeavingASelectedListCard`へ`shittimCaptureAdaptive=true`を渡して再取得できる。
 
 ## 新しい議論の通知
 

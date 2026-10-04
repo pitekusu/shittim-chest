@@ -21,6 +21,8 @@ import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.then
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import androidx.navigation3.runtime.NavBackStack
+import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.pitekusu.shittim.records.auth.MobileAvatar
@@ -241,7 +243,7 @@ class RecordSearchNavigationTest {
     }
     var query = RecordListQuery()
       private set
-    private var selected: String? = null
+    private val backStack = NavBackStack<NavKey>(RecordsList)
     private var authorized = true
     private var theme = ThemeChoice.Dark
     private var records = RecordListState.Ready.fromSaved(entries)
@@ -252,7 +254,7 @@ class RecordSearchNavigationTest {
 
     fun setAuthorized(value: Boolean) {
       authorized = value
-      selected = null
+      backStack.closeRecord()
       state.value = screen()
     }
 
@@ -263,7 +265,8 @@ class RecordSearchNavigationTest {
 
     private fun screen() = BootstrapScreen.State(theme, session,
       records = records, record = RecordPreviewState.Ready(
-        RecordPreview("架空の議題全文", "架空の結論", "アロナ")), selectedRecordId = selected,
+        RecordPreview("架空の議題全文", "架空の結論", "アロナ")),
+      selectedRecordId = (backStack.lastOrNull() as? RecordDetail)?.recordId, backStack = backStack.toList(),
       canReadRecords = authorized, listQuery = query,
       requesters = if (authorized) recordRequesterChoices(entries) else emptyList(), eventSink = ::event)
 
@@ -275,8 +278,8 @@ class RecordSearchNavigationTest {
         is BootstrapScreen.Event.SelectRequester -> query = query.copy(requesterName = event.displayName)
         is BootstrapScreen.Event.SelectOrder -> query = query.copy(order = event.order)
         BootstrapScreen.Event.ClearRecordQuery -> query = RecordListQuery()
-        is BootstrapScreen.Event.OpenRecord -> selected = event.recordId
-        BootstrapScreen.Event.CloseRecord -> selected = null
+        is BootstrapScreen.Event.OpenRecord -> if (authorized) backStack.openRecord(event.recordId)
+        BootstrapScreen.Event.CloseRecord -> if (authorized) backStack.closeRecord()
         else -> Unit
       }
       if (old != query) {
