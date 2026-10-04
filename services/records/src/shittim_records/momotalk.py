@@ -21,6 +21,7 @@ PARTICIPANT_NAMES = dict(zip(PARTICIPANTS, ("アロナ", "プラナ", "安倍晋
 TOKYO = ZoneInfo("Asia/Tokyo")
 MAX_CHARACTERS = 100
 MAX_ATTEMPTS = 3
+MAX_CHAIN_STEPS = 8
 QUESTION_CHUNK_BYTES = 24_000
 OpaqueId = Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{43}$")]
 Score = Annotated[int, Field(strict=True, ge=0, le=1000)]
@@ -139,6 +140,9 @@ class SavedImage(StoredModel):
     participant: ParticipantSlot
     mood: Literal["happy", "unhappy"]
     state: Literal["pending", "ready", "failed"] = "pending"
+    # Persist the switch so SQS redelivery never resubmits the rejected subject.
+    moderation_blocked: bool = False
+    alternate_topic_used: bool = False
 
 
 class Room(StoredModel):
@@ -157,6 +161,7 @@ class Room(StoredModel):
     version: int = 0
     lease_until: int = 0
     complete: bool = False
+    continuation_pending: bool = False
 
     @model_validator(mode="after")
     def valid_checkpoint(self) -> Self:

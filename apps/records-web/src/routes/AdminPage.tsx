@@ -205,6 +205,7 @@ const EVENT_RESOURCES = [
   { key: "openai", label: "OpenAI集計", hasDeliveryMetrics: true },
   { key: "inspector_translation", label: "脆弱性概要翻訳", hasDeliveryMetrics: true },
   { key: "momotalk_weekly", label: "モモトーク週次集計", hasDeliveryMetrics: true },
+  { key: "momotalk_continuation", label: "モモトーク生成の再開", hasDeliveryMetrics: true },
   { key: "momotalk_announcement", label: "モモトーク公開通知", hasDeliveryMetrics: true },
   { key: "mobile_push_sweep", label: "Android通知の配送確認", hasDeliveryMetrics: true },
   { key: "abnormal_stop", label: "異常終了通知", hasDeliveryMetrics: true },
