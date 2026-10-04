@@ -1662,7 +1662,7 @@ def _validate_records_workflows(directory: Path) -> None:
         "ParameterKey=MobileDebateEnabled,UsePreviousValue=true",
         "ParameterKey=MobileDebateChannelId,UsePreviousValue=true",
         "ParameterKey=MobileDebateEnabled,ParameterValue=false",
-        "ParameterKey=MobileDebateChannelId,ParameterValue=)",
+        '"ParameterKey=MobileDebateChannelId,ParameterValue=")',
         '"$@" "${mobile_debate_parameters[@]}" --query Id --output text',
         '--expected-parameter "MobileDebateEnabled=${mobile_debate_enabled}"',
     )
