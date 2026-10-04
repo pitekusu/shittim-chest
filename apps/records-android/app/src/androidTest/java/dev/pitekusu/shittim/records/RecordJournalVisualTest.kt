@@ -148,6 +148,7 @@ class RecordJournalVisualTest {
     compose.runOnIdle { selected.value = null; window.value = DpSize(360.dp, 800.dp) }
     compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasTestTag(lastTag))
     compose.onNodeWithTag(lastTag).assertIsDisplayed().assertIsNotSelected()
+    compose.onNodeWithTag("records-query-toolbar").assertIsDisplayed()
   }
 
   /** Optional screenshots and real-frame pacing are not part of normal CI execution. */

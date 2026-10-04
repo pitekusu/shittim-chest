@@ -980,6 +980,8 @@ Material／Compose標準のモーションを使い、Androidのアニメーシ�
 
 詳細のSaveable状態は標準entry decoratorへ寄せる。decorated entry・SaveableStateHolder・scene状態は描画scopeのroute keyより外側に置き、同じentryのリサイズ・回転・同期では読み位置を維持する。popして開き直した場合はアロナの初回意見から始める。旧実装の詳細UUID・手動removeStateは撤去する。一覧のPaging Flow・アカウントに結び付く検索条件・読位置を詳細entryの寿命へ巻き込まない。本文・検索語・token・アカウント識別子は保存対象にしない。
 
+NavEntryの移動で親のLookaheadScopeが切り替わる際のMaterialツールバーの計測エラーを防ぐため、検索・絞り込みツールバーだけを標準LookaheadScopeで囲む。記録entry全体の再生成や独自計測処理は追加せず、狭幅→広幅→狭幅の操作後にツールバーが復帰することを既存画面試験で確認する。
+
 ### 維持する境界
 
 - 閲覧routeはNav3の単一back stackを正とし、既存の選択先・履歴と二重に同期する基盤は作らない。routeは一覧とopaqueな記録IDを持つ詳細の2種類とし、現在と同じ一覧＋詳細1件の構成を維持する。別の詳細を開くときも詳細履歴を積み重ねない。

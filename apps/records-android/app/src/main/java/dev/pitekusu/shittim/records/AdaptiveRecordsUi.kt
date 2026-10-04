@@ -41,6 +41,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.LookaheadScope
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -164,9 +165,13 @@ internal fun AdaptiveRecordsUi(
             if (queryAvailable && state.selectedRecordId == null && queryMode == RecordQueryMode.Closed && motionAllowed) {
               Box(Modifier.align(Alignment.BottomCenter).widthIn(max = 560.dp).fillMaxWidth(),
                 contentAlignment = Alignment.BottomEnd) {
-                RecordQueryToolbar(state.listQuery, Modifier.padding(ShittimSpacing.Medium),
-                  onSearch = { queryMode = RecordQueryMode.Search },
-                  onFilters = { focusManager.clearFocus(force = true); queryMode = RecordQueryMode.Filters })
+                // Nav3 moves this entry between single- and two-pane lookahead roots. A local
+                // root keeps Material's toolbar alignment-line owner valid across that move.
+                LookaheadScope {
+                  RecordQueryToolbar(state.listQuery, Modifier.padding(ShittimSpacing.Medium),
+                    onSearch = { queryMode = RecordQueryMode.Search },
+                    onFilters = { focusManager.clearFocus(force = true); queryMode = RecordQueryMode.Filters })
+                }
               }
             }
           }
