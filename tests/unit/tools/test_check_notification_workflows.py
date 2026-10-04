@@ -921,7 +921,7 @@ def test_records_release_requires_errexit_for_create_plan_calls(directory: Path)
         "ParameterKey=MobileDebateEnabled,UsePreviousValue=true",
         "ParameterKey=MobileDebateChannelId,UsePreviousValue=true",
         "ParameterKey=MobileDebateEnabled,ParameterValue=false",
-        "ParameterKey=MobileDebateChannelId,ParameterValue=)",
+        '"ParameterKey=MobileDebateChannelId,ParameterValue=")',
         '"${mobile_debate_parameters[@]}"',
     ],
 )

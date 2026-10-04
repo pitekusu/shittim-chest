@@ -168,7 +168,8 @@ internal class BootstrapPresenter(
               result.value
             }, { store?.close(); client.close() },
             { cursor -> session.withAuthorizedToken { client.list(it, cursor) }
-              ?: throw DebateRequestException(DebateFailure.AUTH_REQUIRED) })
+              ?: throw DebateRequestException(DebateFailure.AUTH_REQUIRED) },
+            authenticationRequired = session::onAuthenticationRequired)
         } }
         ViewModelProvider(modelOwner, factory)["debate-$owner", DebateSubmissionModel::class.java]
       }
