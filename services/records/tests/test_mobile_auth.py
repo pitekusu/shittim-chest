@@ -116,6 +116,13 @@ def test_mobile_schema_has_no_internal_records() -> None:
     schema = build_mobile_auth_schema()
     encoded = json.dumps(schema)
     assert "paths" not in schema
-    for private_field in ("requester_key", "transaction_hash", "browser_nonce_hash", "code_hash"):
+    for private_field in (
+        "requester_key",
+        "transaction_hash",
+        "browser_nonce_hash",
+        "code_hash",
+        "discord_user_id",
+        "discord_username",
+    ):
         assert private_field not in encoded
     assert "MobileSessionRecord" not in encoded

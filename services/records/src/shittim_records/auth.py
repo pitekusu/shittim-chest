@@ -177,11 +177,13 @@ class AvatarStore(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class AuthenticatedRequester:
-    """Verified profile, without provider tokens, raw IDs or expiring image URLs."""
+    """Verified server-only identity; never serialize directly into a public profile."""
 
     requester_key: str = field(repr=False)
     display_name: str = field(repr=False)
     avatar_asset_key: str | None = field(repr=False)
+    discord_user_id: str | None = field(default=None, repr=False)
+    discord_username: str | None = field(default=None, repr=False)
 
 
 def authenticate_discord_requester(
@@ -205,7 +207,9 @@ def authenticate_discord_requester(
     except Exception:
         # Avatar availability must not decide login eligibility; never log private failures.
         avatar_asset_key = None
-    return AuthenticatedRequester(requester_key, display_name, avatar_asset_key)
+    return AuthenticatedRequester(
+        requester_key, display_name, avatar_asset_key, identity.user_id, identity.username
+    )
 
 
 class AuthService:
