@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-09-23
+updated: 2026-10-04
 ---
 
 # GitHub・CI-CD詳細設計
@@ -148,7 +148,7 @@ Androidは同じ`ci.yml`の`android-gate`で検証し、独立した大規模mat
 | ビルド・静的確認 | debug APK、テストAPK、Android Lint |
 | 通常の端末試験 | API 36 x86_64のエミュレーター1台で認証・鍵・暗号化保存・DB・API・同期などの非画面instrumentation test |
 | 画面・操作の確認 | 既存試験を保持し、UI変更時と配布前に対象を選んで実行。手動CIの`android_screen_tests`で全試験を選択可能 |
-| 結果 | `android-gate`で分類成功と実行結果を確認。必要なジョブの失敗・取消・skipは不合格 |
+| 結果 | `android-gate`で分類成功と実行済みJUnit結果を確認。結果欠落・0件・失敗・取消・skipは不合格 |
 | 成果物 | Lint・テストのレポートのみ7日保持。APK配布・署名・Play認証は行わない |
 
 PR、mainへのpush、手動実行でチェックを作成する。手動実行はAndroidとCore全検証を明示的に実行する。
@@ -157,6 +157,7 @@ AndroidJUnitRunnerの標準`notAnnotation`フィルターを使い、非画面�
 手動CIの`android_screen_tests`は既定falseとし、trueの場合だけフィルターを外して画面を含む全試験を実行する。
 UI変更時と配布前には関連する画面試験を標準の`class`フィルターで選び、必要な明暗・狭幅・操作を確認する。
 選択方法はAndroid READMEを参照する。未実施と実行成功を区別し、タイムアウト・取消・skipを成功扱いしない。
+端末やインストールの異常でGradleが成功終了しても、実行済みJUnit結果がなければ不合格とする。試験件数の固定目標は設けない。
 `apps/records-android/`、共通CI、変更範囲判定とその試験の変更でAndroidを検証する。
 Androidのみや文書を伴う差分では、Coreの全pytest・wheel作成・CDKを省略する。
 `tests`・`package`・`cdk`の必須チェック名は実処理のジョブで維持し、対象外と実行成功を区別する。

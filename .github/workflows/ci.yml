@@ -493,10 +493,17 @@ jobs:
           # Always cold boot: a stale Quick Boot snapshot can hang instrumentation.
           emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swangle -camera-back none -camera-front none
           script: >-
+            timeout 15s adb shell df /data &&
             timeout 12m apps/records-android/gradlew -p apps/records-android --no-daemon
             -Pandroid.testInstrumentationRunnerArguments.timeout_msec=120000
             ${{ steps.android-tests.outputs.runner_args }}
             :app:connectedDebugAndroidTest
+      - name: Require executed Android test results
+        if: ${{ steps.scope.outputs.required == 'true' }}
+        id: verify-android-results
+        run: >-
+          python3 tools/check_ci_scope.py --junit-reports
+          apps/records-android/app/build/outputs/androidTest-results/connected/debug
       - name: Retain Android reports, not an unsigned distribution
         if: ${{ steps.scope.outputs.required == 'true' && (!cancelled()) }}
         id: reports-android
@@ -517,6 +524,7 @@ jobs:
           python3 tools/check_ci_scope.py
           --require-step build-android
           --require-step verify-android
+          --require-step verify-android-results
           --require-step reports-android
 
   container-arm64:

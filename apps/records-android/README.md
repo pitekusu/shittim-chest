@@ -157,7 +157,7 @@ C16のログイン画面（API 36、未認証・実データなし）：
 - Composeの画面・操作試験には実行時annotationの`@ScreenTest`を付け、通常のPR／main CIでは全件実行しない。試験自体は残し、UI変更時と配布前には影響する画面を選んで確認する。
 - JDKは`.java-version`、GradleはWrapperをローカルと共有する。CIにもアプリと同じSDK／Build Toolsを用意する。
 - Android配下と関連文書だけの差分ではCoreの全pytest・パッケージ・CDK検証を省略する。
-- `android-gate`は必要な処理の失敗・取消・skipを不合格にする。手動CIではAndroidも必ず検証する。
+- `android-gate`は必要な処理の失敗・取消・skipを不合格にする。Gradleの終了コードだけで判断せず、JUnitレポートの実行済み試験を必須にし、結果欠落・0件・失敗・skipも拒否する。手動CIではAndroidも必ず検証する。
 - Lint・テストのレポートを7日保存する。APK配布・CodeQL対応待ちのC04は含めない。
 
 ### instrumentation testの選択

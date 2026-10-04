@@ -434,6 +434,12 @@ def test_android_ci_selects_only_screen_execution_as_optional(
         (":app:assembleDebugAndroidTest ", "", "APK builds and Lint"),
         (":app:connectedDebugAndroidTest", ":app:assembleDebug", "bounded selected"),
         ("${{ steps.android-tests.outputs.runner_args }}", "", "bounded selected"),
+        (
+            "--junit-reports",
+            "--github-output results",
+            "executed JUnit",
+        ),
+        ("--require-step verify-android-results", "", "every required step outcome"),
         ("        default: false\n", "        default: true\n", "manual opt-in"),
         (
             ":app:connectedDebugAndroidTest",

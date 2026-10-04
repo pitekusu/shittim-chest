@@ -1341,6 +1341,7 @@ def _validate_android_test_selection(directory: Path) -> None:
         verify = _workflow_step_block(
             android, "Run the selected instrumentation tests on one emulator"
         )
+        results = _workflow_step_block(android, "Require executed Android test results")
     except ValueError as error:
         raise WorkflowPolicyError(
             "Android CI must retain its build and device test steps"
@@ -1358,6 +1359,13 @@ def _validate_android_test_selection(directory: Path) -> None:
     )
     if any(marker not in verify for marker in required_verify):
         raise WorkflowPolicyError("Android CI must run bounded selected instrumentation tests")
+    if (
+        "id: verify-android-results" not in results
+        or "python3 tools/check_ci_scope.py --junit-reports "
+        "apps/records-android/app/build/outputs/androidTest-results/connected/debug"
+        not in " ".join(results.split())
+    ):
+        raise WorkflowPolicyError("Android CI must require executed JUnit test results")
     input_block = re.search(r"(?m)^      android_screen_tests:\n((?:        .+\n)+)", text)
     required_selection = (
         "id: android-tests",
@@ -1376,7 +1384,7 @@ def _validate_android_test_selection(directory: Path) -> None:
     ):
         raise WorkflowPolicyError("Android screen tests must be an explicit manual opt-in")
     if "continue-on-error:" in android or any(
-        "|| true" in step for step in (build, selection, verify)
+        "|| true" in step for step in (build, selection, verify, results)
     ):
         raise WorkflowPolicyError("Android CI must not mask build or instrumentation failures")
 
@@ -1412,7 +1420,10 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         "tests": ("core_tests", ("verify-tests",)),
         "package": ("core_package", ("build-package", "verify-package")),
         "cdk": ("infra", ("audit-infra", "verify-infra")),
-        "android-gate": ("android", ("build-android", "verify-android", "reports-android")),
+        "android-gate": (
+            "android",
+            ("build-android", "verify-android", "verify-android-results", "reports-android"),
+        ),
         "container-arm64": (
             "runtime_container",
             ("verify-container", "verify-sbom", "verify-record", "retain-sbom"),
