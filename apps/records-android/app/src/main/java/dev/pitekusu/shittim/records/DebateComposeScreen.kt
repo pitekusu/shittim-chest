@@ -41,7 +41,10 @@ internal fun DebateComposeScreen(state: DebateSubmissionState, online: Boolean,
     val workspace = state.workspace
     if (workspace == null) {
       if (state.failure == null) CircularProgressIndicator()
-      else Text(stringResource(R.string.debate_storage_error), color = MaterialTheme.colorScheme.error)
+      else {
+        Text(stringResource(R.string.debate_storage_error), color = MaterialTheme.colorScheme.error)
+        TextButton(onClick = onRetry) { Text(stringResource(R.string.session_retry)) }
+      }
       return@Column
     }
     val frozen = workspace.requestId != null

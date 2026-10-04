@@ -151,11 +151,12 @@ internal class BootstrapPresenter(
       cacheAccountId?.let { owner ->
         val factory = viewModelFactory { initializer {
           val client = DebateRequestsClient()
-          val store = try { DebateWorkspaceStore.open(context.applicationContext, session::isCacheAuthorized) }
-          catch (_: Exception) { null }
+          // Kotlin lazy retries an initializer that throws; a transient open failure
+          // must not permanently disable this account's retained model.
+          val store = lazy { DebateWorkspaceStore.open(context.applicationContext, session::isCacheAuthorized) }
           DebateSubmissionModel({ session.isCacheAuthorized(owner) },
-            { store?.load(owner) ?: throw DebateRequestException(DebateFailure.STORAGE) },
-            { store?.save(owner, it) ?: throw DebateRequestException(DebateFailure.STORAGE) },
+            { store.value.load(owner) },
+            { store.value.save(owner, it) },
             { id, question -> session.withAuthorizedToken {
               if (!hasValidatedDebateNetwork(context)) throw DebateRequestException(DebateFailure.UNAVAILABLE)
               client.submit(it, id, question)
@@ -166,7 +167,7 @@ internal class BootstrapPresenter(
               val result = session.withAuthorizedToken { Lookup(client.find(it, id)) }
                 ?: throw DebateRequestException(DebateFailure.AUTH_REQUIRED)
               result.value
-            }, { store?.close(); client.close() },
+            }, { if (store.isInitialized()) store.value.close(); client.close() },
             { cursor -> session.withAuthorizedToken { client.list(it, cursor) }
               ?: throw DebateRequestException(DebateFailure.AUTH_REQUIRED) },
             authenticationRequired = session::onAuthenticationRequired)
@@ -421,13 +422,16 @@ internal class BootstrapPresenter(
         is BootstrapScreen.Event.SelectOrder -> listQuery = listQuery.copy(order = event.order)
         BootstrapScreen.Event.ClearRecordQuery -> listQuery = RecordListQuery()
         BootstrapScreen.Event.ComposeDebate -> if (cacheAccountId != null && session.isCacheAuthorized(cacheAccountId)) {
+          debateModel?.restore()
           backStack.closeRecord()
           backStack.add(DebateCompose)
         }
         is BootstrapScreen.Event.EditDebate -> debateModel?.edit(event.question)
         BootstrapScreen.Event.SubmitDebate -> if (signedIn && hasValidatedDebateNetwork(context)) debateModel?.submit()
         BootstrapScreen.Event.CheckDebate -> if (signedIn && hasValidatedDebateNetwork(context)) debateModel?.reconcile()
-        BootstrapScreen.Event.RetryDebate -> if (signedIn && hasValidatedDebateNetwork(context)) debateModel?.retryConfirmedMissing()
+        BootstrapScreen.Event.RetryDebate -> if (debateModel?.state?.value?.workspace == null) {
+          debateModel?.restore() // Encrypted local recovery also works offline.
+        } else if (signedIn && hasValidatedDebateNetwork(context)) debateModel?.retryConfirmedMissing()
         BootstrapScreen.Event.NewDebateDraft -> if (cacheAccountId != null && session.isCacheAuthorized(cacheAccountId)) {
           if (debateModel?.newDraft() == true) {
             backStack.closeRecord()

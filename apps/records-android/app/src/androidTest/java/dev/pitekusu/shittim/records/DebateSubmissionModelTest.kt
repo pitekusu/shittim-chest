@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModelStore
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -118,6 +120,75 @@ class DebateSubmissionModelTest {
     withContext(Dispatchers.Main) { model.flush { navigated = true } }
     assertTrue(navigated)
     assertEquals(0, saves)
+    withContext(Dispatchers.Main) { ViewModelStore().apply { put("model", model); clear() } }
+  }
+
+  @Test fun transientOpenOrReadFailureCanRestoreTheSameFrozenRequestWithoutSending() = runBlocking<Unit> {
+    for (failOpen in listOf(true, false)) {
+      var opens = 0
+      var reads = 0
+      var saves = 0
+      var posts = 0
+      var lookups = 0
+      val recoveredRead = CompletableDeferred<Unit>()
+      val workspace = DebateWorkspace(draft = "架空の議題", requestId = id, frozenQuestion = "架空の議題")
+      val store = lazy {
+        opens++
+        if (failOpen && opens == 1) throw IllegalStateException("synthetic_open_failure")
+        workspace
+      }
+      val model = DebateSubmissionModel({ true }, {
+        reads++
+        val value = store.value
+        if (!failOpen && reads == 1) throw IllegalStateException("synthetic_read_failure")
+        recoveredRead.await()
+        value
+      }, { saves++ }, { _, _ -> posts++; null }, { lookups++; null }, {})
+      withContext(Dispatchers.Main) { model.restore() }
+      await { model.state.value.failure == DebateFailure.STORAGE }
+      withContext(Dispatchers.Main) { model.restore(); model.restore() }
+      assertNull(model.state.value.failure) // A retry displays loading, not a stale error.
+      assertNull(model.state.value.workspace)
+      assertEquals(2, reads) // Re-entry while restoring does not duplicate the read.
+      recoveredRead.complete(Unit)
+      await { model.state.value.workspace != null }
+      assertSame(workspace, model.state.value.workspace)
+      assertEquals(id, model.state.value.workspace?.requestId)
+      withContext(Dispatchers.Main) { model.restore() }
+      assertEquals(2, reads) // Loaded edits are not replaced by another restoration.
+      assertEquals(if (failOpen) 2 else 1, opens)
+      assertEquals(0, saves)
+      assertEquals(0, posts)
+      assertEquals(0, lookups)
+      withContext(Dispatchers.Main) { ViewModelStore().apply { put("model", model); clear() } }
+    }
+  }
+
+  @Test fun workspaceRecoveryStillRequiresAuthorizationBeforeAndAfterTheRead() = runBlocking<Unit> {
+    var permitted = true
+    var reads = 0
+    val recoveredRead = CompletableDeferred<DebateWorkspace>()
+    val restoration = CompletableDeferred<Job>()
+    val model = DebateSubmissionModel({ permitted }, {
+      reads++
+      if (reads == 1) throw IllegalStateException("synthetic_read_failure")
+      restoration.complete(requireNotNull(currentCoroutineContext()[Job]))
+      recoveredRead.await()
+    }, { fail("Restoration must not replace encrypted data") },
+      { _, _ -> fail("Restoration must not submit"); null }, { fail("Restoration must not poll"); null }, {})
+    withContext(Dispatchers.Main) { model.restore() }
+    await { model.state.value.failure == DebateFailure.STORAGE }
+    permitted = false
+    withContext(Dispatchers.Main) { model.restore() }
+    assertEquals(1, reads)
+    assertEquals(DebateFailure.STORAGE, model.state.value.failure)
+    permitted = true
+    withContext(Dispatchers.Main) { model.restore() }
+    await { reads == 2 }
+    permitted = false
+    recoveredRead.complete(DebateWorkspace(draft = "架空の保存済み下書き"))
+    restoration.await().join()
+    assertNull(model.state.value.workspace)
     withContext(Dispatchers.Main) { ViewModelStore().apply { put("model", model); clear() } }
   }
 
