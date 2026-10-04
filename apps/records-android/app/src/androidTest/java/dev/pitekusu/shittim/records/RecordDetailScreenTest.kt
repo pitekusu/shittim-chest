@@ -1,15 +1,22 @@
 package dev.pitekusu.shittim.records
 
+import android.graphics.Bitmap
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.DeviceConfigurationOverride
+import androidx.compose.ui.test.FontScale
+import androidx.compose.ui.test.WindowSize
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
@@ -17,6 +24,10 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
 import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.test.swipeUp
+import androidx.compose.ui.test.then
+import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.dp
+import java.io.File
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import android.view.KeyEvent
@@ -161,6 +172,62 @@ class RecordDetailScreenTest {
     compose.onNodeWithText("この記録には意見データがありません。").assertIsDisplayed()
     assertEquals(position, questionScroll.fetchSemanticsNode()
       .config[SemanticsProperties.VerticalScrollAxisRange].value(), 0.01f)
+  }
+
+  @Test fun longQuestionAtLargeTextKeepsItsViewportInsideTheCardAndEveryLineReachable() {
+    val question = "長い架空の議題について、休日に楽しむ散歩と読書の計画を考えてください。\n".repeat(20) +
+      "議題の最後の一行です。"
+    compose.activityRule.scenario.onActivity { it.setContent {
+      DeviceConfigurationOverride(DeviceConfigurationOverride.WindowSize(DpSize(320.dp, 640.dp)) then
+        DeviceConfigurationOverride.FontScale(2f)) {
+        ShittimTheme(true) { RecordDetailScreen(RecordPreviewState.Ready(
+          RecordPreview(question, "結論", "アロナ")), "large-question", {}) }
+      }
+    } }
+    val scroll = compose.onNodeWithTag("detail-question-scroll", useUnmergedTree = true)
+    val card = compose.onNodeWithTag("detail-question-open").fetchSemanticsNode().boundsInRoot
+    val viewport = scroll.fetchSemanticsNode().boundsInRoot
+    val label = compose.onNodeWithTag("detail-question-label", useUnmergedTree = true)
+      .fetchSemanticsNode().boundsInRoot
+    assertTrue(viewport.width > 0f && viewport.height > 0f)
+    assertTrue(viewport.left >= card.left && viewport.right <= card.right)
+    assertTrue(viewport.top >= label.bottom && viewport.bottom <= card.bottom)
+    assertEquals(0f, scroll.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value(), .01f)
+    val text = compose.onNodeWithTag("detail-question-text", useUnmergedTree = true)
+    val layouts = mutableListOf<TextLayoutResult>()
+    text.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+    assertEquals(question, layouts.single().layoutInput.text.text)
+    assertTrue(text.fetchSemanticsNode().positionInRoot.y + layouts.single().getLineTop(0) >= viewport.top - 1f)
+    compose.onNodeWithTag("detail-question-full", useUnmergedTree = true).assertIsDisplayed()
+    compose.onNodeWithText("この記録には意見データがありません。").assertIsDisplayed()
+    compose.onNodeWithTag("detail-section-Opinions").assertIsDisplayed()
+    captureQuestion("long-question-large-text-top")
+    val maxScroll = scroll.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].maxValue()
+    assertTrue(maxScroll > 0f)
+    scroll.performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, maxScroll) }
+    compose.waitForIdle()
+    assertEquals(maxScroll, scroll.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value(), 1f)
+    val lastBottom = text.fetchSemanticsNode().positionInRoot.y +
+      layouts.single().getLineBottom(layouts.single().lineCount - 1)
+    assertTrue(lastBottom <= viewport.bottom + 1f && lastBottom > viewport.top)
+    captureQuestion("long-question-large-text-end")
+    assertEquals(label, compose.onNodeWithTag("detail-question-label", useUnmergedTree = true)
+      .fetchSemanticsNode().boundsInRoot)
+    scroll.performSemanticsAction(SemanticsActions.ScrollBy) { it(0f, -maxScroll) }
+    compose.waitForIdle()
+    assertEquals(0f, scroll.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value(), .01f)
+    compose.onNodeWithTag("detail-question-full", useUnmergedTree = true).performClick()
+    compose.waitUntil(5_000) { compose.onNodeWithTag("detail-question-sheet").isDisplayed() }
+    InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+    compose.waitUntil(5_000) { !compose.onNodeWithTag("detail-question-sheet").isDisplayed() }
+    compose.onNodeWithTag("detail-section-Opinions").assertIsSelected()
+  }
+
+  private fun captureQuestion(name: String) {
+    if (InstrumentationRegistry.getArguments().getString("shittimCaptureUi") != "true") return
+    File(compose.activity.cacheDir, "$name.png").outputStream().use {
+      compose.onRoot().captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it)
+    }
   }
 
   @Test fun opinionsStartWithAronaAndResetOnAnswerChangesButKeepTheCurrentPositionDuringRefresh() {
