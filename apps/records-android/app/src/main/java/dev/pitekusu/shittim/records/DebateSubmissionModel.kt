@@ -194,12 +194,13 @@ internal class DebateSubmissionModel(
       lookup(resendIfMissing = true)
   }
 
-  fun newDraft() {
-    val value = mutable.value.workspace ?: return
-    if (!authorized() || mutable.value.busy || value.receipt?.terminal != true) return
+  fun newDraft(): Boolean {
+    val value = mutable.value.workspace ?: return false
+    if (!authorized() || mutable.value.busy || value.receipt?.terminal != true) return false
     val draft = DebateWorkspace()
     mutable.value = DebateSubmissionState(draft, saving = true)
     viewModelScope.launch { persistEdit(draft) }
+    return true
   }
 
   /** Called from the visible NavEntry's coroutine; stopping the entry cancels its HTTP read. */

@@ -154,4 +154,49 @@ class DebateProgressModelTest {
     assertEquals("", saved.draft)
     clear(model)
   }
+
+  @Test fun terminalHistoryCannotCreateANewDraftOverAnotherActiveRequestOrDraft() = runBlocking<Unit> {
+    for (workspace in listOf(
+      DebateWorkspace(draft = "架空の議題", requestId = id, frozenQuestion = "架空の議題", receipt = request(status = "running")),
+      DebateWorkspace(draft = "架空の未送信下書き"),
+    )) {
+      var saves = 0
+      var navigated = false
+      val model = DebateSubmissionModel({ true }, { workspace }, { saves++ },
+        { _, _ -> null }, { request(it, "published") }, {})
+      withContext(Dispatchers.Main) { model.restore() }
+      await { model.state.value.workspace != null }
+      withContext(Dispatchers.Main) {
+        model.refreshStatus(second)
+        if (model.newDraft()) navigated = true
+      }
+      assertTrue(requireNotNull(model.status.value.request).terminal)
+      assertFalse(navigated)
+      assertSame(workspace, model.state.value.workspace)
+      assertEquals(0, saves)
+      clear(model)
+    }
+  }
+
+  @Test fun newDraftNavigatesOnlyWhenCreatedAndKeepsStorageFailureVisible() = runBlocking<Unit> {
+    for (storageFails in listOf(false, true)) {
+      var saved = DebateWorkspace(draft = "架空の議題", requestId = id,
+        frozenQuestion = "架空の議題", receipt = request(status = "published"))
+      var navigated = false
+      val model = DebateSubmissionModel({ true }, { saved }, {
+        if (storageFails) throw IllegalStateException("synthetic_storage_failure")
+        saved = it
+      }, { _, _ -> null }, { null }, {})
+      withContext(Dispatchers.Main) { model.restore() }
+      await { model.state.value.workspace != null }
+      withContext(Dispatchers.Main) { if (model.newDraft()) navigated = true }
+      await { !model.state.value.saving }
+      assertTrue(navigated)
+      assertNull(model.state.value.workspace?.requestId)
+      assertEquals("", model.state.value.workspace?.draft)
+      assertEquals(if (storageFails) DebateFailure.STORAGE else null, model.state.value.failure)
+      assertEquals(if (storageFails) id else null, saved.requestId)
+      clear(model)
+    }
+  }
 }

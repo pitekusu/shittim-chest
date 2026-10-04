@@ -428,9 +428,10 @@ internal class BootstrapPresenter(
         BootstrapScreen.Event.CheckDebate -> if (signedIn && hasValidatedDebateNetwork(context)) debateModel?.reconcile()
         BootstrapScreen.Event.RetryDebate -> if (signedIn && hasValidatedDebateNetwork(context)) debateModel?.retryConfirmedMissing()
         BootstrapScreen.Event.NewDebateDraft -> if (cacheAccountId != null && session.isCacheAuthorized(cacheAccountId)) {
-          debateModel?.newDraft()
-          backStack.closeRecord()
-          backStack.add(DebateCompose)
+          if (debateModel?.newDraft() == true) {
+            backStack.closeRecord()
+            backStack.add(DebateCompose)
+          }
         }
         BootstrapScreen.Event.ShowDebateRequests -> if (cacheAccountId != null && session.isCacheAuthorized(cacheAccountId)) {
           val show = { backStack.closeRecord(); backStack.add(DebateRequests); Unit }
