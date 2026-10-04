@@ -16,7 +16,7 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class DebateRequestsClientTest {
-  private val id = "11111111-2222-4333-8444-555555555555"
+  private val id = "11111111-2222-4333-8444-abcdefabcdef"
   private val token = "t".repeat(43)
   private val headers = headersOf(HttpHeaders.ContentType, "application/json")
   private fun receipt(status: String = "queued") = """{"requestId":"$id","question":"架空の相談","status":"$status","phase":null,"createdAt":"2026-10-04T00:00:00Z","updatedAt":"2026-10-04T00:00:00Z","recordId":null,"errorCode":null}"""
@@ -65,7 +65,7 @@ class DebateRequestsClientTest {
     var calls = 0
     DebateRequestsClient(MockEngine {
       calls++
-      respond(receipt().replace(id, "99999999-2222-4333-8444-555555555555"), headers = headers)
+      respond(receipt().replace(id, "99999999-2222-4333-8444-abcdefabcdef"), headers = headers)
     }).use { client ->
       try { client.submit(token, id, "架空の相談"); fail("mismatched receipt") }
       catch (error: DebateRequestException) { assertEquals(DebateFailure.INVALID_RESPONSE, error.failure) }

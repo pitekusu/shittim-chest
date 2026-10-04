@@ -3,6 +3,7 @@ package dev.pitekusu.shittim.records
 import androidx.lifecycle.ViewModelStore
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -13,7 +14,7 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class DebateSubmissionModelTest {
-  private val id = "11111111-2222-4333-8444-555555555555"
+  private val id = "11111111-2222-4333-8444-abcdefabcdef"
   private fun receipt(id: String, question: String) = DebateRequest(id, question, "queued",
     createdAt = "2026-10-04T00:00:00Z", updatedAt = "2026-10-04T00:00:00Z")
   private suspend fun await(condition: () -> Boolean) = withTimeout(5000) {
@@ -82,6 +83,25 @@ class DebateSubmissionModelTest {
     await { saved.receipt != null }
     assertEquals(1, calls)
     assertEquals(id, saved.requestId)
+    withContext(Dispatchers.Main) { ViewModelStore().apply { put("model", model); clear() } }
+  }
+
+  @Test fun backWaitsForFrozenWriteButNotForPostResponse() = runBlocking {
+    val saving = CompletableDeferred<Unit>()
+    val saved = CompletableDeferred<Unit>()
+    val response = CompletableDeferred<DebateRequest?>()
+    var navigated = false
+    val model = DebateSubmissionModel({ true }, { DebateWorkspace(draft = "架空の議題") },
+      { saving.complete(Unit); saved.await() }, { _, _ -> response.await() }, { null }, {})
+    withContext(Dispatchers.Main) { model.restore() }
+    await { model.state.value.workspace != null }
+    withContext(Dispatchers.Main) { model.submit(); model.flush { navigated = true } }
+    saving.await()
+    assertFalse(navigated)
+    saved.complete(Unit)
+    await { navigated }
+    assertTrue(model.state.value.busy)
+    assertFalse(response.isCompleted)
     withContext(Dispatchers.Main) { ViewModelStore().apply { put("model", model); clear() } }
   }
 }

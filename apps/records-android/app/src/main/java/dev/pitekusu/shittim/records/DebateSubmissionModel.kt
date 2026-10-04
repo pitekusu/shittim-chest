@@ -31,6 +31,7 @@ internal class DebateSubmissionModel(
   private var autosave: Job? = null
   private var operation: Job? = null
   private var committed: DebateWorkspace? = null
+  private var pendingSave: DebateWorkspace? = null
 
   fun restore() {
     if (!authorized() || operation?.isActive == true || mutable.value.workspace != null) return
@@ -72,10 +73,26 @@ internal class DebateSubmissionModel(
 
   fun flush(afterSave: () -> Unit) {
     val value = mutable.value.workspace ?: return
-    if (committed === value) { afterSave(); return }
-    if (mutable.value.busy) { afterSave(); return }
+    val flushingOperation = mutable.value.busy
+    if (!flushingOperation && committed === value) { afterSave(); return }
     autosave?.cancel()
-    viewModelScope.launch { if (persistEdit(value) && authorized()) afterSave() }
+    viewModelScope.launch {
+      if (flushingOperation) {
+        // Wait for an in-flight encrypted write, not for the POST response. A queued
+        // freeze must also be durable before Back or permission-upgrade reauthentication.
+        val durable = writes.withLock {
+          if (!authorized()) return@withLock false
+          try {
+            pendingSave?.let { pending ->
+              if (committed !== pending) { save(pending); committed = pending }
+            }
+            true
+          } catch (error: CancellationException) { throw error }
+          catch (_: Exception) { false }
+        }
+        if (durable && authorized()) afterSave()
+      } else if (persistEdit(value) && authorized()) afterSave()
+    }
   }
 
   fun submit() {
@@ -87,11 +104,15 @@ internal class DebateSubmissionModel(
 
   private fun transmit(frozen: DebateWorkspace) {
     autosave?.cancel()
+    pendingSave = frozen
     mutable.value = DebateSubmissionState(mutable.value.workspace, busy = true)
     operation = viewModelScope.launch {
       try {
-        writes.withLock { save(frozen) }
-        committed = frozen
+        writes.withLock {
+          if (committed !== frozen) save(frozen)
+          committed = frozen
+          pendingSave = null
+        }
         if (!authorized()) return@launch
         mutable.value = DebateSubmissionState(frozen, busy = true)
         val receipt = send(requireNotNull(frozen.requestId), requireNotNull(frozen.frozenQuestion)) ?: return@launch
@@ -162,6 +183,7 @@ internal class DebateSubmissionModel(
     autosave?.cancel()
     operation?.cancel()
     committed = null
+    pendingSave = null
     mutable.value = DebateSubmissionState()
   }
 
