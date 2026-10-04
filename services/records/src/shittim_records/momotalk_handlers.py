@@ -114,7 +114,12 @@ def collect_handler(event: Mapping[str, Any], _context: object) -> dict[str, Any
             local = scheduled_at.astimezone(TOKYO)
             week_id = local.date() - timedelta(days=(local.weekday() + 1) % 7)
             store, _assets, queue, _reader, _configuration, _references = _components()
-            count = continue_week(week_id, store, queue, now=now)
+            # Sunday midnight changes the date before the 18:00 collection.
+            # Also recover the previous week's paused work after an outage.
+            count = sum(
+                continue_week(candidate, store, queue, now=now)
+                for candidate in (week_id, week_id - timedelta(days=7))
+            )
             return {"state": "continued", "rooms": count}
         if event.get("source") != "aws.events" or event.get("detail-type") != "Scheduled Event":
             raise ValueError("invalid scheduled event")

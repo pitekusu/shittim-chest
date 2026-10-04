@@ -432,6 +432,9 @@ def test_continuation_handler_uses_fresh_schedule_and_never_collects_inputs(monk
     service = published(state)
     service.run(WEEK.week_id, ROOM_ID, now=START, steps_remaining=1)
     monkeypatch.setattr(handlers, "_components", lambda: (state, None, state, None, None, None))
+    monkeypatch.setattr(
+        state, "get_week", lambda week: state.week if week == WEEK.week_id else None
+    )
     from datetime import datetime
 
     monkeypatch.setattr(
@@ -450,6 +453,32 @@ def test_continuation_handler_uses_fresh_schedule_and_never_collects_inputs(monk
         with pytest.raises(RuntimeError, match="MOMOTALK_COLLECTION_FAILED"):
             handlers.collect_handler(event, None)
     assert state.calls == before
+
+
+@pytest.mark.parametrize("hour", [0, 18])
+def test_continuation_handler_includes_prior_week_at_sunday_rollover(monkeypatch, hour):
+    from datetime import datetime
+
+    from shittim_records import momotalk_handlers as handlers
+
+    now = START + timedelta(hours=hour - 18)
+    checked = []
+
+    def resume(week, *_args, **_kwargs):
+        checked.append(week)
+        return int(week == WEEK.week_id - timedelta(days=7))
+
+    monkeypatch.setattr(handlers, "continue_week", resume)
+    monkeypatch.setattr(handlers, "_components", lambda: (None,) * 6)
+    monkeypatch.setattr(
+        handlers,
+        "datetime",
+        SimpleNamespace(now=lambda _zone: now, fromisoformat=datetime.fromisoformat),
+    )
+    assert handlers.collect_handler(
+        {"source": "shittim.momotalk.continuation", "time": now.isoformat()}, None
+    ) == {"state": "continued", "rooms": 1}
+    assert checked == [WEEK.week_id, WEEK.week_id - timedelta(days=7)]
 
 
 def test_preexisting_checkpoints_load_without_moderation_metadata():
