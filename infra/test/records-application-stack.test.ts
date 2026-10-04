@@ -1108,6 +1108,7 @@ describe("RecordsApplicationStack", () => {
       "Collect project-scoped OpenAI organization costs hourly at minute 37",
       "Translate unseen active Inspector descriptions hourly at minute 7",
       "Recover pending Android record notifications every minute",
+      "Resume checkpointed MomoTalk after bounded SQS invocation chains",
     ]) {
       const [logicalId] = Object.entries(eventRules).find(
         ([, resource]) => resource.Properties.Description === description,
@@ -1117,7 +1118,7 @@ describe("RecordsApplicationStack", () => {
         "Fn::GetAtt": [logicalId, "Arn"],
       });
     }
-    expect(statusEventBridgeArns).toHaveLength(8);
+    expect(statusEventBridgeArns).toHaveLength(9);
     expect(JSON.stringify(statusEventBridgeArns)).not.toContain(
       "ShittimChest-Prod-RecordsApplication-*",
     );

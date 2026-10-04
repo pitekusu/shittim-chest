@@ -145,6 +145,9 @@ def worker_handler(event: Mapping[str, Any], _context: object) -> dict[str, Any]
                     job.room_id,
                     now=datetime.now(UTC),
                     steps_remaining=job.steps_remaining,
+                    receive_count=int(
+                        record.get("attributes", {}).get("ApproximateReceiveCount", 1)
+                    ),
                 )
             finally:
                 generator.close()

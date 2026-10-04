@@ -162,9 +162,10 @@ class MomotalkGenerationService:
         *,
         now: datetime,
         steps_remaining: int = MAX_CHAIN_STEPS,
+        receive_count: int = 1,
     ) -> bool:
         """Return false for a bounded SQS retry; never log the provider's exception."""
-        if not 1 <= steps_remaining <= MAX_CHAIN_STEPS:
+        if not 1 <= steps_remaining <= MAX_CHAIN_STEPS or receive_count < 1:
             raise MomotalkFailure("MOMOTALK_JOB_INVALID")
         room = self.store.get_room(week_id, room_id)
         week = self.store.get_week(week_id)
@@ -178,6 +179,14 @@ class MomotalkGenerationService:
             return False
         room = claimed
         room.continuation_pending = False
+        remaining = steps_remaining - receive_count
+        if remaining < 0:
+            # Earlier deliveries can exhaust the budget before a failed save or
+            # send is recovered. Hand off without another provider request.
+            room.attempts -= 1
+            room.continuation_pending = True
+            self.store.save(room)
+            return True
         if room.attempts > MAX_ATTEMPTS:
             self._fail_step(room)
         else:
@@ -190,18 +199,19 @@ class MomotalkGenerationService:
             except MomotalkFailure as error:
                 _log_step_failure(room, error)
                 if room.attempts < MAX_ATTEMPTS:
+                    room.continuation_pending = remaining == 0
                     self.store.save(room)
-                    return False
+                    return room.continuation_pending
                 self._fail_step(room)
         room.attempts = 0
         if room.state == "ready" and all(image.state != "pending" for image in room.images):
             room.complete = True
-        room.continuation_pending = not room.complete and steps_remaining == 1
+        room.continuation_pending = not room.complete and remaining == 0
         self.store.save(room)
         # Enqueue after saving. If this send fails, redelivery resumes the saved next
         # step rather than re-running the expensive completed provider request.
         if not room.complete and not room.continuation_pending:
-            self.queue.send(week_id, room_id, steps_remaining=steps_remaining - 1)
+            self.queue.send(week_id, room_id, steps_remaining=remaining)
         elif room.complete:
             self._cleanup(week_id, week)
         return True

@@ -325,12 +325,18 @@ def test_operator_claim_loss_keeps_the_rejection_for_the_next_repair(monkeypatch
 
 
 @pytest.mark.parametrize("chunk_count", [2, 12])
-def test_long_preparation_and_image_fallbacks_resume_in_bounded_chains(chunk_count):
+@pytest.mark.parametrize("retry_preparation", [False, True])
+def test_long_preparation_and_image_fallbacks_resume_in_bounded_chains(
+    chunk_count, retry_preparation
+):
     class QueuedState(FallbackState):
         def send(self, week_id, room_id, *, steps_remaining=MAX_CHAIN_STEPS):
             self.jobs.append((week_id, room_id, steps_remaining))
 
         def prepare(self, *args, final, **kwargs):
+            if retry_preparation and args[2].attempts < 3:
+                # claim increments the saved attempts before calling prepare.
+                raise MomotalkFailure("MOMOTALK_GENERATION_FAILED")
             result = super().prepare(*args, final=True, **kwargs)
             return result if final else WeekDigest(summary=result.summary, images=result.images)
 
@@ -359,8 +365,18 @@ def test_long_preparation_and_image_fallbacks_resume_in_bounded_chains(chunk_cou
         invocations = 0
         while state.jobs:
             week_id, room_id, remaining = state.jobs.pop(0)
-            assert service.run(week_id, room_id, now=START, steps_remaining=remaining)
-            invocations += 1
+            for receive_count in range(1, 5):
+                succeeded = service.run(
+                    week_id,
+                    room_id,
+                    now=START,
+                    steps_remaining=remaining,
+                    receive_count=receive_count,
+                )
+                invocations += 1
+                if succeeded:
+                    break
+            assert succeeded
         chains.append(invocations)
         assert invocations <= MAX_CHAIN_STEPS
         if not state.room.complete:
@@ -372,6 +388,16 @@ def test_long_preparation_and_image_fallbacks_resume_in_bounded_chains(chunk_cou
     assert not state.room.continuation_pending
     assert len(state.image_calls) == 4 and len(state.reselections) == 2
     assert continue_week(WEEK.week_id, state, state, now=START) == 0
+
+
+def test_exhausted_redelivery_pauses_without_a_provider_call_or_charging_an_attempt():
+    state = cast(Any, FallbackState())
+    service = published(state)
+    before = state.calls.copy()
+    attempts = state.room.attempts
+    assert service.run(WEEK.week_id, ROOM_ID, now=START, steps_remaining=1, receive_count=2)
+    assert state.room.continuation_pending and state.room.attempts == attempts
+    assert state.calls == before
 
 
 def test_continuation_tick_skips_unpaused_and_leased_rooms_and_recovers_failed_send(monkeypatch):

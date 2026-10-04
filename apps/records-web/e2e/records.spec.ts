@@ -552,12 +552,20 @@ const adminStatus = {
             { name: `${key}_day_failures`, value: 0 },
           ],
         ),
-        ...["momotalk_weekly", "momotalk_announcement"].flatMap((key, index) => [
-          { name: `${key}_state`, value: "ENABLED" },
-          { name: `${key}_expression`, value: `cron(0 ${index === 0 ? 9 : 11} ? * SUN *)` },
-          { name: `${key}_day_invocations`, value: 0 },
-          { name: `${key}_day_failures`, value: 0 },
-        ]),
+        ...["momotalk_weekly", "momotalk_continuation", "momotalk_announcement"].flatMap(
+          (key, index) => [
+            { name: `${key}_state`, value: "ENABLED" },
+            {
+              name: `${key}_expression`,
+              value:
+                key === "momotalk_continuation"
+                  ? "rate(5 minutes)"
+                  : `cron(0 ${index === 0 ? 9 : 11} ? * SUN *)`,
+            },
+            { name: `${key}_day_invocations`, value: 0 },
+            { name: `${key}_day_failures`, value: 0 },
+          ],
+        ),
         { name: "mobile_push_sweep_state", value: "ENABLED" },
         { name: "mobile_push_sweep_expression", value: "rate(1 minute)" },
         { name: "mobile_push_sweep_day_invocations", value: 1440 },
@@ -2383,6 +2391,9 @@ test("service status page presents localized visual status", async ({ page }, te
   await expect(page.getByRole("region", { name: "Lambda関数状態" })).toBeVisible();
   await expect(page.getByRole("region", { name: "API Gateway状態" })).toBeVisible();
   await expect(page.getByRole("region", { name: "定期実行とイベント配信" })).toBeVisible();
+  await expect(page.getByRole("row", { name: /^モモトーク生成の再開/ })).toContainText(
+    "rate(5 minutes)",
+  );
   await expect(page.locator("#admin-service-affection")).toHaveCount(0);
   const dynamodbCard = page.locator("#admin-service-dynamodb");
   await expect(dynamodbCard.getByRole("region", { name: "親愛度データ" })).toBeVisible();
@@ -2442,7 +2453,7 @@ test("service status page presents localized visual status", async ({ page }, te
     maxDiffPixels: 20,
     timeout: 15_000,
   });
-  for (const service of ["s3", "dynamodb", "lambda", "apigateway", "sqs"]) {
+  for (const service of ["s3", "dynamodb", "lambda", "apigateway", "sqs", "eventbridge"]) {
     await page.locator(`#admin-service-${service}`).screenshot({
       path: testInfo.outputPath(`${service}-desktop.png`),
       animations: "disabled",

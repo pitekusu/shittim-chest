@@ -131,6 +131,7 @@ _EVENT_RULE_DESCRIPTIONS = {
     "inspector_translation": "Translate unseen active Inspector descriptions hourly at minute 7",
     "abnormal_stop": "Notify only abnormal singleton runtime task stops",
     "momotalk_weekly": "Collect weekly MomoTalk inputs at 18:00 JST Sunday",
+    "momotalk_continuation": "Resume checkpointed MomoTalk after bounded SQS invocation chains",
     "momotalk_announcement": "Announce readable MomoTalk at 20:00 JST Sunday",
     "mobile_push_sweep": "Recover pending Android record notifications every minute",
 }

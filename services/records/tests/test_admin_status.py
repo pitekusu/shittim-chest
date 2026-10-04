@@ -1742,6 +1742,7 @@ def test_eventbridge_reports_schedule_and_rules_without_names() -> None:
         "translation-rule": descriptions["inspector_translation"],
         "stop-rule": descriptions["abnormal_stop"],
         "momotalk-rule": descriptions["momotalk_weekly"],
+        "momotalk-continuation-rule": descriptions["momotalk_continuation"],
         "momotalk-announcement-rule": descriptions["momotalk_announcement"],
         "mobile-push-rule": descriptions["mobile_push_sweep"],
     }
@@ -1793,6 +1794,7 @@ def test_eventbridge_reports_schedule_and_rules_without_names() -> None:
             "openai-rule",
             "translation-rule",
             "momotalk-rule",
+            "momotalk-continuation-rule",
             "momotalk-announcement-rule",
             "mobile-push-rule",
         )
@@ -1806,6 +1808,7 @@ def test_eventbridge_reports_schedule_and_rules_without_names() -> None:
     assert section.state == "healthy"
     assert values["runtime_retry_attempts"] == 2
     assert values["abnormal_stop_expression"] == "event pattern"
+    assert values["momotalk_continuation_state"] == "ENABLED"
     assert not any(name in section.model_dump_json() for name in rules)
 
 

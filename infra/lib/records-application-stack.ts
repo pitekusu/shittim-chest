@@ -1428,7 +1428,7 @@ export class RecordsApplicationStack extends Stack {
         retryAttempts: 2, maxEventAge: Duration.hours(6),
       })],
     });
-    new events.Rule(this, "MomotalkContinuationRule", {
+    const momotalkContinuationRule = new events.Rule(this, "MomotalkContinuationRule", {
       description: "Resume checkpointed MomoTalk after bounded SQS invocation chains",
       schedule: events.Schedule.rate(Duration.minutes(5)),
       targets: [new eventTargets.LambdaFunction(momotalkCollector, {
@@ -1849,6 +1849,7 @@ export class RecordsApplicationStack extends Stack {
               openAiCostSchedule.ruleArn,
               inspectorTranslationSchedule.ruleArn,
               momotalkWeeklyRule.ruleArn,
+              momotalkContinuationRule.ruleArn,
               momotalkAnnouncementRule.ruleArn,
               mobilePushSweepRule.ruleArn,
               this.formatArn({
