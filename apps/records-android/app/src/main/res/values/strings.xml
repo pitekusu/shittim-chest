@@ -1,6 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
   <string name="debate_start">議論を開始</string>
+  <string name="debate_requests">自分の議論依頼</string>
+  <string name="debate_requests_empty">まだ議論を依頼していません。</string>
+  <string name="debate_requests_more">さらに表示</string>
+  <string name="debate_requests_online">進行状況の確認にはオンライン接続が必要です。</string>
+  <string name="debate_status_title">議論の進行状況</string>
+  <string name="debate_not_accepted">まだ受理されていないことを確認しました。同じ内容で再送できます。</string>
+  <string name="debate_request_missing">この依頼の状態を確認できませんでした。</string>
+  <string name="debate_open_result">議論の記録を読む</string>
+  <string name="debate_phase_affection">質問への感想を整理しています</string>
+  <string name="debate_phase_evidence">参考情報を調べています</string>
+  <string name="debate_phase_preferences">それぞれの案を考えています</string>
+  <string name="debate_phase_initial">初回意見をまとめています</string>
+  <string name="debate_phase_discussing">3人が意見を交わしています</string>
+  <string name="debate_phase_final">最終案をまとめています</string>
+  <string name="debate_phase_voting">投票しています</string>
+  <string name="debate_phase_decision">結論をまとめています</string>
   <string name="debate_question">3人に相談する議題</string>
   <string name="debate_publish_notice">議題と回答はDiscordの既定チャンネルと議論の記録に掲載されます。</string>
   <string name="debate_characters">%1$d / 1000文字</string>

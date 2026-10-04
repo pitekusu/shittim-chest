@@ -16,6 +16,17 @@ internal class DebateSubmissionState(val workspace: DebateWorkspace? = null,
   val busy: Boolean = false, val saving: Boolean = false, val failure: DebateFailure? = null,
   val confirmedMissing: Boolean = false)
 
+internal class DebateStatusState(val requestId: String? = null, val request: DebateRequest? = null,
+  val loading: Boolean = false, val failure: DebateFailure? = null)
+internal class DebateHistoryState(val items: List<DebateRequest> = emptyList(),
+  val nextCursor: String? = null, val loading: Boolean = false, val failure: DebateFailure? = null,
+  val loaded: Boolean = false)
+
+// The screen and its click guard must agree when a status read is unavailable.
+internal fun debateReceipt(id: String, status: DebateStatusState, submission: DebateSubmissionState): DebateRequest? =
+  status.request?.takeIf { status.requestId == id && it.requestId == id }
+    ?: submission.workspace?.takeIf { it.requestId == id }?.receipt?.takeIf { it.requestId == id }
+
 /** The request ID and exact body reach encrypted storage before any network side effect. */
 internal class DebateSubmissionModel(
   private val authorized: () -> Boolean,
@@ -24,10 +35,15 @@ internal class DebateSubmissionModel(
   private val send: suspend (String, String) -> DebateRequest?,
   private val find: suspend (String) -> DebateRequest?,
   private val close: () -> Unit,
+  private val list: suspend (String?) -> DebateRequestPage = { DebateRequestPage(emptyList()) },
   private val authenticationRequired: () -> Unit = {},
 ) : ViewModel() {
   private val mutable = MutableStateFlow(DebateSubmissionState())
   val state = mutable.asStateFlow()
+  private val mutableStatus = MutableStateFlow(DebateStatusState())
+  val status = mutableStatus.asStateFlow()
+  private val mutableHistory = MutableStateFlow(DebateHistoryState())
+  val history = mutableHistory.asStateFlow()
   private val writes = Mutex()
   private var autosave: Job? = null
   private var operation: Job? = null
@@ -140,17 +156,28 @@ internal class DebateSubmissionModel(
     }
   }
 
-  fun reconcile() {
+  fun reconcile() = lookup(resendIfMissing = false)
+
+  private fun lookup(resendIfMissing: Boolean) {
     val current = mutable.value
     val value = current.workspace ?: return
     val id = value.requestId ?: return
     if (!authorized() || current.busy) return
     mutable.value = DebateSubmissionState(value, busy = true)
     operation = viewModelScope.launch {
+      var handedOff = false
       try {
         val receipt = find(id)
         if (!authorized()) return@launch
-        if (receipt == null) mutable.value = DebateSubmissionState(value, confirmedMissing = true)
+        if (receipt == null) {
+          mutable.value = DebateSubmissionState(value, confirmedMissing = true)
+          if (resendIfMissing) {
+            // An explicit retry always repeats GET immediately before the same-ID POST.
+            // A previously missing response alone is not permission to replay later.
+            handedOff = true
+            transmit(value)
+          }
+        }
         else {
           check(receipt.requestId == id && receipt.question == value.frozenQuestion)
           val accepted = DebateWorkspace(draft = value.draft, requestId = id,
@@ -166,7 +193,7 @@ internal class DebateSubmissionModel(
       } catch (_: Exception) {
         if (authorized()) mutable.value = DebateSubmissionState(value, failure = DebateFailure.STORAGE)
       } finally {
-        if (authorized() && mutable.value.busy) mutable.value = DebateSubmissionState(value)
+        if (!handedOff && authorized() && mutable.value.busy) mutable.value = DebateSubmissionState(value)
       }
     }
   }
@@ -174,15 +201,95 @@ internal class DebateSubmissionModel(
   fun retryConfirmedMissing() {
     val current = mutable.value
     val value = current.workspace ?: return
-    if (authorized() && !current.busy && current.confirmedMissing && value.requestId != null && value.receipt == null) transmit(value)
+    if (authorized() && !current.busy && current.confirmedMissing && value.requestId != null && value.receipt == null)
+      lookup(resendIfMissing = true)
   }
 
-  fun newDraft() {
-    val value = mutable.value.workspace ?: return
-    if (!authorized() || mutable.value.busy || value.receipt?.terminal != true) return
+  fun newDraft(): Boolean {
+    val value = mutable.value.workspace ?: return false
+    if (!authorized() || mutable.value.busy || value.receipt?.terminal != true) return false
     val draft = DebateWorkspace()
     mutable.value = DebateSubmissionState(draft, saving = true)
     viewModelScope.launch { persistEdit(draft) }
+    return true
+  }
+
+  fun publishedRecordId(id: String): String? {
+    if (!authorized()) return null
+    return debateReceipt(id, mutableStatus.value, mutable.value)?.takeIf { it.status == "published" }?.recordId
+  }
+
+  /** Called from the visible NavEntry's coroutine; stopping the entry cancels its HTTP read. */
+  suspend fun refreshStatus(id: String) {
+    if (!authorized() || mutable.value.busy || operation?.isActive == true) return
+    val previous = mutableStatus.value.request.takeIf { mutableStatus.value.requestId == id }
+    mutableStatus.value = DebateStatusState(id, previous, loading = true)
+    mutable.value.workspace?.takeIf { it.requestId == id }?.let { workspace ->
+      mutable.value = DebateSubmissionState(workspace, failure = mutable.value.failure)
+    }
+    try {
+      val receipt = find(id)
+      if (!authorized() || mutableStatus.value.requestId != id) return
+      val workspace = mutable.value.workspace
+      if (workspace?.requestId == id) {
+        if (receipt == null) mutable.value = DebateSubmissionState(workspace,
+          failure = mutable.value.failure, confirmedMissing = true)
+        else {
+          if (receipt.requestId != id || receipt.question != workspace.frozenQuestion)
+            throw DebateRequestException(DebateFailure.INVALID_RESPONSE)
+          // Unchanged polling must not repeatedly wrap and encrypt the same small snapshot.
+          val old = workspace.receipt
+          if (old == null || old.updatedAt != receipt.updatedAt || old.status != receipt.status ||
+            old.phase != receipt.phase || old.recordId != receipt.recordId || old.errorCode != receipt.errorCode) {
+            val accepted = DebateWorkspace(draft = workspace.draft, requestId = id,
+              frozenQuestion = workspace.frozenQuestion, receipt = receipt)
+            writes.withLock {
+              if (!authorized() || mutable.value.workspace !== workspace || mutableStatus.value.requestId != id)
+                return@withLock
+              save(accepted)
+              // A new draft may be selected while the encrypted write is in progress.
+              // Its queued save must remain current instead of being replaced by this poll.
+              if (authorized() && mutable.value.workspace === workspace && mutableStatus.value.requestId == id) {
+                committed = accepted
+                mutable.value = DebateSubmissionState(accepted)
+              }
+            }
+          }
+        }
+      }
+      mutableStatus.value = DebateStatusState(id, receipt,
+        failure = if (receipt == null) DebateFailure.NOT_FOUND else null)
+    } catch (error: CancellationException) { throw error }
+    catch (error: DebateRequestException) {
+      if (authorized() && mutableStatus.value.requestId == id) mutableStatus.value = DebateStatusState(id, previous, failure = error.failure)
+    } catch (_: Exception) {
+      if (authorized() && mutableStatus.value.requestId == id) mutableStatus.value = DebateStatusState(id, previous, failure = DebateFailure.STORAGE)
+    } finally {
+      if (mutableStatus.value.requestId == id && mutableStatus.value.loading) mutableStatus.value = DebateStatusState(id, previous)
+    }
+  }
+
+  suspend fun refreshHistory(more: Boolean = false) {
+    if (!authorized() || mutableHistory.value.loading) return
+    val previous = mutableHistory.value
+    val cursor = if (more) previous.nextCursor ?: return else null
+    mutableHistory.value = DebateHistoryState(previous.items, previous.nextCursor, loading = true, loaded = previous.loaded)
+    try {
+      val page = list(cursor)
+      if (!authorized()) return
+      val items = (if (more) previous.items + page.items else page.items + previous.items)
+        .distinctBy { it.requestId }.sortedByDescending { java.time.Instant.parse(it.createdAt) }
+      mutableHistory.value = DebateHistoryState(items, page.nextCursor, loaded = true)
+    } catch (error: CancellationException) { throw error }
+    catch (error: DebateRequestException) {
+      if (authorized()) mutableHistory.value = DebateHistoryState(previous.items, previous.nextCursor,
+        failure = error.failure, loaded = previous.loaded)
+    } catch (_: Exception) {
+      if (authorized()) mutableHistory.value = DebateHistoryState(previous.items, previous.nextCursor,
+        failure = DebateFailure.UNAVAILABLE, loaded = previous.loaded)
+    } finally {
+      if (mutableHistory.value.loading) mutableHistory.value = previous
+    }
   }
 
   fun hide() {
@@ -191,6 +298,8 @@ internal class DebateSubmissionModel(
     committed = null
     pendingSave = null
     mutable.value = DebateSubmissionState()
+    mutableStatus.value = DebateStatusState()
+    mutableHistory.value = DebateHistoryState()
   }
 
   override fun onCleared() { hide(); close() }

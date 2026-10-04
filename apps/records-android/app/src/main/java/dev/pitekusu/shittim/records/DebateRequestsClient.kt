@@ -84,7 +84,8 @@ internal class DebateRequestsClient(private val engine: HttpClientEngine = OkHtt
     check(validDebateRequestId(requestId) && validDebateQuestion(question))
     val result = call<DebateRequest>(token, HttpMethod.Post, "", json.encodeToString(Start(requestId, question)))
     if (result.requestId != requestId || result.question != question) throw DebateRequestException(DebateFailure.INVALID_RESPONSE)
-    result.validate()
+    try { result.validate() }
+    catch (_: Exception) { throw DebateRequestException(DebateFailure.INVALID_RESPONSE) }
     return result
   }
 
@@ -95,16 +96,22 @@ internal class DebateRequestsClient(private val engine: HttpClientEngine = OkHtt
         it.validate()
         check(it.requestId == requestId)
       }
-    } catch (error: DebateRequestException) { if (error.failure == DebateFailure.NOT_FOUND) null else throw error }
+    } catch (error: CancellationException) { throw error }
+    catch (error: DebateRequestException) { if (error.failure == DebateFailure.NOT_FOUND) null else throw error }
+    catch (_: Exception) { throw DebateRequestException(DebateFailure.INVALID_RESPONSE) }
   }
 
   suspend fun list(token: String, cursor: String? = null): DebateRequestPage {
     check(cursor == null || cursor.length in 1..4096)
-    return call<DebateRequestPage>(token, HttpMethod.Get, "", cursor = cursor).also { page ->
-      check(page.items.size <= 50 && page.items.map { it.requestId }.distinct().size == page.items.size)
-      page.items.forEach(DebateRequest::validate)
-      check(page.nextCursor == null || (page.nextCursor.length in 1..4096 && page.nextCursor != cursor))
-    }
+    try {
+      return call<DebateRequestPage>(token, HttpMethod.Get, "", cursor = cursor).also { page ->
+        check(page.items.size <= 50 && page.items.map { it.requestId }.distinct().size == page.items.size)
+        page.items.forEach(DebateRequest::validate)
+        check(page.nextCursor == null || (page.nextCursor.length in 1..4096 && page.nextCursor != cursor))
+      }
+    } catch (error: CancellationException) { throw error }
+    catch (error: DebateRequestException) { throw error }
+    catch (_: Exception) { throw DebateRequestException(DebateFailure.INVALID_RESPONSE) }
   }
 
   private suspend inline fun <reified T> call(token: String, method: HttpMethod, path: String,
@@ -135,8 +142,9 @@ internal class DebateRequestsClient(private val engine: HttpClientEngine = OkHtt
           throw DebateRequestException(when (response.status.value) {
             401 -> DebateFailure.AUTH_REQUIRED
             403 -> when (code) {
-              "GUILD_MEMBERSHIP_REQUIRED" -> DebateFailure.AUTH_REQUIRED
               "DEBATE_START_REAUTH_REQUIRED" -> DebateFailure.REAUTH_REQUIRED
+              // A known guild removal invalidates saved reads; a channel-only denial does not.
+              "GUILD_MEMBERSHIP_REQUIRED" -> DebateFailure.AUTH_REQUIRED
               else -> DebateFailure.FORBIDDEN
             }
             404 -> DebateFailure.NOT_FOUND
