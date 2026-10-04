@@ -36,6 +36,7 @@ internal class DebateSubmissionModel(
 
   fun restore() {
     if (!authorized() || operation?.isActive == true || mutable.value.workspace != null) return
+    mutable.value = DebateSubmissionState()
     operation = viewModelScope.launch {
       try {
         val loaded = load()
