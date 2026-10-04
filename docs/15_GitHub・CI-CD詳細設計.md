@@ -402,6 +402,10 @@ Lambdaのbase64 SHA-256は既定値のないCloudFormationパラメーター、�
 401・`private, no-store`・Bearer challengeを確認する。tokenを渡さないためセッションの作成・削除は行わない。
 App Linksの実機確認はAndroid配布工程で別に実施し、Release smokeで実Discordログインを開始しない。
 
+Androidの議論開始は専用Lambdaを配信しても初期無効とする。同一SHAのRecords→Core公開後にのみ有効化し、実投稿・有料生成を通常smokeへ追加しない。
+Records Applicationの既存開始フラグ・投稿先は`UsePreviousValue`で維持し、初回だけ無効／未設定を明示する。
+開始フラグ変更は公開Lambda versionの更新へ結び付ける。投稿先の変更は無効化→変更→再有効化の順で行い、非公開設定を説明・ログへ出さない。
+
 変更セットは次の条件で扱う。
 
 | 対象 | 受理する条件・処理 |

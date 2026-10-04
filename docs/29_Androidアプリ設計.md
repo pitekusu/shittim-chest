@@ -125,7 +125,7 @@ Android専用の討論エンジンは作らず、認証済み受付から既存�
 | 1 | サーバー内部の本人情報保持・旧認証データ互換 | 実装済み。受付ルートは未追加 |
 | 2 | 共通受付のAndroid識別・本人別参照・重複防止 | 実装済み。公開APIは未接続 |
 | 3 | Discord状態投稿・履歴照合・イベントの後方互換 | 実装済み。Core／Lambdaの更新が必要 |
-| 4 | Bearer専用受付／進捗API・専用Lambda・限定IAM | 後続 |
+| 4 | Bearer専用受付／進捗API・専用Lambda・限定IAM | 実装済み。新規受付は初期無効 |
 | 5 | Navigation 3入力画面・暗号化下書き・送信前の確定保存 | 後続 |
 | 6 | 前景中の進捗確認・再起動復帰・公開結果への接続 | 後続 |
 
@@ -164,6 +164,41 @@ Androidの内部operation IDをDiscord interactionとして偽装しない。状
 状態投稿／Runtime再調整のイベントは、Discordの既存v1形式を維持してAndroidのopaque operationを運ぶv2形式を追加する。
 イベントへ議題・本人情報を含めない。既存のthread作成、討論パネル、待ち行列drain、leaseとGuild制限を共通利用し、討論・winner・親愛度処理は変えない。
 実DynamoDB Localの受付からCore admissionまでと、架空Discordの応答不明・履歴復旧、旧イベント／保存互換を確認する。実投稿・生成は行わない。
+
+### PR4：受付・本人の進捗API
+
+| API | 契約 |
+|---|---|
+| `POST /api/v1/debate-requests` | 本人のUUIDv4・議題を受付。成功は再送を含め`202` |
+| `GET /api/v1/debate-requests/{requestId}` | 本人の議題・状態・処理段階・公開済み記録IDだけを取得 |
+| `GET /api/v1/debate-requests` | 本人の全保存履歴を最新順に取得。既定20件・最大50件・cursor pagination |
+
+Bearer専用でCookieとの混在を拒否し、応答は`private, no-store`とする。
+議題は空白だけを拒否し、最大1000 Unicodeコードポイント。本人ID・名前・投稿先はクライアントから指定できない。
+本人のopaque利用者キーと内部Discord本人IDの対応を照合し、新規受付前にGuild在籍と固定チャンネルの閲覧・投稿権限をdiscord.pyの標準権限解決で確認する。
+本人情報のない旧セッションは開始時だけ再認証が必要で、閲覧は維持する。
+Guild脱退が確定した場合だけ提示されたモバイルセッションを失効させる。チャンネル権限不足やDiscord障害では閲覧セッションを削除しない。
+
+保存済み受付の本人・ID・本文を先に確認する。同一本文の再送は改名・設定変更・新規受付無効化後も同じ受付を返し、別本文は`409`とする。
+cursorは本人・取得件数へ署名で束縛し、内部テーブルキーを含めず一時間で期限切れにする。履歴自体には新しい期間制限を設けない。
+Coreの処理段階は補助表示し、推測した進捗率や途中の回答本文を返さない。
+
+| 状態 | 根拠 |
+|---|---|
+| 受付 | 保存済みだがDiscord状態投稿がまだ確認できない |
+| 待機 | Core受付済み、または待ち行列で実行権の取得待ち |
+| 起動中 | Discord状態投稿を確認済みでCoreの開始段階 |
+| 議論中 | Coreの討論処理段階 |
+| 記録公開待ち | Core完了済みでArchive未確認 |
+| 公開済み | 本人の依頼に対応する既知形式のArchiveを確認済み |
+| 失敗・中止 | 保存されたCore／受付の終端状態 |
+
+専用Lambdaが既存受付への書込と本人別参照を担当し、既存Read Lambdaの書込権限は増やさない。
+専用LambdaにもOpenAI・親愛度更新・ECS操作・テーブルScan権限は付けず、Archive／Coreは必要なMETA項目だけを読む。
+META読込はProjectionと属性allowlistを対応させ、[AWSの属性制限方針](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/specifying-conditions.html)に従い`dynamodb:Select`も`SPECIFIC_ATTRIBUTES`へ制約する。実AWSのIAM受入は配信時の確認に残す。
+設定は初期無効・固定チャンネル未設定とする。Records Releaseは既存の有効化設定を`UsePreviousValue`で維持し、初回だけ無効を明示する。
+有効化フラグの変更で公開Lambda versionを更新する。投稿先の変更は「無効化→変更→再有効化」の順とし、非公開チャンネル値をversion説明や配信ログへ出さない。
+匿名・混在認証の拒否、本人分離、同時再送、Archive公開待ち、Guild脱退時だけの失効、限定IAMと配信設定の維持を関連試験で確認する。
 
 ## 高レベルAPI・ライブラリ優先の開発方針
 
