@@ -42,6 +42,7 @@ from shittim_chest.application.scale_to_zero import (
     IngressOperationResult,
     IngressRequest,
     IngressSemanticOperationBinding,
+    IngressSource,
     IngressStatus,
     IngressStatusPublication,
     RuntimeState,
@@ -1327,6 +1328,11 @@ def serialize_ingress_request(request: IngressRequest) -> DynamoItem:
         ("ttl", request.ttl),
     ):
         _put_optional(item, field, value)
+    # Omit additive fields for Discord so legacy records and CAS bytes stay unchanged.
+    if request.source is IngressSource.MOBILE:
+        item["source"] = request.source.value
+        _put_optional(item, "owner_key", request.owner_key)
+        _put_optional(item, "mobile_request_id", request.mobile_request_id)
     return _validated_item(item)
 
 
@@ -1375,6 +1381,9 @@ def deserialize_ingress_request(raw_item: Mapping[str, DynamoValue]) -> IngressR
             completed_at=_optional_datetime(item, "completed_at"),
             ttl=_optional_integer(item, "ttl"),
             schema_version=_integer(item, "record_schema_version"),
+            source=IngressSource(_optional_text(item, "source") or IngressSource.DISCORD.value),
+            owner_key=_optional_text(item, "owner_key"),
+            mobile_request_id=_optional_text(item, "mobile_request_id"),
         )
     except ValueError as error:
         raise PersistenceFormatError("invalid ingress request") from error
