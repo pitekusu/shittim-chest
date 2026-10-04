@@ -22,6 +22,11 @@ internal class DebateHistoryState(val items: List<DebateRequest> = emptyList(),
   val nextCursor: String? = null, val loading: Boolean = false, val failure: DebateFailure? = null,
   val loaded: Boolean = false)
 
+// The screen and its click guard must agree when a status read is unavailable.
+internal fun debateReceipt(id: String, status: DebateStatusState, submission: DebateSubmissionState): DebateRequest? =
+  status.request?.takeIf { status.requestId == id && it.requestId == id }
+    ?: submission.workspace?.takeIf { it.requestId == id }?.receipt?.takeIf { it.requestId == id }
+
 /** The request ID and exact body reach encrypted storage before any network side effect. */
 internal class DebateSubmissionModel(
   private val authorized: () -> Boolean,
@@ -206,6 +211,11 @@ internal class DebateSubmissionModel(
     mutable.value = DebateSubmissionState(draft, saving = true)
     viewModelScope.launch { persistEdit(draft) }
     return true
+  }
+
+  fun publishedRecordId(id: String): String? {
+    if (!authorized()) return null
+    return debateReceipt(id, mutableStatus.value, mutable.value)?.takeIf { it.status == "published" }?.recordId
   }
 
   /** Called from the visible NavEntry's coroutine; stopping the entry cancels its HTTP read. */

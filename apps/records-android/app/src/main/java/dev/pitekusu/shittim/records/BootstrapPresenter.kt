@@ -453,8 +453,8 @@ internal class BootstrapPresenter(
         }
         is BootstrapScreen.Event.OpenDebateResult -> if (
           cacheAccountId != null && session.isCacheAuthorized(cacheAccountId) && stackOwner == cacheAccountId &&
-          debateRoute is DebateRequestStatus && debateStatus.requestId == debateRoute.requestId &&
-          debateStatus.request?.let { it.status == "published" && it.recordId == event.recordId } == true
+          debateRoute is DebateRequestStatus &&
+          debateModel?.publishedRecordId(debateRoute.requestId) == event.recordId
         ) {
           backStack.closeRecord()
           backStack.openRecord(event.recordId)

@@ -56,8 +56,7 @@ internal fun DebateRequestsScreen(state: DebateHistoryState, online: Boolean,
 internal fun DebateRequestStatusScreen(id: String, state: DebateStatusState,
   submission: DebateSubmissionState, online: Boolean, onRetry: () -> Unit,
   onResult: (String) -> Unit, onReauth: () -> Unit, onNew: () -> Unit, modifier: Modifier = Modifier) {
-  val receipt = state.request.takeIf { state.requestId == id }
-    ?: submission.workspace?.receipt?.takeIf { it.requestId == id }
+  val receipt = debateReceipt(id, state, submission)
   val ownWorkspace = submission.workspace?.takeIf { it.requestId == id }
   Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(ShittimSpacing.Medium)
     .testTag("debate-status"), verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {

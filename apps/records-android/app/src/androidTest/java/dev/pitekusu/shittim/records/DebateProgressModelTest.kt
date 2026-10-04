@@ -199,4 +199,40 @@ class DebateProgressModelTest {
       clear(model)
     }
   }
+
+  @Test fun restoredPublishedReceiptOpensOfflineOrAfterUnavailableReadOnlyForThePermittedRequest() = runBlocking<Unit> {
+    var allowed = true
+    val receipt = request(status = "published")
+    val saved = DebateWorkspace(draft = receipt.question, requestId = id,
+      frozenQuestion = receipt.question, receipt = receipt)
+    val model = DebateSubmissionModel({ allowed }, { saved }, {}, { _, _ -> null },
+      { throw DebateRequestException(DebateFailure.UNAVAILABLE) }, {})
+    withContext(Dispatchers.Main) { model.restore() }
+    await { model.state.value.workspace != null }
+    assertNull(model.status.value.request)
+    assertEquals("r".repeat(43), model.publishedRecordId(id))
+    assertSame(receipt, debateReceipt(id, model.status.value, model.state.value))
+    withContext(Dispatchers.Main) { model.refreshStatus(id) }
+    assertEquals(DebateFailure.UNAVAILABLE, model.status.value.failure)
+    assertEquals("r".repeat(43), model.publishedRecordId(id))
+    assertNull(model.publishedRecordId(second))
+    withContext(Dispatchers.Main) { allowed = false }
+    assertNull(model.publishedRecordId(id))
+    clear(model)
+  }
+
+  @Test fun latestNonPublishedStatusAndMisboundReceiptsCannotOpenAnArchivedResult() = runBlocking<Unit> {
+    val receipt = request(status = "published")
+    val saved = DebateWorkspace(draft = receipt.question, requestId = id,
+      frozenQuestion = receipt.question, receipt = receipt)
+    val model = DebateSubmissionModel({ true }, { saved }, {}, { _, _ -> null }, { request() }, {})
+    withContext(Dispatchers.Main) { model.restore() }
+    await { model.state.value.workspace != null }
+    withContext(Dispatchers.Main) { model.refreshStatus(id) }
+    assertNull(model.publishedRecordId(id))
+    assertNull(debateReceipt(second, DebateStatusState(second, receipt), DebateSubmissionState(saved)))
+    assertNull(debateReceipt(id, DebateStatusState(), DebateSubmissionState(
+      DebateWorkspace(requestId = second, frozenQuestion = receipt.question, receipt = receipt))))
+    clear(model)
+  }
 }
