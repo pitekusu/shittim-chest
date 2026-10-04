@@ -139,6 +139,9 @@ class SavedImage(StoredModel):
     participant: ParticipantSlot
     mood: Literal["happy", "unhappy"]
     state: Literal["pending", "ready", "failed"] = "pending"
+    # Persist the switch so SQS redelivery never resubmits the rejected subject.
+    moderation_blocked: bool = False
+    alternate_topic_used: bool = False
 
 
 class Room(StoredModel):

@@ -316,8 +316,11 @@ def test_publication_gate_and_private_inputs_are_not_returned():
     boundary = cast(Any, state)
     collect_week(WEEK, boundary, boundary, boundary, boundary)
     service = MomotalkGenerationService(boundary, boundary, boundary, boundary)
-    for _ in range(10):
+    for _ in range(16):
         service.run(WEEK.week_id, ROOM_ID, now=START)
+        assert state.room is not None
+        if state.room.state == "ready":
+            break
     reader = MomotalkReadService(
         boundary,
         boundary,

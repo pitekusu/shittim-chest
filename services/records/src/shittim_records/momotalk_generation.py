@@ -2,7 +2,7 @@
 
 import logging
 from collections.abc import Iterator
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any, Protocol
 
 from shittim_records.contracts import MomotalkWeek
@@ -29,6 +29,7 @@ FAILURE_CODES = frozenset(
         "MOMOTALK_GENERATION_FAILED",
         "MOMOTALK_OUTPUT_INVALID",
         "MOMOTALK_IMAGE_INVALID",
+        "MOMOTALK_IMAGE_MODERATION_BLOCKED",
         "MOMOTALK_UNAVAILABLE",
     }
 )
@@ -94,6 +95,14 @@ class Generator(Protocol):
         image: SavedImage,
         choice: ImageChoice,
     ) -> bytes: ...
+
+    def reselect_image(
+        self,
+        snapshot: WeeklyInput,
+        requester: RequesterInput,
+        image: SavedImage,
+        questions: list[Question],
+    ) -> ImageChoice: ...
 
 
 def collect_week(
@@ -171,7 +180,7 @@ class MomotalkGenerationService:
     def retry_failed_image(
         self, week_id: date, room_id: str, mood: str, source: InputSource, *, now: datetime
     ) -> bool:
-        """One operator-authorized attempt, preserving the published conversation and plan."""
+        """One repair, with one alternate subject only after a moderation rejection."""
         room = self.store.get_room(week_id, room_id)
         if room is None or room.state != "ready" or not room.complete or room.plan is None:
             raise MomotalkFailure("MOMOTALK_REPAIR_INVALID")
@@ -183,7 +192,7 @@ class MomotalkGenerationService:
         if room.images[index].state != "failed":
             raise MomotalkFailure("MOMOTALK_REPAIR_INVALID")
         # Completed weeks have no frozen input. Recollect original Archive questions;
-        # the saved plan still owns the subject, speaker, mood and composition.
+        # the saved plan owns the initial subject, speaker, mood and composition.
         stored_week = self.store.get_week(week_id)
         if stored_week is None:
             raise MomotalkFailure("MOMOTALK_REPAIR_INVALID")
@@ -199,19 +208,27 @@ class MomotalkGenerationService:
         claimed = self.store.claim(room, now)
         if claimed is None:
             raise MomotalkFailure("MOMOTALK_REPAIR_BUSY")
-        image = claimed.images[index]
         try:
-            if not self.assets.image_exists(claimed, mood):
-                content = self.generator.selfie(snapshot, requester, image, choice)
-                self.assets.store_image(claimed, mood, content)
-            image.state = "ready"
-            return True
+            # A moderation rejection and reselection are separate checkpoints.
+            # Renew the claim between them; operator repair can outlive one lease.
+            for _ in range(3):
+                if self._image_step(snapshot, requester, claimed, index):
+                    return claimed.images[index].state == "ready"
+                claimed.attempts = 0
+                self.store.save(claimed)
+                claimed = self.store.claim(claimed, datetime.now(UTC))
+                if claimed is None:
+                    raise MomotalkFailure("MOMOTALK_REPAIR_BUSY")
+            return False
         except MomotalkFailure as error:
+            if claimed is None:
+                raise
             _log_step_failure(claimed, error)
             return False
         finally:
-            claimed.attempts = 0
-            self.store.save(claimed)
+            if claimed is not None:
+                claimed.attempts = 0
+                self.store.save(claimed)
 
     def _step(self, snapshot: WeeklyInput, requester: RequesterInput, room: Room) -> None:
         if room.plan is None:
@@ -229,20 +246,68 @@ class MomotalkGenerationService:
                 room.digest = result
             return
         if len(room.messages) < len(room.plan.turns):
-            utterance = self.generator.utter(snapshot, requester, room)
-            participant = room.plan.turns[len(room.messages)].participant
-            room.messages.append(SavedMessage(participant=participant, text=utterance.text))
+            # Keep the 15-turn conversation plus two image fallbacks below Lambda's
+            # recursive-invocation limit, without disabling recursion protection.
+            for _ in range(min(2, len(room.plan.turns) - len(room.messages))):
+                utterance = self.generator.utter(snapshot, requester, room)
+                participant = room.plan.turns[len(room.messages)].participant
+                room.messages.append(SavedMessage(participant=participant, text=utterance.text))
             if len(room.messages) == len(room.plan.turns):
                 room.state = "ready"
             return
-        for image, choice in zip(room.images, room.plan.images, strict=True):
+        for index, image in enumerate(room.images):
             if image.state != "pending":
                 continue
-            if not self.assets.image_exists(room, image.mood):
-                content = self.generator.selfie(snapshot, requester, image, choice)
-                self.assets.store_image(room, image.mood, content)
-            image.state = "ready"
+            self._image_step(snapshot, requester, room, index)
             return
+
+    @staticmethod
+    def _alternative_questions(requester: RequesterInput, choice: ImageChoice) -> list[Question]:
+        rejected = next((q for q in requester.questions if q.record_id == choice.record_id), None)
+        return [
+            question
+            for question in requester.questions
+            if question.record_id != choice.record_id
+            and (rejected is None or question.text.strip() != rejected.text.strip())
+        ]
+
+    def _image_step(
+        self, snapshot: WeeklyInput, requester: RequesterInput, room: Room, index: int
+    ) -> bool:
+        """Run one provider step; return false only while changing the rejected subject."""
+        if room.plan is None:
+            raise MomotalkFailure("MOMOTALK_OUTPUT_INVALID")
+        image = room.images[index]
+        choice = room.plan.images[index]
+        if self.assets.image_exists(room, image.mood):
+            image.state = "ready"
+            image.moderation_blocked = False
+            return True
+        if image.moderation_blocked:
+            questions = self._alternative_questions(requester, choice)
+            if image.alternate_topic_used or not questions:
+                image.state = "failed"
+                return True
+            replacement = self.generator.reselect_image(snapshot, requester, image, questions)
+            validate_image_choices([replacement], [image], questions)
+            room.plan.images[index] = replacement
+            image.alternate_topic_used = True
+            image.moderation_blocked = False
+            return False
+        try:
+            content = self.generator.selfie(snapshot, requester, image, choice)
+        except MomotalkFailure as error:
+            if error.code != "MOMOTALK_IMAGE_MODERATION_BLOCKED":
+                raise
+            _log_step_failure(room, error)
+            image.moderation_blocked = True
+            if image.alternate_topic_used or not self._alternative_questions(requester, choice):
+                image.state = "failed"
+                return True
+            return False
+        self.assets.store_image(room, image.mood, content)
+        image.state = "ready"
+        return True
 
     @staticmethod
     def _fail_step(room: Room) -> None:
