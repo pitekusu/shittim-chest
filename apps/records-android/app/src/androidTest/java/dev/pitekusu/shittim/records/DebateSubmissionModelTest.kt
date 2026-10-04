@@ -21,7 +21,7 @@ class DebateSubmissionModelTest {
     while (!condition()) delay(10)
   }
 
-  @Test fun storageFailurePreventsAnyPost() = runBlocking {
+  @Test fun storageFailurePreventsAnyPost() = runBlocking<Unit> {
     var calls = 0
     val model = DebateSubmissionModel({ true }, { DebateWorkspace(draft = "架空の議題") },
       { throw IllegalStateException("synthetic_storage_failure") },
@@ -36,7 +36,7 @@ class DebateSubmissionModelTest {
     withContext(Dispatchers.Main) { ViewModelStore().apply { put("test", model); clear() } }
   }
 
-  @Test fun ambiguousPostSurvivesRestartWithoutAutomaticReplayOrRekey() = runBlocking {
+  @Test fun ambiguousPostSurvivesRestartWithoutAutomaticReplayOrRekey() = runBlocking<Unit> {
     var saved = DebateWorkspace(draft = "架空の議題")
     var calls = 0
     val first = DebateSubmissionModel({ true }, { saved }, { saved = it },
@@ -68,7 +68,7 @@ class DebateSubmissionModelTest {
     withContext(Dispatchers.Main) { ViewModelStore().apply { put("second", second); clear() } }
   }
 
-  @Test fun onlyFreshMissingLookupAllowsExplicitSamePayloadResend() = runBlocking {
+  @Test fun onlyFreshMissingLookupAllowsExplicitSamePayloadResend() = runBlocking<Unit> {
     var saved = DebateWorkspace(draft = "架空の議題", requestId = id, frozenQuestion = "架空の議題")
     var calls = 0
     val model = DebateSubmissionModel({ true }, { saved }, { saved = it },
@@ -86,7 +86,7 @@ class DebateSubmissionModelTest {
     withContext(Dispatchers.Main) { ViewModelStore().apply { put("model", model); clear() } }
   }
 
-  @Test fun backWaitsForFrozenWriteButNotForPostResponse() = runBlocking {
+  @Test fun backWaitsForFrozenWriteButNotForPostResponse() = runBlocking<Unit> {
     val saving = CompletableDeferred<Unit>()
     val saved = CompletableDeferred<Unit>()
     val response = CompletableDeferred<DebateRequest?>()
