@@ -1,7 +1,9 @@
 package dev.pitekusu.shittim.records
 
+import android.Manifest
 import android.animation.ValueAnimator
 import android.graphics.Bitmap
+import android.provider.Settings
 import android.view.KeyEvent
 import androidx.activity.BackEventCompat
 import androidx.activity.compose.setContent
@@ -31,8 +33,10 @@ import dev.pitekusu.shittim.records.auth.SessionState
 import java.time.Instant
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -42,6 +46,9 @@ import org.junit.runner.RunWith
 @ScreenTest
 class Nav3SceneMotionUiTest {
   @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+  private val animationScaleSettings = listOf(Settings.Global.WINDOW_ANIMATION_SCALE,
+    Settings.Global.TRANSITION_ANIMATION_SCALE, Settings.Global.ANIMATOR_DURATION_SCALE)
+  private var originalAnimationScales: Map<String, String?>? = null
   private val entries = (1..8).map { index ->
     RecordListEntry(index.toString().padStart(43, 'a'), "遷移確認の架空の相談 $index",
       "画面試験用", RecordAvatar(null, "cyan"), Instant.parse("2026-10-01T00:00:00Z"), "アロナ")
@@ -52,6 +59,41 @@ class Nav3SceneMotionUiTest {
   private val question = "遷移確認の架空の議題"
   private val records = RecordListState.Ready.fromSaved(entries)
   private val preview = RecordPreviewState.Ready(RecordPreview(question, "架空の結論", "アロナ"), saved = true)
+
+  @Before fun enableMotionForThisTest() {
+    val instrumentation = InstrumentationRegistry.getInstrumentation()
+    val resolver = instrumentation.targetContext.contentResolver
+    // The standard API enables all three together; preserve their separate original values.
+    originalAnimationScales = animationScaleSettings.associateWith { Settings.Global.getString(resolver, it) }
+    instrumentation.uiAutomation.setAnimationScale(1f)
+    instrumentation.waitForIdleSync()
+    compose.waitUntil(5_000) {
+      ValueAnimator.areAnimatorsEnabled() && ValueAnimator.getDurationScale() == 1f
+    }
+    compose.runOnIdle { assertTrue(ValueAnimator.areAnimatorsEnabled()) }
+  }
+
+  @After fun restoreOriginalAnimationScales() {
+    val original = originalAnimationScales ?: return
+    val instrumentation = InstrumentationRegistry.getInstrumentation()
+    val resolver = instrumentation.targetContext.contentResolver
+    val automation = instrumentation.uiAutomation
+    // Restoring distinct or unset values needs Settings; do not hold shell identity in the test.
+    automation.adoptShellPermissionIdentity(Manifest.permission.WRITE_SECURE_SETTINGS)
+    try {
+      original.forEach { (setting, value) ->
+        assertTrue("Restore $setting", Settings.Global.putString(resolver, setting, value))
+      }
+    } finally {
+      automation.dropShellPermissionIdentity()
+    }
+    instrumentation.waitForIdleSync()
+    val originalDuration = original[Settings.Global.ANIMATOR_DURATION_SCALE]?.toFloatOrNull() ?: 1f
+    compose.waitUntil(5_000) {
+      original.all { (setting, value) -> Settings.Global.getString(resolver, setting) == value } &&
+        ValueAnimator.getDurationScale() == originalDuration
+    }
+  }
 
   private inner class Host {
     val backStack = NavBackStack<NavKey>(RecordsList)
