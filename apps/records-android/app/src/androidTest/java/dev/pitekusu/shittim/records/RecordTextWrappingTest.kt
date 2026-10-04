@@ -54,6 +54,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
+@ScreenTest
 class RecordTextWrappingTest {
   @get:Rule val compose = createAndroidComposeRule<MainActivity>()
 

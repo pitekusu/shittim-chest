@@ -153,11 +153,50 @@ C16のログイン画面（API 36、未認証・実データなし）：
 
 ## C03のCI
 
-- 共通CIの`android-gate`でdebug APK・テストAPK・Lintを実行し、API 36のエミュレーター1台で画面・保存のinstrumentation testを確認する。
+- 共通CIの`android-gate`でdebug APK・テストAPK・Lintを実行し、API 36のエミュレーター1台で認証・鍵・暗号化保存・DB・API・同期などの非画面instrumentation testを確認する。
+- Composeの画面・操作試験には実行時annotationの`@ScreenTest`を付け、通常のPR／main CIでは全件実行しない。試験自体は残し、UI変更時と配布前には影響する画面を選んで確認する。
 - JDKは`.java-version`、GradleはWrapperをローカルと共有する。CIにもアプリと同じSDK／Build Toolsを用意する。
 - Android配下と関連文書だけの差分ではCoreの全pytest・パッケージ・CDK検証を省略する。
-- `android-gate`は必要な処理の失敗・取消・skipを不合格にする。手動CIではAndroidも必ず検証する。
+- `android-gate`は必要な処理の失敗・取消・skipを不合格にする。Gradleの終了コードだけで判断せず、JUnitレポートの実行済み試験を必須にし、結果欠落・0件・失敗・skipも拒否する。手動CIではAndroidも必ず検証する。
 - Lint・テストのレポートを7日保存する。APK配布・CodeQL対応待ちのC04は含めない。
+
+### instrumentation testの選択
+
+[AndroidJUnitRunnerの標準フィルター](https://developer.android.com/reference/androidx/test/runner/AndroidJUnitRunner)を使う。専用の選択基盤や新しい依存は追加しない。以下はリポジトリのrootから、専用エミュレーターを起動した状態で実行する。
+
+通常CIと同じ非画面試験：
+
+```sh
+uv run --frozen python -m tools.run_android_build -- \
+  -Pandroid.testInstrumentationRunnerArguments.notAnnotation=dev.pitekusu.shittim.records.ScreenTest \
+  :app:connectedDebugAndroidTest
+```
+
+画面・操作試験だけ：
+
+```sh
+uv run --frozen python -m tools.run_android_build -- \
+  -Pandroid.testInstrumentationRunnerArguments.annotation=dev.pitekusu.shittim.records.ScreenTest \
+  :app:connectedDebugAndroidTest
+```
+
+変更した画面のクラスだけ（例：一覧ジャーナル）：
+
+```sh
+uv run --frozen python -m tools.run_android_build -- \
+  -Pandroid.testInstrumentationRunnerArguments.class=dev.pitekusu.shittim.records.RecordJournalVisualTest \
+  :app:connectedDebugAndroidTest
+```
+
+全試験はフィルターを付けずに実行する：
+
+```sh
+uv run --frozen python -m tools.run_android_build -- :app:connectedDebugAndroidTest
+```
+
+`notAnnotation`と`class`は同時指定しない。フィルターは積集合になるため、画面クラスを指定しても`notAnnotation`で除外される。
+CIで全試験を確認する場合は、手動実行の`android_screen_tests`を有効にする。既定は無効であり、手動実行でも非画面試験は常に実行する。
+対象の試験、結果、未実施の確認をPRへ記載し、タイムアウト・取消・skipを合格扱いしない。画面試験の選択変更は、既存タイムアウトの原因解消や性能改善を証明するものではない。
 
 ## C02の責務
 

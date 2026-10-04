@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -397,6 +399,66 @@ def test_ci_requires_runtime_image_path_isolation(directory: Path) -> None:
     )
 
     with pytest.raises(WorkflowPolicyError, match="canonical fail-closed scope"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize("run_screens", ("false", "true"))
+def test_android_ci_selects_only_screen_execution_as_optional(
+    directory: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, run_screens: str
+) -> None:
+    text = (directory / "ci.yml").read_text(encoding="utf-8")
+    step = _workflow_step_block(text, "Select Android instrumentation suite")
+    script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+    output = tmp_path / "outputs"
+    monkeypatch.setenv("RUN_SCREEN_TESTS", run_screens)
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary"))
+
+    # Execute the trusted checked-in shell, not a separate model of its selection logic.
+    subprocess.run(["/usr/bin/bash", "-euo", "pipefail", "-c", script], check=True, timeout=5)  # noqa: S603
+
+    arguments = output.read_text(encoding="utf-8").strip()
+    if run_screens == "true":
+        assert arguments == "runner_args="
+    else:
+        assert arguments == (
+            "runner_args=-Pandroid.testInstrumentationRunnerArguments.notAnnotation="
+            "dev.pitekusu.shittim.records.ScreenTest"
+        )
+    assert validate_notification_workflows(directory) == 1
+
+
+@pytest.mark.parametrize(
+    "before,after,error",
+    (
+        (":app:assembleDebugAndroidTest ", "", "APK builds and Lint"),
+        (":app:connectedDebugAndroidTest", ":app:assembleDebug", "bounded selected"),
+        ("${{ steps.android-tests.outputs.runner_args }}", "", "bounded selected"),
+        (
+            "--junit-reports",
+            "--github-output results",
+            "executed JUnit",
+        ),
+        ("--require-step verify-android-results", "", "every required step outcome"),
+        ("        default: false\n", "        default: true\n", "manual opt-in"),
+        (
+            ":app:connectedDebugAndroidTest",
+            ":app:connectedDebugAndroidTest || true",
+            "must not mask",
+        ),
+        (
+            "        id: verify-android\n",
+            "        id: verify-android\n        continue-on-error: true\n",
+            "must not mask",
+        ),
+    ),
+)
+def test_android_ci_cannot_remove_device_checks_or_mask_failures(
+    directory: Path, before: str, after: str, error: str
+) -> None:
+    _replace(directory / "ci.yml", before, after, 1)
+
+    with pytest.raises(WorkflowPolicyError, match=error):
         validate_notification_workflows(directory)
 
 
