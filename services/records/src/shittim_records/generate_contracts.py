@@ -308,6 +308,69 @@ def _mobile_auth_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _mobile_debate_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
+    common = {
+        "security": [{"mobileBearer": []}],
+        "description": (
+            "本人の依頼のみ。Cookie混在拒否・private, no-store。"
+            "討論の途中本文や内部識別子を返さず、Archive公開後だけrecordIdを返す。"
+        ),
+    }
+    return {
+        "/api/v1/debate-requests": {
+            "post": {
+                **common,
+                "operationId": "startMobileDebate",
+                "requestBody": _request_body("DebateStartRequest"),
+                "responses": {
+                    "202": _response("DebateRequestResponse", "Durably accepted or replayed"),
+                    **error_responses,
+                },
+            },
+            "get": {
+                **common,
+                "operationId": "listMobileDebateRequests",
+                "parameters": [
+                    _parameter(
+                        "limit",
+                        "query",
+                        {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
+                    ),
+                    _parameter("cursor", "query", {"type": "string", "maxLength": 1024}),
+                ],
+                "responses": {
+                    "200": _response("DebateRequestsResponse", "Own requests"),
+                    **error_responses,
+                },
+            },
+        },
+        "/api/v1/debate-requests/{requestId}": {
+            "get": {
+                **common,
+                "operationId": "getMobileDebateRequest",
+                "parameters": [
+                    _parameter(
+                        "requestId",
+                        "path",
+                        {
+                            "type": "string",
+                            "pattern": (
+                                r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}"
+                                r"-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+                            ),
+                        },
+                        required=True,
+                    )
+                ],
+                "responses": {
+                    "200": _response("DebateRequestResponse", "Own progress"),
+                    **error_responses,
+                },
+            },
+        },
+    }
+
+
 def build_openapi() -> dict[str, Any]:
     error_responses = {
         code: _response("ErrorResponse", description)
@@ -328,6 +391,7 @@ def build_openapi() -> dict[str, Any]:
             "version": str(RECORDS_API_SCHEMA_VERSION),
         },
         "paths": {
+            **_mobile_debate_paths(error_responses),
             **_momotalk_paths(error_responses),
             **_mobile_auth_paths(error_responses),
             "/records/{recordId}": _preview_path(image=False),

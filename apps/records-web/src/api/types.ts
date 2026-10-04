@@ -1,5 +1,35 @@
 export type ParticipantSlot = "participant-a" | "participant-b" | "participant-c";
 export type SortOrder = "newest" | "oldest";
+export type DebateRequestStatus =
+  | "accepted"
+  | "queued"
+  | "starting"
+  | "running"
+  | "publishing"
+  | "published"
+  | "failed"
+  | "cancelled";
+
+export interface DebateStartRequest {
+  readonly requestId: string;
+  readonly question: string;
+}
+
+export interface DebateRequestResponse {
+  readonly requestId: string;
+  readonly question: string;
+  readonly status: DebateRequestStatus;
+  readonly phase: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly recordId: string | null;
+  readonly errorCode: "DEBATE_REJECTED" | "DEBATE_FAILED" | "DEBATE_CANCELLED" | null;
+}
+
+export interface DebateRequestsResponse {
+  readonly items: readonly DebateRequestResponse[];
+  readonly nextCursor: string | null;
+}
 export type AdminPromptKey =
   | "system"
   | "moderator"

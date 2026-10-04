@@ -1619,6 +1619,181 @@
       "title": "CostsResponse",
       "type": "object"
     },
+    "DebateRequestResponse": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "recordId": {
+                "type": "null"
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "status": {
+                "const": "published"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "recordId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "recordId"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "createdAt": {
+          "format": "date-time",
+          "title": "Createdat",
+          "type": "string"
+        },
+        "errorCode": {
+          "anyOf": [
+            {
+              "enum": [
+                "DEBATE_REJECTED",
+                "DEBATE_FAILED",
+                "DEBATE_CANCELLED"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Errorcode"
+        },
+        "phase": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Phase"
+        },
+        "question": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Question",
+          "type": "string"
+        },
+        "recordId": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Recordid"
+        },
+        "requestId": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Requestid",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "accepted",
+            "queued",
+            "starting",
+            "running",
+            "publishing",
+            "published",
+            "failed",
+            "cancelled"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "updatedAt": {
+          "format": "date-time",
+          "title": "Updatedat",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "question",
+        "status",
+        "phase",
+        "createdAt",
+        "updatedAt",
+        "recordId",
+        "errorCode"
+      ],
+      "title": "DebateRequestResponse",
+      "type": "object"
+    },
+    "DebateRequestsResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/DebateRequestResponse"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Nextcursor"
+        }
+      },
+      "required": [
+        "items",
+        "nextCursor"
+      ],
+      "title": "DebateRequestsResponse",
+      "type": "object"
+    },
+    "DebateStartRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "question": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Question",
+          "type": "string"
+        },
+        "requestId": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Requestid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId",
+        "question"
+      ],
+      "title": "DebateStartRequest",
+      "type": "object"
+    },
     "ErrorBody": {
       "additionalProperties": false,
       "properties": {
@@ -3775,6 +3950,12 @@
   "$id": "https://shittim-chest.invalid/contracts/records/v1/records-api.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "oneOf": [
+    {
+      "$ref": "#/$defs/DebateRequestResponse"
+    },
+    {
+      "$ref": "#/$defs/DebateRequestsResponse"
+    },
     {
       "$ref": "#/$defs/RecordListResponse"
     },
