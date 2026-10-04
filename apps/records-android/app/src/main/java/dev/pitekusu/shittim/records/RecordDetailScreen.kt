@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -43,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.testTag
@@ -188,13 +190,27 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
             modifier = Modifier.fillMaxWidth().heightIn(max = questionMaximumHeight)
               .padding(horizontal = ShittimSpacing.Medium, vertical = ShittimSpacing.Small)
               .testTag("detail-question-open")) {
-            Column(Modifier.verticalScroll(questionScrollState).testTag("detail-question-scroll")
-              .padding(ShittimSpacing.Medium)) {
-              Text(stringResource(R.string.record_question),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary)
-              Text(state.preview.question, style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.testTag("detail-question-text"))
+            Column(Modifier.padding(ShittimSpacing.Medium)) {
+              // Keep the label and full-text action out of the scroll viewport. The bounded
+              // body clips independently, so a long question cannot paint over the controls.
+              Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.record_question),
+                  style = MaterialTheme.typography.labelLarge,
+                  color = MaterialTheme.colorScheme.primary,
+                  modifier = Modifier.weight(1f).testTag("detail-question-label"))
+                if (questionScrollState.canScrollForward || questionScrollState.canScrollBackward) {
+                  TextButton(onClick = { questionOpen = true },
+                    modifier = Modifier.testTag("detail-question-full")) {
+                    Text(stringResource(R.string.record_question_full))
+                    Icon(painterResource(R.drawable.ic_expand_more), null, Modifier.size(18.dp))
+                  }
+                }
+              }
+              Box(Modifier.weight(1f, fill = false).fillMaxWidth().clipToBounds()
+                .verticalScroll(questionScrollState).testTag("detail-question-scroll")) {
+                Text(state.preview.question, style = MaterialTheme.typography.bodyLarge,
+                  modifier = Modifier.testTag("detail-question-text"))
+              }
             }
           }
           if (selected.section == RecordDetailSection.Opinions && opinions.isNotEmpty()) {

@@ -63,6 +63,7 @@ import androidx.navigation3.scene.rememberSceneState
 import androidx.navigation3.ui.NavDisplay
 import androidx.paging.compose.LazyPagingItems
 import dev.pitekusu.shittim.records.auth.SessionState
+import dev.pitekusu.shittim.records.ui.ShittimBackdrop
 import dev.pitekusu.shittim.records.ui.ShittimSpacing
 import kotlinx.coroutines.launch
 
@@ -129,7 +130,9 @@ internal fun AdaptiveRecordsUi(
     key(state.recordOwner) {
       // Cached NavEntries keep their lifetime while their content observes the latest inputs.
       val listContent = rememberUpdatedState<@Composable () -> Unit> {
-        Box(Modifier.fillMaxSize().semantics {
+        // Both entries need their own opaque background: NavDisplay keeps the outgoing
+        // entry below the incoming slide, including the reader's otherwise-empty margins.
+        ShittimBackdrop(Modifier.fillMaxSize().testTag("records-list-pane").semantics {
           paneTitle = listTitle
           isTraversalGroup = true
         }) {
@@ -184,14 +187,16 @@ internal fun AdaptiveRecordsUi(
           if (state.selectedRecordId == route.recordId) state.record else RecordPreviewState.Idle) }
         if (state.selectedRecordId == route.recordId) preview = state.record
         val entryLifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
-        Box(Modifier.fillMaxSize().semantics { paneTitle = detailTitle; isTraversalGroup = true },
-          contentAlignment = Alignment.TopCenter) {
-          RecordDetailScreen(preview, route.recordId, state.eventSink,
-            Modifier.widthIn(max = 760.dp).fillMaxSize(), rememberLazyListState(),
-            scrollTag = if (twoPanes) "record-detail-content" else "bootstrap-content",
-            motionAllowed = motionAllowed && state.selectedRecordId == route.recordId &&
-              entryLifecycle.isAtLeast(Lifecycle.State.RESUMED), playedSections = playedSections,
-            onSectionSeen = onSectionSeen)
+        ShittimBackdrop(Modifier.fillMaxSize().testTag("records-detail-pane")
+          .semantics { paneTitle = detailTitle; isTraversalGroup = true }) {
+          Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+            RecordDetailScreen(preview, route.recordId, state.eventSink,
+              Modifier.widthIn(max = 760.dp).fillMaxSize(), rememberLazyListState(),
+              scrollTag = if (twoPanes) "record-detail-content" else "bootstrap-content",
+              motionAllowed = motionAllowed && state.selectedRecordId == route.recordId &&
+                entryLifecycle.isAtLeast(Lifecycle.State.RESUMED), playedSections = playedSections,
+              onSectionSeen = onSectionSeen)
+          }
         }
       }
       val entries = rememberDecoratedNavEntries(backStack = state.backStack,
