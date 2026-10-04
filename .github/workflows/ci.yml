@@ -6,6 +6,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      android_screen_tests:
+        description: "Androidの画面試験も含めた全件を実行する"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -423,6 +428,19 @@ jobs:
         run: >-
           apps/records-android/gradlew -p apps/records-android --no-daemon
           :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug
+      - name: Select Android instrumentation suite
+        if: ${{ steps.scope.outputs.required == 'true' }}
+        id: android-tests
+        env:
+          RUN_SCREEN_TESTS: ${{ github.event_name == 'workflow_dispatch' && inputs.android_screen_tests }}
+        run: |
+          if [ "${RUN_SCREEN_TESTS}" = true ]; then
+            echo "runner_args=" >> "${GITHUB_OUTPUT}"
+            echo "Android: full instrumentation suite (including screen tests)." >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "runner_args=-Pandroid.testInstrumentationRunnerArguments.notAnnotation=dev.pitekusu.shittim.records.ScreenTest" >> "${GITHUB_OUTPUT}"
+            echo "Android: non-screen instrumentation suite; screen tests not requested." >> "${GITHUB_STEP_SUMMARY}"
+          fi
       - name: Allow the ephemeral runner to use KVM
         if: ${{ steps.scope.outputs.required == 'true' }}
         run: sudo chown "$(id -u):$(id -g)" /dev/kvm
@@ -460,7 +478,7 @@ jobs:
             ~/.android/avd/ci-api36.avd
             ~/.android/avd/ci-api36.ini
           key: ${{ steps.android-avd-cache.outputs.cache-primary-key }}
-      - name: Run the existing screen tests on one emulator
+      - name: Run the selected instrumentation tests on one emulator
         if: ${{ steps.scope.outputs.required == 'true' }}
         id: verify-android
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
@@ -477,6 +495,7 @@ jobs:
           script: >-
             timeout 12m apps/records-android/gradlew -p apps/records-android --no-daemon
             -Pandroid.testInstrumentationRunnerArguments.timeout_msec=120000
+            ${{ steps.android-tests.outputs.runner_args }}
             :app:connectedDebugAndroidTest
       - name: Retain Android reports, not an unsigned distribution
         if: ${{ steps.scope.outputs.required == 'true' && (!cancelled()) }}

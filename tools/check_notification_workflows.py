@@ -101,6 +101,7 @@ def validate_notification_workflows(directory: Path = WORKFLOW_DIRECTORY) -> int
     _validate_release(directory)
     _validate_ci_container_risk(directory)
     _validate_ci_path_isolation(directory)
+    _validate_android_test_selection(directory)
     _validate_records_workflows(directory)
     _validate_android_release(directory)
     _validate_drift(directory)
@@ -1327,6 +1328,57 @@ def _validate_ci_container_risk(directory: Path) -> None:
         raise WorkflowPolicyError(
             "CI Docker context proof must compare clean src with actual .dockerignore output"
         )
+
+
+def _validate_android_test_selection(directory: Path) -> None:
+    """Only screen execution is optional; builds and device-bound checks remain required."""
+
+    text = (directory / "ci.yml").read_text(encoding="utf-8")
+    android = _workflow_job_block(text, "android-gate")
+    try:
+        build = _workflow_step_block(android, "Build debug APKs and run Android Lint")
+        selection = _workflow_step_block(android, "Select Android instrumentation suite")
+        verify = _workflow_step_block(
+            android, "Run the selected instrumentation tests on one emulator"
+        )
+    except ValueError as error:
+        raise WorkflowPolicyError(
+            "Android CI must retain its build and device test steps"
+        ) from error
+    if any(
+        task not in build.split()
+        for task in (":app:assembleDebug", ":app:assembleDebugAndroidTest", ":app:lintDebug")
+    ):
+        raise WorkflowPolicyError("Android CI must retain APK builds and Lint")
+    required_verify = (
+        "timeout 12m",
+        "-Pandroid.testInstrumentationRunnerArguments.timeout_msec=120000",
+        "${{ steps.android-tests.outputs.runner_args }}",
+        ":app:connectedDebugAndroidTest",
+    )
+    if any(marker not in verify for marker in required_verify):
+        raise WorkflowPolicyError("Android CI must run bounded selected instrumentation tests")
+    input_block = re.search(r"(?m)^      android_screen_tests:\n((?:        .+\n)+)", text)
+    required_selection = (
+        "id: android-tests",
+        "RUN_SCREEN_TESTS: ${{ github.event_name == 'workflow_dispatch' "
+        "&& inputs.android_screen_tests }}",
+        'if [ "${RUN_SCREEN_TESTS}" = true ]; then',
+        'echo "runner_args=" >> "${GITHUB_OUTPUT}"',
+        "runner_args=-Pandroid.testInstrumentationRunnerArguments.notAnnotation="
+        "dev.pitekusu.shittim.records.ScreenTest",
+    )
+    if (
+        input_block is None
+        or "        type: boolean\n" not in input_block[1]
+        or "        default: false\n" not in input_block[1]
+        or any(marker not in selection for marker in required_selection)
+    ):
+        raise WorkflowPolicyError("Android screen tests must be an explicit manual opt-in")
+    if "continue-on-error:" in android or any(
+        "|| true" in step for step in (build, selection, verify)
+    ):
+        raise WorkflowPolicyError("Android CI must not mask build or instrumentation failures")
 
 
 def _validate_ci_path_isolation(directory: Path) -> None:

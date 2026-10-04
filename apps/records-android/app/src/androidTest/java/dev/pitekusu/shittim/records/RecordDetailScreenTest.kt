@@ -30,6 +30,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
+@ScreenTest
 class RecordDetailScreenTest {
   @get:Rule val compose = createAndroidComposeRule<MainActivity>()
   private fun preview() = RecordPreview("架空の議題", "架空の結論", "アロナ")
