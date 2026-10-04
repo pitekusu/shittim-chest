@@ -248,7 +248,10 @@ class MomotalkGenerationService:
         if len(room.messages) < len(room.plan.turns):
             # Keep the 15-turn conversation plus two image fallbacks below Lambda's
             # recursive-invocation limit, without disabling recursion protection.
-            for _ in range(min(2, len(room.plan.turns) - len(room.messages))):
+            for offset in range(min(2, len(room.plan.turns) - len(room.messages))):
+                if offset:
+                    # The next turn starts its own first attempt in this claim.
+                    room.attempts = 1
                 utterance = self.generator.utter(snapshot, requester, room)
                 participant = room.plan.turns[len(room.messages)].participant
                 room.messages.append(SavedMessage(participant=participant, text=utterance.text))

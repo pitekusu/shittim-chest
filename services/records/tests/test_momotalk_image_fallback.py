@@ -209,6 +209,57 @@ def test_second_utterance_failure_saves_the_first_and_does_not_regenerate_it(mon
     assert [call for call in state.calls if isinstance(call, int)] == list(range(9))
 
 
+def test_failures_on_different_batched_turns_do_not_share_attempts(monkeypatch):
+    state = cast(Any, State(snapshot(scores=(500, 500, 500))))
+    collect_week(WEEK, state, state, state, state)
+    service = MomotalkGenerationService(state, state, state, state)
+    service.run(WEEK.week_id, ROOM_ID, now=START)
+    original_utter = state.utter
+    failures = set()
+
+    def utter(value, requester, room):
+        index = len(room.messages)
+        if index in (1, 2, 3) and index not in failures:
+            failures.add(index)
+            raise MomotalkFailure("MOMOTALK_GENERATION_FAILED")
+        return original_utter(value, requester, room)
+
+    monkeypatch.setattr(state, "utter", utter)
+    for message_count in (1, 2, 3):
+        assert not service.run(WEEK.week_id, ROOM_ID, now=START)
+        assert len(state.room.messages) == message_count
+        assert state.room.attempts == 1 and not state.room.complete
+    for _ in range(3):
+        service.run(WEEK.week_id, ROOM_ID, now=START)
+    assert state.room.complete and state.room.state == "ready"
+    assert [call for call in state.calls if isinstance(call, int)] == list(range(9))
+
+
+def test_failing_second_batched_turn_gets_exactly_three_attempts(monkeypatch):
+    state = cast(Any, State(snapshot(scores=(500, 500, 500))))
+    collect_week(WEEK, state, state, state, state)
+    service = MomotalkGenerationService(state, state, state, state)
+    service.run(WEEK.week_id, ROOM_ID, now=START)
+    original_utter = state.utter
+    failures = 0
+
+    def utter(value, requester, room):
+        nonlocal failures
+        if len(room.messages) == 1:
+            failures += 1
+            raise MomotalkFailure("MOMOTALK_GENERATION_FAILED")
+        return original_utter(value, requester, room)
+
+    monkeypatch.setattr(state, "utter", utter)
+    for attempt in (1, 2):
+        assert not service.run(WEEK.week_id, ROOM_ID, now=START)
+        assert state.room.attempts == attempt
+    assert service.run(WEEK.week_id, ROOM_ID, now=START)
+    assert failures == 3
+    assert state.room.complete and state.room.state == "failed"
+    assert len(state.room.messages) == 1
+
+
 def test_enqueue_failure_after_rejection_resumes_without_resending_the_subject(monkeypatch):
     state = cast(Any, FallbackState())
     service = published(state)
