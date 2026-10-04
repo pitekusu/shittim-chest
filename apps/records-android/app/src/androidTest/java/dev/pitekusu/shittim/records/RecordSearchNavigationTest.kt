@@ -248,7 +248,7 @@ class RecordSearchNavigationTest {
     private var records = RecordListState.Ready.fromSaved(entries)
     private val session = SessionState.SignedIn(
       MobileSessionUser("架空の利用者", MobileAvatar("placeholder", "確認用", "cyan")),
-      "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"), "/")
+      "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"))
     val state = mutableStateOf(screen())
 
     fun setAuthorized(value: Boolean) {

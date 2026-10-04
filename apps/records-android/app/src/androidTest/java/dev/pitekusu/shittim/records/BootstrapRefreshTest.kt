@@ -161,7 +161,7 @@ class BootstrapRefreshTest {
       compose.waitUntil(10_000) { rendered?.selectedRecordId == recordId }
       compose.runOnIdle { rendered!!.eventSink(BootstrapScreen.Event.RefreshRecords) }
       assertTrue(unfinished().isEmpty())
-      compose.runOnIdle { model.closeDestination() }
+      compose.runOnIdle { rendered!!.eventSink(BootstrapScreen.Event.CloseRecord) }
       compose.waitUntil(10_000) { rendered?.selectedRecordId == null }
       compose.runOnIdle { rendered!!.eventSink(BootstrapScreen.Event.RefreshRecords) }
       val queued = unfinished().single()

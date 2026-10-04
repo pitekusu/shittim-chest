@@ -167,7 +167,7 @@ class RecordPullRefreshTest {
     private val records = RecordListState.Ready.fromSaved(entries)
     private val session = if (offline) SessionState.Unavailable else SessionState.SignedIn(
       MobileSessionUser("架空の利用者", MobileAvatar("placeholder", "確認用", "cyan")),
-      "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"), "/")
+      "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"))
     private var authorized = true
     private var selected: String? = null
     private var sync: RecordSyncState = RecordSyncState.Idle

@@ -14,6 +14,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.platform.LocalContext
+import androidx.navigation3.runtime.rememberNavBackStack
 import com.slack.circuit.runtime.CircuitUiEvent
 import com.slack.circuit.runtime.CircuitUiState
 import com.slack.circuit.runtime.presenter.Presenter
@@ -34,7 +35,7 @@ internal enum class ThemeChoice {
   Dark,
 }
 
-// A single fixed destination; no navigation stack or screen serialization is needed yet.
+// Circuit owns presentation; Nav3 owns list/detail routes inside this fixed root screen.
 internal data object BootstrapScreen : Screen {
   class State(
     val themeChoice: ThemeChoice,
@@ -80,8 +81,31 @@ internal class BootstrapPresenter(
     val sessionState by session.state.collectAsState()
     val loginCompletion by session.loginCompletion.collectAsState()
     val cachePermit by session.cachePermit.collectAsState()
-    val destination by session.destination.collectAsState()
+    val pendingDestination by session.pendingDestination.collectAsState()
     val cacheAccountId = cachePermit?.accountId?.takeIf(session::isCacheAuthorized)
+    val backStack = rememberNavBackStack(RecordsList)
+    // Only opaque routes are saveable. Account ownership stays in memory and a restored route
+    // is just a hint: neither cache reads nor UI visibility can bypass the live permit.
+    var stackOwner by remember { mutableStateOf<String?>(null) }
+    if (sessionState == SessionState.SigningOut) {
+      backStack.closeRecord()
+      stackOwner = null
+    } else if (cacheAccountId != null && stackOwner != cacheAccountId) {
+      if (stackOwner != null) {
+        backStack.closeRecord()
+        session.discardDestination()
+      }
+      stackOwner = cacheAccountId
+    }
+    LaunchedEffect(cacheAccountId, pendingDestination) {
+      val request = pendingDestination ?: return@LaunchedEffect
+      val owner = cacheAccountId ?: return@LaunchedEffect
+      if (session.consumeDestination(request, owner)) {
+        backStack.openRecord(request.returnTo.removePrefix("/records/"))
+      }
+    }
+    val selectedRoute = backStack.lastOrNull() as? RecordDetail
+    val selectedRecordId = selectedRoute?.recordId.takeIf { cacheAccountId != null }
     val context = LocalContext.current
     val signedIn = sessionState is SessionState.SignedIn
     RecordNotificationPermissionEffect(authorized = cacheAccountId != null && signedIn)
@@ -101,7 +125,7 @@ internal class BootstrapPresenter(
     DisposableEffect(records) { onDispose { records?.close() } }
     // Keep the same account's saved preview during a foreground session check.
     // Permission loss, account change, or navigation drops it immediately.
-    var record by remember(cacheAccountId, destination) { mutableStateOf<RecordPreviewState>(RecordPreviewState.Idle) }
+    var record by remember(cacheAccountId, selectedRecordId) { mutableStateOf<RecordPreviewState>(RecordPreviewState.Idle) }
     var recordRetry by remember { mutableStateOf(0) }
     var listRetry by remember { mutableStateOf(0) }
     var recordList by remember { mutableStateOf<RecordListState>(RecordListState.Idle) }
@@ -141,9 +165,6 @@ internal class BootstrapPresenter(
         }
       }
     }
-    // The session model owns the validated destination across foreground checks and rotation.
-    val selectedRecordId = destination.takeIf { cacheAccountId != null && it.startsWith("/records/") }
-      ?.removePrefix("/records/")
     LaunchedEffect(cacheAccountId) {
       if (cacheAccountId == null) {
         listOwner = null
@@ -245,13 +266,22 @@ internal class BootstrapPresenter(
       loginCompletion = loginCompletion) { event ->
       when (event) {
         is BootstrapScreen.Event.SelectTheme -> themeChoice = event.choice
-        BootstrapScreen.Event.Login -> if (session.beginLogin()) {
+        BootstrapScreen.Event.Login -> if (session.beginLogin(
+          session.pendingDestination.value?.returnTo ?: selectedRoute?.let { "/records/${it.recordId}" } ?: "/"
+        )) {
           try { launcher.launch(session.loginDestination) }
           catch (_: ActivityNotFoundException) {
             session.loginResult(MobileLoginStep.Finished(MobileLoginStatus.BROWSER_UNAVAILABLE))
           }
         }
-        BootstrapScreen.Event.Logout -> session.logout()
+        BootstrapScreen.Event.Logout -> if (
+          cacheAccountId?.let(session::isCacheAuthorized) ?: (session.offlineCacheAccountId == null)
+        ) {
+          // Clear synchronously before IO or another callback can observe the previous selection.
+          backStack.closeRecord()
+          stackOwner = null
+          session.logout()
+        }
         BootstrapScreen.Event.Retry -> session.retry()
         BootstrapScreen.Event.RetryRecord -> {
           recordRetry++
@@ -259,17 +289,24 @@ internal class BootstrapPresenter(
         }
         BootstrapScreen.Event.RefreshRecords -> if (
           cacheAccountId != null && session.isCacheAuthorized(cacheAccountId) &&
-          session.destination.value == "/" && syncState != RecordSyncState.Running
+          backStack.lastOrNull() == RecordsList && session.pendingDestination.value == null &&
+          syncState != RecordSyncState.Running
         ) {
           // Queue the existing delta sync; keep the saved list, query, and scroll position.
-          // Check the live destination/permit even when an older UI callback is retained.
+          // Check the live stack/request/permit even when an older UI callback is retained.
           RecordSyncScheduler.syncNow(context)
         }
         BootstrapScreen.Event.RecordsAuthRequired -> session.onAuthenticationRequired()
         is BootstrapScreen.Event.OpenRecord -> if (
+          cacheAccountId != null && session.isCacheAuthorized(cacheAccountId) &&
+          stackOwner == cacheAccountId && session.pendingDestination.value == null &&
           event.recordId in ((visibleList as? RecordListState.Ready)?.loadedIds ?: emptySet())
-        ) session.openDestination("/records/${event.recordId}")
-        BootstrapScreen.Event.CloseRecord -> session.closeDestination()
+        ) backStack.openRecord(event.recordId)
+        BootstrapScreen.Event.CloseRecord -> if (
+          cacheAccountId != null && session.isCacheAuthorized(cacheAccountId) &&
+          stackOwner == cacheAccountId && selectedRoute != null &&
+          backStack.lastOrNull() == selectedRoute && session.pendingDestination.value == null
+        ) backStack.closeRecord()
         is BootstrapScreen.Event.SearchRecords -> listQuery = listQuery.copy(text = event.text)
         is BootstrapScreen.Event.SelectWinner -> listQuery = listQuery.copy(winner = event.winner)
         is BootstrapScreen.Event.SelectRequester -> listQuery = listQuery.copy(requesterName = event.displayName)

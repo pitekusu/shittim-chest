@@ -98,7 +98,7 @@ internal fun AdaptiveRecordsUi(
     val listValue = calculateThreePaneScaffoldValue(directive.maxHorizontalPartitions,
       ListDetailPaneScaffoldDefaults.adaptStrategies(),
       ThreePaneScaffoldDestinationItem<Unit>(ListDetailPaneScaffoldRole.List))
-    // Circuit owns the selection; Adaptive owns only the current visual transition.
+    // Nav3 owns the selection; Adaptive temporarily owns only the visual transition.
     val scaffoldState = remember { MutableThreePaneScaffoldState(value) }
     val currentState = rememberUpdatedState(state)
     val currentValue = rememberUpdatedState(value)

@@ -58,9 +58,9 @@ updated: 2026-10-04
 | C38 | Google Play提出Action・短寿命API認証の接続 | 既存署名と分離し、検証済みAABのuploadとcommitを採用Actionへ任せる。外部認証設定・配布確認はC39で行う |
 | C39 | 検証済み同一AABの内部テスト配布Workflow | mainの必須CIと署名を確認し、WIFで同一AABを提出・照合する。外部設定未完了では起動しない |
 | C40 | Android依存の更新検知 | 既存のDependabot・Dependency Graph・固定ツール監視の担当範囲を整理。監視の重複追加や依存更新は行わない |
-| C41（未実施） | 利用者向け導入・更新・復旧手順 | インストール、更新、再認証、問題版の配布停止を案内する。機能文書をこの工程へ後回しにしない |
+| C41（スキップ） | 利用者向け導入・更新・復旧手順 | 利用者の指定で今回は実施しない。既存の配布・認証・復旧手順は維持する |
 | 後続 | 起動演出・人格アイコン・投票／親愛度表示・友人向け配布 | C37後に小さなPRで分けて進める。起動演出はAndroid SplashScreenからComposeへ接続する |
-| 後続：Navigation 3 | 一覧／詳細の画面遷移・戻る・状態寿命の標準化 | 未実装。ネイティブ画面を増やす前の独立工程として、後述の3つの通常PRに分ける。既存の配布工程は変更しない |
+| 後続：Navigation 3 | 一覧／詳細の画面遷移・戻る・状態寿命の標準化 | 第1段階で閲覧先を型付きの単一back stackへ移す。描画・Adaptive Scene・状態寿命の仕上げは後述の第2・第3段階で行う。既存の配布工程は変更しない |
 
 ### PRの分割単位
 
@@ -139,8 +139,8 @@ Authlib・Auth Tab・認証検証の共通化も維持する。この方針の�
 | C23：Markdown（接続済み） | [Compose Markdown RendererのMaterial 3対応](https://github.com/mikepenz/multiplatform-markdown-renderer) | 独自パーサー・WebViewは追加しない。外部リンクはHTTPSの絶対URLだけを許可し、Markdown画像URLは取得しない |
 | C26〜29：暗号化保存（導入予定） | Bouncy Castle、Android Keystore、[Room](https://developer.android.com/training/data-storage/room) | 独自暗号方式・DBアクセス基盤は作らない。保存形式・鍵の取り扱いを管理し、Roomには暗号化済み本文を保存 |
 | C31〜C32：同期 | Coroutines、WorkManager、保存済み進捗からの再開 | バックグラウンド継続を新要件として受け、予約・制約・再試行をWorkManagerへ任せる。差分照合・本人認可・暗号化の再開点だけをサービス側で管理 |
-| C36：可変幅の一覧／詳細と戻る | Material 3 AdaptiveのListDetailPaneScaffold、AnimatedPane、ActivityのPredictiveBackHandler | 配置・遷移・pane focus・hinge回避とgesture配信を利用。選択先は既存Circuitを正とし、別のnavigation履歴は増やさない。確定時のCloseRecord接続と認可再確認だけをアプリ側で扱う |
-| 後続：画面遷移（導入予定） | Navigation 3のNavDisplay・NavEntry、Material 3 AdaptiveのListDetailSceneStrategy | Circuit／Metroを維持し、閲覧先の管理だけを単一back stackへ移す。認可、検証済みの認証復帰先、通知・App Linksの検証はアプリ側に残す。C36の現行遷移処理を段階的に置き換える |
+| C36：可変幅の一覧／詳細と戻る | Material 3 AdaptiveのListDetailPaneScaffold、AnimatedPane、ActivityのPredictiveBackHandler | 配置・遷移・pane focus・hinge回避とgesture配信を利用。Nav3第1段階では描画と約280msの戻りを維持し、選択先だけを単一back stackから得る。確定時のCloseRecord接続と認可再確認はアプリ側で扱う |
+| 後続：画面遷移（段階的に導入） | 第1段階はNavigation 3 runtimeのNavKey／rememberNavBackStack。第2段階でNavDisplay・NavEntryとMaterial 3 AdaptiveのListDetailSceneStrategy | Circuit／Metroを維持し、閲覧先を単一back stackへ移す。認可、検証済みの一回限り復帰先、通知・App Linksの検証はアプリ側に残す。描画とSceneの依存は実際に使う第2段階で追加する |
 | 議論公開通知 | Firebase Cloud Messaging、Firebase Admin SDK、NotificationCompat、Activity Result、WorkManager | 配送・通知表示・権限要求・登録再試行を既存APIへ任せる。セッションへの束縛、公開済み記録の確認、重複防止とログアウト時の抑止をサービス側で管理 |
 | C38〜C39：内部テスト配布 | r0adkll/upload-google-play、Google認証Action、既存のgoogle-auth・Google API client | upload・track更新・commitは採用Actionへ任せる。helperは版番号読取・署名と同一AABの検証・提出後照合・秘密の準備と回収だけを担当し、独自の提出APIやedit受け渡しを作らない |
 
@@ -918,13 +918,13 @@ Material／Compose標準のモーションを使い、Androidのアニメーシ�
 
 ## C36：可変幅レイアウト・画面操作の仕上げ
 
-この節はNavigation 3導入前の現行実装を記載する。今後の遷移管理の移行は「Navigation 3への段階的移行」で扱い、移行完了までは現在の動作を維持する。
+この節はC36から継続するAdaptive描画・操作を記載する。Navigation 3の第1段階では閲覧先だけを移し、ここにある配置と戻り演出は第2段階のNavDisplay／Scene接続まで維持する。
 
 認証後の記録画面は、標準`ListDetailPaneScaffold`と`AnimatedPane`で一覧／詳細を配置する。利用できる幅840dp以上かつ文字倍率1.5未満では左右2ペインとし、それ以外は選択先だけを1ペインで表示する。幅の判定は物理画面ではなく、system bar・IMEを避けた内容領域を使う。標準のwindow postureからhingeの除外領域を取り込み、本文は詳細760dp・単独一覧560dpまでに制限する。ログイン前は従来のブランドと操作の配置を維持する。
 
 上部アプリバーは画面名とメニューに絞り、重複する左側の装飾アイコンを置かない。一覧・ログインのブランド見出しはWeb版と同じ二重円枠と斜め四角のマークを使用し、`THE SHITTIM CHEST`をその右側に配置する。日本語アプリ名はログイン前だけ下段に残す。
 
-一覧・詳細のスクロール状態を別々に保持し、選択記録・検索条件は既存Circuitを正とする。リサイズで再取得・選択解除・スクロール初期化を行わない。独自のnavigation履歴や本文を含むSavedStateは追加しない。閲覧認可を失った場合は記録ペインを直ちにcompositionから外し、退出アニメーションで本文を残さない。
+一覧・詳細のスクロール状態を別々に保持する。選択記録はNav3の単一back stackから得て、検索条件は既存Circuitのアカウントに結び付くメモリで管理する。リサイズで再取得・選択解除・スクロール初期化を行わない。独自のnavigation履歴や本文を含むSavedStateは追加しない。閲覧認可を失った場合は記録ペインを直ちにcompositionから外し、退出アニメーションで本文を残さない。
 検索欄にフォーカスしたまま詳細へ移った場合はフォーカスを解除する。一覧へ戻る遷移中は検索欄をフォーカス対象から外し、遷移後も自動で戻さない。検索内容と一覧のスクロール位置は維持する。
 
 詳細に「一覧に戻る」リンクを重複配置せず、端末の戻るボタン・ジェスチャーを使う。詳細タイトルは本文のスクロール外に置く。両ペインは読み上げのまとまりと日本語のpane名を持ち、一覧の表示中記録は文字とselected semanticsで伝える。名前の隣にある装飾アイコン／代替イニシャルは重複して読ませない。標準Cardのkeyboard操作とtouch targetを維持し、文字を縮めて収めない。
@@ -964,7 +964,7 @@ Material／Compose標準のモーションを使い、Androidのアニメーシ�
 
 目的は、個別に制御している戻るアニメーション、画面状態の寿命、1ペイン／2ペインの切替を高レベルAPIへ寄せ、今後のランキング・モモトーク・討論開始などのネイティブ画面追加をしやすくすることとする。通信・復号の高速化や、既存の引っかかりの解消を導入だけで保証しない。
 
-この工程は未実装であり、今回の計画追記では依存を追加しない。ネイティブ画面を増やす前に独立した工程として進め、冒頭の工程表にあるC38〜C41の配布工程・番号・順序や、現在の内部テスト配布の条件は変更しない。Nav3とAdaptiveの依存は実装時に互換性・保守状況・安全性を確認してVersion Catalogで固定し、Kotlin・Compose・Materialの既定版を無断で変更しない。
+ネイティブ画面を増やす前の独立工程として進める。第1段階ではNavigation 3 runtimeだけを追加し、型付きの閲覧先と状態保持を接続する。第2段階でNavDisplayとAdaptive Sceneを同時に導入するため、それまでは既存の描画と戻り演出を維持する。C41は利用者の指定でスキップし、C38〜C40の配布工程と内部テスト配布の条件は変更しない。依存は必要な段階で互換性・保守状況・安全性を確認してVersion Catalogで固定し、Kotlin・Compose・Materialの既定版を無断で変更しない。
 
 ### 実装単位
 
@@ -972,13 +972,15 @@ Material／Compose標準のモーションを使い、Androidのアニメーシ�
 
 | PR | 内容 | 主な確認点 |
 |---|---|---|
-| 1 | 型付きrouteと単一back stack、一覧／詳細のNavDisplay接続 | 閲覧先を二重管理しない。既存の認可・ログイン復帰・外部リンク処理へ安全に接続し、Circuit／Metroを維持する |
-| 2 | AdaptiveのSceneStrategy、1ペイン／2ペイン、戻る演出 | 標準のListDetailSceneStrategyを優先する。約280msのスライド、予測型Backの確定・取消、幅変更時の選択と読位置を維持する |
+| 1 | 型付きrouteと単一back stack、認証状態から閲覧先を分離 | rememberNavBackStackを唯一の閲覧先とする。既存の認可・一回限りのログイン復帰・外部リンクへ接続し、Circuit／Metroと現行Adaptive描画を維持する |
+| 2 | NavDisplay・NavEntryとAdaptiveのSceneStrategy、1ペイン／2ペイン、戻る演出 | 描画の置換を一度に行い、標準のListDetailSceneStrategyを優先する。約280msのスライド、予測型Backの確定・取消、幅変更時の選択と読位置を維持する |
 | 3 | 状態寿命と復帰経路の仕上げ、代表画面・実機確認 | 詳細の再訪と回転を区別する。一覧・検索・通知タップ・認証／Web復帰を横断確認し、完了後に不要な旧遷移処理を取り除く |
 
 ### 維持する境界
 
-- 閲覧routeはNav3の単一back stackを正とし、既存の選択先・履歴と二重に同期する基盤は作らない。検証済みログイン復帰先は別の認証状態として扱い、期限切れでは保持し、明示ログアウト・アカウント切替では破棄する。
+- 閲覧routeはNav3の単一back stackを正とし、既存の選択先・履歴と二重に同期する基盤は作らない。routeは一覧とopaqueな記録IDを持つ詳細の2種類とし、現在と同じ一覧＋詳細1件の構成を維持する。別の詳細を開くときも詳細履歴を積み重ねない。
+- 認証モデルは現在の閲覧先を保持しない。検証済みApp Link・ログイン結果からの復帰先だけを一回限りのpending状態として渡し、有効なキャッシュ閲覧許可の下で消費してback stackへ接続する。未認可の入力だけで実記録を表示しない。
+- 閲覧許可の期限切れでは実記録を直ちに隠し、back stackの識別子は同じ利用者の再認証復帰用として残す。ログイン開始時は未消費の復帰先または非表示の閲覧routeを渡す。明示ログアウトでは同期的に一覧へ戻し、確認済みのアカウント切替でも旧利用者の閲覧先とpending状態を破棄する。
 - 固定App Linksの検証、通知のアカウント束縛・ローカル許可確認、Activity再生成時のIntent二重実行防止を維持する。認可喪失時は全entry・全ペインの実記録を直ちに非表示にし、進行中の戻る処理で別記録や別アカウントを操作しない。
 - 一覧のPaging Flow・検索条件・読位置を維持する。詳細を閉じて同じ記録を開き直した場合も新しい閲覧としてアロナの初回意見から開始し、同じ閲覧中の回転・同期・シート／Web復帰では読位置を維持する。検索画面・フォーカス・キーボードを一覧復帰時に自動再表示しない。
 - Nav3のSavedStateにはopaqueな記録IDなど必要最小限のroute識別子だけを入れる。質問・回答・検索語・token・private Discord IDは入れない。検索語は既存どおりアカウントに結び付くメモリだけで保持する。
