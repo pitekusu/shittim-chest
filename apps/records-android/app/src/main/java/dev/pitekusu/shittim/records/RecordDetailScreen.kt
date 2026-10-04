@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -18,9 +20,8 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
@@ -51,6 +52,9 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -149,7 +153,6 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
         participantVisualSlot(value.participantName, value.participantSlot) ?: value.participantName) {
         rememberLazyListState()
       } }
-      val questionScrollState = rememberScrollState()
       fun resetOpinion(page: DetailPage) {
         if (page.section == RecordDetailSection.Opinions) {
           // Incoming lazy pages may not have a first layout yet. Request the next layout's
@@ -180,43 +183,40 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
       }
       var affectionControlsBottom by remember { mutableFloatStateOf(Float.NEGATIVE_INFINITY) }
       BoxWithConstraints(modifier.fillMaxSize()) {
-        // The shared question stays outside the pager. Bound only its viewport, never its text,
-        // so long questions and large fonts cannot consume all of the answer/navigation space.
+        // Five lines at normal sizes; retain a height cap for landscape and large text so
+        // the answer remains reachable. The reading sheet always contains the full question.
         val questionMaximumHeight = maxHeight * 0.35f
         Column(Modifier.fillMaxSize()) {
-          Surface(onClick = { questionOpen = true },
-            color = MaterialTheme.colorScheme.surfaceContainer,
+          Surface(color = MaterialTheme.colorScheme.surfaceContainer,
             shape = MaterialTheme.shapes.large,
             modifier = Modifier.fillMaxWidth().heightIn(max = questionMaximumHeight)
               .padding(horizontal = ShittimSpacing.Medium, vertical = ShittimSpacing.Small)
               .testTag("detail-question-open")) {
             Column(Modifier.padding(ShittimSpacing.Medium)) {
-              // Keep the label and full-text action out of the scroll viewport. The bounded
-              // body clips independently, so a long question cannot paint over the controls.
+              // The full-text action stays visible even when the preview is height constrained.
               Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(stringResource(R.string.record_question),
                   style = MaterialTheme.typography.labelLarge,
                   color = MaterialTheme.colorScheme.primary,
                   modifier = Modifier.weight(1f).testTag("detail-question-label"))
-                if (questionScrollState.canScrollForward || questionScrollState.canScrollBackward) {
-                  TextButton(onClick = { questionOpen = true },
-                    modifier = Modifier.testTag("detail-question-full")) {
-                    Text(stringResource(R.string.record_question_full))
-                    Icon(painterResource(R.drawable.ic_expand_more), null, Modifier.size(18.dp))
-                  }
+                TextButton(onClick = { questionOpen = true },
+                  modifier = Modifier.testTag("detail-question-full")) {
+                  Text(stringResource(R.string.record_question_full))
+                  Icon(painterResource(R.drawable.ic_expand_more), null, Modifier.size(18.dp))
                 }
               }
-              Box(Modifier.weight(1f, fill = false).fillMaxWidth().clipToBounds()
-                .verticalScroll(questionScrollState).testTag("detail-question-scroll")) {
-                Text(state.preview.question, style = MaterialTheme.typography.bodyLarge,
-                  modifier = Modifier.testTag("detail-question-text"))
-              }
+              Text(state.preview.question, style = MaterialTheme.typography.bodyLarge,
+                maxLines = 5, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false).fillMaxWidth().clipToBounds()
+                  .testTag("detail-question-text"))
             }
           }
           if (selected.section == RecordDetailSection.Opinions && opinions.isNotEmpty()) {
             RecordOpinionControls(opinions, selected.person, selected.finalOpinion,
-              onPerson = { index -> scope.launch { openPage(index * 2) } },
-              onStage = { final -> scope.launch { openPage(selected.person * 2 + if (final) 1 else 0) } })
+              onPerson = { index -> scope.launch {
+                val final = index == selected.person && !selected.finalOpinion
+                openPage(index * 2 + if (final) 1 else 0)
+              } })
           }
           if (selected.section == RecordDetailSection.Affection && affectionChanges.isNotEmpty()) {
             RecordAffectionControls(affectionOrder.map { affectionChanges[it] },
@@ -308,17 +308,28 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
         }
       }
       if (questionOpen) {
+        val questionSheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden,
+          enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))
         ModalBottomSheet(onDismissRequest = { questionOpen = false },
-          sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden,
-            enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded)),
-          modifier = Modifier.testTag("detail-question-sheet")) {
-          LazyColumn(contentPadding = PaddingValues(ShittimSpacing.Medium)) {
-            item { Text(stringResource(R.string.record_question),
-              style = MaterialTheme.typography.titleLargeEmphasized) }
-            item { RecordMarkdown(state.preview.question) }
-            item { TextButton(onClick = { questionOpen = false }) {
+          sheetState = questionSheetState,
+          modifier = Modifier.fillMaxHeight(.92f).testTag("detail-question-sheet")) {
+          Row(Modifier.fillMaxWidth().padding(horizontal = ShittimSpacing.Large),
+            verticalAlignment = Alignment.CenterVertically) {
+            Text(stringResource(R.string.record_question_full_title),
+              style = MaterialTheme.typography.titleLargeEmphasized,
+              modifier = Modifier.weight(1f).semantics { heading() })
+            TextButton(onClick = { scope.launch {
+              // Use Material's exit animation before removing the sheet from composition.
+              questionSheetState.hide()
+              questionOpen = false
+            } }, modifier = Modifier.testTag("detail-question-close")) {
               Text(stringResource(R.string.detail_close))
-            } }
+            }
+          }
+          HorizontalDivider()
+          LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("detail-question-reader"),
+            contentPadding = PaddingValues(ShittimSpacing.Large)) {
+            item { SelectionContainer { RecordMarkdown(state.preview.question) } }
           }
         }
       }

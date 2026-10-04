@@ -24,6 +24,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.isSelected
+import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -82,13 +84,13 @@ class RecordPreviewPanelTest {
     compose.onNodeWithTag("detail-section-Opinions").performClick()
     compose.waitForIdle()
     for (index in opinions.indices) {
-      compose.onNodeWithTag("opinion-person-$index").performClick()
-      compose.onNodeWithText(label(R.string.record_final_proposal)).performClick()
+      if (index != 0) compose.onNodeWithTag("opinion-person-$index").performClick()
+      compose.onNode(isSelected() and hasStateDescription(label(R.string.record_initial_opinion))).performClick()
       compose.waitUntil(10_000) {
         compose.onAllNodesWithText(longProposal, substring = true).fetchSemanticsNodes().isNotEmpty()
       }
       compose.onNodeWithText("案${index + 1}").assertExists()
-      compose.onNodeWithText(label(R.string.record_initial_opinion)).performClick()
+      compose.onNode(isSelected() and hasStateDescription(label(R.string.record_final_proposal))).performClick()
       val markdownTexts = listOf("強調", "資料", "箇条書き")
       compose.waitUntil(10_000) {
         markdownTexts.all { text ->
@@ -102,7 +104,7 @@ class RecordPreviewPanelTest {
       val expectedSize = with(compose.density) { 96.dp.toPx() }
       assertEquals(expectedSize, avatar.size.width.toFloat(), 1f)
       assertEquals(expectedSize, avatar.size.height.toFloat(), 1f)
-      compose.onNodeWithText(label(R.string.record_final_proposal)).performClick()
+      compose.onNode(isSelected() and hasStateDescription(label(R.string.record_initial_opinion))).performClick()
       compose.onNodeWithTag("opinion-avatar-$slot").assertExists()
     }
   }

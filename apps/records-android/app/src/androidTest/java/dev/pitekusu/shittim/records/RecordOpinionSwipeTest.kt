@@ -5,9 +5,8 @@ import androidx.activity.compose.setContent
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.test.assertIsOff
-import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
@@ -15,6 +14,8 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.isSelected
+import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.swipeLeft
@@ -49,14 +50,17 @@ class RecordOpinionSwipeTest {
       opinions = listOf(ordered[2], ordered[0], ordered[1]), winnerSlot = "participant-b")
   }
 
-  private fun stage(final: Boolean) = compose.onNodeWithText(compose.activity.getString(
-    if (final) R.string.record_final_proposal else R.string.record_initial_opinion))
+  private fun stage(final: Boolean) = compose.onNode(isSelected() and hasStateDescription(compose.activity.getString(
+    if (final) R.string.record_final_proposal else R.string.record_initial_opinion)))
 
-  private fun assertSelection(person: Int, final: Boolean) {
+  private fun assertSelection(person: Int, final: Boolean, name: String = names[person]) {
     compose.onNodeWithTag("detail-section-Opinions").assertIsSelected()
     compose.onNodeWithTag("opinion-person-$person").assertIsSelected()
-    stage(final).assertIsOn()
-    stage(!final).assertIsOff()
+      .assertTextContains(name)
+      .assertTextContains(compose.activity.getString(
+        if (final) R.string.record_final_proposal else R.string.record_initial_opinion))
+    stage(final).assertExists()
+    stage(!final).assertDoesNotExist()
   }
 
   private fun assertAnswer(person: Int, final: Boolean) {
@@ -99,15 +103,15 @@ class RecordOpinionSwipeTest {
     assertAnswer(0, false)
   }
 
-  @Test fun personaTapsResetToInitialAndReopeningTheSameRecordStartsWithArona() {
+  @Test fun personaTapsToggleTheSelectedAnswerAndReopeningTheSameRecordStartsWithArona() {
     val open = mutableStateOf(true)
     compose.activityRule.scenario.onActivity { it.setContent { ShittimTheme(false) {
       if (open.value) RecordDetailScreen(RecordPreviewState.Ready(preview()), "swipe-sample", {}, motionAllowed = false)
     } } }
     assertAnswer(0, false)
-    stage(true).performClick()
+    stage(false).performClick()
     assertAnswer(0, true)
-    // Tapping the currently selected persona must also reset the answer stage.
+    // The selected two-line persona button toggles between the two answers.
     compose.onNodeWithTag("opinion-person-0").performClick()
     assertAnswer(0, false)
     compose.onNodeWithTag("opinion-person-1").performClick()
@@ -116,17 +120,17 @@ class RecordOpinionSwipeTest {
     assertAnswer(1, true)
     compose.onNodeWithTag("opinion-person-1").performClick()
     assertAnswer(1, false)
-    stage(true).performClick()
+    stage(false).performClick()
     assertAnswer(1, true)
     compose.onNodeWithTag("opinion-person-2").performClick()
     assertAnswer(2, false)
-    stage(true).performClick()
+    stage(false).performClick()
     assertAnswer(2, true)
     swipeAnswer(forward = true)
     compose.onNodeWithTag("detail-section-Voting").assertIsSelected()
     swipeAnswer(forward = false)
     assertAnswer(2, true)
-    stage(false).performClick()
+    stage(true).performClick()
     assertAnswer(2, false)
     compose.runOnIdle { open.value = false }
     compose.onNodeWithTag("detail-pager").assertDoesNotExist()
@@ -164,10 +168,10 @@ class RecordOpinionSwipeTest {
       RecordDetailScreen(state.value, "swipe-sample", {}, motionAllowed = false)
     } }
     compose.onNodeWithTag("opinion-person-2").performClick()
-    stage(true).performClick()
+    stage(false).performClick()
     assertAnswer(2, true)
     readPartway(2, true)
-    stage(false).performClick()
+    stage(true).performClick()
     assertAnswer(2, false)
     assertEquals(0f, readingPosition(), 0.01f)
     val initialPosition = readPartway(2, false)
@@ -182,7 +186,7 @@ class RecordOpinionSwipeTest {
     }
     assertSelection(2, false)
     assertEquals(initialPosition, readingPosition(), 0.01f)
-    stage(true).performClick()
+    stage(false).performClick()
     assertAnswer(2, true)
     assertEquals(0f, readingPosition(), 0.01f)
     swipeAnswer(forward = false)
@@ -200,7 +204,7 @@ class RecordOpinionSwipeTest {
       compose.waitUntil(5_000) {
         compose.onNodeWithText(if (final) "昔の最終案" else "昔の初回意見").isDisplayed()
       }
-      assertSelection(0, final)
+      assertSelection(0, final, "プラナ")
       compose.onNodeWithTag("opinion-person-1").assertDoesNotExist()
       compose.onNodeWithTag("opinion-person-2").assertDoesNotExist()
     }

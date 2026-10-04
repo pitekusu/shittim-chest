@@ -25,7 +25,6 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertIsNotFocused
 import androidx.compose.ui.test.assertIsNotSelected
-import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasText
@@ -39,6 +38,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.isSelected
+import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.performKeyInput
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
@@ -269,7 +270,7 @@ class AdaptiveRecordsUiTest {
       compose.waitForIdle()
       compose.onNodeWithTag("detail-section-Opinions").assertIsSelected()
       compose.onNodeWithTag("opinion-person-0").assertIsSelected()
-      compose.onNodeWithText(compose.activity.getString(R.string.record_initial_opinion)).assertIsOn()
+      compose.onNode(isSelected() and hasStateDescription(compose.activity.getString(R.string.record_initial_opinion))).assertExists()
       assertEquals(0f, readingPosition(), .01f)
     }
     fun readPartway(tail: String) {
@@ -300,7 +301,7 @@ class AdaptiveRecordsUiTest {
     closeAndReopen()
     compose.onNodeWithTag("opinion-person-2").performClick()
     compose.waitUntil(10_000) { compose.onNodeWithText("再入場試験の初回意見2").isDisplayed() }
-    compose.onNodeWithText(compose.activity.getString(R.string.record_final_proposal)).performClick()
+    compose.onNode(isSelected() and hasStateDescription(compose.activity.getString(R.string.record_initial_opinion))).performClick()
     compose.waitUntil(10_000) { compose.onNodeWithText("再入場試験の最終案2").isDisplayed() }
     readPartway("最終本文の末尾2")
     // A later answer must not be restored when the same record is entered again.
@@ -339,7 +340,7 @@ class AdaptiveRecordsUiTest {
     compose.waitUntil(10_000) { compose.onNodeWithText("復元試験の初回意見0").isDisplayed() }
     compose.onNodeWithTag("opinion-person-2").performClick()
     compose.waitUntil(10_000) { compose.onNodeWithText("復元試験の初回意見2").isDisplayed() }
-    compose.onNodeWithText(compose.activity.getString(R.string.record_final_proposal)).performClick()
+    compose.onNode(isSelected() and hasStateDescription(compose.activity.getString(R.string.record_initial_opinion))).performClick()
     compose.waitUntil(10_000) {
       compose.onNodeWithText("復元試験の最終案2").isDisplayed() &&
         compose.onNodeWithTag("bootstrap-content").fetchSemanticsNode()
@@ -365,7 +366,7 @@ class AdaptiveRecordsUiTest {
     compose.waitForIdle()
     compose.onNodeWithTag("detail-section-Opinions").assertIsSelected()
     compose.onNodeWithTag("opinion-person-2").assertIsSelected()
-    compose.onNodeWithText(compose.activity.getString(R.string.record_final_proposal)).assertIsOn()
+    compose.onNode(isSelected() and hasStateDescription(compose.activity.getString(R.string.record_final_proposal))).assertExists()
     compose.waitUntil(10_000) {
       compose.onAllNodesWithText("復元本文の末尾2", substring = true).fetchSemanticsNodes().isNotEmpty()
     }
@@ -556,7 +557,7 @@ class AdaptiveRecordsUiTest {
     } }
     compose.onNodeWithTag("opinion-person-2").performClick()
     compose.waitUntil(10_000) { compose.onNodeWithText("幅変更試験の初回意見2").isDisplayed() }
-    compose.onNodeWithText(compose.activity.getString(R.string.record_final_proposal)).performClick()
+    compose.onNode(isSelected() and hasStateDescription(compose.activity.getString(R.string.record_initial_opinion))).performClick()
     compose.waitUntil(10_000) {
       compose.onAllNodesWithText("幅変更本文の末尾2", substring = true).fetchSemanticsNodes().isNotEmpty() &&
         compose.onNodeWithTag("bootstrap-content").fetchSemanticsNode()
@@ -573,12 +574,12 @@ class AdaptiveRecordsUiTest {
     compose.onNodeWithTag("record-detail-content").assertIsDisplayed()
     compose.waitForIdle()
     compose.onNodeWithTag("opinion-person-2").assertIsSelected()
-    compose.onNodeWithText(compose.activity.getString(R.string.record_final_proposal)).assertIsOn()
+    compose.onNode(isSelected() and hasStateDescription(compose.activity.getString(R.string.record_final_proposal))).assertExists()
     assertTrue(readingPosition("record-detail-content") > 0f)
     compose.runOnIdle { window.value = DpSize(420.dp, 850.dp) }
     compose.waitForIdle()
     compose.onNodeWithTag("opinion-person-2").assertIsSelected()
-    compose.onNodeWithText(compose.activity.getString(R.string.record_final_proposal)).assertIsOn()
+    compose.onNode(isSelected() and hasStateDescription(compose.activity.getString(R.string.record_final_proposal))).assertExists()
     assertEquals(compactPosition, readingPosition("bootstrap-content"), .01f)
     compose.runOnIdle { assertEquals(RecordDetail(entries.first().recordId), backStack.last()) }
   }
