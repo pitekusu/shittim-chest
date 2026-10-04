@@ -18,7 +18,7 @@ from shittim_chest.application.scale_to_zero import (
 
 NOW = datetime(2026, 10, 4, tzinfo=UTC)
 OWNER = "a" * 43
-REQUEST_ID = "00000000-0000-4000-8000-000000000001"
+REQUEST_ID = "11111111-2222-4333-8444-55555555555a"
 
 
 def mobile_request() -> IngressRequest:
@@ -74,7 +74,7 @@ def test_tampered_mobile_ownership_is_rejected(field: str, value: str) -> None:
 
 @pytest.mark.parametrize(
     "request_id",
-    ["00000000-0000-1000-8000-000000000001", "invalid", REQUEST_ID.upper().replace("0001", "ABCD")],
+    ["11111111-2222-1333-8444-55555555555a", "invalid", REQUEST_ID.upper()],
 )
 def test_only_canonical_uuidv4_is_accepted(request_id: str) -> None:
     with pytest.raises(ValueError):
