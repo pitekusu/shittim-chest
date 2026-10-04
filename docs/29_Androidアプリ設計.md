@@ -1264,7 +1264,7 @@ WIF・Environment・Play権限の外部設定前は起動を拒否する。設�
 ### 同一成果物の検証・配信
 
 1. 固定SHAの最新main CI・Records CI・既存CodeQLが成功したことを確認する。新しい失敗・実行中の試行を古い成功で置き換えない。
-2. Playの全トラック、現在のbundle／APKを読み、その最大値より大きい`versionCode`を決める。`minimum_version_code`は通常の最大値＋1に優先する下限指定であり、失敗後に状態と副作用を確認した前回試行番号＋1を指定して番号の再利用を防ぐ。指定値を検証し、現在の最大番号＋1との大きい方を使う。競合した場合は自動的な再番号付け・再ビルドをせず終了する。
+2. Playの全トラック、現在のbundle／APKを読み、その最大値より大きい`versionCode`を決める。`minimum_version_code`は通常の最大値＋1に優先する下限指定であり、失敗後に状態と副作用を確認した前回試行番号＋1を指定して番号の再利用を防ぐ。指定値を検証し、現在の最大番号＋1との大きい方を使う。以後の更新が不可能になる最終番号`2100000000`は、下限指定・自動採番ともビルド前に拒否する。競合した場合は自動的な再番号付け・再ビルドをせず終了する。
 3. 既存upload keyでRelease AABを一度ビルドし、Release Lintを実行する。JDKとdigest固定の公式bundletoolで署名・証明書・パッケージ・版番号・非debugを検証する。pinした公開証明書のUTC有効期間を確認し、その証明書だけの一時truststoreを使ってJDKの厳格検証を行う。自己署名を理由に重大警告全体を許可せず、一時truststoreは検証後に回収する。
 4. 検証した同一AABのhashを再照合し、配信直前にWIF認証を更新する。C38の提出Actionへ単一AABと資格情報ファイルのpath、固定した内部トラック・statusを渡す。upload・track更新・commitはActionが担当し、helperから別のcommitを行わない。
 5. Action成功後に公式Google SDKでPlayの版番号・bundle hash・内部トラックの`completed`を再取得し、検証したAABと照合する。提出前の`verification.json`と、提出後照合が成功した場合の簡単な`receipt.json`を保持する。

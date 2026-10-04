@@ -21,6 +21,7 @@ from googleapiclient.errors import HttpError
 from tools.verify_android_bundle import PACKAGE, digest, verify_bundle
 
 SCOPE = "https://www.googleapis.com/auth/androidpublisher"
+PLAY_MAX_VERSION_CODE = 2_100_000_000
 PRIVATE_FILES = ("upload-key.p12", "google-services.json", "gradle-build.log")
 
 
@@ -54,7 +55,7 @@ def version_code(value: object) -> int:
         code = int(value)
     else:
         raise ValueError("play_version_code_invalid")
-    if not 0 < code <= 2_100_000_000:
+    if not 0 < code <= PLAY_MAX_VERSION_CODE:
         raise ValueError("play_version_code_invalid")
     return code
 
@@ -90,6 +91,10 @@ def preflight(state: Path) -> None:
     # after checking its side effects, instead of retrying/reusing that version.
     floor = version_code(os.environ.get("MINIMUM_VERSION_CODE", "1"))
     code = version_code(max(max(codes, default=0) + 1, floor))
+    # Keep the terminal value readable in inventory, but never publish it: Play
+    # would require a larger value for every future update and none could exist.
+    if code == PLAY_MAX_VERSION_CODE:
+        raise ValueError("play_version_code_exhausted")
     write_json(state / "plan.json", {"sha": sha, "versionCode": code})
     with Path(os.environ["GITHUB_OUTPUT"]).open("a") as stream:
         stream.write(f"version_code={code}\n")

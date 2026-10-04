@@ -81,6 +81,22 @@ def test_failed_upload_floor_does_not_reuse_unlisted_version(
     assert json.loads((state / "plan.json").read_text())["versionCode"] == 29
 
 
+@pytest.mark.parametrize("floor,observed", (("2100000000", 27), ("1", 2_099_999_999)))
+def test_terminal_upload_code_is_rejected_before_build_or_publication(
+    api: MagicMock, state: Path, monkeypatch: pytest.MonkeyPatch, floor: str, observed: int
+) -> None:
+    monkeypatch.setenv("MINIMUM_VERSION_CODE", floor)
+    api.edits().bundles().list().execute.return_value = {"bundles": [{"versionCode": observed}]}
+
+    with pytest.raises(ValueError, match="play_version_code_exhausted"):
+        release.preflight(state)
+
+    assert not (state / "plan.json").exists()
+    assert not (state.parent / "output").exists()
+    api.edits().commit.assert_not_called()
+    api.edits().bundles().upload.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "name,value",
     (("GITHUB_RUN_ATTEMPT", "2"), ("GITHUB_REF", "refs/heads/feature"), ("GITHUB_SHA", "bad")),

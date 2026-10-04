@@ -456,6 +456,7 @@ Environmentはmain限定とし、次を安全に登録する。
 検証した同一AABだけを固定した提出Actionへ渡す。Actionがupload・internal track更新・commitを行い、helperのPlay再取得で版番号・hash・`completed`が一致したことを確認する。
 `minimum_version_code`は指定下限であり、通常はPlay読取の最大番号＋1を使う。失敗後の新しい実行では、
 Consoleで副作用を確認した前回試行番号＋1を下限に指定し、API未掲載の番号も再利用しない。
+以後の更新を不可能にするPlayの最終番号`2100000000`は、下限指定・自動採番のどちらでもビルド前に拒否する。
 署名検証はpinした公開証明書のUTC有効期間を確認し、その証明書だけの一時truststoreでJDKの厳格検証を行う。
 自己署名を理由にexit code 4全体を許可せず、期限切れ・未有効やその他の重大警告は拒否する。一時truststoreは回収する。
 `verification.json`は提出前のAAB検証、`receipt.json`はAction成功後の提出後照合の小さな記録とする。
