@@ -33,6 +33,9 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 
 internal enum class ThemeChoice {
   System,
@@ -58,6 +61,9 @@ internal data object BootstrapScreen : Screen {
     val backStack: List<NavKey> = listOf(RecordsList) + listOfNotNull(selectedRecordId?.let(::RecordDetail)),
     val recordOwner: String? = (session as? SessionState.SignedIn)?.cacheAccountId,
     val debate: DebateSubmissionState = DebateSubmissionState(),
+    val debateStatus: DebateStatusState = DebateStatusState(),
+    val debateHistory: DebateHistoryState = DebateHistoryState(),
+    val debateOnline: Boolean = session is SessionState.SignedIn,
     val eventSink: (Event) -> Unit,
   ) : CircuitUiState
 
@@ -77,12 +83,19 @@ internal data object BootstrapScreen : Screen {
     data class SelectOrder(val order: RecordOrder) : Event
     data object ClearRecordQuery : Event
     data object ComposeDebate : Event
-    data class EditDebate(val question: String) : Event
+    class EditDebate(val question: String) : Event {
+      override fun toString(): String = "EditDebate(<redacted>)"
+    }
     data object SubmitDebate : Event
     data object CheckDebate : Event
     data object RetryDebate : Event
     data object ReauthenticateDebate : Event
     data object NewDebateDraft : Event
+    data object ShowDebateRequests : Event
+    data class OpenDebateRequest(val requestId: String) : Event
+    data object LoadMoreDebateRequests : Event
+    data object RefreshDebateRequests : Event
+    data class OpenDebateResult(val recordId: String) : Event
   }
 }
 
@@ -124,6 +137,7 @@ internal class BootstrapPresenter(
     val selectedRecordId = selectedRoute?.recordId.takeIf { cacheAccountId != null }
     val context = LocalContext.current
     val signedIn = sessionState is SessionState.SignedIn
+    val debateOnline = signedIn && rememberValidatedDebateNetwork()
     RecordNotificationPermissionEffect(authorized = cacheAccountId != null && signedIn)
     val currentSignedIn by rememberUpdatedState(signedIn)
     val currentSessionState by rememberUpdatedState(sessionState)
@@ -142,14 +156,19 @@ internal class BootstrapPresenter(
           DebateSubmissionModel({ session.isCacheAuthorized(owner) },
             { store?.load(owner) ?: throw DebateRequestException(DebateFailure.STORAGE) },
             { store?.save(owner, it) ?: throw DebateRequestException(DebateFailure.STORAGE) },
-            { id, question -> session.withAuthorizedToken { client.submit(it, id, question) }
+            { id, question -> session.withAuthorizedToken {
+              if (!hasValidatedDebateNetwork(context)) throw DebateRequestException(DebateFailure.UNAVAILABLE)
+              client.submit(it, id, question)
+            }
               ?: throw DebateRequestException(DebateFailure.AUTH_REQUIRED) },
             { id ->
               class Lookup(val value: DebateRequest?)
               val result = session.withAuthorizedToken { Lookup(client.find(it, id)) }
                 ?: throw DebateRequestException(DebateFailure.AUTH_REQUIRED)
               result.value
-            }, { store?.close(); client.close() })
+            }, { store?.close(); client.close() },
+            { cursor -> session.withAuthorizedToken { client.list(it, cursor) }
+              ?: throw DebateRequestException(DebateFailure.AUTH_REQUIRED) })
         } }
         ViewModelProvider(modelOwner, factory)["debate-$owner", DebateSubmissionModel::class.java]
       }
@@ -161,6 +180,44 @@ internal class BootstrapPresenter(
     }
     LaunchedEffect(debateModel) { debateModel?.restore() }
     val debate = debateModel?.state?.collectAsState()?.value ?: DebateSubmissionState()
+    val debateStatus = debateModel?.status?.collectAsState()?.value ?: DebateStatusState()
+    val debateHistory = debateModel?.history?.collectAsState()?.value ?: DebateHistoryState()
+    LaunchedEffect(debate.failure, debateStatus.failure, debateHistory.failure) {
+      if (listOf(debate.failure, debateStatus.failure, debateHistory.failure).contains(DebateFailure.AUTH_REQUIRED))
+        session.onAuthenticationRequired()
+    }
+    var historyRefresh by remember(cacheAccountId) { mutableStateOf(0) }
+    var historyMore by remember(cacheAccountId) { mutableStateOf(false) }
+    val foregroundLifecycle = LocalLifecycleOwner.current.lifecycle
+    val debateRoute = backStack.lastOrNull()
+    LaunchedEffect(cacheAccountId, debate.workspace?.requestId, debateRoute) {
+      val id = debate.workspace?.requestId ?: return@LaunchedEffect
+      if (cacheAccountId != null && session.isCacheAuthorized(cacheAccountId) && debateRoute == DebateCompose) {
+        backStack[backStack.lastIndex] = DebateRequestStatus(id)
+      }
+    }
+    LaunchedEffect(debateModel, debateRoute, debateOnline, historyRefresh, debate.busy) {
+      if (!debateOnline) return@LaunchedEffect
+      foregroundLifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+        when (val route = debateRoute) {
+          is DebateRequestStatus -> {
+            do {
+              debateModel?.refreshStatus(route.requestId)
+              val latest = debateModel?.status?.value
+              if (latest?.requestId == route.requestId && latest.request?.terminal == true) break
+              if (latest?.failure in setOf(DebateFailure.NOT_FOUND, DebateFailure.AUTH_REQUIRED,
+                  DebateFailure.REAUTH_REQUIRED, DebateFailure.FORBIDDEN, DebateFailure.INVALID_RESPONSE)) break
+              delay(5_000)
+            } while (true)
+          }
+          DebateRequests -> {
+            debateModel?.refreshHistory(more = historyMore)
+            historyMore = false
+          }
+          else -> Unit
+        }
+      }
+    }
     val records = remember(context.applicationContext) {
       try {
         RecordsRepository.open(context.applicationContext, session::isCacheAuthorized)
@@ -309,7 +366,8 @@ internal class BootstrapPresenter(
       canReadRecords = cacheAccountId != null, listQuery = listQuery, searching = searching,
       requesters = if (cacheAccountId != null) requesters else emptyList(),
       loginCompletion = loginCompletion, backStack = backStack.toList(), recordOwner = cacheAccountId,
-      debate = debate) { event ->
+      debate = debate, debateStatus = debateStatus, debateHistory = debateHistory,
+      debateOnline = debateOnline) { event ->
       when (event) {
         is BootstrapScreen.Event.SelectTheme -> themeChoice = event.choice
         BootstrapScreen.Event.Login -> if (session.beginLogin(
@@ -354,7 +412,7 @@ internal class BootstrapPresenter(
           session.pendingDestination.value == null
         ) {
           if (backStack.lastOrNull() == DebateCompose) debateModel?.flush { backStack.closeRecord() }
-          else backStack.closeRecord()
+          else backStack.removeLastOrNull()
         }
         is BootstrapScreen.Event.SearchRecords -> listQuery = listQuery.copy(text = event.text)
         is BootstrapScreen.Event.SelectWinner -> listQuery = listQuery.copy(winner = event.winner)
@@ -366,10 +424,40 @@ internal class BootstrapPresenter(
           backStack.add(DebateCompose)
         }
         is BootstrapScreen.Event.EditDebate -> debateModel?.edit(event.question)
-        BootstrapScreen.Event.SubmitDebate -> if (signedIn) debateModel?.submit()
-        BootstrapScreen.Event.CheckDebate -> if (signedIn) debateModel?.reconcile()
-        BootstrapScreen.Event.RetryDebate -> if (signedIn) debateModel?.retryConfirmedMissing()
-        BootstrapScreen.Event.NewDebateDraft -> debateModel?.newDraft()
+        BootstrapScreen.Event.SubmitDebate -> if (signedIn && hasValidatedDebateNetwork(context)) debateModel?.submit()
+        BootstrapScreen.Event.CheckDebate -> if (signedIn && hasValidatedDebateNetwork(context)) debateModel?.reconcile()
+        BootstrapScreen.Event.RetryDebate -> if (signedIn && hasValidatedDebateNetwork(context)) debateModel?.retryConfirmedMissing()
+        BootstrapScreen.Event.NewDebateDraft -> if (cacheAccountId != null && session.isCacheAuthorized(cacheAccountId)) {
+          debateModel?.newDraft()
+          backStack.closeRecord()
+          backStack.add(DebateCompose)
+        }
+        BootstrapScreen.Event.ShowDebateRequests -> if (cacheAccountId != null && session.isCacheAuthorized(cacheAccountId)) {
+          val show = { backStack.closeRecord(); backStack.add(DebateRequests); Unit }
+          if (backStack.lastOrNull() == DebateCompose) debateModel?.flush(show) else show()
+        }
+        is BootstrapScreen.Event.OpenDebateRequest -> if (
+          cacheAccountId != null && session.isCacheAuthorized(cacheAccountId) && stackOwner == cacheAccountId &&
+          backStack.lastOrNull() == DebateRequests && validDebateRequestId(event.requestId) &&
+          debateHistory.items.any { it.requestId == event.requestId }
+        ) backStack.add(DebateRequestStatus(event.requestId))
+        BootstrapScreen.Event.LoadMoreDebateRequests -> if (signedIn && hasValidatedDebateNetwork(context) && backStack.lastOrNull() == DebateRequests) {
+          historyMore = true
+          historyRefresh++
+        }
+        BootstrapScreen.Event.RefreshDebateRequests -> if (signedIn && hasValidatedDebateNetwork(context) && backStack.lastOrNull() == DebateRequests) {
+          historyMore = false
+          historyRefresh++
+        }
+        is BootstrapScreen.Event.OpenDebateResult -> if (
+          cacheAccountId != null && session.isCacheAuthorized(cacheAccountId) && stackOwner == cacheAccountId &&
+          debateRoute is DebateRequestStatus && debateStatus.requestId == debateRoute.requestId &&
+          debateStatus.request?.let { it.status == "published" && it.recordId == event.recordId } == true
+        ) {
+          backStack.closeRecord()
+          backStack.openRecord(event.recordId)
+          if (signedIn) RecordSyncScheduler.syncNow(context)
+        }
         BootstrapScreen.Event.ReauthenticateDebate -> debateModel?.flush {
           session.reauthenticate {
             if (session.beginLogin("/")) {

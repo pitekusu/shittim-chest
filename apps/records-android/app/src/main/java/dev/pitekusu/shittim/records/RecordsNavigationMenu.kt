@@ -83,6 +83,11 @@ internal fun RecordsNavigationMenu(state: BootstrapScreen.State, onDismiss: () -
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).testTag("records-menu-content")
       .padding(horizontal = ShittimSpacing.Medium, vertical = ShittimSpacing.Small),
       verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Small)) {
+      MenuItem(R.string.debate_requests, R.drawable.ic_add_debate,
+        modifier = Modifier.testTag("debate-requests-open"), onClick = {
+          onDismiss()
+          state.eventSink(BootstrapScreen.Event.ShowDebateRequests)
+        })
       ShittimSectionHeading(stringResource(R.string.menu_web))
       webDestinations.forEach { (label, path) ->
         MenuItem(label, R.drawable.ic_open_web, onClick = { openWeb(path) })

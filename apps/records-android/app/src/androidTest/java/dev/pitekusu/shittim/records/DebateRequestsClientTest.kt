@@ -72,4 +72,17 @@ class DebateRequestsClientTest {
     }
     assertEquals(1, calls)
   }
+
+  @Test fun knownGuildRemovalLocksAuthorizationButChannelDenialDoesNot() = runBlocking {
+    var code = "GUILD_MEMBERSHIP_REQUIRED"
+    DebateRequestsClient(MockEngine {
+      respond("""{"error":{"code":"$code"}}""", HttpStatusCode.Forbidden, headers)
+    }).use { client ->
+      try { client.submit(token, id, "架空の相談"); fail("known removal accepted") }
+      catch (error: DebateRequestException) { assertEquals(DebateFailure.AUTH_REQUIRED, error.failure) }
+      code = "CHANNEL_PERMISSION_REQUIRED"
+      try { client.submit(token, id, "架空の相談"); fail("channel denial ignored") }
+      catch (error: DebateRequestException) { assertEquals(DebateFailure.FORBIDDEN, error.failure) }
+    }
+  }
 }
