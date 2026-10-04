@@ -47,6 +47,7 @@ import org.junit.runner.RunWith
 
 /** Screen return retains the current entry; it is not another deep-link or login request. */
 @RunWith(AndroidJUnit4::class)
+@ScreenTest
 class Nav3ReturnFlowUiTest {
   @get:Rule val compose = createAndroidComposeRule<MainActivity>()
 
