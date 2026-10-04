@@ -286,6 +286,8 @@ jobs:
             local logical_name="$1" stack="$2" change_set="$3" region="$4"
             local execution_role="$5" template_bucket="$6" template_key="$7"
             local stack_status type arn status
+            local mobile_debate_enabled=false
+            local -a mobile_debate_parameters=()
             shift 7
             if aws cloudformation describe-stacks --region "${region}" --stack-name "${stack}" \
               > "${RUNNER_TEMP}/${logical_name}-stack.json" \
@@ -310,6 +312,29 @@ jobs:
                 ;;
               *) exit 1 ;;
             esac
+            if [ "${logical_name}" = application ]; then
+              # Preserve deployed acceptance settings without reading the NoEcho
+              # channel value. New parameters are explicitly fail-closed.
+              if [ "${type}" = UPDATE ] && jq --exit-status '
+                any(.Stacks[0].Parameters[]; .ParameterKey == "MobileDebateEnabled")
+              ' "${RUNNER_TEMP}/${logical_name}-stack.json" >/dev/null; then
+                mobile_debate_enabled=$(jq --exit-status --raw-output '
+                  .Stacks[0].Parameters[] | select(.ParameterKey == "MobileDebateEnabled")
+                  | .ParameterValue
+                ' "${RUNNER_TEMP}/${logical_name}-stack.json")
+                [[ "${mobile_debate_enabled}" =~ ^(false|true)$ ]]
+                mobile_debate_parameters+=(ParameterKey=MobileDebateEnabled,UsePreviousValue=true)
+              else
+                mobile_debate_parameters+=(ParameterKey=MobileDebateEnabled,ParameterValue=false)
+              fi
+              if [ "${type}" = UPDATE ] && jq --exit-status '
+                any(.Stacks[0].Parameters[]; .ParameterKey == "MobileDebateChannelId")
+              ' "${RUNNER_TEMP}/${logical_name}-stack.json" >/dev/null; then
+                mobile_debate_parameters+=(ParameterKey=MobileDebateChannelId,UsePreviousValue=true)
+              else
+                mobile_debate_parameters+=(ParameterKey=MobileDebateChannelId,ParameterValue=)
+              fi
+            fi
             arn=$(aws cloudformation create-change-set \
               --region "${region}" \
               --stack-name "${stack}" \
@@ -320,7 +345,7 @@ jobs:
               --role-arn "${execution_role}" \
               --capabilities CAPABILITY_NAMED_IAM \
               --client-token "records-${logical_name}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-              "$@" --query Id --output text)
+              "$@" "${mobile_debate_parameters[@]}" --query Id --output text)
             for attempt in $(seq 1 60)
             do
               status=$(aws cloudformation describe-change-set \
@@ -351,6 +376,7 @@ jobs:
                 --expected-parameter "RecordsBundleObjectVersion=${BUNDLE_VERSION}" \
                 --expected-parameter "RecordsBundleCodeSha256=${BUNDLE_CODE_SHA256}" \
                 --expected-parameter "LegacyRuntimeConfigVersion=${legacy_runtime_config_version}" \
+                --expected-parameter "MobileDebateEnabled=${mobile_debate_enabled}" \
                 --expected-parameter "RecordsPublicHostname=${PUBLIC_HOSTNAME}"
             elif [ "${logical_name}" = edge ]; then
               uv run --project services/records --frozen python \

@@ -1656,6 +1656,22 @@ def _validate_records_workflows(directory: Path) -> None:
     if any(release.count(call) != 1 for call in change_set_calls):
         raise WorkflowPolicyError("Records Release must propagate each create_plan safety failure")
     plan_step = _workflow_step_block(release, "Create and validate the three Records Change Sets")
+    mobile_settings = (
+        'any(.Stacks[0].Parameters[]; .ParameterKey == "MobileDebateEnabled")',
+        'any(.Stacks[0].Parameters[]; .ParameterKey == "MobileDebateChannelId")',
+        "ParameterKey=MobileDebateEnabled,UsePreviousValue=true",
+        "ParameterKey=MobileDebateChannelId,UsePreviousValue=true",
+        "ParameterKey=MobileDebateEnabled,ParameterValue=false",
+        "ParameterKey=MobileDebateChannelId,ParameterValue=)",
+        '"$@" "${mobile_debate_parameters[@]}" --query Id --output text',
+        '--expected-parameter "MobileDebateEnabled=${mobile_debate_enabled}"',
+    )
+    if any(marker not in plan_step for marker in mobile_settings):
+        raise WorkflowPolicyError(
+            "Records Release must preserve fail-closed mobile debate settings"
+        )
+    if 'select(.ParameterKey == "MobileDebateChannelId")' in plan_step:
+        raise WorkflowPolicyError("Records Release must not read the NoEcho mobile channel value")
     if (
         "          set -e\n          create_plan stateful" not in plan_step
         or "|| true" in plan_step
