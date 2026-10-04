@@ -37,6 +37,7 @@ from shittim_chest.adapters.dynamodb.serializer import (
     deserialize_ingress_semantic_binding,
     deserialize_ingress_status_publication,
     ingress_request_sort_key,
+    ingress_request_sort_key_from_identity,
     serialize_ingress_active_pointer,
     serialize_ingress_operation_result,
     serialize_ingress_request,
@@ -48,6 +49,7 @@ from shittim_chest.adapters.dynamodb.transaction_errors import (
 )
 from shittim_chest.application.models import DebateSnapshot
 from shittim_chest.application.ports import (
+    MobileIngressSessionInvalid,
     RepositoryConflict,
     RepositoryIdentityConflict,
     RepositoryQueueFull,
@@ -63,13 +65,16 @@ from shittim_chest.application.scale_to_zero import (
     IngressOperationResult,
     IngressRequest,
     IngressSemanticOperationBinding,
+    IngressSource,
     IngressStatus,
     IngressStatusPublication,
     IngressWakeCandidate,
+    MobileIngressPage,
     StatusHistoryCheckpoint,
     StatusMessageState,
     StatusPublicationState,
     StatusPublicationWork,
+    mobile_ingress_id,
     status_publication_nonce,
 )
 from shittim_chest.application.status_publication import (
@@ -96,7 +101,44 @@ class DynamoDbIngressRepository:
         self._table_name = table_name
 
     async def enqueue(self, request: IngressRequest) -> EnqueuedIngress:
+        if request.source is not IngressSource.DISCORD:
+            raise ValueError("mobile admission must use enqueue_mobile")
         return await self._run(self._enqueue, request)
+
+    async def enqueue_mobile(
+        self,
+        request: IngressRequest,
+        *,
+        session_condition: TransactWriteItemTypeDef | None = None,
+    ) -> EnqueuedIngress:
+        """Atomically store owned admission and, optionally, its live session fence."""
+
+        if request.source is not IngressSource.MOBILE:
+            raise ValueError("mobile admission requires a mobile request")
+        if session_condition is not None and set(session_condition) != {"ConditionCheck"}:
+            raise ValueError("mobile session fence must be one ConditionCheck")
+        return await self._run(self._enqueue, request, session_condition=session_condition)
+
+    async def get_mobile_request(self, *, owner_key: str, request_id: str) -> IngressRequest | None:
+        return await self._run(self._get_mobile_request, owner_key, request_id)
+
+    async def list_mobile_requests(
+        self,
+        *,
+        owner_key: str,
+        since: datetime,
+        limit: int = 50,
+        cursor_created_at: datetime | None = None,
+        cursor_request_id: str | None = None,
+    ) -> MobileIngressPage:
+        return await self._run(
+            self._list_mobile_requests,
+            owner_key,
+            since,
+            limit,
+            cursor_created_at,
+            cursor_request_id,
+        )
 
     def terminal_projection_actions(
         self,
@@ -402,7 +444,12 @@ class DynamoDbIngressRepository:
         except PersistenceFormatError:
             raise RepositoryConflict("ingress repository record is invalid") from None
 
-    def _enqueue(self, request: IngressRequest) -> EnqueuedIngress:
+    def _enqueue(
+        self,
+        request: IngressRequest,
+        *,
+        session_condition: TransactWriteItemTypeDef | None = None,
+    ) -> EnqueuedIngress:
         if request.status is not IngressStatus.PENDING:
             raise ValueError("new ingress request must be pending")
         operation = _operation_for_request(request)
@@ -422,14 +469,24 @@ class DynamoDbIngressRepository:
             actions.append(
                 self._put_new(serialize_ingress_semantic_binding(_binding_for_request(request)))
             )
+        if request.source is IngressSource.MOBILE:
+            actions.append(self._put_new(_mobile_owner_pointer(request)))
+        session_index = None
+        write_floor = len(actions) - 1
+        if session_condition is not None:
+            session_index = len(actions)
+            actions.append(session_condition)
         try:
             wrote_items = self._transact(
                 actions,
                 token=_client_token(
                     f"{self._table_name}:ingress:{request.interaction_id}:{request.operation_id}"
                 ),
-                aggregate_write_floor=len(actions) - 1,
+                aggregate_write_floor=write_floor,
+                session_condition_index=session_index,
             )
+        except MobileIngressSessionInvalid:
+            raise
         except RepositoryConflict:
             replay, active_count = self._resolve_enqueue_conflict(request)
             if replay is not None:
@@ -446,6 +503,94 @@ class DynamoDbIngressRepository:
             return replay
         return EnqueuedIngress(request=request, operation=operation, created=True)
 
+    def _get_mobile_request(self, owner_key: str, request_id: str) -> IngressRequest | None:
+        internal_id = mobile_ingress_id(owner_key, request_id)
+        item = self._get_item(_operation_key(internal_id))
+        if item is None:
+            return None
+        operation = deserialize_ingress_operation_result(item)
+        # Admission/terminal projection updates all three records atomically.
+        # Re-read that bundle together so a concurrent phase transition is not
+        # mistaken for a corrupt receipt or exposed as a partially updated state.
+        operation_item, request_item, publication_item = self._transact_get_items(
+            (
+                _operation_key(internal_id),
+                _request_key(operation.request_sort_key),
+                _status_publication_key(internal_id),
+            )
+        )
+        if operation_item is None or request_item is None or publication_item is None:
+            raise RepositoryConflict("mobile receipt bundle is incomplete")
+        operation = deserialize_ingress_operation_result(operation_item)
+        request = deserialize_ingress_request(request_item)
+        self._validate_replay_bundle(
+            operation, request, deserialize_ingress_status_publication(publication_item)
+        )
+        if (
+            request.source is not IngressSource.MOBILE
+            or request.owner_key != owner_key
+            or request.mobile_request_id != request_id
+            or request.interaction_id != internal_id
+        ):
+            raise RepositoryIdentityConflict("mobile receipt ownership is inconsistent")
+        return request
+
+    def _list_mobile_requests(
+        self,
+        owner_key: str,
+        since: datetime,
+        limit: int,
+        cursor_created_at: datetime | None,
+        cursor_request_id: str | None,
+    ) -> MobileIngressPage:
+        _require_utc(since)
+        # Standard validation also constrains the partition key; no public cursor carries it.
+        mobile_ingress_id(owner_key, "00000000-0000-4000-8000-000000000000")
+        if isinstance(limit, bool) or not 1 <= limit <= 50:
+            raise ValueError("mobile request page limit must be between one and fifty")
+        if (cursor_created_at is None) is not (cursor_request_id is None):
+            raise ValueError("mobile cursor timestamp and request ID must be set together")
+        partition = f"MOBILE_INGRESS#{owner_key}"
+        parameters: QueryInputTypeDef = {
+            "TableName": self._table_name,
+            "KeyConditionExpression": "PK=:pk AND SK>=:since",
+            "ExpressionAttributeValues": marshal_item(
+                {":pk": partition, ":since": f"REQUEST#{_timestamp(since)}#"}
+            ),
+            "ScanIndexForward": False,
+            "ConsistentRead": True,
+            "Limit": limit,
+        }
+        if cursor_created_at is not None and cursor_request_id is not None:
+            mobile_ingress_id(owner_key, cursor_request_id)
+            if cursor_created_at < since:
+                raise ValueError("mobile cursor predates the requested inventory")
+            parameters["ExclusiveStartKey"] = marshal_item(
+                {
+                    "PK": partition,
+                    "SK": _mobile_owner_sort_key(cursor_created_at, cursor_request_id),
+                }
+            )
+        response = self._client.query(**parameters)
+        requests: list[IngressRequest] = []
+        for raw in response.get("Items", []):
+            pointer = unmarshal_item(raw)
+            if (
+                _text(pointer, "PK") != partition
+                or _text(pointer, "record_type") != "mobile_ingress_owner_pointer"
+                or _integer(pointer, "schema_version") != CURRENT_SCHEMA_VERSION
+                or _integer(pointer, "record_schema_version") != 1
+            ):
+                raise RepositoryConflict("mobile inventory pointer is invalid")
+            request = self._get_mobile_request(owner_key, _text(pointer, "mobile_request_id"))
+            if request is None or pointer != _mobile_owner_pointer(request):
+                raise RepositoryConflict("mobile inventory pointer identity is inconsistent")
+            requests.append(request)
+        if response.get("LastEvaluatedKey") and requests:
+            last = requests[-1]
+            return MobileIngressPage(tuple(requests), last.created_at, last.mobile_request_id)
+        return MobileIngressPage(tuple(requests))
+
     def _resolve_enqueue_conflict(
         self,
         request: IngressRequest,
@@ -457,6 +602,10 @@ class DynamoDbIngressRepository:
         )
         replay_item, counter_item = self._transact_get_items((replay_key, _counter_key()))
         active_count = _active_count_from_item(counter_item)
+        if request.source is IngressSource.MOBILE:
+            # The receipt may have advanced since this counter snapshot. Mobile
+            # retries use the same atomic receipt read as owned status lookup.
+            return self._replay(request), active_count
         if replay_item is None:
             return None, active_count
         if request.kind is IngressKind.NEW_DEBATE:
@@ -474,6 +623,16 @@ class DynamoDbIngressRepository:
         )
 
     def _replay(self, request: IngressRequest) -> EnqueuedIngress | None:
+        if request.source is IngressSource.MOBILE:
+            if request.owner_key is None or request.mobile_request_id is None:
+                raise ValueError("mobile replay requires owner and public request ID")
+            persisted = self._get_mobile_request(request.owner_key, request.mobile_request_id)
+            if persisted is None:
+                return None
+            _assert_exact_identity(request, persisted)
+            return EnqueuedIngress(
+                request=persisted, operation=_operation_for_request(persisted), created=False
+            )
         if request.kind is IngressKind.NEW_DEBATE:
             operation = self._get_operation_result(request.interaction_id)
             if operation is None:
@@ -2506,6 +2665,7 @@ class DynamoDbIngressRepository:
         *,
         token: str,
         aggregate_write_floor: int | None = None,
+        session_condition_index: int | None = None,
     ) -> bool:
         action_list = list(actions)
         if not 1 <= len(action_list) <= 99:
@@ -2525,6 +2685,15 @@ class DynamoDbIngressRepository:
             )
         except self._client.exceptions.TransactionCanceledException as error:
             if is_condition_only_cancellation(error):
+                reasons = error.response.get("CancellationReasons", [])
+                # The deployment-lock check is prepended above. Only this known
+                # session condition miss is authentication failure, not all conflicts.
+                if (
+                    session_condition_index is not None
+                    and len(reasons) == len(action_list)
+                    and reasons[session_condition_index + 1].get("Code") == "ConditionalCheckFailed"
+                ):
+                    raise MobileIngressSessionInvalid("mobile session is no longer valid") from None
                 raise RepositoryConflict("DynamoDB ingress transaction condition failed") from None
             raise RepositoryUnavailable from None
         except self._client.exceptions.IdempotentParameterMismatchException:
@@ -2587,6 +2756,24 @@ class DynamoDbIngressRepository:
             raw_item = raw_response.get("Item")
             items.append(None if raw_item is None else unmarshal_item(raw_item))
         return tuple(items)
+
+
+def _mobile_owner_sort_key(created_at: datetime, request_id: str) -> str:
+    return ingress_request_sort_key_from_identity(created_at=created_at, interaction_id=request_id)
+
+
+def _mobile_owner_pointer(request: IngressRequest) -> DynamoItem:
+    if request.owner_key is None or request.mobile_request_id is None:
+        raise ValueError("mobile pointer requires request ownership")
+    return {
+        "PK": f"MOBILE_INGRESS#{request.owner_key}",
+        "SK": _mobile_owner_sort_key(request.created_at, request.mobile_request_id),
+        "record_type": "mobile_ingress_owner_pointer",
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "record_schema_version": 1,
+        "mobile_request_id": request.mobile_request_id,
+        "request_sort_key": ingress_request_sort_key(request),
+    }
 
 
 def _operation_for_request(request: IngressRequest) -> IngressOperationResult:
@@ -2769,6 +2956,9 @@ def _assert_common_identity(
     include_display_names: bool,
 ) -> None:
     incoming_identity = (
+        incoming.source,
+        incoming.owner_key,
+        incoming.mobile_request_id,
         incoming.operation_id,
         incoming.kind,
         incoming.application_id,
@@ -2787,6 +2977,9 @@ def _assert_common_identity(
         incoming.expected_attempt_id,
     )
     persisted_identity = (
+        persisted.source,
+        persisted.owner_key,
+        persisted.mobile_request_id,
         persisted.operation_id,
         persisted.kind,
         persisted.application_id,
