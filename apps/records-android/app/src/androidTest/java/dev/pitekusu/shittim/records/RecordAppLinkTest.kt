@@ -5,7 +5,6 @@ import android.net.Uri
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleCallback
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
@@ -89,7 +88,6 @@ class RecordAppLinkTest {
     .setClass(ApplicationProvider.getApplicationContext(), MainActivity::class.java)
 
   private fun deliver(scenario: ActivityScenario<MainActivity>, intent: Intent) {
-    val instrumentation = InstrumentationRegistry.getInstrumentation()
     val lifecycle = ActivityLifecycleMonitorRegistry.getInstance()
     val resumed = CountDownLatch(1)
     lateinit var target: MainActivity
@@ -102,7 +100,6 @@ class RecordAppLinkTest {
       // onNewIntent is followed by onResume; main-thread idle alone can precede Binder delivery.
       scenario.onActivity { it.startActivity(Intent(intent).setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)) }
       assertTrue("warm link did not resume its Activity", resumed.await(5, TimeUnit.SECONDS))
-      instrumentation.waitForIdleSync()
     } finally {
       lifecycle.removeLifecycleCallback(callback)
     }
