@@ -88,6 +88,8 @@ class MobileCallbackService:
             display_name=requester.display_name,
             avatar_asset_key=requester.avatar_asset_key,
             guild_verified_at=verified_at,
+            discord_user_id=requester.discord_user_id,
+            discord_username=requester.discord_username,
         )
         # Only the CAS winner returns a grant. Storage failure must never produce a redirect.
         self._store.advance(binding, authorized, now_epoch=now_epoch)

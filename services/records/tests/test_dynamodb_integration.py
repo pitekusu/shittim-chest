@@ -62,10 +62,17 @@ from shittim_records.rankings import RankingService
 from shittim_records.read_adapters import DynamoRecordsReader
 
 
-def test_mobile_grant_roundtrip_races_and_atomic_consumption(dynamodb_client, table_names):
+@pytest.mark.parametrize("with_identity", [False, True])
+def test_mobile_grant_roundtrip_races_and_atomic_consumption(
+    dynamodb_client, table_names, with_identity
+):
     table = table_names[0]
     store = DynamoMobileAuthStore(dynamodb_client, table)
     started, authorizing, authorized = mobile_states()
+    identity = (
+        {"discord_user_id": "1" * 18, "discord_username": "verified-user"} if with_identity else {}
+    )
+    authorized = authorized.model_copy(update=identity)
     store.create(started, now_epoch=1000)
     with pytest.raises(AuthFailure, match=r"^mobile_grant_invalid$"):
         store.create(started, now_epoch=1000)
@@ -100,7 +107,7 @@ def test_mobile_grant_roundtrip_races_and_atomic_consumption(dynamodb_client, ta
     # Exercise real C09 issuance: a collision cannot consume the code or update the profile.
     collision = {"PK": "MOBILE_SESSION#" + "a" * 64, "SK": "META", "sentinel": "unchanged"}
     dynamodb_client.put_item(TableName=table, Item=marshal_item(collision))
-    session = mobile_session()
+    session = mobile_session().model_copy(update=identity)
     with pytest.raises(AuthFailure, match=r"^mobile_session_unavailable$"):
         store.issue_session(authorized, session_hash="a" * 64, session=session, now_epoch=1041)
     assert store.get(started.transaction_hash, now_epoch=1041) == authorized
@@ -163,6 +170,8 @@ def test_mobile_grant_roundtrip_races_and_atomic_consumption(dynamodb_client, ta
     )
     assert profile["display_name"] == session.display_name
     assert profile["updated_at"] == session.guild_verified_at.isoformat()
+    assert "discord_user_id" not in profile
+    assert "discord_username" not in profile
 
     # C10 reads C09's exact format and revokes only the presented mobile session.
     digest = str(stored["PK"]).removeprefix("MOBILE_SESSION#")
