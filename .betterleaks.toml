@@ -19,3 +19,13 @@ condition = "AND"
 regexTarget = "line"
 regexes = ['''^\s*ECR_CREDENTIAL_HELPER_SHA256:\s+5bdd30fb6c7a92462f5b454cce1aa906ca7926a6c2e39efad9613a7bf7661fac\s*$''']
 paths = ['''^\.github/workflows/release\.yml$''']
+
+[[rules]]
+id = "generic-password"
+
+[[rules.allowlists]]
+description = "Exact synthetic upload-password fixture, never a credential"
+condition = "AND"
+regexTarget = "line"
+regexes = ['''^\s*"UPLOAD_STORE_PASSWORD": "synthetic",\s*$''']
+paths = ['''^tests/unit/tools/test_android_release\.py$''']

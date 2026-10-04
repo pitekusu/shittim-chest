@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Small Play-internal release boundary; authentication is delegated to google-auth/GPP."""
+"""Project-specific inputs and checks; upload/commit belong to upload-google-play."""
 
 from __future__ import annotations
 
@@ -10,63 +10,42 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
-import time
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
 
 import google.auth
-from google.auth.transport.requests import AuthorizedSession
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 from tools.verify_android_bundle import PACKAGE, digest, verify_bundle
 
-BASE = f"https://androidpublisher.googleapis.com/androidpublisher/v3/applications/{PACKAGE}"
 SCOPE = "https://www.googleapis.com/auth/androidpublisher"
-PRIVATE_FILES = ("upload-key.p12", "google-services.json", "publish.log", "gradle-build.log")
+PLAY_MAX_VERSION_CODE = 2_100_000_000
+PRIVATE_FILES = ("upload-key.p12", "google-services.json", "gradle-build.log")
 
 
-def request(client: AuthorizedSession, method: str, path: str) -> dict[str, Any]:
-    response = client.request(
-        method,
-        BASE + path,
-        timeout=60,
-        allow_redirects=False,
-    )
-    if not 200 <= response.status_code < 300:
-        raise ValueError(f"play_http_{response.status_code}")
-    value = response.json() if response.content else {}
-    if not isinstance(value, dict):
-        raise ValueError("play_response_invalid")
-    return value
-
-
-def client() -> AuthorizedSession:
+def client():
     credential_file = Path(os.environ["GOOGLE_APPLICATION_CREDENTIALS"])
-    if credential_file.is_symlink() or credential_file.stat().st_size > 64 * 1024:
-        raise ValueError("play_credentials_invalid")
-    # Never fall back to a long-lived service-account key or developer user ADC.
     config = json.loads(credential_file.read_text())
+    # Workflow authentication must remain WIF; no service-account key/user ADC fallback.
     if config.get("type") != "external_account" or not config.get(
         "service_account_impersonation_url"
     ):
         raise ValueError("play_requires_federated_service_account")
     credentials, _ = google.auth.load_credentials_from_file(str(credential_file), scopes=[SCOPE])
-    # Refresh before sending, but never resend a commit after an HTTP 401.
-    return AuthorizedSession(credentials, max_refresh_attempts=0)
+    return build("androidpublisher", "v3", credentials=credentials, cache_discovery=False)
 
 
 @contextmanager
-def edit(api: AuthorizedSession):
-    identifier = request(api, "POST", "/edits").get("id", "")
-    if not isinstance(identifier, str) or re.fullmatch(r"[A-Za-z0-9_-]+", identifier) is None:
-        raise ValueError("play_edit_invalid")
+def inspection(api):
+    # These edits only read inventory and are discarded. Never use this after
+    # an unknown upload result: creating an edit can invalidate an unfinished edit.
+    identifier = api.edits().insert(packageName=PACKAGE, body={}).execute()["id"]
     try:
-        yield f"/edits/{identifier}"
+        yield {"packageName": PACKAGE, "editId": identifier}
     finally:
-        # Inspection edits never upload or commit and can be safely discarded.
-        request(api, "DELETE", f"/edits/{identifier}")
+        api.edits().delete(packageName=PACKAGE, editId=identifier).execute()
 
 
 def version_code(value: object) -> int:
@@ -76,95 +55,12 @@ def version_code(value: object) -> int:
         code = int(value)
     else:
         raise ValueError("play_version_code_invalid")
-    if not 0 < code <= 2_100_000_000:
+    if not 0 < code <= PLAY_MAX_VERSION_CODE:
         raise ValueError("play_version_code_invalid")
     return code
 
 
-def inventory(
-    api: AuthorizedSession, path: str
-) -> tuple[int, list[dict[str, Any]], list[dict[str, Any]]]:
-    tracks = request(api, "GET", path + "/tracks").get("tracks", [])
-    bundles = request(api, "GET", path + "/bundles").get("bundles", [])
-    apks = request(api, "GET", path + "/apks").get("apks", [])
-    if not all(isinstance(items, list) for items in (tracks, bundles, apks)):
-        raise ValueError("play_inventory_invalid")
-    codes = [
-        version_code(c)
-        for t in tracks
-        for r in t.get("releases", [])
-        for c in r.get("versionCodes", [])
-    ]
-    codes += [version_code(item["versionCode"]) for item in bundles + apks]
-    if not any(track.get("track") == "internal" for track in tracks):
-        raise ValueError("play_internal_track_missing")
-    return max(codes, default=0), tracks, bundles
-
-
-def staged(
-    tracks: list[dict[str, Any]], bundles: list[dict[str, Any]], code: int, checksum: str
-) -> bool:
-    matching = [b for b in bundles if version_code(b["versionCode"]) == code]
-    if not matching or any(b.get("sha256") != checksum for b in matching):
-        return False
-    return any(
-        r.get("status") == "completed" and str(code) in r.get("versionCodes", [])
-        for t in tracks
-        if t.get("track") == "internal"
-        for r in t.get("releases", [])
-    )
-
-
-def publication_state(api: AuthorizedSession, code: int) -> str:
-    # Edit-track "completed" describes rollout configuration, not whether Play
-    # review has finished. This non-edit resource reports actual availability.
-    releases = request(api, "GET", "/tracks/internal/releases").get("releases", [])
-    if not isinstance(releases, list):
-        return "unknown"
-    states: set[str] = set()
-    for release in releases:
-        if not isinstance(release, dict):
-            return "unknown"
-        if release.get("track") != "internal":
-            continue
-        artifacts = release.get("activeArtifacts", [])
-        if not isinstance(artifacts, list) or any(not isinstance(a, dict) for a in artifacts):
-            return "unknown"
-        try:
-            matching = any(version_code(a.get("versionCode")) == code for a in artifacts)
-        except ValueError:
-            return "unknown"
-        if matching:
-            lifecycle = release.get("releaseLifecycleState")
-            if not isinstance(lifecycle, str):
-                return "unknown"
-            states.add(lifecycle)
-    if not states:
-        return "missing"
-    if len(states) != 1:
-        return "unknown"
-    return {
-        "RELEASE_LIFECYCLE_STATE_PUBLISHED": "published",
-        "RELEASE_LIFECYCLE_STATE_DRAFT": "pending",
-        "RELEASE_LIFECYCLE_STATE_NOT_SENT_FOR_REVIEW": "pending",
-        "RELEASE_LIFECYCLE_STATE_IN_REVIEW": "pending",
-        "RELEASE_LIFECYCLE_STATE_APPROVED_NOT_PUBLISHED": "pending",
-        "RELEASE_LIFECYCLE_STATE_NOT_APPROVED": "rejected",
-    }.get(states.pop(), "unknown")
-
-
-def published(
-    tracks: list[dict[str, Any]],
-    bundles: list[dict[str, Any]],
-    code: int,
-    checksum: str,
-    *,
-    publication: str,
-) -> bool:
-    return publication == "published" and staged(tracks, bundles, code, checksum)
-
-
-def write_json(path: Path, value: dict[str, Any]) -> None:
+def write_json(path: Path, value: dict[str, object]) -> None:
     with path.open("x", encoding="utf-8") as stream:
         json.dump(value, stream)
 
@@ -178,9 +74,27 @@ def preflight(state: Path) -> None:
         or os.environ.get("GITHUB_REF") != "refs/heads/main"
     ):
         raise ValueError("play_requires_main_sha")
-    with client() as api, edit(api) as path:
-        maximum, _, _ = inventory(api, path)
-    code = version_code(maximum + 1)
+    with client() as api, inspection(api) as params:
+        tracks = api.edits().tracks().list(**params).execute().get("tracks", [])
+        bundles = api.edits().bundles().list(**params).execute().get("bundles", [])
+        apks = api.edits().apks().list(**params).execute().get("apks", [])
+    if not any(t["track"] == "internal" for t in tracks):
+        raise ValueError("play_internal_track_missing")
+    codes = [
+        version_code(c)
+        for t in tracks
+        for r in t.get("releases", [])
+        for c in r.get("versionCodes", [])
+    ]
+    codes += [version_code(a["versionCode"]) for a in bundles + apks]
+    # A failed, uncommitted upload may not be listed; the operator supplies a floor
+    # after checking its side effects, instead of retrying/reusing that version.
+    floor = version_code(os.environ.get("MINIMUM_VERSION_CODE", "1"))
+    code = version_code(max(max(codes, default=0) + 1, floor))
+    # Keep the terminal value readable in inventory, but never publish it: Play
+    # would require a larger value for every future update and none could exist.
+    if code == PLAY_MAX_VERSION_CODE:
+        raise ValueError("play_version_code_exhausted")
     write_json(state / "plan.json", {"sha": sha, "versionCode": code})
     with Path(os.environ["GITHUB_OUTPUT"]).open("a") as stream:
         stream.write(f"version_code={code}\n")
@@ -229,116 +143,39 @@ def verify(state: Path, bundletool: Path) -> None:
     print("android_bundle_verified")
 
 
-def publish(state: Path) -> None:
+def readback(state: Path) -> None:
+    # Run only after the Action succeeds. This verifies the submitted artifact,
+    # not review completion or when a particular device can install the update.
     result = json.loads((state / "verification.json").read_text())
-    bundle = state / "verified/app-release.aab"
-    code, checksum = version_code(result["versionCode"]), result["bundleSha256"]
-    if (
-        result["sha"] != os.environ["GITHUB_SHA"]
-        or digest(bundle) != checksum
-        or result["track"] != "internal"
+    with client() as api, inspection(api) as params:
+        track = api.edits().tracks().get(**params, track="internal").execute()
+        bundles = api.edits().bundles().list(**params).execute().get("bundles", [])
+    if not (
+        any(
+            r.get("status") == "completed"
+            and str(result["versionCode"]) in r.get("versionCodes", [])
+            for r in track.get("releases", [])
+        )
+        and any(
+            b["versionCode"] == result["versionCode"] and b.get("sha256") == result["bundleSha256"]
+            for b in bundles
+        )
     ):
-        raise ValueError("android_verified_artifact_changed")
-    with client() as api:
-        with edit(api) as path:
-            maximum, tracks, bundles = inventory(api, path)
-        if not staged(tracks, bundles, code, checksum):
-            if maximum >= code:
-                raise ValueError("play_version_code_conflict")
-            gpp = Path("apps/records-android/app/build/gpp")
-            if any(
-                (gpp / f"{PACKAGE}.{suffix}").exists() for suffix in ("txt", "skipped", "commit")
-            ):
-                raise ValueError("play_stale_edit_do_not_resend")
-            # GPP owns upload/staging, with commit=false. Never retry an unknown
-            # upload response; only this boundary commits the verified edit once.
-            write_json(
-                state / "stage-attempt.json",
-                {**result, "phase": "stage_started", "verified": False, "doNotResend": True},
-            )
-            with (state / "publish.log").open("xb") as log:
-                stage_result = subprocess.run(  # noqa: S603 - fixed Wrapper and internal-only GPP task.
-                    [
-                        "./gradlew",
-                        "--no-daemon",
-                        ":app:publishReleaseBundle",
-                        f"-PshittimAndroidPublishArtifactDir={state / 'verified'}",
-                        f"-PshittimAndroidPublishReleaseName=0.0.{code}",
-                    ],
-                    cwd="apps/records-android",
-                    stdout=log,
-                    stderr=subprocess.STDOUT,
-                    timeout=600,
-                    check=False,
-                )
-            if stage_result.returncode != 0:
-                raise ValueError("play_stage_failed_do_not_resend")
-            # GPP 4.1.1's documented --no-commit state is private, never an artifact.
-            edit_file = gpp / f"{PACKAGE}.txt"
-            if not (gpp / f"{PACKAGE}.skipped").is_file() or edit_file.is_symlink():
-                raise ValueError("play_staged_edit_missing")
-            identifier = edit_file.read_text().strip()
-            if re.fullmatch(r"[A-Za-z0-9_-]+", identifier) is None:
-                raise ValueError("play_staged_edit_invalid")
-            path = f"/edits/{identifier}"
-            _, staged_tracks, staged_bundles = inventory(api, path)
-            if not staged(staged_tracks, staged_bundles, code, checksum) or (
-                [t for t in staged_tracks if t.get("track") != "internal"]
-                != [t for t in tracks if t.get("track") != "internal"]
-            ):
-                raise ValueError("play_staged_content_invalid")
-            write_json(state / "commit-attempt.json", {**result, "phase": "commit_started"})
-            # Commit may succeed even if its response is lost. Suppress only to
-            # perform authoritative reads; success still requires the same hash.
-            with suppress(Exception):
-                # Default commit behavior cancels existing reviews. Neither cancel
-                # those nor send pending Console changes for review from this job.
-                request(
-                    api,
-                    "POST",
-                    path + ":commit?changesInReviewBehavior=ERROR_IF_IN_REVIEW"
-                    "&changesNotSentForReview=true",
-                )
-        # Even an identical already-committed bundle must pass lifecycle checks.
-        # Only reads are repeated: commit and upload are never resent for review.
-        for attempt in range(4):
-            artifact_ready = False
-            try:
-                with edit(api) as path:
-                    _, tracks, bundles = inventory(api, path)
-                artifact_ready = staged(tracks, bundles, code, checksum)
-                publication = publication_state(api, code)
-                confirmed = published(tracks, bundles, code, checksum, publication=publication)
-            except Exception:
-                publication, confirmed = "unavailable", False
-            if confirmed:
-                break
-            if attempt < 3:
-                time.sleep(5)
-        else:
-            outcome = (
-                publication if artifact_ready or publication == "unavailable" else "unconfirmed"
-            )
-            write_json(
-                state / "receipt.json",
-                {**result, "status": outcome, "verified": False, "doNotResend": True},
-            )
-            raise ValueError(f"play_publication_{outcome}_do_not_resend")
-    write_json(state / "receipt.json", {**result, "status": "completed", "verified": True})
-    print(f"play_internal_published_and_verified versionCode={code}")
+        raise ValueError("play_submission_unconfirmed_check_console")
+    write_json(state / "receipt.json", {**result, "status": "submitted", "verified": True})
+    print(f"play_internal_submission_verified versionCode={result['versionCode']}")
 
 
 def main() -> int:
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "action", choices=("materialize", "preflight", "verify", "publish", "cleanup")
+        "action", choices=("materialize", "preflight", "verify", "readback", "cleanup")
     )
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--bundletool", type=Path)
     args = parser.parse_args()
     try:
-        # The directory is a fixed private child of the ephemeral runner temp.
         state = args.state.resolve()
         if state != Path(os.environ["RUNNER_TEMP"]).resolve() / "android-release":
             raise ValueError("android_release_state_path_invalid")
@@ -350,11 +187,14 @@ def main() -> int:
                 raise ValueError("android_bundletool_missing")
             verify(state, args.bundletool)
         else:
-            {"materialize": materialize, "preflight": preflight, "publish": publish}[args.action](
+            {"materialize": materialize, "preflight": preflight, "readback": readback}[args.action](
                 state
             )
+    except HttpError as error:
+        print(f"play_http_{int(error.resp.status)}", file=sys.stderr)
+        return 1
     except Exception as error:
-        # No response/credential/Gradle output or arbitrary exception string in CI.
+        # API response bodies/credential details must not escape into CI logs.
         category = (
             str(error)
             if isinstance(error, ValueError) and re.fullmatch(r"[a-z_0-9]+", str(error))

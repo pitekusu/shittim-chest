@@ -286,8 +286,10 @@ def _validate_android_release(directory: Path) -> None:
         "Authenticate only to inspect current Play versions",
         "Verify signature certificate package version and immutable bundle digest",
         "Renew federated credentials immediately before publishing",
-        "Publish the verified AAB only to internal and read back Play state",
-        "Retain only non-secret verification and attempt receipts",
+        "Upload the verified AAB to internal with the maintained Action",
+        "Read back the submitted internal track and bundle digest",
+        "Retain only non-secret verification and submission receipt",
+        "Remove private signing Firebase and Gradle log files",
     )
     if any(text.count(f"      - name: {name}\n") != 1 for name in protected_steps):
         raise WorkflowPolicyError("Android Release must retain its mandatory trust-boundary steps")
@@ -296,14 +298,14 @@ def _validate_android_release(directory: Path) -> None:
         raise WorkflowPolicyError(
             "Android Release must verify its bundle before renewed auth and publish"
         )
-    for name, action in ((protected_steps[2], "verify"), (protected_steps[4], "publish")):
+    for name, action in ((protected_steps[2], "verify"), (protected_steps[5], "readback")):
         block = _workflow_step_block(text, name)
         command = (
             f'run: uv run --frozen python -m tools.android_release {action} --state "${{STATE}}"'
         )
         if block.count(command) != 1 or "        if:" in block:
             raise WorkflowPolicyError(
-                "Android Release must unconditionally verify and publish through its guard"
+                "Android Release must verify and read back only after prior steps succeed"
             )
     gate = _workflow_step_block(text, "Require successful same-SHA main CI and CodeQL")
     if (
@@ -316,7 +318,7 @@ def _validate_android_release(directory: Path) -> None:
         raise WorkflowPolicyError(
             "Android Release must unconditionally require same-SHA main gates"
         )
-    auth_action = "google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093"
+    auth_action = "google-github-actions/auth@"
     if text.count(f"uses: {auth_action}") != 2 or re.search(
         r"credentials_json:|token_format:|\.outputs\.(?:auth|access|id)_token\b|"
         r"ANDROID_PUBLISHER_CREDENTIALS",
@@ -344,22 +346,54 @@ def _validate_android_release(directory: Path) -> None:
             raise WorkflowPolicyError(
                 "Android Release must use the fixed WIF and Play service account"
             )
+    renewed_auth = _workflow_step_block(text, protected_steps[3])
+    if renewed_auth.count("        id: play-auth\n") != 1:
+        raise WorkflowPolicyError("Android Release must name its renewed WIF credentials")
+    upload = _workflow_step_block(text, protected_steps[4])
+    upload_action = "uses: r0adkll/upload-google-play@"
+    expected_inputs = {
+        "serviceAccountJson": "${{ steps.play-auth.outputs.credentials_file_path }}",
+        "packageName": "dev.pitekusu.shittim.records",
+        "releaseFiles": "${{ runner.temp }}/android-release/verified/app-release.aab",
+        "tracks": "internal",
+        "status": "completed",
+        "releaseName": '"0.0.${{ steps.version.outputs.version_code }}"',
+    }
+    inputs = re.findall(r"(?m)^          (\S[^:\n]*):[ \t]*(.*)$", upload)
+    if (
+        text.count(upload_action) != 1
+        or upload.count(upload_action) != 1
+        or "        if:" in upload
+        or len(inputs) != len(expected_inputs)
+        or dict(inputs) != expected_inputs
+    ):
+        raise WorkflowPolicyError(
+            "Android Release must upload its single verified internal AAB once with only WIF inputs"
+        )
     receipts = _workflow_step_block(
-        text, "Retain only non-secret verification and attempt receipts"
+        text, "Retain only non-secret verification and submission receipt"
     )
     paths = re.search(r"(?m)^          path: \|\n((?: {12}.+\n)+)", receipts)
     expected_paths = tuple(
         f"${{{{ runner.temp }}}}/android-release/{name}.json"
-        for name in ("verification", "stage-attempt", "commit-attempt", "receipt")
+        for name in ("verification", "receipt")
     )
     if (
         text.count("uses: actions/upload-artifact@") != 1
         or paths is None
         or tuple(line.strip() for line in paths.group(1).splitlines()) != expected_paths
+        or "          retention-days: 7" not in receipts.splitlines()
     ):
         raise WorkflowPolicyError("Android Release may retain only its non-secret JSON receipts")
     if "        if: always()" not in receipts.splitlines():
         raise WorkflowPolicyError("Android Release must retain receipts even after cancellation")
+    cleanup = _workflow_step_block(text, protected_steps[7])
+    if (
+        'run: uv run --frozen python -m tools.android_release cleanup --state "${STATE}"'
+        not in cleanup
+        or "        if: always()" not in cleanup.splitlines()
+    ):
+        raise WorkflowPolicyError("Android Release must always clean up private release inputs")
 
 
 def _validate_release_main_checks(text: str) -> None:

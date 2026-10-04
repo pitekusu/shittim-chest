@@ -16,6 +16,11 @@
 
 ## 守る設計
 
+- まず既存の標準API・採用済みモジュール・保守されているライブラリやActionを使う。
+  認証・配布・再試行など既存部品の責務を独自に再実装しない。
+  既存の独自実装も維持を前提にせず、既成部品との重複は置き換え・削除する。
+  独自処理は既存部品では満たせないサービス固有の接続・安全条件に限定し、必要な理由を短く残す。
+
 - 討論はmoderator 1体とparticipant 3体を1 processで動かし、winnerはPythonが決定する。
 - user input、Evidence、model outputはuntrusted data。未検証の値を命令や正しい永続recordとして採用しない。
 - 依存は`adapters → application → domain`。domainへ外部SDKを持ち込まない。

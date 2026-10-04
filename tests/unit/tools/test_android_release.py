@@ -1,19 +1,40 @@
-"""Exercise Play publishing boundaries with only synthetic files and API stubs."""
+"""Test only project-specific release inputs and verification, not the publishing Action."""
 
 from __future__ import annotations
 
 import base64
 import json
-import subprocess
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from google.auth.transport.requests import AuthorizedSession
 from tools import android_release as release
 
 SHA = "a" * 40
+
+
+@pytest.fixture
+def api(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    api = MagicMock()
+    api.__enter__.return_value = api
+    api.edits().insert().execute.return_value = {"id": "synthetic-inspection"}
+    api.edits().tracks().list().execute.return_value = {"tracks": [{"track": "internal"}]}
+    api.edits().bundles().list().execute.return_value = {"bundles": []}
+    api.edits().apks().list().execute.return_value = {"apks": []}
+    api.reset_mock()
+    monkeypatch.setattr(release, "client", lambda: api)
+    return api
+
+
+@pytest.fixture
+def state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setenv("GITHUB_SHA", SHA)
+    monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "output"))
+    state = tmp_path / "android-release"
+    state.mkdir()
+    return state
 
 
 @pytest.mark.parametrize("value", (1, "1", 2_100_000_000, "2100000000"))
@@ -22,59 +43,110 @@ def test_version_codes_accept_only_play_integers(value: object) -> None:
 
 
 @pytest.mark.parametrize("value", (True, False, 0, -1, 1.0, None, "01", "1e3", 2_100_000_001))
-def test_version_codes_reject_boolean_and_out_of_range_values(value: object) -> None:
+def test_version_codes_reject_invalid_values(value: object) -> None:
     with pytest.raises(ValueError, match="play_version_code_invalid"):
         release.version_code(value)
 
 
-@pytest.mark.parametrize(
-    "track_code,bundle_code,apk_code", ((41, 28, 17), (13, 51, 17), (13, 28, 62))
-)
-def test_inventory_uses_every_track_bundle_and_apk(
-    monkeypatch: pytest.MonkeyPatch, track_code: int, bundle_code: int, apk_code: int
+@pytest.mark.parametrize("track,bundle,apk", ((41, 28, 17), (13, 51, 17), (13, 28, 62)))
+def test_preflight_uses_all_tracks_bundles_and_apks(
+    api: MagicMock, state: Path, track: int, bundle: int, apk: int
 ) -> None:
-    responses = {
-        "/edits/read/tracks": {
-            "tracks": [
-                {"track": "internal", "releases": [{"versionCodes": ["1"]}]},
-                {"track": "production", "releases": [{"versionCodes": [str(track_code)]}]},
-            ]
-        },
-        "/edits/read/bundles": {"bundles": [{"versionCode": bundle_code}]},
-        "/edits/read/apks": {"apks": [{"versionCode": apk_code}]},
+    api.edits().tracks().list().execute.return_value = {
+        "tracks": [
+            {"track": "internal", "releases": [{"versionCodes": ["1"]}]},
+            {"track": "production", "releases": [{"versionCodes": [str(track)]}]},
+        ]
     }
-    request = MagicMock(side_effect=lambda _api, _method, path: responses[path])
-    monkeypatch.setattr(release, "request", request)
+    api.edits().bundles().list().execute.return_value = {"bundles": [{"versionCode": bundle}]}
+    api.edits().apks().list().execute.return_value = {"apks": [{"versionCode": apk}]}
 
-    maximum, _, _ = release.inventory(MagicMock(), "/edits/read")
+    release.preflight(state)
 
-    assert maximum == max(track_code, bundle_code, apk_code)
-    assert [call.args[2] for call in request.call_args_list] == list(responses)
+    code = max(track, bundle, apk) + 1
+    assert json.loads((state / "plan.json").read_text()) == {"sha": SHA, "versionCode": code}
+    assert (state.parent / "output").read_text() == f"version_code={code}\n"
+    api.edits().delete.assert_called_once_with(
+        packageName=release.PACKAGE, editId="synthetic-inspection"
+    )
+    api.edits().commit.assert_not_called()
+    api.edits().bundles().upload.assert_not_called()
+
+
+def test_failed_upload_floor_does_not_reuse_unlisted_version(
+    api: MagicMock, state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MINIMUM_VERSION_CODE", "29")
+    release.preflight(state)
+    assert json.loads((state / "plan.json").read_text())["versionCode"] == 29
+
+
+@pytest.mark.parametrize("floor,observed", (("2100000000", 27), ("1", 2_099_999_999)))
+def test_terminal_upload_code_is_rejected_before_build_or_publication(
+    api: MagicMock, state: Path, monkeypatch: pytest.MonkeyPatch, floor: str, observed: int
+) -> None:
+    monkeypatch.setenv("MINIMUM_VERSION_CODE", floor)
+    api.edits().bundles().list().execute.return_value = {"bundles": [{"versionCode": observed}]}
+
+    with pytest.raises(ValueError, match="play_version_code_exhausted"):
+        release.preflight(state)
+
+    assert not (state / "plan.json").exists()
+    assert not (state.parent / "output").exists()
+    api.edits().commit.assert_not_called()
+    api.edits().bundles().upload.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    (("GITHUB_RUN_ATTEMPT", "2"), ("GITHUB_REF", "refs/heads/feature"), ("GITHUB_SHA", "bad")),
+)
+def test_untrusted_run_stops_before_creating_inspection(
+    api: MagicMock, state: Path, monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError):
+        release.preflight(state)
+    api.edits().insert.assert_not_called()
+
+
+def test_failed_inventory_discards_only_its_read_edit(api: MagicMock, state: Path) -> None:
+    api.edits().bundles().list().execute.side_effect = TimeoutError("synthetic")
+    with pytest.raises(TimeoutError):
+        release.preflight(state)
+    api.edits().delete.assert_called_once_with(
+        packageName=release.PACKAGE, editId="synthetic-inspection"
+    )
+    assert not (state / "plan.json").exists()
+
+
+def test_missing_internal_track_is_not_a_production_fallback(api: MagicMock, state: Path) -> None:
+    api.edits().tracks().list().execute.return_value = {"tracks": [{"track": "production"}]}
+    with pytest.raises(ValueError, match="play_internal_track_missing"):
+        release.preflight(state)
 
 
 @pytest.mark.parametrize(
     "credential_type", ("service_account", "authorized_user", "external_account")
 )
-def test_credentials_cannot_fall_back_to_long_lived_key_or_user_adc(
+def test_credentials_require_federated_service_account(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, credential_type: str
 ) -> None:
-    credential_file = tmp_path / "synthetic-credentials.json"
-    credential_file.write_text(json.dumps({"type": credential_type}))
-    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(credential_file))
+    credentials = tmp_path / "synthetic-credentials.json"
+    credentials.write_text(json.dumps({"type": credential_type}))
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(credentials))
     load = MagicMock()
     monkeypatch.setattr(release.google.auth, "load_credentials_from_file", load)
-
     with pytest.raises(ValueError, match="play_requires_federated_service_account"):
         release.client()
-
     load.assert_not_called()
 
 
-def test_federated_client_scopes_play_and_disables_response_driven_retries(
+def test_client_delegates_play_connection_to_official_sdk(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    credential_file = tmp_path / "synthetic-federation.json"
-    credential_file.write_text(
+    credentials = tmp_path / "synthetic-wif.json"
+    credentials.write_text(
         json.dumps(
             {
                 "type": "external_account",
@@ -82,68 +154,28 @@ def test_federated_client_scopes_play_and_disables_response_driven_retries(
             }
         )
     )
-    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(credential_file))
-    credentials = MagicMock()
-    load = MagicMock(return_value=(credentials, None))
-    session = MagicMock()
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(credentials))
+    loaded = MagicMock()
+    load = MagicMock(return_value=(loaded, None))
+    build = MagicMock()
     monkeypatch.setattr(release.google.auth, "load_credentials_from_file", load)
-    monkeypatch.setattr(release, "AuthorizedSession", session)
-
-    assert release.client() is session.return_value
-
-    load.assert_called_once_with(str(credential_file), scopes=[release.SCOPE])
-    session.assert_called_once_with(credentials, max_refresh_attempts=0)
-
-
-def test_request_has_fixed_api_origin_and_no_redirects() -> None:
-    api = MagicMock(spec=AuthorizedSession)
-    api.request.return_value.status_code = 200
-    api.request.return_value.content = b"{}"
-    api.request.return_value.json.return_value = {"tracks": []}
-
-    assert release.request(api, "GET", "/edits/read/tracks") == {"tracks": []}
-    api.request.assert_called_once_with(
-        "GET", release.BASE + "/edits/read/tracks", timeout=60, allow_redirects=False
+    monkeypatch.setattr(release, "build", build)
+    assert release.client() is build.return_value
+    load.assert_called_once_with(str(credentials), scopes=[release.SCOPE])
+    build.assert_called_once_with(
+        "androidpublisher", "v3", credentials=loaded, cache_discovery=False
     )
-
-
-@pytest.mark.parametrize(
-    "status,body,category", ((302, {}, "play_http_302"), (200, [], "play_response_invalid"))
-)
-def test_request_rejects_redirects_and_non_object_responses(
-    status: int, body: object, category: str
-) -> None:
-    api = MagicMock(spec=AuthorizedSession)
-    api.request.return_value.status_code = status
-    api.request.return_value.content = b"synthetic response"
-    api.request.return_value.json.return_value = body
-
-    with pytest.raises(ValueError, match=category):
-        release.request(api, "GET", "/edits/read/tracks")
-
-
-def test_rerun_stops_before_remote_preflight(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
-    client = MagicMock()
-    monkeypatch.setattr(release, "client", client)
-
-    with pytest.raises(ValueError, match="play_rerun_requires_track_inspection"):
-        release.preflight(tmp_path)
-
-    client.assert_not_called()
 
 
 @pytest.mark.parametrize(
     "missing", ("UPLOAD_STORE_PASSWORD", "UPLOAD_KEY_ALIAS", "FIREBASE_CLIENT_CONFIG")
 )
-def test_missing_release_inputs_cannot_materialize_private_files(
+def test_missing_inputs_do_not_materialize_private_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing: str
 ) -> None:
     inputs = {
-        "UPLOAD_KEY_BASE64": base64.b64encode(b"synthetic keystore fixture").decode(),
-        "UPLOAD_STORE_PASSWORD": str(12345678),
+        "UPLOAD_KEY_BASE64": base64.b64encode(b"synthetic keystore").decode(),
+        "UPLOAD_STORE_PASSWORD": "synthetic",
         "UPLOAD_KEY_ALIAS": "synthetic-upload",
         "FIREBASE_CLIENT_CONFIG": json.dumps(
             {
@@ -155,336 +187,75 @@ def test_missing_release_inputs_cannot_materialize_private_files(
     }
     for name, value in inputs.items():
         monkeypatch.setenv(name, "" if name == missing else value)
-    state = tmp_path / "private-state"
-
+    private = tmp_path / "private"
     with pytest.raises(ValueError, match="android_release_inputs_missing"):
-        release.materialize(state)
-
-    assert not list(state.iterdir())
-
-
-@pytest.fixture
-def state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("GITHUB_SHA", SHA)
-    state = tmp_path / "android-release"
-    (state / "verified").mkdir(parents=True)
-    bundle = state / "verified/app-release.aab"
-    bundle.write_bytes(b"synthetic already-verified AAB fixture")
-    (state / "verification.json").write_text(
-        json.dumps(
-            {
-                "sha": SHA,
-                "versionCode": 7,
-                "bundleSha256": release.digest(bundle),
-                "track": "internal",
-            }
-        )
-    )
-    (tmp_path / "apps/records-android/app/build/gpp").mkdir(parents=True)
-    return state
+        release.materialize(private)
+    assert not list(private.iterdir())
 
 
-class PlayStub:
-    """Expose staged and committed snapshots without contacting a real service."""
-
-    def __init__(self, state: Path) -> None:
-        self.checksum = release.digest(state / "verified/app-release.aab")
-        self.calls: list[tuple[str, str]] = []
-        self.committed = False
-        self.commit_error = False
-        self.confirm_commit = True
-        self.conflict = False
-        self.change_other_track = False
-        self.reads = 0
-        self.lifecycle = "RELEASE_LIFECYCLE_STATE_PUBLISHED"
-        self.lifecycle_error = False
-        self.release_code = 7
-        self.release_track = "internal"
-
-    def request(self, _api: AuthorizedSession, method: str, path: str) -> dict[str, Any]:
-        self.calls.append((method, path))
-        if method == "POST" and path == "/edits":
-            self.reads += 1
-            return {"id": f"read-{self.reads}"}
-        if method == "POST" and ":commit?" in path:
-            self.committed = self.confirm_commit
-            if self.commit_error:
-                raise TimeoutError("synthetic transport failure")
-            return {}
-        if method == "DELETE":
-            return {}
-        if path == "/tracks/internal/releases":
-            if self.lifecycle_error:
-                raise TimeoutError("synthetic lifecycle transport failure")
-            return {
-                "releases": [
-                    {
-                        "track": self.release_track,
-                        "activeArtifacts": [{"versionCode": self.release_code}],
-                        "releaseLifecycleState": self.lifecycle,
-                    }
-                ]
-            }
-        staged = path.startswith("/edits/gpp-new-edit/")
-        ready = staged or self.committed
-        code = 7 if ready or self.conflict else 6
-        if path.endswith("/tracks"):
-            return {
-                "tracks": [
-                    {
-                        "track": "internal",
-                        "releases": [{"status": "completed", "versionCodes": [str(code)]}],
-                    },
-                    {
-                        "track": "production",
-                        "releases": [
-                            {"versionCodes": ["3" if staged and self.change_other_track else "2"]}
-                        ],
-                    },
-                ]
-            }
-        if path.endswith("/bundles"):
-            return {
-                "bundles": [{"versionCode": code, "sha256": self.checksum if ready else "0" * 64}]
-            }
-        if path.endswith("/apks"):
-            return {"apks": []}
-        raise AssertionError(f"unexpected synthetic API operation: {method} {path}")
-
-
-@pytest.fixture
-def publishing(state: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[PlayStub, MagicMock]:
-    stub = PlayStub(state)
-    api = MagicMock(spec=AuthorizedSession)
-    api.__enter__.return_value = api
-    monkeypatch.setattr(release, "client", lambda: api)
-    monkeypatch.setattr(release, "request", stub.request)
-    monkeypatch.setattr(release.time, "sleep", lambda _: None)
-
-    def stage(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
-        gpp = Path("apps/records-android/app/build/gpp")
-        (gpp / f"{release.PACKAGE}.txt").write_text("gpp-new-edit")
-        (gpp / f"{release.PACKAGE}.skipped").touch()
-        return subprocess.CompletedProcess(args, 0)
-
-    run = MagicMock(side_effect=stage)
-    monkeypatch.setattr(release.subprocess, "run", run)
-    return stub, run
-
-
-@pytest.mark.parametrize("lost_response", (False, True))
-def test_stage_then_safe_single_commit_is_confirmed_by_fresh_edit_and_lifecycle(
-    state: Path, publishing: tuple[PlayStub, MagicMock], lost_response: bool
-) -> None:
-    stub, run = publishing
-    stub.commit_error = lost_response
-
-    release.publish(state)
-
-    commits = [(method, path) for method, path in stub.calls if ":commit?" in path]
-    assert commits == [
-        (
-            "POST",
-            "/edits/gpp-new-edit:commit?changesInReviewBehavior=ERROR_IF_IN_REVIEW&changesNotSentForReview=true",
-        )
-    ]
-    assert stub.reads == 2
-    assert run.call_count == 1
-    assert run.call_args.args[0][2] == ":app:publishReleaseBundle"
-    assert run.call_args.kwargs["cwd"] == "apps/records-android"
-    assert json.loads((state / "receipt.json").read_text())["verified"] is True
-    assert stub.calls.count(("GET", "/tracks/internal/releases")) == 1
-    assert not any(method == "DELETE" and "gpp-new-edit" in path for method, path in stub.calls)
-
-
-@pytest.mark.parametrize("failure", ("nonzero", "timeout"))
-def test_failed_staging_keeps_attempt_receipt_and_prevents_resending(
-    state: Path, publishing: tuple[PlayStub, MagicMock], failure: str
-) -> None:
-    stub, run = publishing
-
-    def fail_stage(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
-        receipt = json.loads((state / "stage-attempt.json").read_text())
-        assert receipt["phase"] == "stage_started"
-        assert receipt["verified"] is False and receipt["doNotResend"] is True
-        if failure == "timeout":
-            raise subprocess.TimeoutExpired("synthetic Gradle timeout", 600)
-        return subprocess.CompletedProcess(args, 1)
-
-    run.side_effect = fail_stage
-    expected = subprocess.TimeoutExpired if failure == "timeout" else ValueError
-    with pytest.raises(expected):
-        release.publish(state)
-
-    receipt = json.loads((state / "stage-attempt.json").read_text())
-    assert receipt["bundleSha256"] == stub.checksum and receipt["versionCode"] == 7
-    assert not (state / "commit-attempt.json").exists()
-    assert not any(":commit?" in path for _, path in stub.calls)
-    with pytest.raises(FileExistsError):
-        release.publish(state)
-    assert run.call_count == 1
-
-
-def test_unknown_commit_never_resends_when_fresh_reads_cannot_confirm(
-    state: Path, publishing: tuple[PlayStub, MagicMock]
-) -> None:
-    stub, run = publishing
-    stub.commit_error = True
-    stub.confirm_commit = False
-
-    with pytest.raises(ValueError, match="play_publication_unconfirmed_do_not_resend"):
-        release.publish(state)
-
-    assert sum(":commit?" in path for _, path in stub.calls) == 1
-    assert stub.reads == 5
-    assert run.call_count == 1
-    receipt = json.loads((state / "receipt.json").read_text())
-    assert receipt["verified"] is False and receipt["doNotResend"] is True
-
-
-def test_already_published_digest_skips_gpp_and_commit(
-    state: Path, publishing: tuple[PlayStub, MagicMock]
-) -> None:
-    stub, run = publishing
-    stub.committed = True
-
-    release.publish(state)
-
-    run.assert_not_called()
-    assert not any(":commit?" in path for _, path in stub.calls)
-    assert (state / "receipt.json").is_file()
-    assert ("GET", "/tracks/internal/releases") in stub.calls
-
-
-@pytest.mark.parametrize("already_committed", (False, True))
 @pytest.mark.parametrize(
-    "lifecycle,outcome",
+    "remote_code,remote_hash,status,expected",
     (
-        ("RELEASE_LIFECYCLE_STATE_NOT_SENT_FOR_REVIEW", "pending"),
-        ("RELEASE_LIFECYCLE_STATE_DRAFT", "pending"),
-        ("RELEASE_LIFECYCLE_STATE_IN_REVIEW", "pending"),
-        ("RELEASE_LIFECYCLE_STATE_APPROVED_NOT_PUBLISHED", "pending"),
-        ("RELEASE_LIFECYCLE_STATE_NOT_APPROVED", "rejected"),
-        ("RELEASE_LIFECYCLE_STATE_UNSPECIFIED", "unknown"),
-        ("UNRECOGNIZED_FUTURE_STATE", "unknown"),
+        (7, "ab" * 32, "completed", True),
+        (8, "ab" * 32, "completed", False),
+        (7, "cd" * 32, "completed", False),
+        (7, "ab" * 32, "draft", False),
     ),
 )
-def test_completed_edit_rollout_is_not_publication_until_lifecycle_is_published(
-    state: Path,
-    publishing: tuple[PlayStub, MagicMock],
-    already_committed: bool,
-    lifecycle: str,
-    outcome: str,
+def test_readback_verifies_internal_artifact_without_publishing(
+    api: MagicMock, state: Path, remote_code: int, remote_hash: str, status: str, expected: bool
 ) -> None:
-    stub, run = publishing
-    stub.committed = already_committed
-    stub.lifecycle = lifecycle
-
-    with pytest.raises(ValueError, match=f"play_publication_{outcome}_do_not_resend"):
-        release.publish(state)
-
-    receipt = json.loads((state / "receipt.json").read_text())
-    assert receipt["status"] == outcome and receipt["verified"] is False
-    assert receipt["doNotResend"] is True
-    assert run.call_count == (0 if already_committed else 1)
-    assert sum(":commit?" in path for _, path in stub.calls) == (0 if already_committed else 1)
-    assert stub.calls.count(("GET", "/tracks/internal/releases")) == 4
-
-
-@pytest.mark.parametrize("missing", ("version", "track"))
-def test_published_lifecycle_requires_same_active_artifact_on_internal_track(
-    state: Path, publishing: tuple[PlayStub, MagicMock], missing: str
-) -> None:
-    stub, run = publishing
-    stub.committed = True
-    if missing == "version":
-        stub.release_code = 6
+    verified = {"sha": SHA, "versionCode": 7, "bundleSha256": "ab" * 32, "track": "internal"}
+    (state / "verification.json").write_text(json.dumps(verified))
+    api.edits().tracks().get().execute.return_value = {
+        "track": "internal",
+        "releases": [{"status": status, "versionCodes": [str(remote_code)]}],
+    }
+    api.edits().bundles().list().execute.return_value = {
+        "bundles": [{"versionCode": remote_code, "sha256": remote_hash}]
+    }
+    if expected:
+        release.readback(state)
+        assert json.loads((state / "receipt.json").read_text()) == {
+            **verified,
+            "status": "submitted",
+            "verified": True,
+        }
     else:
-        stub.release_track = "production"
-
-    with pytest.raises(ValueError, match="play_publication_missing_do_not_resend"):
-        release.publish(state)
-
-    assert json.loads((state / "receipt.json").read_text())["verified"] is False
-    run.assert_not_called()
-    assert not any(":commit?" in path for _, path in stub.calls)
+        with pytest.raises(ValueError, match="play_submission_unconfirmed"):
+            release.readback(state)
+        assert not (state / "receipt.json").exists()
+    api.edits().commit.assert_not_called()
+    api.edits().bundles().upload.assert_not_called()
+    api.edits().tracks().update.assert_not_called()
 
 
-def test_lifecycle_api_failure_never_confirms_or_resends_release(
-    state: Path, publishing: tuple[PlayStub, MagicMock]
+def test_invalid_state_and_private_errors_are_not_logged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    stub, run = publishing
-    stub.lifecycle_error = True
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    monkeypatch.setattr("sys.argv", ["release", "cleanup", "--state", str(tmp_path)])
+    assert release.main() == 1
+    assert capsys.readouterr().err == "android_release_state_path_invalid\n"
+    monkeypatch.setattr(
+        "sys.argv", ["release", "readback", "--state", str(tmp_path / "android-release")]
+    )
+    monkeypatch.setattr(
+        release, "readback", MagicMock(side_effect=RuntimeError("synthetic secret"))
+    )
+    assert release.main() == 1
+    assert capsys.readouterr().err == "android_release_failed\n"
 
-    with pytest.raises(ValueError, match="play_publication_unavailable_do_not_resend"):
-        release.publish(state)
 
-    assert json.loads((state / "receipt.json").read_text())["verified"] is False
-    assert sum(":commit?" in path for _, path in stub.calls) == 1
-    assert run.call_count == 1
-
-
-def test_review_transition_to_published_is_reconciled_with_reads_only(
-    state: Path,
-    publishing: tuple[PlayStub, MagicMock],
-    monkeypatch: pytest.MonkeyPatch,
+def test_official_sdk_http_error_logs_only_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    stub, run = publishing
-
-    def delayed(api: AuthorizedSession, method: str, path: str) -> dict[str, Any]:
-        result = stub.request(api, method, path)
-        if path == "/tracks/internal/releases" and stub.calls.count((method, path)) == 1:
-            result["releases"][0]["releaseLifecycleState"] = "RELEASE_LIFECYCLE_STATE_IN_REVIEW"
-        return result
-
-    monkeypatch.setattr(release, "request", delayed)
-    release.publish(state)
-
-    assert json.loads((state / "receipt.json").read_text())["verified"] is True
-    assert stub.calls.count(("GET", "/tracks/internal/releases")) == 2
-    assert sum(":commit?" in path for _, path in stub.calls) == 1
-    assert run.call_count == 1
-
-
-@pytest.mark.parametrize("conflict", (False, True))
-def test_concurrent_version_or_other_track_change_cannot_commit(
-    state: Path, publishing: tuple[PlayStub, MagicMock], conflict: bool
-) -> None:
-    stub, run = publishing
-    stub.conflict = conflict
-    stub.change_other_track = not conflict
-    category = "play_version_code_conflict" if conflict else "play_staged_content_invalid"
-
-    with pytest.raises(ValueError, match=category):
-        release.publish(state)
-
-    assert run.call_count == (0 if conflict else 1)
-    assert not any(":commit?" in path for _, path in stub.calls)
-
-
-def test_changed_verified_bundle_stops_before_any_remote_operation(
-    state: Path, publishing: tuple[PlayStub, MagicMock]
-) -> None:
-    stub, run = publishing
-    (state / "verified/app-release.aab").write_bytes(b"changed synthetic bundle")
-
-    with pytest.raises(ValueError, match="android_verified_artifact_changed"):
-        release.publish(state)
-
-    assert not stub.calls
-    run.assert_not_called()
-
-
-@pytest.mark.parametrize("suffix", ("txt", "skipped", "commit"))
-def test_stale_gpp_edit_cannot_trigger_another_upload(
-    state: Path, publishing: tuple[PlayStub, MagicMock], suffix: str
-) -> None:
-    stub, run = publishing
-    (Path("apps/records-android/app/build/gpp") / f"{release.PACKAGE}.{suffix}").touch()
-
-    with pytest.raises(ValueError, match="play_stale_edit_do_not_resend"):
-        release.publish(state)
-
-    run.assert_not_called()
-    assert not any(":commit?" in path for _, path in stub.calls)
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    monkeypatch.setattr(
+        "sys.argv", ["release", "readback", "--state", str(tmp_path / "android-release")]
+    )
+    response = MagicMock(status=403)
+    error = release.HttpError(response, b'{"error":{"message":"synthetic private detail"}}')
+    monkeypatch.setattr(release, "readback", MagicMock(side_effect=error))
+    assert release.main() == 1
+    assert capsys.readouterr().err == "play_http_403\n"
