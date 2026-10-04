@@ -71,7 +71,7 @@ class AdaptiveRecordsUiTest {
   private val records = RecordListState.Ready.fromSaved(entries)
   private val session = SessionState.SignedIn(
     MobileSessionUser("レイアウト確認用", MobileAvatar("placeholder", "確認用", "cyan")),
-    "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"), "/")
+    "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"))
 
   private fun screen(selected: String? = null, theme: ThemeChoice = ThemeChoice.Dark,
     onEvent: (BootstrapScreen.Event) -> Unit = {}): BootstrapScreen.State =

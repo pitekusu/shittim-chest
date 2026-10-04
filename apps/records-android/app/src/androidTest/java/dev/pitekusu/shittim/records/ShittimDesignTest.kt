@@ -90,7 +90,7 @@ class ShittimDesignTest {
   @Test fun sharedComponentsRemainOperableInLightDarkAndLargeTextScreens() {
     val events = mutableListOf<BootstrapScreen.Event>()
     val user = MobileSessionUser("デザイン確認用", MobileAvatar("placeholder", "確認用", "cyan"))
-    val session = SessionState.SignedIn(user, "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"), "/")
+    val session = SessionState.SignedIn(user, "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"))
     val entries = listOf("アロナ", "プラナ", "安倍晋三AI").mapIndexed { index, name ->
       RecordListEntry(('a' + index).toString().repeat(43), "架空の相談：休日をどう過ごそう？",
         "デザイン確認用", RecordAvatar(null, listOf("cyan", "pink", "lavender")[index]),

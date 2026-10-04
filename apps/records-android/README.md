@@ -497,6 +497,16 @@ Kotlin・Compose・Materialの既定版、Actionの完全SHA、配布ツール�
 既存の検知設定とC38／C39の参照を確認した文書整理であり、依存更新・新Workflow・追加権限・Play提出は行わない。
 詳しい担当範囲は[Androidアプリ設計](../../docs/29_Androidアプリ設計.md#c40android依存の更新検知)を参照する。
 
+## Navigation 3：閲覧先の一本化（第1段階）
+
+- Navigation 3 runtimeの`NavKey`と`rememberNavBackStack`で、一覧とopaqueな記録IDを持つ詳細を管理する。Circuit／Metroは描画状態・イベント・依存接続に継続使用し、別のback stackを追加しない。
+- セッションモデルの現在の閲覧先を撤去する。検証済みApp Link・ログイン結果は一回限りの復帰先として受け渡し、有効なローカル閲覧許可の下で消費する。期限切れ中のrouteは非表示にし、明示ログアウトと確認済みアカウント切替で破棄する。
+- back stackの保存対象はroute識別子だけ。質問・回答・検索語・token・アカウント識別子をSavedStateへ入れない。詳細を開き直すとアロナの初回意見から開始し、同じ閲覧中の回転・同期では位置を維持する。
+- この段階では既存のAdaptive描画・約280msの戻りを維持する。NavDisplayと標準ListDetailSceneStrategyへの置換は第2段階でまとめて行い、未使用のUI依存や独自navigation wrapperを先行追加しない。
+- 関連試験で一覧／詳細往復、認可喪失、一回限りの復帰先、ログアウト・アカウント切替を確認する。残りの復帰経路・状態寿命・画面資料の横断確認は第3段階で行う。C41は指定によりスキップし、Playへの配布は別操作とする。
+
+詳細は[Androidアプリ設計のNav3移行](../../docs/29_Androidアプリ設計.md#navigation-3への段階的移行)を参照する。
+
 ## 起動・ログインのブランド演出
 
 - Android標準SplashScreenから全画面のシッテム演出につなぐ。起動は約1秒、対話的ログインが確認・保存まで成功したときは約1.5秒。認可確認や保存済み記録の表示は演出と並行して進む。

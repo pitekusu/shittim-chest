@@ -27,13 +27,16 @@ internal sealed interface SessionState {
   class SignedOut(val notice: SessionNotice? = null) : SessionState
   data object Browser : SessionState
   class SignedIn(val user: MobileSessionUser, val cacheAccountId: String,
-    val expiresAt: Instant, val returnTo: String) : SessionState
+    val expiresAt: Instant) : SessionState
   data object SigningOut : SessionState
   data object Unavailable : SessionState
   data object StorageError : SessionState
 }
 
-/** Activity-retained authentication lifetime; Circuit owns the screen and its presentation. */
+// Identity matters: a late consumer must not discard a newer request for the same record.
+internal class PendingDestination(val returnTo: String)
+
+/** Activity-retained authentication lifetime; Nav3 owns the visible destination. */
 @MainThread
 internal class MobileSessionModel(
   private val client: MobileAuthClient,
@@ -60,15 +63,14 @@ internal class MobileSessionModel(
   private var pendingLogoutToken: StoredToken? = null
   private var operation: Job? = null
   private var expiry: Job? = null
-  private val mutableDestination = MutableStateFlow("/")
-  val destination = mutableDestination.asStateFlow()
-  private var returnTo: String
-    get() = mutableDestination.value
-    set(value) { mutableDestination.value = value }
+  private val mutablePendingDestination = MutableStateFlow<PendingDestination?>(null)
+  val pendingDestination = mutablePendingDestination.asStateFlow()
+  private var loginReturnTo = "/"
   private var offlineAllowed = false
   private var cacheAccessBlocked = false
 
-  val loginDestination: String get() = returnTo
+  val loginDestination: String get() = if (state.value == SessionState.Browser) loginReturnTo
+    else mutablePendingDestination.value?.returnTo ?: "/"
 
   // Offline readers receive neither credentials nor a persisted profile.
   val offlineCacheAccountId: String? get() {
@@ -151,20 +153,16 @@ internal class MobileSessionModel(
   fun openDestination(destination: String) {
     if (!destination.startsWith("/records/") || !isMobileReturnTo(destination) ||
       state.value == SessionState.Browser || state.value == SessionState.SigningOut) return
-    if (returnTo == destination) return
-    returnTo = destination
-    (state.value as? SessionState.SignedIn)?.let {
-      mutableState.value = SessionState.SignedIn(it.user, it.cacheAccountId, it.expiresAt, destination)
-    }
+    mutablePendingDestination.value = PendingDestination(destination)
   }
 
-  fun closeDestination() {
-    if (offlineCacheAccountId == null) return
-    val signedIn = state.value as? SessionState.SignedIn
-    if (returnTo == "/") return
-    returnTo = "/"
-    signedIn?.let { mutableState.value = SessionState.SignedIn(it.user, it.cacheAccountId, it.expiresAt, "/") }
+  fun consumeDestination(request: PendingDestination, accountId: String): Boolean {
+    if (!isCacheAuthorized(accountId) || mutablePendingDestination.value !== request) return false
+    mutablePendingDestination.value = null
+    return true
   }
+
+  fun discardDestination() { mutablePendingDestination.value = null }
 
   // The token is available only inside the request callback, never in a UI state or saved value.
   // A response that finishes after logout, expiry, or a new session cannot be displayed.
@@ -187,8 +185,10 @@ internal class MobileSessionModel(
   }
 
   // Claim synchronously, before launching the Activity, to ignore double taps.
-  fun beginLogin(): Boolean {
-    if (state.value !is SessionState.SignedOut || operation?.isActive == true) return false
+  fun beginLogin(destination: String = loginDestination): Boolean {
+    if (!isMobileReturnTo(destination) || state.value !is SessionState.SignedOut ||
+      operation?.isActive == true) return false
+    loginReturnTo = destination
     mutableState.value = SessionState.Browser
     return true
   }
@@ -196,7 +196,7 @@ internal class MobileSessionModel(
   fun loginResult(result: MobileLoginStep.Finished) {
     if (state.value != SessionState.Browser) return
     if (result.status == MobileLoginStatus.SIGNED_IN) {
-      returnTo = result.returnTo?.takeIf(::isMobileReturnTo) ?: "/"
+      loginReturnTo = result.returnTo?.takeIf(::isMobileReturnTo) ?: "/"
       refresh(afterLogin = true) // Re-read and validate the saved token, not the Activity result.
     } else {
       mutableState.value = when (result.status) {
@@ -224,7 +224,8 @@ internal class MobileSessionModel(
     mutableCachePermit.value = null
     offlineAllowed = false
     mutableState.value = SessionState.SigningOut
-    returnTo = "/"
+    mutablePendingDestination.value = null
+    loginReturnTo = "/"
     operation = viewModelScope.launch {
       try {
         finishLogout(previous, verification)
@@ -240,7 +241,8 @@ internal class MobileSessionModel(
     token = null
     mutableCachePermit.value = null
     offlineAllowed = false
-    returnTo = "/"
+    mutablePendingDestination.value = null
+    loginReturnTo = "/"
     mutableState.value = SessionState.SigningOut
     withContext(NonCancellable) {
       withContext(Dispatchers.IO) { beginLocalLogout() }
@@ -310,8 +312,11 @@ internal class MobileSessionModel(
             else {
               cacheAccessBlocked = false
               mutableCachePermit.value = authorized.cacheAuthorization
-              mutableState.value = SessionState.SignedIn(response.user, response.cacheAccountId, deadline, returnTo)
-              if (afterLogin) mutableLoginCompletion.value++
+              mutableState.value = SessionState.SignedIn(response.user, response.cacheAccountId, deadline)
+              if (afterLogin) {
+                mutablePendingDestination.value = loginReturnTo.takeIf { it != "/" }?.let(::PendingDestination)
+                mutableLoginCompletion.value++
+              }
               scheduleExpiry(deadline)
             }
           }
@@ -366,8 +371,8 @@ internal class MobileSessionModel(
     mutableCachePermit.value = null
     withContext(Dispatchers.IO) { clearToken() }
     // Preserve record keys/ciphertext. Same-account reauthentication can unlock them again.
-    // Keep a validated record link across expiry so the next login can return to it.
-    // Explicit logout still clears the destination when switching accounts.
+    // Keep unconsumed external links. The caller supplies Nav3's current route at the next login.
+    // Explicit logout still clears pending requests when switching accounts.
     mutableState.value = SessionState.SignedOut(SessionNotice.EXPIRED)
   }
 

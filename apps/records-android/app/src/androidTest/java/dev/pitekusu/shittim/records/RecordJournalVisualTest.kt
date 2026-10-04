@@ -225,7 +225,7 @@ class RecordJournalVisualTest {
     selected: String? = null, onEvent: (BootstrapScreen.Event) -> Unit = {}): BootstrapScreen.State =
     BootstrapScreen.State(theme, SessionState.SignedIn(
       MobileSessionUser("架空の利用者", MobileAvatar("placeholder", "確認用", "cyan")),
-      "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"), "/"),
+      "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z")),
       records = records, sync = sync, selectedRecordId = selected,
       record = RecordPreviewState.Ready(RecordPreview("架空の議題の全文です。", "架空の結論", "アロナ")),
       eventSink = onEvent)
