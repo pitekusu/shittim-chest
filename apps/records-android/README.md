@@ -503,7 +503,7 @@ Kotlin・Compose・Materialの既定版、Actionの完全SHA、配布ツール�
 - セッションモデルの現在の閲覧先を撤去する。検証済みApp Link・ログイン結果は一回限りの復帰先として受け渡し、有効なローカル閲覧許可の下で消費する。期限切れ中のrouteは非表示にし、明示ログアウトと確認済みアカウント切替で破棄する。
 - back stackの保存対象はroute識別子だけ。質問・回答・検索語・token・アカウント識別子をSavedStateへ入れない。詳細を開き直すとアロナの初回意見から開始し、同じ閲覧中の回転・同期では位置を維持する。
 - 第1段階では既存のAdaptive描画・約280msの戻りを維持し、描画の置換を第2段階へ分離した。未使用のUI依存や独自navigation wrapperは先行追加しない。
-- 関連試験で一覧／詳細往復、認可喪失、一回限りの復帰先、ログアウト・アカウント切替を確認する。残りの復帰経路・状態寿命・画面資料の横断確認は第3段階で行う。C41は指定によりスキップし、Playへの配布は別操作とする。
+- 関連試験で一覧／詳細往復、認可喪失、一回限りの復帰先、ログアウト・アカウント切替を確認する。外部復帰と状態寿命の横断確認は後述の第3段階を参照する。C41は指定によりスキップし、Playへの配布は別操作とする。
 
 詳細は[Androidアプリ設計のNav3移行](../../docs/29_Androidアプリ設計.md#navigation-3への段階的移行)を参照する。
 
@@ -513,7 +513,14 @@ Kotlin・Compose・Materialの既定版、Actionの完全SHA、配布ツール�
 - 予測型Backの進捗・取消と退出中のentry保持は標準処理へ任せる。NavigationBackHandlerをNavDisplayより前に置き、広幅はAdaptive Scene内部のBack処理を優先する。現在のrouteでnavigation event状態と広幅の描画scopeを切り替えて古いgestureを取り消し、狭幅のNavDisplayは維持して約280msの戻りスライドを保つ。独自PredictiveBackHandler・seekTo・取消時の復元は撤去し、確定時は認可確認済みの既存CloseRecordへ接続する。
 - 詳細のSaveable状態は標準entry decoratorで管理する。decorated entry・SaveableStateHolder・scene状態は描画scopeのroute keyより外側に置き、同じentryのリサイズ・回転・同期では読み位置を維持する。独自の詳細UUID・手動removeStateは使わず、pop後の再訪は初回意見から開始する。一覧のPaging・検索・読位置はdetail entryから独立して保持する。
 - 認可喪失では退出中のentryも含め記録画面を直ちに外し、アカウント切替ではNavDisplayと旧entryを破棄する。検索語・本文・token・アカウント識別子をentryの保存状態へ追加しない。Sceneの自動focus移動を無効にし、検索画面から詳細へ進んだ後も一覧復帰時にキーボードやフォーカスを復活させない。
-- 境界幅、文字拡大、戻る確定・取消、プレビュー中の認可喪失・アカウント切替、詳細再訪・回転を関連試験で確認する。外部リンク・認証・オフライン復帰と代表画面の横断確認は第3段階で行う。
+- 境界幅、文字拡大、戻る確定・取消、プレビュー中の認可喪失・アカウント切替、詳細再訪・回転を関連試験で確認する。外部リンク・認証・オフライン復帰の横断確認は後述の第3段階を参照する。
+
+## Navigation 3：外部復帰・状態寿命（第3段階）
+
+- MainActivityの既存cold／warm起動と再作成時のリンク再演拒否、retained MobileSessionModelのpending復帰先を横断確認する。onNewIntentの新しい入力は同じcanonical App Link・通知binding検証へ接続済みで、Intentの再読込や独自Nav3 decoder・ResultBusを追加する必要はない。本体は第1・第2段階の実装を維持する。
+- 固定URI検証・一回限りのpending消費・Auth TabのActivity Resultを維持する。通知の旧binding拒否と認証取消・再試行・失効は既存の安全条件を使い、API・認証方式・通知設定・依存を変更しない。
+- `RecordAppLinkTest`でcold／warm起動・再作成・旧通知binding拒否を確認する。`Nav3ReturnFlowUiTest`は標準ActivityMonitorと架空データを使い、Webを開いて戻った後の詳細の人物・回答段階・読位置と一覧の条件・読位置・focus非復活を確認する。pending・オフライン認可・再訪／回転・検索からの復帰は既存の関連試験を利用する。
+- この工程では実機・実Discord認証・実FCM通知・Play配布を行わない。架空環境の画面・操作確認は、その受入を確認済みとする根拠にはしない。内部テスト版での主要操作確認は、別途配布後の受入として残す。
 
 ## 起動・ログインのブランド演出
 
