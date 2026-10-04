@@ -602,6 +602,10 @@ class DynamoDbIngressRepository:
         )
         replay_item, counter_item = self._transact_get_items((replay_key, _counter_key()))
         active_count = _active_count_from_item(counter_item)
+        if request.source is IngressSource.MOBILE:
+            # The receipt may have advanced since this counter snapshot. Mobile
+            # retries use the same atomic receipt read as owned status lookup.
+            return self._replay(request), active_count
         if replay_item is None:
             return None, active_count
         if request.kind is IngressKind.NEW_DEBATE:
@@ -619,6 +623,16 @@ class DynamoDbIngressRepository:
         )
 
     def _replay(self, request: IngressRequest) -> EnqueuedIngress | None:
+        if request.source is IngressSource.MOBILE:
+            if request.owner_key is None or request.mobile_request_id is None:
+                raise ValueError("mobile replay requires owner and public request ID")
+            persisted = self._get_mobile_request(request.owner_key, request.mobile_request_id)
+            if persisted is None:
+                return None
+            _assert_exact_identity(request, persisted)
+            return EnqueuedIngress(
+                request=persisted, operation=_operation_for_request(persisted), created=False
+            )
         if request.kind is IngressKind.NEW_DEBATE:
             operation = self._get_operation_result(request.interaction_id)
             if operation is None:
