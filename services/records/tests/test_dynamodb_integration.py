@@ -70,9 +70,7 @@ def test_mobile_grant_roundtrip_races_and_atomic_consumption(
     store = DynamoMobileAuthStore(dynamodb_client, table)
     started, authorizing, authorized = mobile_states()
     identity = (
-        {"discord_user_id": "1" * 18, "discord_username": "verified-user"}
-        if with_identity
-        else {}
+        {"discord_user_id": "1" * 18, "discord_username": "verified-user"} if with_identity else {}
     )
     authorized = authorized.model_copy(update=identity)
     store.create(started, now_epoch=1000)
