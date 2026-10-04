@@ -38,6 +38,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
+@ScreenTest
 class RecordPreviewPanelTest {
   @get:Rule val compose = createAndroidComposeRule<MainActivity>()
 
