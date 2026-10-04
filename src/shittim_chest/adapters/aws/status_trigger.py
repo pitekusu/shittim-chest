@@ -12,6 +12,7 @@ from shittim_chest.application.ports import (
     ReconciliationTriggerUnavailable,
     StatusTriggerUnavailable,
 )
+from shittim_chest.application.scale_to_zero import is_mobile_ingress_id
 
 if TYPE_CHECKING:
     from mypy_boto3_lambda.client import LambdaClient
@@ -20,7 +21,7 @@ _STATUS_EVENT_SCHEMA_VERSION = 1
 
 
 class LambdaStatusPublicationTrigger:
-    """Kick one configured publisher Lambda using only an interaction snowflake."""
+    """Kick the publisher using only a source-specific opaque operation identity."""
 
     __slots__ = ("_client", "_function_name")
 
@@ -33,7 +34,7 @@ class LambdaStatusPublicationTrigger:
     async def request_publication(self, interaction_id: str) -> None:
         """Queue an idempotent publication kick without blocking the event loop."""
 
-        _require_canonical_snowflake(interaction_id)
+        _require_trigger_id(interaction_id)
         await asyncio.to_thread(self._request_publication, interaction_id)
 
     def _request_publication(self, interaction_id: str) -> None:
@@ -60,7 +61,7 @@ class LambdaRuntimeReconciliationTrigger:
     async def request_reconciliation(self, interaction_id: str) -> None:
         """Queue one content-free lost-wake recovery hint."""
 
-        _require_canonical_snowflake(interaction_id)
+        _require_trigger_id(interaction_id)
         await asyncio.to_thread(self._request_reconciliation, interaction_id)
 
     def _request_reconciliation(self, interaction_id: str) -> None:
@@ -79,14 +80,21 @@ class _InvocationRejected(Exception):
 
 
 def _payload(interaction_id: str) -> bytes:
+    event = (
+        {"schema_version": 2, "source": "mobile", "request_id": interaction_id}
+        if is_mobile_ingress_id(interaction_id)
+        else {"schema_version": _STATUS_EVENT_SCHEMA_VERSION, "interaction_id": interaction_id}
+    )
     return json.dumps(
-        {
-            "schema_version": _STATUS_EVENT_SCHEMA_VERSION,
-            "interaction_id": interaction_id,
-        },
+        event,
         ensure_ascii=True,
         separators=(",", ":"),
     ).encode("utf-8")
+
+
+def _require_trigger_id(value: str) -> None:
+    if not is_mobile_ingress_id(value):
+        _require_canonical_snowflake(value)
 
 
 def _invoke(client: LambdaClient, *, function_name: str, payload: bytes) -> None:

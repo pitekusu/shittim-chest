@@ -8,6 +8,7 @@ import pytest
 from botocore import UNSIGNED
 from botocore.config import Config
 from botocore.stub import Stubber
+from discord.utils import time_snowflake
 
 from shittim_chest.adapters.dynamodb import (
     DynamoDbIngressRepository,
@@ -88,6 +89,10 @@ async def test_mobile_retry_reads_one_bundle_after_concurrent_acceptance(
         guild_id="guild-id",
         channel_id="channel-id",
         created_at=NOW,
+    )
+    source = replace(
+        source,
+        history_after_snowflake=str(time_snowflake(source.created_at - timedelta(seconds=1))),
     )
     accepted = replace(
         source,

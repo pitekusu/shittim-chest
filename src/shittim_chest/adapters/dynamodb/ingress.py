@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, ParamSpec, TypeVar, cast
 
 from botocore.exceptions import BotoCoreError, ClientError
+from discord.utils import time_snowflake
 
 if TYPE_CHECKING:
     from mypy_boto3_dynamodb.client import DynamoDBClient
@@ -452,6 +453,13 @@ class DynamoDbIngressRepository:
     ) -> EnqueuedIngress:
         if request.status is not IngressStatus.PENDING:
             raise ValueError("new ingress request must be pending")
+        if request.source is IngressSource.MOBILE:
+            # The SDK encodes only the history search boundary; this is not an
+            # interaction ID. A one-second margin includes the initial bot post.
+            boundary = str(time_snowflake(request.created_at - timedelta(seconds=1)))
+            if request.history_after_snowflake not in (None, boundary):
+                raise ValueError("mobile history bound disagrees with admission timestamp")
+            request = replace(request, history_after_snowflake=boundary)
         operation = _operation_for_request(request)
         publication = IngressStatusPublication.prepared(
             request,
@@ -545,7 +553,7 @@ class DynamoDbIngressRepository:
     ) -> MobileIngressPage:
         _require_utc(since)
         # Standard validation also constrains the partition key; no public cursor carries it.
-        mobile_ingress_id(owner_key, "00000000-0000-4000-8000-000000000000")
+        mobile_ingress_id(owner_key, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
         if isinstance(limit, bool) or not 1 <= limit <= 50:
             raise ValueError("mobile request page limit must be between one and fifty")
         if (cursor_created_at is None) is not (cursor_request_id is None):
@@ -582,8 +590,16 @@ class DynamoDbIngressRepository:
                 or _integer(pointer, "record_schema_version") != 1
             ):
                 raise RepositoryConflict("mobile inventory pointer is invalid")
-            request = self._get_mobile_request(owner_key, _text(pointer, "mobile_request_id"))
-            if request is None or pointer != _mobile_owner_pointer(request):
+            # The owned pointer already carries the immutable request key. Each
+            # request is an atomic progress snapshot, so inventory avoids the
+            # additional replay-operation lookup needed by public-UUID lookup.
+            request = self._load_request(_text(pointer, "request_sort_key"))
+            if (
+                request is None
+                or request.source is not IngressSource.MOBILE
+                or request.owner_key != owner_key
+                or pointer != _mobile_owner_pointer(request)
+            ):
                 raise RepositoryConflict("mobile inventory pointer identity is inconsistent")
             requests.append(request)
         if response.get("LastEvaluatedKey") and requests:

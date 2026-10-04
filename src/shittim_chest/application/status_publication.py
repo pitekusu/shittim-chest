@@ -385,7 +385,7 @@ class PublicStatusPublisher:
                 author_id=expected_author,
                 nonce=publication.nonce,
                 operation_marker=status_publication_marker(publication.canonical_interaction_id),
-                after_message_id=publication.canonical_interaction_id,
+                after_message_id=publication.history_after_message_id,
                 checkpoint=publication.history_checkpoint,
             )
             if message is None:

@@ -124,7 +124,7 @@ Android専用の討論エンジンは作らず、認証済み受付から既存�
 |---|---|---|
 | 1 | サーバー内部の本人情報保持・旧認証データ互換 | 実装済み。受付ルートは未追加 |
 | 2 | 共通受付のAndroid識別・本人別参照・重複防止 | 実装済み。公開APIは未接続 |
-| 3 | Discord状態投稿・履歴照合・イベントの後方互換 | 後続 |
+| 3 | Discord状態投稿・履歴照合・イベントの後方互換 | 実装済み。Core／Lambdaの更新が必要 |
 | 4 | Bearer専用受付／進捗API・専用Lambda・限定IAM | 後続 |
 | 5 | Navigation 3入力画面・暗号化下書き・送信前の確定保存 | 後続 |
 | 6 | 前景中の進捗確認・再起動復帰・公開結果への接続 | 後続 |
@@ -154,6 +154,16 @@ IDとusernameは両方ある場合だけ保持する。既存のopaque利用者�
 本人別参照は受付履歴と同じ保持方針とし、期限だけを理由に重複防止情報を削除しない。全保存履歴をpagination対象とする。
 進捗参照は関係する保存行を原子的に読み、同時更新を破損データと誤認しない。Discordデータの保存JSONは従来のまま維持する。
 実DynamoDB Localで二重受付、本人分離、pagination、失効競合を確認する。状態投稿への接続はPR3、公開受付はPR4で行う。
+
+### PR3：Discord公開と障害後の履歴照合
+
+Androidの内部operation IDをDiscord interactionとして偽装しない。状態投稿の履歴検索には受付時刻からdiscord.pyが生成した専用snowflake境界を保存し、本文を含まないoperationマーカーとnonceで同じ投稿を照合する。
+投稿応答が不明な場合も既存の履歴照合・checkpointを使い、同じ状態投稿を重ねて作らない。
+既存Discord受付は従来のinteraction境界を使い、新項目を保存JSONへ先行追加しない。
+
+状態投稿／Runtime再調整のイベントは、Discordの既存v1形式を維持してAndroidのopaque operationを運ぶv2形式を追加する。
+イベントへ議題・本人情報を含めない。既存のthread作成、討論パネル、待ち行列drain、leaseとGuild制限を共通利用し、討論・winner・親愛度処理は変えない。
+実DynamoDB Localの受付からCore admissionまでと、架空Discordの応答不明・履歴復旧、旧イベント／保存互換を確認する。実投稿・生成は行わない。
 
 ## 高レベルAPI・ライブラリ優先の開発方針
 
