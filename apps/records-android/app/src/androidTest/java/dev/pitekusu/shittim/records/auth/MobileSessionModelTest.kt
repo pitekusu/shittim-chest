@@ -103,14 +103,20 @@ class MobileSessionModelTest {
 
   @Test
   fun denialAfterSessionResponseCannotPublishItsOlderPermit() = runBlocking {
-    suspend fun awaitStage(stage: String, action: suspend () -> Unit) {
-      try { withTimeout(5_000) { action() } }
-      catch (error: TimeoutCancellationException) { throw AssertionError("session_test_wait:$stage", error) }
-    }
     withContext(Dispatchers.Main) {
       Fixture().use { fixture ->
         fixture.stored = fixture.validToken
         val model = fixture.start()
+        suspend fun awaitStage(stage: String, action: suspend () -> Unit) {
+          try { withTimeout(5_000) { action() } }
+          catch (error: TimeoutCancellationException) {
+            // Fixed state names and booleans only; never print a profile, token, or account identifier.
+            throw AssertionError("session_test_wait:$stage,state=${model.state.value::class.simpleName}," +
+              "gets=${fixture.gets},activationCompleted=${fixture.activationJob?.isCompleted}," +
+              "activationCancelled=${fixture.activationJob?.isCancelled},permit=${model.cachePermit.value != null}," +
+              "stored=${fixture.stored != null},storedPermit=${fixture.stored?.cacheAuthorization != null}", error)
+          }
+        }
         awaitStage("signed_in") { model.await<SessionState.SignedIn>() }
         // SignedIn is emitted before the refresh Job completes; one yield is not a completion barrier.
         awaitStage("initial_refresh_finished") { checkNotNull(fixture.activationJob).join() }
@@ -118,9 +124,10 @@ class MobileSessionModelTest {
         fixture.activationStarted = CompletableDeferred()
         model.onForeground()
         awaitStage("cache_activation") { fixture.activationStarted.await() }
+        // The old 200 response is already decoded; only the next server check must reject access.
+        fixture.status = HttpStatusCode.Forbidden
         model.onAuthenticationRequired()
         assertNull(model.cachePermit.value)
-        fixture.status = HttpStatusCode.Forbidden
         fixture.activationGate!!.complete(Unit)
         awaitStage("signed_out") { model.await<SessionState.SignedOut>() }
         assertNull(model.cachePermit.value)
