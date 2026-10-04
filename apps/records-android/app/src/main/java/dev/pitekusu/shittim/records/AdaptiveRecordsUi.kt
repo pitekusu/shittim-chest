@@ -199,6 +199,18 @@ internal fun AdaptiveRecordsUi(
           }
         }
       }
+      val composeContent = rememberUpdatedState<@Composable () -> Unit> {
+        ShittimBackdrop(Modifier.fillMaxSize()) {
+          DebateComposeScreen(state.debate, state.session is SessionState.SignedIn,
+            onEdit = { state.eventSink(BootstrapScreen.Event.EditDebate(it)) },
+            onSubmit = { state.eventSink(BootstrapScreen.Event.SubmitDebate) },
+            onCheck = { state.eventSink(BootstrapScreen.Event.CheckDebate) },
+            onRetry = { state.eventSink(BootstrapScreen.Event.RetryDebate) },
+            onReauth = { state.eventSink(BootstrapScreen.Event.ReauthenticateDebate) },
+            onNew = { state.eventSink(BootstrapScreen.Event.NewDebateDraft) },
+            modifier = Modifier.widthIn(max = 760.dp).align(Alignment.TopCenter))
+        }
+      }
       val entries = rememberDecoratedNavEntries(backStack = state.backStack,
         entryDecorators = listOf(rememberSaveableStateHolderNavEntryDecorator()),
         entryProvider = entryProvider {
@@ -208,6 +220,7 @@ internal fun AdaptiveRecordsUi(
             }
           }) + ListDetailSceneStrategy.preferredPaneSize(width = 400.dp)) { listContent.value() }
           entry<RecordDetail>(metadata = ListDetailSceneStrategy.detailPane()) { detailContent.value(it) }
+          entry<DebateCompose> { composeContent.value() }
         })
       val onBack = { state.eventSink(BootstrapScreen.Event.CloseRecord) }
       val sceneState = rememberSceneState(entries, listOf(sceneStrategy), onBack = onBack)

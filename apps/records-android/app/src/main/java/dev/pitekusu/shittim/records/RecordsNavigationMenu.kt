@@ -49,10 +49,13 @@ private val adminDestinations = listOf(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun RecordsAppBar(onMenuClick: () -> Unit) {
+internal fun RecordsAppBar(onMenuClick: () -> Unit, onCompose: () -> Unit = {}) {
   TopAppBar(title = {
     Text(stringResource(R.string.record_title), style = MaterialTheme.typography.titleMediumEmphasized)
   }, actions = {
+    IconButton(onClick = onCompose, modifier = Modifier.testTag("debate-compose-open")) {
+      Icon(painterResource(R.drawable.ic_add_debate), contentDescription = stringResource(R.string.debate_start))
+    }
     IconButton(onClick = onMenuClick, modifier = Modifier.testTag("records-menu-open")) {
       Icon(painterResource(R.drawable.ic_menu), contentDescription = stringResource(R.string.menu_open))
     }

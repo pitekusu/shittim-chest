@@ -10,6 +10,9 @@ import kotlinx.serialization.Serializable
 internal data object RecordsList : NavKey
 
 @Serializable
+internal data object DebateCompose : NavKey
+
+@Serializable
 internal data class RecordDetail(val recordId: String) : NavKey {
   init { require(mobileOpaqueValue.matches(recordId)) { "invalid_record_route" } }
 }

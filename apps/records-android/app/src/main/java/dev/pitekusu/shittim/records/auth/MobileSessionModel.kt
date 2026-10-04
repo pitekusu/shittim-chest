@@ -19,7 +19,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-internal enum class SessionNotice { EXPIRED, CANCELLED, LOGIN_FAILED, BROWSER_UNAVAILABLE, LOCAL_LOGOUT }
+internal enum class SessionNotice { EXPIRED, CANCELLED, LOGIN_FAILED, BROWSER_UNAVAILABLE, LOCAL_LOGOUT, REAUTH_REQUIRED }
 
 // No credentials or saved UI state. Leaving SignedIn drops the previous user's profile.
 internal sealed interface SessionState {
@@ -148,6 +148,31 @@ internal class MobileSessionModel(
 
   fun retry() {
     if (state.value == SessionState.Unavailable) refresh()
+  }
+
+  /** Permission upgrade is not logout: keep encrypted drafts and record keys for the same account. */
+  fun reauthenticate(onReady: () -> Unit) {
+    if (state.value !is SessionState.SignedIn || operation?.isActive == true) return
+    val verification = operation
+    verification?.cancel()
+    expiry?.cancel()
+    revokeNotifications()
+    token = null
+    mutableCachePermit.value = null
+    offlineAllowed = false
+    mutableState.value = SessionState.Checking
+    operation = viewModelScope.launch {
+      try {
+        withContext(NonCancellable) {
+          verification?.join()
+          withContext(Dispatchers.IO) { clearToken() }
+        }
+        mutableState.value = SessionState.SignedOut(SessionNotice.REAUTH_REQUIRED)
+        operation = null
+        onReady()
+      } catch (error: CancellationException) { throw error }
+      catch (_: TokenStorageException) { mutableState.value = SessionState.StorageError }
+    }
   }
 
   fun openDestination(destination: String) {

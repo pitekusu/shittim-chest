@@ -29,6 +29,30 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class MobileSessionModelTest {
   @Test
+  fun permissionUpgradePreservesEncryptedDataAndCancellationDoesNotInvokeLogout() = runBlocking {
+    withContext(Dispatchers.Main) {
+      Fixture().use { fixture ->
+        fixture.stored = fixture.validToken
+        val model = fixture.start()
+        model.await<SessionState.SignedIn>()
+        yield()
+        var ready = false
+        model.reauthenticate { ready = true }
+        assertNull(model.cachePermit.value)
+        assertEquals(SessionNotice.REAUTH_REQUIRED, model.await<SessionState.SignedOut>().notice)
+        assertTrue(ready)
+        assertNull(fixture.stored)
+        assertEquals(0, fixture.cacheClears)
+        assertEquals(0, fixture.posts)
+        assertTrue(model.beginLogin())
+        model.loginResult(MobileLoginStep.Finished(MobileLoginStatus.CANCELLED))
+        assertEquals(SessionNotice.CANCELLED, (model.state.value as SessionState.SignedOut).notice)
+        assertEquals(0, fixture.cacheClears)
+      }
+    }
+  }
+
+  @Test
   fun notificationsAreRevokedBeforeOfflineLogoutWaitsForNetwork(): Unit = runBlocking {
     withContext(Dispatchers.Main) {
       Fixture().use { fixture ->
