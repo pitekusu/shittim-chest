@@ -1,5 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+  <string name="debate_start">議論を開始</string>
+  <string name="debate_question">3人に相談する議題</string>
+  <string name="debate_publish_notice">議題と回答はDiscordの既定チャンネルと議論の記録に掲載されます。</string>
+  <string name="debate_characters">%1$d / 1000文字</string>
+  <string name="debate_saving">暗号化して保存しています</string>
+  <string name="debate_submit">この議題で議論を開始</string>
+  <string name="debate_offline">下書きは保存できます。送信にはオンラインでのログイン確認が必要です。</string>
+  <string name="debate_storage_error">下書きを保存できませんでした。空き容量を確認してください。保存されるまで送信しません。</string>
+  <string name="debate_reauth">議論の開始にはDiscordで再認証してください。保存済みの記録と下書きは保持します。</string>
+  <string name="debate_forbidden">Discordサーバーの参加状態とチャンネルの権限を確認してください。</string>
+  <string name="debate_queue_full">現在の受付枠がいっぱいです。受付状態を確認し、時間を置いて同じ依頼を再送してください。</string>
+  <string name="debate_unavailable">現在は接続・受付状態を確認できません。新しい依頼として送り直さず、受付状態を確認してください。</string>
+  <string name="debate_unknown">受付状態を確認しています</string>
+  <string name="debate_check">受付状態を確認</string>
+  <string name="debate_retry">未受理の同じ依頼を再送</string>
+  <string name="debate_no_cancel">画面を閉じても議論は続きます。取消・再実行はDiscordで操作してください。</string>
+  <string name="debate_new">新しい議題を書く</string>
+  <string name="debate_accepted">受け付けました</string>
+  <string name="debate_queued">順番を待っています</string>
+  <string name="debate_starting">3人を呼び出しています</string>
+  <string name="debate_running">議論しています</string>
+  <string name="debate_publishing">議論が終わり、記録を公開しています</string>
+  <string name="debate_published">記録が公開されました</string>
+  <string name="debate_failed">議論を完了できませんでした</string>
+  <string name="debate_cancelled">Discordで取り消されました</string>
     <string name="app_name">シッテムの箱</string>
     <string name="brand_title">THE SHITTIM\nCHEST</string>
     <string name="preview_theme">表示を選択</string>
