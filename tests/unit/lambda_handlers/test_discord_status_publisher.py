@@ -181,6 +181,19 @@ def test_no_work_does_not_read_any_secret() -> None:
     assert reader.calls == []
 
 
+def test_mobile_v2_event_has_no_discord_interaction_and_keeps_no_work_secret_boundary() -> None:
+    internal_id = "m_" + "a" * 64
+    publisher = FakePublisher(StatusPublicationOutcome.NO_WORK, request_gateway=False)
+    reader = FakeReader()
+    result = handler(publisher, reader).handle(
+        {"schema_version": 2, "source": "mobile", "request_id": internal_id},
+        claim_owner="request-id",
+    )
+    assert result == {"outcome": "no_work"}
+    assert publisher.calls == [(internal_id, "request-id")]
+    assert reader.calls == []
+
+
 def test_persisted_boundary_mismatch_fails_before_token_read() -> None:
     publisher = FakePublisher(StatusPublicationOutcome.DELIVERED)
     publisher.request = replace(publisher.request, application_id="999")
@@ -201,6 +214,11 @@ def test_persisted_boundary_mismatch_fails_before_token_read() -> None:
         {"schema_version": True, "interaction_id": "300"},
         {"schema_version": 1, "interaction_id": "not-a-snowflake"},
         {"schema_version": 1, "interaction_id": "300", "token": "forbidden"},
+        {"schema_version": 2, "source": "mobile", "request_id": "300"},
+        {"schema_version": 2, "source": "discord", "request_id": "m_" + "a" * 64},
+        {"schema_version": 2.0, "source": "mobile", "request_id": "m_" + "a" * 64},
+        {"schema_version": 2, "source": "mobile", "request_id": "m_" + "A" * 64},
+        {"schema_version": 2, "source": "mobile", "request_id": "m_" + "a" * 64, "token": "x"},
     ],
 )
 def test_invalid_event_fails_before_token_read(event: object) -> None:

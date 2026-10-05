@@ -99,8 +99,9 @@ internal fun AdaptiveRecordsUi(
     val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
     val visibleMotion = motionAllowed && lifecycle.isAtLeast(Lifecycle.State.STARTED) &&
       ValueAnimator.areAnimatorsEnabled()
-    val listMotion = visibleMotion && queryMode == RecordQueryMode.Closed && state.selectedRecordId == null
-    val refreshAvailable = state.canReadRecords && state.selectedRecordId == null &&
+    val onList = state.backStack.lastOrNull() == RecordsList
+    val listMotion = visibleMotion && queryMode == RecordQueryMode.Closed && onList
+    val refreshAvailable = state.canReadRecords && onList &&
       queryMode == RecordQueryMode.Closed && motionAllowed && lifecycle.isAtLeast(Lifecycle.State.STARTED)
     // WorkManager owns the operation. Queued/offline work must not keep the gesture spinner alive.
     val refreshing = refreshAvailable && state.sync == RecordSyncState.Running
@@ -117,8 +118,8 @@ internal fun AdaptiveRecordsUi(
         searchScrollState.scrollToItem(0)
       }
     }
-    LaunchedEffect(state.selectedRecordId, state.recordOwner) {
-      if (state.selectedRecordId != null) {
+    LaunchedEffect(state.backStack.lastOrNull(), state.recordOwner) {
+      if (!onList) {
         queryMode = RecordQueryMode.Closed
         focusManager.clearFocus(force = true)
         keyboard?.hide()
@@ -165,7 +166,7 @@ internal fun AdaptiveRecordsUi(
                 selectedRecordId = state.selectedRecordId.takeIf { twoPanes }, motionAllowed = listMotion)
             }
             val queryAvailable = (state.records as? RecordListState.Ready)?.saved == true || !state.listQuery.isDefault
-            if (queryAvailable && state.selectedRecordId == null && queryMode == RecordQueryMode.Closed && motionAllowed) {
+            if (queryAvailable && onList && queryMode == RecordQueryMode.Closed && motionAllowed) {
               Box(Modifier.align(Alignment.BottomCenter).widthIn(max = 560.dp).fillMaxWidth(),
                 contentAlignment = Alignment.BottomEnd) {
                 // Nav3 moves this entry between single- and two-pane lookahead roots. A local
@@ -199,6 +200,38 @@ internal fun AdaptiveRecordsUi(
           }
         }
       }
+      val composeContent = rememberUpdatedState<@Composable () -> Unit> {
+        ShittimBackdrop(Modifier.fillMaxSize()) {
+          DebateComposeScreen(state.debate, state.debateOnline,
+            onEdit = { state.eventSink(BootstrapScreen.Event.EditDebate(it)) },
+            onSubmit = { state.eventSink(BootstrapScreen.Event.SubmitDebate) },
+            onCheck = { state.eventSink(BootstrapScreen.Event.CheckDebate) },
+            onRetry = { state.eventSink(BootstrapScreen.Event.RetryDebate) },
+            onReauth = { state.eventSink(BootstrapScreen.Event.ReauthenticateDebate) },
+            onNew = { state.eventSink(BootstrapScreen.Event.NewDebateDraft) },
+            modifier = Modifier.widthIn(max = 760.dp).align(Alignment.TopCenter))
+        }
+      }
+      val requestsContent = rememberUpdatedState<@Composable () -> Unit> {
+        ShittimBackdrop(Modifier.fillMaxSize()) {
+          DebateRequestsScreen(state.debateHistory, state.debateOnline,
+            onOpen = { state.eventSink(BootstrapScreen.Event.OpenDebateRequest(it)) },
+            onMore = { state.eventSink(BootstrapScreen.Event.LoadMoreDebateRequests) },
+            onRetry = { state.eventSink(BootstrapScreen.Event.RefreshDebateRequests) },
+            modifier = Modifier.widthIn(max = 760.dp).align(Alignment.TopCenter))
+        }
+      }
+      val statusContent = rememberUpdatedState<@Composable (DebateRequestStatus) -> Unit> { route ->
+        ShittimBackdrop(Modifier.fillMaxSize()) {
+          DebateRequestStatusScreen(route.requestId, state.debateStatus, state.debate,
+            state.debateOnline,
+            onRetry = { state.eventSink(BootstrapScreen.Event.RetryDebate) },
+            onResult = { state.eventSink(BootstrapScreen.Event.OpenDebateResult(it)) },
+            onReauth = { state.eventSink(BootstrapScreen.Event.ReauthenticateDebate) },
+            onNew = { state.eventSink(BootstrapScreen.Event.NewDebateDraft) },
+            modifier = Modifier.widthIn(max = 760.dp).align(Alignment.TopCenter))
+        }
+      }
       val entries = rememberDecoratedNavEntries(backStack = state.backStack,
         entryDecorators = listOf(rememberSaveableStateHolderNavEntryDecorator()),
         entryProvider = entryProvider {
@@ -208,6 +241,9 @@ internal fun AdaptiveRecordsUi(
             }
           }) + ListDetailSceneStrategy.preferredPaneSize(width = 400.dp)) { listContent.value() }
           entry<RecordDetail>(metadata = ListDetailSceneStrategy.detailPane()) { detailContent.value(it) }
+          entry<DebateCompose> { composeContent.value() }
+          entry<DebateRequests> { requestsContent.value() }
+          entry<DebateRequestStatus> { statusContent.value(it) }
         })
       val onBack = { state.eventSink(BootstrapScreen.Event.CloseRecord) }
       val sceneState = rememberSceneState(entries, listOf(sceneStrategy), onBack = onBack)
@@ -236,7 +272,7 @@ internal fun AdaptiveRecordsUi(
           })
       }
     }
-    if (state.canReadRecords && state.selectedRecordId == null) {
+    if (state.canReadRecords && onList) {
       when (queryMode) {
         RecordQueryMode.Filters -> RecordFilterSheet(state.listQuery,
           requesters = state.requesters,

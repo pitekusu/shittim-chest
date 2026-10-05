@@ -229,6 +229,7 @@ const adminFunctionKeys = [
   "records_admin_status",
   "records_mobile_push_worker",
   "records_admin_config",
+  "records_mobile_debate_api",
 ] as const;
 
 const nextTaskReleaseTag = "release-b7c975496109a6cf1b343fa1481a8577e999ec41-33177843936-1";
@@ -2389,6 +2390,11 @@ test("service status page presents localized visual status", async ({ page }, te
   await expect(translationCache).toContainText("未翻訳件数0");
   await expect(translationCache).toContainText("最終翻訳日時2026年8月29日 11:07");
   await expect(page.getByRole("region", { name: "Lambda関数状態" })).toBeVisible();
+  await expect(
+    page
+      .locator("#admin-service-lambda")
+      .getByRole("rowheader", { name: /^Android議論受付・進捗API/ }),
+  ).toContainText("稼働中 · 更新 正常");
   await expect(page.getByRole("region", { name: "API Gateway状態" })).toBeVisible();
   await expect(page.getByRole("region", { name: "定期実行とイベント配信" })).toBeVisible();
   await expect(page.getByRole("row", { name: /^モモトーク生成の再開/ })).toContainText(

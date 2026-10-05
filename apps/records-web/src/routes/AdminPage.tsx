@@ -183,6 +183,7 @@ const LAMBDA_RESOURCES = [
   { key: "records_momotalk_worker", label: "モモトーク生成" },
   { key: "records_momotalk_announcement", label: "モモトーク公開通知" },
   { key: "records_mobile_push_worker", label: "Android議論通知" },
+  { key: "records_mobile_debate_api", label: "Android議論受付・進捗API" },
   { key: "records_admin_status", label: "管理状態API" },
   { key: "records_admin_config", label: "プロンプト管理API" },
 ] as const;

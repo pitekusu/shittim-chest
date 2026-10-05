@@ -14,6 +14,9 @@ import java.time.ZoneOffset
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -25,6 +28,30 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class MobileSessionModelTest {
+  @Test
+  fun permissionUpgradePreservesEncryptedDataAndCancellationDoesNotInvokeLogout() = runBlocking {
+    withContext(Dispatchers.Main) {
+      Fixture().use { fixture ->
+        fixture.stored = fixture.validToken
+        val model = fixture.start()
+        model.await<SessionState.SignedIn>()
+        yield()
+        var ready = false
+        model.reauthenticate { ready = true }
+        assertNull(model.cachePermit.value)
+        assertEquals(SessionNotice.REAUTH_REQUIRED, model.await<SessionState.SignedOut>().notice)
+        assertTrue(ready)
+        assertNull(fixture.stored)
+        assertEquals(0, fixture.cacheClears)
+        assertEquals(0, fixture.posts)
+        assertTrue(model.beginLogin())
+        model.loginResult(MobileLoginStep.Finished(MobileLoginStatus.CANCELLED))
+        assertEquals(SessionNotice.CANCELLED, (model.state.value as SessionState.SignedOut).notice)
+        assertEquals(0, fixture.cacheClears)
+      }
+    }
+  }
+
   @Test
   fun notificationsAreRevokedBeforeOfflineLogoutWaitsForNetwork(): Unit = runBlocking {
     withContext(Dispatchers.Main) {
@@ -80,17 +107,29 @@ class MobileSessionModelTest {
       Fixture().use { fixture ->
         fixture.stored = fixture.validToken
         val model = fixture.start()
-        model.await<SessionState.SignedIn>()
-        yield()
+        suspend fun awaitStage(stage: String, action: suspend () -> Unit) {
+          try { withTimeout(5_000) { action() } }
+          catch (error: TimeoutCancellationException) {
+            // Fixed state names and booleans only; never print a profile, token, or account identifier.
+            throw AssertionError("session_test_wait:$stage,state=${model.state.value::class.simpleName}," +
+              "gets=${fixture.gets},activationCompleted=${fixture.activationJob?.isCompleted}," +
+              "activationCancelled=${fixture.activationJob?.isCancelled},permit=${model.cachePermit.value != null}," +
+              "stored=${fixture.stored != null},storedPermit=${fixture.stored?.cacheAuthorization != null}", error)
+          }
+        }
+        awaitStage("signed_in") { model.await<SessionState.SignedIn>() }
+        // SignedIn is emitted before the refresh Job completes; one yield is not a completion barrier.
+        awaitStage("initial_refresh_finished") { checkNotNull(fixture.activationJob).join() }
         fixture.activationGate = CompletableDeferred()
         fixture.activationStarted = CompletableDeferred()
         model.onForeground()
-        withTimeout(5_000) { fixture.activationStarted.await() }
+        awaitStage("cache_activation") { fixture.activationStarted.await() }
+        // The old 200 response is already decoded; only the next server check must reject access.
+        fixture.status = HttpStatusCode.Forbidden
         model.onAuthenticationRequired()
         assertNull(model.cachePermit.value)
-        fixture.status = HttpStatusCode.Forbidden
         fixture.activationGate!!.complete(Unit)
-        model.await<SessionState.SignedOut>()
+        awaitStage("signed_out") { model.await<SessionState.SignedOut>() }
         assertNull(model.cachePermit.value)
         assertNull(fixture.stored)
         assertEquals(3, fixture.gets) // The final check starts after the denial.
@@ -679,6 +718,7 @@ class MobileSessionModelTest {
     var sessionStarted = CompletableDeferred<Unit>()
     var activationGate: CompletableDeferred<Unit>? = null
     var activationStarted = CompletableDeferred<Unit>()
+    var activationJob: Job? = null
     var logoutGate: CompletableDeferred<Unit>? = null
     val postStarted = CompletableDeferred<Unit>()
     val owner = ViewModelStore()
@@ -719,7 +759,10 @@ class MobileSessionModelTest {
       assertNull(stored)
       assertFalse(cacheClearFails)
       logoutPending = false
-    }, { activationStarted.complete(Unit); activationGate?.await(); activatedAccounts.add(it) }, {
+    }, {
+      activationJob = currentCoroutineContext()[Job]
+      activationStarted.complete(Unit); activationGate?.await(); activatedAccounts.add(it)
+    }, {
       cacheClears++
       if (cacheClearFails) throw dev.pitekusu.shittim.records.storage.RecordCacheException()
     }, Clock.fixed(now, ZoneOffset.UTC), revokeNotifications = { notificationRevocations++ })

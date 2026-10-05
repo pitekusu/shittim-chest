@@ -126,6 +126,20 @@ def test_wrong_binding_is_rejected_without_consuming_grant(exchange, field):
     assert store.grant == before and not store.sessions
 
 
+def test_verified_discord_identity_is_kept_only_in_the_private_session(exchange):
+    service, store, _avatars = exchange
+    identity = {"discord_user_id": "1" * 18, "discord_username": "synthetic-user"}
+    store.grant = MobileAuthorizedTransaction.model_validate(
+        {**store.grant.model_dump(), **identity}
+    )
+    response = service.exchange(REQUEST)
+    saved = next(iter(store.sessions.values()))
+    assert saved.discord_user_id == identity["discord_user_id"]
+    assert saved.discord_username == identity["discord_username"]
+    for value in identity.values():
+        assert value not in response.model_dump_json() + repr(response) + repr(saved)
+
+
 @pytest.mark.parametrize("seconds", [1039, 1100, 1600])
 def test_code_deadlines_reject_even_when_storage_returns_a_stale_row(exchange, seconds):
     service, store, _avatars = exchange

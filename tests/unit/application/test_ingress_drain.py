@@ -438,6 +438,31 @@ async def test_drain_remains_closed_until_supervisor_schema_recovery_and_admissi
 
 
 @pytest.mark.asyncio
+async def test_mobile_request_uses_same_claim_accept_prepare_activate_pipeline() -> None:
+    item = IngressRequest.mobile_debate(
+        request_id="00000000-0000-4000-8000-a00000000001",
+        owner_key="a" * 43,
+        application_id="application-id",
+        question="A fictional question",
+        requester_id="requester-id",
+        requester_username="requester",
+        requester_display_name="Requester",
+        guild_id="guild-id",
+        channel_id="channel-id",
+        created_at=NOW,
+    )
+    item = replace(item, status_message_id="123", status_message_updated_at=NOW)
+    ingress = FakeIngressRepository(ready=(item,))
+    commands = FakeCommands()
+    context = FakeContext()
+    report = await drainer(ingress=ingress, commands=commands, context=context).drain_once()
+    assert (report.claimed, report.accepted) == (1, 1)
+    assert commands.calls == [item.interaction_id]
+    assert context.prepared == context.activated == [item.interaction_id]
+    assert ingress.accepted[0][0] == item.interaction_id
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status", [RuntimeStatus.READY, RuntimeStatus.BUSY])
 async def test_drain_preserves_repository_fifo_and_persists_accepted_ids(
     status: RuntimeStatus,

@@ -268,6 +268,7 @@ class FakeGateway:
         self.edited = 0
         self.fetched = 0
         self.searched = 0
+        self.search_after_message_ids: list[str] = []
         self.fetch_result: DiscordStatusMessage | Exception | None = None
         self.search_result: DiscordStatusMessage | None = None
         self.search_error: StatusDeliveryError | None = None
@@ -314,9 +315,9 @@ class FakeGateway:
             author_id,
             nonce,
             operation_marker,
-            after_message_id,
             checkpoint,
         )
+        self.search_after_message_ids.append(after_message_id)
         self.searched += 1
         if self.search_error is not None:
             raise self.search_error
@@ -379,6 +380,58 @@ def work() -> StatusPublicationWork:
         content=render_public_status(source, StatusMessageState.STARTING),
     )
     return StatusPublicationWork(request=source, publication=publication)
+
+
+@pytest.mark.asyncio
+async def test_mobile_ambiguous_write_searches_real_history_without_creating_a_duplicate() -> None:
+    source = replace(
+        IngressRequest.mobile_debate(
+            request_id="00000000-0000-4000-8000-a00000000001",
+            owner_key="a" * 43,
+            application_id="200",
+            question="A fictional question",
+            requester_id="400",
+            requester_username="requester",
+            requester_display_name="Requester",
+            guild_id="100",
+            channel_id="101",
+            created_at=NOW,
+        ),
+        history_after_snowflake="300",
+    )
+    publication = IngressStatusPublication.prepared(
+        source, content=render_public_status(source, source.status_message_state)
+    )
+    repository = FakeStatusRepository(StatusPublicationWork(source, publication))
+    gateway = FakeGateway(publication, source.application_id)
+    gateway.create_error = StatusWriteAmbiguous()
+    clock = FixedClock()
+    publisher = PublicStatusPublisher(
+        repository=cast(StatusPublicationRepository, repository), clock=cast(Clock, clock)
+    )
+    assert (
+        await publisher.publish(
+            interaction_id=source.interaction_id,
+            claim_owner="worker",
+            gateway_factory=lambda _: _gateway(gateway),
+        )
+        is StatusPublicationOutcome.RETRY_SCHEDULED
+    )
+    assert gateway.created == 1
+    assert repository.work.publication.history_reconciliation_required
+    clock.current = repository.rescheduled[-1]
+    gateway.create_error = None
+    gateway.search_result = gateway.message()
+    assert (
+        await publisher.publish(
+            interaction_id=source.interaction_id,
+            claim_owner="worker",
+            gateway_factory=lambda _: _gateway(gateway),
+        )
+        is StatusPublicationOutcome.DELIVERED
+    )
+    assert gateway.search_after_message_ids == ["300"]
+    assert gateway.created == 1
 
 
 @pytest.mark.parametrize("state", tuple(StatusMessageState))

@@ -49,10 +49,13 @@ private val adminDestinations = listOf(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun RecordsAppBar(onMenuClick: () -> Unit) {
+internal fun RecordsAppBar(onMenuClick: () -> Unit, onCompose: () -> Unit = {}) {
   TopAppBar(title = {
     Text(stringResource(R.string.record_title), style = MaterialTheme.typography.titleMediumEmphasized)
   }, actions = {
+    IconButton(onClick = onCompose, modifier = Modifier.testTag("debate-compose-open")) {
+      Icon(painterResource(R.drawable.ic_add_debate), contentDescription = stringResource(R.string.debate_start))
+    }
     IconButton(onClick = onMenuClick, modifier = Modifier.testTag("records-menu-open")) {
       Icon(painterResource(R.drawable.ic_menu), contentDescription = stringResource(R.string.menu_open))
     }
@@ -80,6 +83,11 @@ internal fun RecordsNavigationMenu(state: BootstrapScreen.State, onDismiss: () -
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).testTag("records-menu-content")
       .padding(horizontal = ShittimSpacing.Medium, vertical = ShittimSpacing.Small),
       verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Small)) {
+      MenuItem(R.string.debate_requests, R.drawable.ic_add_debate,
+        modifier = Modifier.testTag("debate-requests-open"), onClick = {
+          onDismiss()
+          state.eventSink(BootstrapScreen.Event.ShowDebateRequests)
+        })
       ShittimSectionHeading(stringResource(R.string.menu_web))
       webDestinations.forEach { (label, path) ->
         MenuItem(label, R.drawable.ic_open_web, onClick = { openWeb(path) })

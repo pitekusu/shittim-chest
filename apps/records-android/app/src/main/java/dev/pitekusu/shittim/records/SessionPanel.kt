@@ -54,6 +54,7 @@ internal fun SessionPanel(state: SessionState, onEvent: (BootstrapScreen.Event) 
           SessionNotice.LOGIN_FAILED -> R.string.session_login_failed
           SessionNotice.BROWSER_UNAVAILABLE -> R.string.session_no_browser
           SessionNotice.LOCAL_LOGOUT -> R.string.session_local_logout
+          SessionNotice.REAUTH_REQUIRED -> R.string.debate_reauth
           null -> null
         }
         if (explanation != null) Text(stringResource(explanation))

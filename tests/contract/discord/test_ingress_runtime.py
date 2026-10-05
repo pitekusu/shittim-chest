@@ -448,9 +448,35 @@ def discord_context(
 
 
 @pytest.mark.asyncio
-async def test_prepare_reuses_durable_status_message_as_starter_and_binds_context() -> None:
+@pytest.mark.parametrize("mobile", [False, True])
+async def test_prepare_reuses_durable_status_message_as_starter_and_binds_context(
+    mobile: bool,
+) -> None:
     current = snapshot()
     request = claimed_request(current)
+    if mobile:
+        pending = IngressRequest.mobile_debate(
+            request_id="00000000-0000-4000-8000-a00000000001",
+            owner_key="a" * 43,
+            application_id=str(MODERATOR_APPLICATION_ID),
+            question=current.question,
+            requester_id=current.requester_id,
+            requester_username=current.requester_username,
+            requester_display_name=current.requester_display_name,
+            guild_id=current.guild_id,
+            channel_id=current.channel_id,
+            created_at=NOW,
+        )
+        request = replace(
+            pending,
+            status=request.status,
+            status_message_id=request.status_message_id,
+            status_message_updated_at=request.status_message_updated_at,
+            updated_at=request.updated_at,
+            claim_owner=request.claim_owner,
+            claim_expires_at=request.claim_expires_at,
+            delivery_attempt=request.delivery_attempt,
+        )
     application = FakeApplication(current)
     client_set = clients()
     moderator = client_set[DiscordBotSlot.MODERATOR]

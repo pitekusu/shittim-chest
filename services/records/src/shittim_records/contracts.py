@@ -902,6 +902,64 @@ class ErrorResponse(PublicModel):
     error: ErrorBody
 
 
+DebateRequestId = Annotated[
+    str, Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+]
+DebateRequestStatus = Literal[
+    "accepted", "queued", "starting", "running", "publishing", "published", "failed", "cancelled"
+]
+
+
+class DebateStartRequest(PublicModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    request_id: DebateRequestId
+    question: Annotated[str, Field(min_length=1, max_length=1000, pattern=r"\S", repr=False)]
+
+
+class DebateRequestResponse(PublicModel):
+    model_config = ConfigDict(
+        hide_input_in_errors=True,
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {"status": {"const": "published"}},
+                        "required": ["status"],
+                    },
+                    "then": {
+                        "properties": {"recordId": {"type": "string"}},
+                        "required": ["recordId"],
+                    },
+                    "else": {"properties": {"recordId": {"type": "null"}}},
+                }
+            ],
+        },
+    )
+
+    request_id: DebateRequestId
+    question: Annotated[str, Field(min_length=1, max_length=1000, pattern=r"\S", repr=False)]
+    status: DebateRequestStatus
+    phase: str | None
+    created_at: AwareDatetime
+    updated_at: AwareDatetime
+    record_id: RecordId | None
+    error_code: Literal["DEBATE_REJECTED", "DEBATE_FAILED", "DEBATE_CANCELLED"] | None
+
+    @model_validator(mode="after")
+    def published_record_only(self) -> DebateRequestResponse:
+        if (self.status == "published") != (self.record_id is not None):
+            raise ValueError("record is available only after publication")
+        if self.updated_at < self.created_at:
+            raise ValueError("request update precedes creation")
+        return self
+
+
+class DebateRequestsResponse(PublicModel):
+    items: list[DebateRequestResponse]
+    next_cursor: str | None
+
+
 class MomotalkWeek(PublicModel):
     week_id: date
     period_start: AwareDatetime
@@ -956,6 +1014,8 @@ class MomotalkRoomResponse(PublicModel):
 
 
 PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
+    DebateRequestResponse,
+    DebateRequestsResponse,
     RecordListResponse,
     RecordSyncIndexResponse,
     RecordDetailResponse,
@@ -978,6 +1038,7 @@ PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
 )
 
 PUBLIC_REQUEST_MODELS: tuple[type[BaseModel], ...] = (
+    DebateStartRequest,
     MemorialUploadRequest,
     MemorialGenerateRequest,
     MemorialResetRequest,

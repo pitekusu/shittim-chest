@@ -15,7 +15,7 @@ from shittim_records.mobile_auth import (
     MobileSessionRecord,
     MobileStartedTransaction,
 )
-from shittim_records.mobile_auth_adapters import DynamoMobileAuthStore
+from shittim_records.mobile_auth_adapters import DynamoMobileAuthStore, _item, _session_item
 
 
 def mobile_states() -> tuple[
@@ -248,3 +248,69 @@ def test_session_storage_rejects_raw_keys_and_does_not_hide_aws_failure():
             store.get_session(session_hash="a" * 64)
         with pytest.raises(client.exceptions.ProvisionedThroughputExceededException):
             store.delete_session(session_hash="a" * 64)
+
+
+def test_legacy_authorized_grant_and_session_keep_canonical_payload_and_cas():
+    grant = mobile_states()[2]
+    session = mobile_session()
+    private_fields = {"discord_user_id", "discord_username"}
+    legacy_grant = grant.model_dump_json(by_alias=True, exclude=private_fields)
+    legacy_session = session.model_dump_json(exclude=private_fields)
+    assert _item(grant)["payload"] == legacy_grant
+    assert _session_item("a" * 64, session)["payload"] == legacy_session
+    assert '"avatar_asset_key":null' in legacy_session
+    client = boto3.client(
+        "dynamodb",
+        region_name="ap-northeast-1",
+        aws_access_key_id="local",
+        aws_secret_access_key="local",  # noqa: S106 - offline Stubber only.
+    )
+    store = DynamoMobileAuthStore(client, "test-mobile-auth")
+    with Stubber(client) as stub:
+        stub.add_response("get_item", {"Item": marshal_item(_item(grant))})
+        stub.add_response("get_item", {"Item": marshal_item(_session_item("a" * 64, session))})
+        assert store.get(grant.transaction_hash, now_epoch=1041) == grant
+        assert store.get_session(session_hash="a" * 64) == session
+    consumed = store.consumption_write(grant, now_epoch=1041)["Put"]
+    assert consumed["ExpressionAttributeValues"][":expected"] == {"S": legacy_grant}
+
+
+def test_identity_mismatch_cannot_issue_session_or_call_storage():
+    grant = mobile_states()[2].model_copy(
+        update={
+            "discord_user_id": "1" * 18,
+            "discord_username": "synthetic-user",
+        }
+    )
+    session = mobile_session().model_copy(
+        update={
+            "discord_user_id": "2" * 18,
+            "discord_username": "another-user",
+        }
+    )
+    client = boto3.client(
+        "dynamodb",
+        region_name="ap-northeast-1",
+        aws_access_key_id="local",
+        aws_secret_access_key="local",  # noqa: S106 - offline Stubber only.
+    )
+    with Stubber(client), pytest.raises(AuthFailure, match=r"^mobile_grant_invalid$"):
+        DynamoMobileAuthStore(client, "test-mobile-auth").issue_session(
+            grant, session_hash="a" * 64, session=session, now_epoch=1041
+        )
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        {"discord_user_id": "1" * 18},
+        {"discord_username": "synthetic-user"},
+        {"discord_user_id": "not-a-discord-id", "discord_username": "synthetic-user"},
+    ],
+)
+def test_partial_or_invalid_private_identity_is_rejected(identity):
+    from pydantic import ValidationError
+
+    for state in (mobile_states()[2], mobile_session()):
+        with pytest.raises(ValidationError):
+            type(state).model_validate({**state.model_dump(), **identity})

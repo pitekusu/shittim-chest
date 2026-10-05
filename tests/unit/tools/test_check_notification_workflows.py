@@ -915,6 +915,22 @@ def test_records_release_requires_errexit_for_create_plan_calls(directory: Path)
         validate_notification_workflows(directory)
 
 
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "ParameterKey=MobileDebateEnabled,UsePreviousValue=true",
+        "ParameterKey=MobileDebateChannelId,UsePreviousValue=true",
+        "ParameterKey=MobileDebateEnabled,ParameterValue=false",
+        '"ParameterKey=MobileDebateChannelId,ParameterValue=")',
+        '"${mobile_debate_parameters[@]}"',
+    ],
+)
+def test_records_release_preserves_mobile_debate_settings(directory: Path, marker: str) -> None:
+    _replace(directory / RECORDS_RELEASE_WORKFLOW, marker, "removed-mobile-setting", 1)
+    with pytest.raises(WorkflowPolicyError, match="fail-closed mobile debate"):
+        validate_notification_workflows(directory)
+
+
 def test_records_release_rejects_deletion_time_as_stack_absence(
     directory: Path,
 ) -> None:

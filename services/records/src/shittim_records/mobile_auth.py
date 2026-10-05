@@ -164,6 +164,17 @@ class MobileAuthorizedTransaction(MobileTransaction):
     display_name: NonEmptyText = Field(repr=False)
     avatar_asset_key: str | None = Field(repr=False)
     guild_verified_at: AwareDatetime
+    # Verified OAuth identity for native submission, not part of any public DTO.
+    discord_user_id: Annotated[str | None, Field(pattern=r"^[0-9]{17,20}$")] = Field(
+        default=None, repr=False
+    )
+    discord_username: NonEmptyText | None = Field(default=None, repr=False, max_length=80)
+
+    @model_validator(mode="after")
+    def validate_discord_identity(self) -> MobileAuthorizedTransaction:
+        if (self.discord_user_id is None) != (self.discord_username is None):
+            raise ValueError("invalid_mobile_discord_identity")
+        return self
 
     @model_validator(mode="after")
     def validate_code_lifetime(self) -> MobileAuthorizedTransaction:
@@ -203,6 +214,10 @@ class MobileSessionRecord(BaseModel):
     guild_verified_at: AwareDatetime
     created_at: EpochSeconds
     expires_at: EpochSeconds
+    discord_user_id: Annotated[str | None, Field(pattern=r"^[0-9]{17,20}$")] = Field(
+        default=None, repr=False
+    )
+    discord_username: NonEmptyText | None = Field(default=None, repr=False, max_length=80)
 
     @model_validator(mode="after")
     def validate_session(self) -> MobileSessionRecord:
@@ -210,6 +225,8 @@ class MobileSessionRecord(BaseModel):
             raise ValueError("invalid_mobile_session_lifetime")
         if self.avatar_asset_key not in (None, f"requesters/{self.requester_key}/avatar.webp"):
             raise ValueError("invalid_mobile_avatar_asset")
+        if (self.discord_user_id is None) != (self.discord_username is None):
+            raise ValueError("invalid_mobile_discord_identity")
         return self
 
 

@@ -42,6 +42,7 @@ const RANKING_FUNCTION_NAME = "shittim-chest-production-records-ranking";
 const READ_FUNCTION_NAME = "shittim-chest-production-records-read";
 const OGP_FUNCTION_NAME = "shittim-chest-production-records-ogp";
 const MOBILE_PUSH_FUNCTION_NAME = "shittim-chest-production-records-mobile-push-worker";
+const MOBILE_DEBATE_FUNCTION_NAME = "shittim-chest-production-records-mobile-debate-api";
 const FIREBASE_SERVICE_ACCOUNT_PARAMETER_NAME =
   "/shittim-chest/production/records/firebase/service-account";
 const MODERATOR_TOKEN_PARAMETER_NAME =
@@ -61,6 +62,7 @@ export class RecordsApplicationStack extends Stack {
   public readonly readFunction: lambda.Function;
   public readonly ogpFunction: lambda.Function;
   public readonly mobilePushFunction: lambda.Function;
+  public readonly mobileDebateFunction: lambda.Function;
 
   public constructor(
     scope: Construct,
@@ -110,6 +112,15 @@ export class RecordsApplicationStack extends Stack {
         description: "Exact version currently bound to the production Runtime stack",
       },
     );
+    const mobileDebateEnabled = new CfnParameter(this, "MobileDebateEnabled", {
+      type: "String", default: "false", allowedValues: ["false", "true"],
+      description: "Enable new Android submissions only after compatible Core deployment",
+    });
+    const mobileDebateChannel = new CfnParameter(this, "MobileDebateChannelId", {
+      type: "String", default: "", allowedPattern: "^$|^[0-9]{17,20}$",
+      description: "One normal text channel from the existing Core allowlist; required when enabled",
+      noEcho: true,
+    });
 
     const sourceTable = dynamodb.Table.fromTableAttributes(this, "SourceDebateTable", {
       tableName: sourceTableName.valueAsString,
@@ -1495,6 +1506,7 @@ export class RecordsApplicationStack extends Stack {
       account: "shittim-chest-production-account",
     } as const;
     const statusFunctionNames = {
+      records_mobile_debate_api: MOBILE_DEBATE_FUNCTION_NAME,
       records_mobile_push_worker: MOBILE_PUSH_FUNCTION_NAME,
       records_momotalk_collector: MOMOTALK_COLLECTOR_FUNCTION_NAME,
       records_momotalk_worker: MOMOTALK_WORKER_FUNCTION_NAME,
@@ -1517,6 +1529,7 @@ export class RecordsApplicationStack extends Stack {
       records_admin_status: ADMIN_STATUS_FUNCTION_NAME,
     } as const;
     const memorialStatusFunctionNames = [
+      MOBILE_DEBATE_FUNCTION_NAME,
       MEMORIAL_API_FUNCTION_NAME,
       MEMORIAL_WORKER_FUNCTION_NAME,
       MOMOTALK_COLLECTOR_FUNCTION_NAME,
@@ -1967,6 +1980,99 @@ export class RecordsApplicationStack extends Stack {
       version: memorialApiVersion,
     });
 
+    const ingressPartitions = [
+      "CONTROL#INGRESS", "CONTROL#INGRESS#ACTIVE", "INGRESS_OPERATION#m_*", "MOBILE_INGRESS#*",
+    ];
+    const sourceMetaFields = [
+      "PK", "SK", "schema_version", "record_type", "debate_id", "requester_id",
+      "guild_id", "channel_id", "current_phase", "updated_at",
+    ];
+    const runtimeParameterName = `/shittim-chest/production/runtime/${legacyRuntimeConfigVersion.valueAsString}`;
+    this.mobileDebateFunction = this.httpFunctionWithRole({
+      id: "MobileDebateFunction", functionName: MOBILE_DEBATE_FUNCTION_NAME,
+      handler: "shittim_records.mobile_debate_handler.handler", code,
+      timeout: Duration.seconds(29), reservedConcurrentExecutions: 2,
+      environment: {
+        SOURCE_TABLE_NAME: sourceTable.tableName, SESSION_TABLE_NAME: sessionTable.tableName,
+        ARCHIVE_TABLE_NAME: archiveTable.tableName,
+        IDENTITY_HMAC_PARAMETER_NAME: identityParameter.parameterName,
+        SESSION_KEY_PARAMETER_NAME: sessionKeyParameter.parameterName,
+        RUNTIME_CONFIG_PARAMETER_NAME: runtimeParameterName,
+        MODERATOR_TOKEN_PARAMETER_NAME,
+        PUBLIC_ORIGIN: `https://${recordsPublicHostname.valueAsString}`,
+        MOBILE_DEBATE_ENABLED: mobileDebateEnabled.valueAsString,
+        MOBILE_DEBATE_CHANNEL_ID: mobileDebateChannel.valueAsString,
+      },
+      policyStatements: [
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem", "dynamodb:Query"], resources: [sourceTable.tableArn],
+          conditions: { "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ingressPartitions }, Null: { "dynamodb:LeadingKeys": "false" } },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:PutItem", "dynamodb:UpdateItem"], resources: [sourceTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ingressPartitions },
+            StringEquals: { "dynamodb:EnclosingOperation": "TransactWriteItems" },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:ConditionCheckItem"], resources: [sourceTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["CONTROL#DEPLOYMENT"] },
+            StringEquals: { "dynamodb:EnclosingOperation": "TransactWriteItems" },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"], resources: [sourceTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEBATE#*"] },
+            "ForAllValues:StringEquals": { "dynamodb:Attributes": sourceMetaFields },
+            StringEqualsIfExists: { "dynamodb:Select": "SPECIFIC_ATTRIBUTES" },
+            Null: { "dynamodb:Attributes": "false", "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem", "dynamodb:DeleteItem"], resources: [sessionTable.tableArn],
+          conditions: { "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["MOBILE_SESSION#*"] }, Null: { "dynamodb:LeadingKeys": "false" } },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:ConditionCheckItem"], resources: [sessionTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["MOBILE_SESSION#*"] },
+            StringEquals: { "dynamodb:EnclosingOperation": "TransactWriteItems" },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"], resources: [archiveTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["RECORD#*"] },
+            "ForAllValues:StringEquals": { "dynamodb:Attributes": ["PK", "SK", "schema_version", "record_type", "record_id", "requester_key", "question"] },
+            StringEqualsIfExists: { "dynamodb:Select": "SPECIFIC_ATTRIBUTES" },
+            Null: { "dynamodb:Attributes": "false", "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["ssm:GetParameters"], resources: [
+            identityParameter.parameterArn, sessionKeyParameter.parameterArn,
+            this.formatArn({ service: "ssm", resource: "parameter", resourceName: runtimeParameterName.slice(1) }),
+            this.formatArn({ service: "ssm", resource: "parameter", resourceName: MODERATOR_TOKEN_PARAMETER_NAME.slice(1) }),
+          ],
+        }),
+      ],
+    });
+    const mobileDebateVersion = new lambda.Version(this, "MobileDebateVersion", {
+      lambda: this.mobileDebateFunction, codeSha256: bundleCodeSha256.valueAsString,
+      // Lambda versions freeze configuration. Flag changes must replace the
+      // version and advance live even when the reviewed code bundle is unchanged.
+      description: `Native debate admission enabled=${mobileDebateEnabled.valueAsString}`,
+    });
+    const mobileDebateAlias = new lambda.Alias(this, "MobileDebateLiveAlias", {
+      aliasName: "live", version: mobileDebateVersion,
+    });
+
     const accessLogs = new logs.LogGroup(this, "RecordsApiAccessLogs", {
       logGroupName: "/aws/apigateway/shittim-chest-production-records",
       retention: logs.RetentionDays.THREE_MONTHS,
@@ -1999,6 +2105,12 @@ export class RecordsApplicationStack extends Stack {
       authAlias,
       { payloadFormatVersion: apigatewayv2.PayloadFormatVersion.VERSION_2_0 },
     );
+    const mobileDebateIntegration = new integrations.HttpLambdaIntegration(
+      "MobileDebateIntegration", mobileDebateAlias,
+      { payloadFormatVersion: apigatewayv2.PayloadFormatVersion.VERSION_2_0 },
+    );
+    api.addRoutes({ path: "/api/v1/debate-requests", methods: [apigatewayv2.HttpMethod.GET, apigatewayv2.HttpMethod.POST], integration: mobileDebateIntegration });
+    api.addRoutes({ path: "/api/v1/debate-requests/{requestId}", methods: [apigatewayv2.HttpMethod.GET], integration: mobileDebateIntegration });
     const readIntegration = new integrations.HttpLambdaIntegration(
       "ReadIntegration",
       readAlias,
