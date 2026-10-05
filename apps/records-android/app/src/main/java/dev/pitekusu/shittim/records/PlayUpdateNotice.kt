@@ -13,6 +13,7 @@ import androidx.compose.material3.Snackbar
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -27,6 +28,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import com.google.android.play.core.appupdate.AppUpdateInfo
 import com.google.android.play.core.appupdate.AppUpdateManager
 import com.google.android.play.core.appupdate.AppUpdateManagerFactory
 import com.google.android.play.core.appupdate.AppUpdateOptions
@@ -54,6 +56,22 @@ internal fun PlayUpdateNotice(manager: AppUpdateManager? = null) {
   var failed by remember { mutableStateOf(false) }
   var resumed by remember { mutableStateOf(false) }
   var installEvents by remember { mutableIntStateOf(0) }
+  fun applyInfo(info: AppUpdateInfo) {
+    val availability = info.updateAvailability()
+    version = if (availability == UpdateAvailability.UPDATE_AVAILABLE ||
+      availability == UpdateAvailability.DEVELOPER_TRIGGERED_UPDATE_IN_PROGRESS) info.availableVersionCode() else 0
+    // Play defines installStatus only while an update is actually in progress.
+    status = if (availability == UpdateAvailability.DEVELOPER_TRIGGERED_UPDATE_IN_PROGRESS) {
+      requestedVersion = version
+      info.installStatus()
+    } else InstallStatus.UNKNOWN
+    if (status != InstallStatus.UNKNOWN) {
+      consentPending = false
+      failed = status == InstallStatus.FAILED
+    }
+    available = availability == UpdateAvailability.UPDATE_AVAILABLE &&
+      info.isUpdateTypeAllowed(AppUpdateType.FLEXIBLE)
+  }
   val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
     busy = false
     consentPending = false
@@ -66,8 +84,8 @@ internal fun PlayUpdateNotice(manager: AppUpdateManager? = null) {
     }
   }
 
-  LifecycleResumeEffect(updates) {
-    resumed = true
+  DisposableEffect(updates) {
+    // The SDK can finish, fail or cancel a download while this Activity is paused.
     val listener = InstallStateUpdatedListener { install ->
       installEvents++
       status = install.installStatus()
@@ -79,23 +97,17 @@ internal fun PlayUpdateNotice(manager: AppUpdateManager? = null) {
       }
     }
     updates.registerListener(listener)
+    onDispose { updates.unregisterListener(listener) }
+  }
+
+  LifecycleResumeEffect(updates) {
+    resumed = true
     val check = scope.launch {
       try {
         val observedEvents = installEvents
         val info = updates.appUpdateInfo.await()
         // A delayed query cannot overwrite a newer install event (especially DOWNLOADED).
-        if (observedEvents == installEvents) {
-          val availability = info.updateAvailability()
-          version = info.availableVersionCode()
-          // Play defines installStatus only while an update is actually in progress.
-          status = if (availability == UpdateAvailability.DEVELOPER_TRIGGERED_UPDATE_IN_PROGRESS) {
-            requestedVersion = version
-            info.installStatus()
-          } else InstallStatus.UNKNOWN
-          if (status != InstallStatus.UNKNOWN) consentPending = false
-          available = availability == UpdateAvailability.UPDATE_AVAILABLE &&
-            info.isUpdateTypeAllowed(AppUpdateType.FLEXIBLE)
-        }
+        if (observedEvents == installEvents) applyInfo(info)
       } catch (cancelled: CancellationException) {
         throw cancelled
       } catch (_: Exception) {
@@ -106,7 +118,6 @@ internal fun PlayUpdateNotice(manager: AppUpdateManager? = null) {
     onPauseOrDispose {
       resumed = false
       check.cancel()
-      updates.unregisterListener(listener)
     }
   }
 
@@ -135,11 +146,15 @@ internal fun PlayUpdateNotice(manager: AppUpdateManager? = null) {
                 busy = false
               } else {
                 // AppUpdateInfo is one-shot. Always obtain a new instance just before launching.
+                val observedEvents = installEvents
                 val info = updates.appUpdateInfo.await()
-                if (resumed && info.updateAvailability() == UpdateAvailability.UPDATE_AVAILABLE &&
-                  info.isUpdateTypeAllowed(AppUpdateType.FLEXIBLE)) {
-                  requestedVersion = info.availableVersionCode()
-                  version = requestedVersion
+                if (!resumed || observedEvents != installEvents) {
+                  busy = false
+                  return@launch
+                }
+                applyInfo(info)
+                if (available) {
+                  requestedVersion = version
                   consentPending = true
                   if (!updates.startUpdateFlowForResult(info, launcher,
                       AppUpdateOptions.newBuilder(AppUpdateType.FLEXIBLE).build())) {

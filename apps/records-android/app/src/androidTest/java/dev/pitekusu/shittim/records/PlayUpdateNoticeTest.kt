@@ -284,4 +284,59 @@ class PlayUpdateNoticeTest {
     text(R.string.play_update_start).performClick()
     compose.runOnIdle { assertTrue(manager.isConfirmationDialogVisible) }
   }
+
+  @Test fun anUpdateWithdrawnBeforeTheActionRemovesTheStaleNotice() {
+    val manager = FakeAppUpdateManager(compose.activity).apply { setUpdateAvailable(34) }
+    show(manager)
+    compose.runOnIdle { manager.setUpdateNotAvailable() }
+    text(R.string.play_update_start).performClick()
+    compose.onNodeWithTag("play-update-notice").assertDoesNotExist()
+    assertFalse(manager.isConfirmationDialogVisible)
+    compose.onNodeWithText("架空の記録").assertIsDisplayed()
+  }
+
+  @Test fun aFreshImmediateOnlyReleaseRemovesTheStaleFlexibleOffer() {
+    val manager = FakeAppUpdateManager(compose.activity).apply { setUpdateAvailable(34) }
+    show(manager)
+    compose.runOnIdle { manager.setUpdateAvailable(34, AppUpdateType.IMMEDIATE) }
+    text(R.string.play_update_start).performClick()
+    compose.onNodeWithTag("play-update-notice").assertDoesNotExist()
+    assertFalse(manager.isImmediateFlowVisible)
+    assertFalse(manager.isConfirmationDialogVisible)
+  }
+
+  @Test fun aLateActionQueryCannotReplaceTheCompletedDownloadOrLaunchConsent() {
+    val fake = FakeAppUpdateManager(compose.activity).apply { setUpdateAvailable(34) }
+    val staleInfo = fake.appUpdateInfo.result
+    val pendingQuery = TaskCompletionSource<AppUpdateInfo>()
+    var queries = 0
+    val manager = object : AppUpdateManager by fake {
+      override fun getAppUpdateInfo() = if (++queries == 1) fake.appUpdateInfo else pendingQuery.task
+    }
+    show(manager)
+    text(R.string.play_update_start).performClick()
+    compose.runOnIdle {
+      fake.startUpdateFlowForResult(fake.appUpdateInfo.result, AppUpdateType.FLEXIBLE, compose.activity, 34)
+      fake.userAcceptsUpdate()
+      fake.downloadStarts()
+      fake.downloadCompletes()
+      pendingQuery.setResult(staleInfo)
+    }
+    text(R.string.play_update_downloaded).assertIsDisplayed()
+    assertFalse(fake.isConfirmationDialogVisible)
+    assertFalse(fake.isInstallSplashScreenVisible)
+  }
+
+  @Test fun aBackgroundDownloadFailureIsRememberedAndAllowsExplicitRetryOnResume() {
+    val manager = FakeAppUpdateManager(compose.activity).apply { setUpdateAvailable(34) }
+    show(manager)
+    text(R.string.play_update_start).performClick()
+    compose.runOnIdle { manager.userAcceptsUpdate(); manager.downloadStarts() }
+    compose.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+    compose.runOnUiThread { manager.downloadFails() }
+    compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+    text(R.string.play_update_failed).assertIsDisplayed()
+    text(R.string.play_update_start).performClick()
+    compose.runOnIdle { assertTrue(manager.isConfirmationDialogVisible) }
+  }
 }
