@@ -53,7 +53,7 @@ internal fun PlayUpdateNotice(manager: AppUpdateManager? = null) {
   var status by remember { mutableIntStateOf(InstallStatus.UNKNOWN) }
   var available by remember { mutableStateOf(false) }
   var busy by remember { mutableStateOf(false) }
-  var failed by remember { mutableStateOf(false) }
+  var failed by rememberSaveable { mutableStateOf(false) }
   var resumed by remember { mutableStateOf(false) }
   var installEvents by remember { mutableIntStateOf(0) }
   fun applyInfo(info: AppUpdateInfo) {

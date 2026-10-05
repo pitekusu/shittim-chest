@@ -174,6 +174,28 @@ class PlayUpdateNoticeTest {
     compose.onNodeWithTag("play-update-notice").assertDoesNotExist()
   }
 
+  @Test fun observedDownloadFailureSurvivesRestorationAndAllowsExplicitRetry() {
+    val manager = FakeAppUpdateManager(compose.activity).apply { setUpdateAvailable(34) }
+    val restoration = StateRestorationTester(compose)
+    compose.activityRule.scenario.onActivity { activity ->
+      val host = activity.findViewById<ViewGroup>(android.R.id.content)
+      (host.getChildAt(0) as? ComposeView)?.disposeComposition()
+      host.removeAllViews()
+    }
+    restoration.setContent { ShittimTheme(true) { PlayUpdateNotice(manager) } }
+    text(R.string.play_update_start).performClick()
+    compose.runOnIdle {
+      manager.userAcceptsUpdate()
+      manager.downloadStarts()
+      manager.downloadFails()
+    }
+    text(R.string.play_update_failed).assertIsDisplayed()
+    restoration.emulateSavedInstanceStateRestore()
+    text(R.string.play_update_failed).assertIsDisplayed()
+    text(R.string.play_update_start).performClick()
+    compose.runOnIdle { assertTrue(manager.isConfirmationDialogVisible) }
+  }
+
   @Test fun lateForegroundQueryCannotOverwriteACompletedDownloadEvent() {
     val fake = FakeAppUpdateManager(compose.activity).apply { setUpdateAvailable(34) }
     compose.runOnIdle {
