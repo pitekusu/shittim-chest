@@ -193,4 +193,66 @@ class PlayUpdateNoticeTest {
     text(R.string.play_update_downloaded).assertIsDisplayed()
     assertFalse(fake.isInstallSplashScreenVisible)
   }
+
+  @Test fun noUpdateIgnoresAStaleDownloadedStatusAndNeverOffersRestart() {
+    val manager = FakeAppUpdateManager(compose.activity).apply { setUpdateAvailable(34) }
+    compose.runOnIdle {
+      manager.startUpdateFlowForResult(manager.appUpdateInfo.result, AppUpdateType.FLEXIBLE, compose.activity, 34)
+      manager.userAcceptsUpdate()
+      manager.downloadStarts()
+      manager.downloadCompletes()
+      // The SDK fake retains installStatus even though it no longer has a defined meaning.
+      manager.setUpdateNotAvailable()
+    }
+    show(manager)
+    compose.onNodeWithTag("play-update-notice").assertDoesNotExist()
+    compose.onNodeWithText("架空の記録").assertIsDisplayed()
+    assertFalse(manager.isInstallSplashScreenVisible)
+  }
+
+  @Test fun cancelingAFreshlyDiscoveredReleaseDefersThatReleaseImmediatelyAndOnResume() {
+    val manager = FakeAppUpdateManager(compose.activity).apply { setUpdateAvailable(34) }
+    show(manager)
+    // A release can arrive between the initial query and the explicit update action.
+    compose.runOnIdle { manager.setUpdateAvailable(35) }
+    text(R.string.play_update_start).performClick()
+    compose.runOnIdle {
+      manager.userAcceptsUpdate()
+      manager.downloadStarts()
+      manager.userCancelsDownload()
+    }
+    compose.onNodeWithTag("play-update-notice").assertDoesNotExist()
+    compose.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+    compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+    compose.onNodeWithTag("play-update-notice").assertDoesNotExist()
+    compose.runOnIdle { manager.setUpdateAvailable(36) }
+    compose.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+    compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+    text(R.string.play_update_available).assertIsDisplayed()
+  }
+
+  @Test fun cancelingANewerResumedDownloadDoesNotReuseThePreviousRequestedVersion() {
+    val manager = FakeAppUpdateManager(compose.activity).apply { setUpdateAvailable(34) }
+    show(manager)
+    text(R.string.play_update_start).performClick()
+    compose.runOnIdle {
+      manager.userAcceptsUpdate()
+      manager.downloadStarts()
+      manager.userCancelsDownload()
+    }
+    compose.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+    compose.runOnUiThread {
+      manager.setUpdateAvailable(35)
+      manager.startUpdateFlowForResult(manager.appUpdateInfo.result, AppUpdateType.FLEXIBLE, compose.activity, 35)
+      manager.userAcceptsUpdate()
+      manager.downloadStarts()
+    }
+    compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+    text(R.string.play_update_downloading).assertIsDisplayed()
+    compose.runOnIdle { manager.userCancelsDownload() }
+    compose.onNodeWithTag("play-update-notice").assertDoesNotExist()
+    compose.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+    compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+    compose.onNodeWithTag("play-update-notice").assertDoesNotExist()
+  }
 }

@@ -74,19 +74,28 @@ internal fun PlayUpdateNotice(manager: AppUpdateManager? = null) {
       busy = false
       consentPending = false
       failed = status == InstallStatus.FAILED
-      if (status == InstallStatus.CANCELED) deferredVersion = version
+      if (status == InstallStatus.CANCELED) {
+        deferredVersion = requestedVersion.takeIf { it > 0 } ?: version
+      }
     }
     updates.registerListener(listener)
     val check = scope.launch {
       try {
         val observedEvents = installEvents
         val info = updates.appUpdateInfo.await()
-        version = info.availableVersionCode()
         // A delayed query cannot overwrite a newer install event (especially DOWNLOADED).
-        if (observedEvents == installEvents) status = info.installStatus()
-        if (status != InstallStatus.UNKNOWN) consentPending = false
-        available = info.updateAvailability() == UpdateAvailability.UPDATE_AVAILABLE &&
-          info.isUpdateTypeAllowed(AppUpdateType.FLEXIBLE)
+        if (observedEvents == installEvents) {
+          val availability = info.updateAvailability()
+          version = info.availableVersionCode()
+          // Play defines installStatus only while an update is actually in progress.
+          status = if (availability == UpdateAvailability.DEVELOPER_TRIGGERED_UPDATE_IN_PROGRESS) {
+            requestedVersion = version
+            info.installStatus()
+          } else InstallStatus.UNKNOWN
+          if (status != InstallStatus.UNKNOWN) consentPending = false
+          available = availability == UpdateAvailability.UPDATE_AVAILABLE &&
+            info.isUpdateTypeAllowed(AppUpdateType.FLEXIBLE)
+        }
       } catch (cancelled: CancellationException) {
         throw cancelled
       } catch (_: Exception) {
@@ -128,6 +137,7 @@ internal fun PlayUpdateNotice(manager: AppUpdateManager? = null) {
                 if (resumed && info.updateAvailability() == UpdateAvailability.UPDATE_AVAILABLE &&
                   info.isUpdateTypeAllowed(AppUpdateType.FLEXIBLE)) {
                   requestedVersion = info.availableVersionCode()
+                  version = requestedVersion
                   consentPending = true
                   if (!updates.startUpdateFlowForResult(info, launcher,
                       AppUpdateOptions.newBuilder(AppUpdateType.FLEXIBLE).build())) {
