@@ -250,9 +250,10 @@ internal fun AdaptiveRecordsUi(
             modifier = Modifier.widthIn(max = 760.dp).align(Alignment.TopCenter))
         }
       }
-      val entries = rememberDecoratedNavEntries(backStack = state.backStack,
-        entryDecorators = listOf(rememberSaveableStateHolderNavEntryDecorator()),
-        entryProvider = entryProvider {
+      // Keep Adaptive metadata and entry content identities stable between a predictive
+      // preview and its committed destination. The holders still render current screen state.
+      val recordsEntryProvider = remember {
+        entryProvider<NavKey> {
           entry<RecordsList>(metadata = ListDetailSceneStrategy.listPane(detailPlaceholder = {
             Box(Modifier.fillMaxSize().padding(ShittimSpacing.Large), contentAlignment = Alignment.Center) {
               Text(stringResource(R.string.record_select), color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -262,7 +263,11 @@ internal fun AdaptiveRecordsUi(
           entry<DebateCompose> { composeContent.value() }
           entry<DebateRequests> { requestsContent.value() }
           entry<DebateRequestStatus> { statusContent.value(it) }
-        })
+        }
+      }
+      val entries = rememberDecoratedNavEntries(backStack = state.backStack,
+        entryDecorators = listOf(rememberSaveableStateHolderNavEntryDecorator()),
+        entryProvider = recordsEntryProvider)
       val onBack = { state.eventSink(BootstrapScreen.Event.CloseRecord) }
       val sceneState = rememberSceneState(entries, listOf(sceneStrategy), onBack = onBack)
       // Wide scenes own their Back handler internally. Rehost only their visual scope on a
