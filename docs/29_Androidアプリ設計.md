@@ -825,7 +825,7 @@ Play公式のIn-App UpdatesをFLEXIBLE方式で接続する。依存版はVersio
 
 前景確認と更新操作直前の再確認は、同じ短い状態反映処理を使う。更新が撤回された場合やFLEXIBLEが利用不可になった場合は古い案内を消し、進行中ならSDKの定義された状態へ切り替える。両方の確認にイベント世代チェックを適用する。定義されたFAILEDや受信した失敗は明示再試行を許す。一方、プロセス破棄・画面再作成でイベントを受信できず、UPDATE_AVAILABLEへ戻った応答だけでは取消と失敗を識別できないため、[未定義のinstallStatus](https://developer.android.com/reference/com/google/android/play/core/appupdate/AppUpdateInfo#installStatus())から推測しない。同一版の再案内抑止を優先し、その場合は新規起動・新しい版を再案内の機会とする。
 
-公式FakeAppUpdateManagerで、明示同意、あとで、取消、再作成、ダウンロード、背景からの復帰、明示再起動、未対応・SDK失敗を確認する。FakeはPlayとの実接続の代替ではない。実機確認には、機能を含む旧版をPlay内部テストから取得した端末と、同じpackage・アプリ署名のより大きいversionCodeの新しい内部テスト版が必要になる。機能追加前のアプリには更新案内を後付けできない（[公式試験手順](https://developer.android.com/guide/playcore/in-app-updates/test)）。
+公式FakeAppUpdateManagerで、明示同意、あとで、取消、再作成、ダウンロード、背景からの復帰、明示再起動、未対応・SDK失敗を確認する。Compose操作試験は`@ScreenTest`で分類し、通常CIの画面試験除外を維持する。必要時はローカルまたは画面試験を指定した手動CIで実行する。FakeはPlayとの実接続の代替ではない。実機確認には、機能を含む旧版をPlay内部テストから取得した端末と、同じpackage・アプリ署名のより大きいversionCodeの新しい内部テスト版が必要になる。機能追加前のアプリには更新案内を後付けできない（[公式試験手順](https://developer.android.com/guide/playcore/in-app-updates/test)）。
 
 ## C21：議論一覧のカード
 

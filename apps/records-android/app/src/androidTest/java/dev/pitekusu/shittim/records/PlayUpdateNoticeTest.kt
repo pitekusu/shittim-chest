@@ -43,6 +43,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /** Official Play fake only: no network, credentials, downloaded APK or actual installation. */
+@ScreenTest
 @RunWith(AndroidJUnit4::class)
 class PlayUpdateNoticeTest {
   @get:Rule val compose = createAndroidComposeRule<MainActivity>()
