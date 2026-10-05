@@ -190,7 +190,7 @@ class RecordDetailVisualTest {
         "架空の長い議題です。\n".repeat(60), "架空の結論", "アロナ")),
         "visual-sample", {}, motionAllowed = false)
     } } }
-    compose.onNodeWithTag("detail-question-open").performClick()
+    compose.onNodeWithTag("detail-question-full").performClick()
     compose.waitUntil(5_000) { compose.onNodeWithTag("detail-question-sheet").isDisplayed() }
     InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
     compose.waitUntil(5_000) { !compose.onNodeWithTag("detail-question-sheet").isDisplayed() }

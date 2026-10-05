@@ -13,7 +13,6 @@ import androidx.compose.ui.test.DeviceConfigurationOverride
 import androidx.compose.ui.test.WindowSize
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
-import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.isDisplayed
@@ -22,6 +21,8 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.isSelected
+import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
@@ -57,7 +58,7 @@ class Nav3ReturnFlowUiTest {
     compose.waitUntil(10_000) { compose.onNodeWithText("復帰試験の初回意見0").isDisplayed() }
     compose.onNodeWithTag("opinion-person-1").performClick()
     compose.waitUntil(10_000) { compose.onNodeWithText("復帰試験の初回意見1").isDisplayed() }
-    compose.onNodeWithText(compose.activity.getString(R.string.record_final_proposal)).performClick()
+    compose.onNode(isSelected() and hasStateDescription(compose.activity.getString(R.string.record_initial_opinion))).performClick()
     compose.waitUntil(10_000) {
       compose.onAllNodesWithText("復帰本文の末尾1", substring = true).fetchSemanticsNodes().isNotEmpty() &&
         compose.onNodeWithTag("bootstrap-content").fetchSemanticsNode()
@@ -88,7 +89,7 @@ class Nav3ReturnFlowUiTest {
       stopAndResume()
       compose.onNodeWithTag("detail-section-Opinions").assertIsSelected()
       compose.onNodeWithTag("opinion-person-1").assertIsSelected()
-      compose.onNodeWithText(compose.activity.getString(R.string.record_final_proposal)).assertIsOn()
+      compose.onNode(isSelected() and hasStateDescription(compose.activity.getString(R.string.record_final_proposal))).assertExists()
       compose.onNodeWithTag("record-search", useUnmergedTree = true).assertDoesNotExist()
       compose.onNodeWithTag("brand-intro").assertDoesNotExist()
       assertEquals(position, readingPosition(), .01f)
