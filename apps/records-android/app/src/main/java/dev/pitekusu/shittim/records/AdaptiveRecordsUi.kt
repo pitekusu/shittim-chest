@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -183,6 +184,7 @@ internal fun AdaptiveRecordsUi(
                   MediumFloatingActionButton(
                     onClick = { state.eventSink(BootstrapScreen.Event.ComposeDebate) },
                     modifier = Modifier.testTag("debate-compose-open"),
+                    shape = CircleShape,
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary) {
                     Icon(painterResource(R.drawable.ic_add_debate),
