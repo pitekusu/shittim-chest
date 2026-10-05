@@ -1,5 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="play_update_available">新しいバージョンがあります</string>
+    <string name="play_update_start">更新</string>
+    <string name="play_update_later">あとで</string>
+    <string name="play_update_downloading">更新をダウンロードしています。引き続き利用できます</string>
+    <string name="play_update_downloaded">更新の準備ができました</string>
+    <string name="play_update_restart">再起動して更新</string>
+    <string name="play_update_failed">更新できませんでした。あとで再試行できます</string>
   <string name="debate_start">議論を開始</string>
   <string name="debate_requests">自分の議論依頼</string>
   <string name="debate_requests_empty">まだ議論を依頼していません。</string>
