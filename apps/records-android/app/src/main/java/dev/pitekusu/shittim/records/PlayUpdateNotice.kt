@@ -37,6 +37,7 @@ import com.google.android.play.core.install.model.AppUpdateType
 import com.google.android.play.core.install.model.InstallStatus
 import com.google.android.play.core.install.model.UpdateAvailability
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
@@ -56,6 +57,7 @@ internal fun PlayUpdateNotice(manager: AppUpdateManager? = null) {
   var failed by rememberSaveable { mutableStateOf(false) }
   var resumed by remember { mutableStateOf(false) }
   var installEvents by remember { mutableIntStateOf(0) }
+  var foregroundCheck by remember { mutableStateOf<Job?>(null) }
   fun applyInfo(info: AppUpdateInfo) {
     val availability = info.updateAvailability()
     version = if (availability == UpdateAvailability.UPDATE_AVAILABLE ||
@@ -105,9 +107,10 @@ internal fun PlayUpdateNotice(manager: AppUpdateManager? = null) {
 
   LifecycleResumeEffect(updates) {
     resumed = true
-    val check = scope.launch {
+    // The explicit action owns its fresh query; do not race it with a resume query.
+    val check = if (busy) null else scope.launch {
+      val observedEvents = installEvents
       try {
-        val observedEvents = installEvents
         val info = updates.appUpdateInfo.await()
         // A delayed query cannot overwrite a newer install event (especially DOWNLOADED).
         if (observedEvents == installEvents) applyInfo(info)
@@ -115,12 +118,14 @@ internal fun PlayUpdateNotice(manager: AppUpdateManager? = null) {
         throw cancelled
       } catch (_: Exception) {
         // Offline, unsupported/debug installs or Play unavailable must not block local records.
-        available = false
+        if (observedEvents == installEvents) available = false
       }
     }
+    foregroundCheck = check
     onPauseOrDispose {
       resumed = false
-      check.cancel()
+      check?.cancel()
+      if (foregroundCheck === check) foregroundCheck = null
     }
   }
 
@@ -139,19 +144,23 @@ internal fun PlayUpdateNotice(manager: AppUpdateManager? = null) {
       action = {
         if (!downloading) TextButton(enabled = resumed && !busy && !consentPending, onClick = {
           if (!resumed || busy || consentPending) return@TextButton
+          // Task.await is cancellable: an older foreground response cannot replace this action.
+          foregroundCheck?.cancel()
+          foregroundCheck = null
           busy = true
           failed = false
+          val observedEvents = installEvents
           scope.launch {
             try {
               if (downloaded) {
                 // Never restart the app (including an unsent draft) without this explicit action.
                 updates.completeUpdate().await()
-                busy = false
+                if (observedEvents == installEvents) busy = false
               } else {
                 // AppUpdateInfo is one-shot. Always obtain a new instance just before launching.
-                val observedEvents = installEvents
                 val info = updates.appUpdateInfo.await()
-                if (!resumed || observedEvents != installEvents) {
+                if (observedEvents != installEvents) return@launch
+                if (!resumed) {
                   busy = false
                   return@launch
                 }
@@ -168,12 +177,14 @@ internal fun PlayUpdateNotice(manager: AppUpdateManager? = null) {
                 } else busy = false
               }
             } catch (cancelled: CancellationException) {
-              busy = false
+              if (observedEvents == installEvents) busy = false
               throw cancelled
             } catch (_: Exception) {
-              busy = false
-              consentPending = false
-              failed = true
+              if (observedEvents == installEvents) {
+                busy = false
+                consentPending = false
+                failed = true
+              }
             }
           }
         }) { Text(stringResource(if (downloaded) R.string.play_update_restart else R.string.play_update_start)) }

@@ -196,6 +196,67 @@ class PlayUpdateNoticeTest {
     compose.runOnIdle { assertTrue(manager.isConfirmationDialogVisible) }
   }
 
+  @Test fun anOlderResumeQueryCannotReofferAnOlderVersionAfterConsentCancellation() {
+    val fake = FakeAppUpdateManager(compose.activity).apply { setUpdateAvailable(34) }
+    val olderInfo = fake.appUpdateInfo.result
+    val delayedResume = TaskCompletionSource<AppUpdateInfo>()
+    var checks = 0
+    var requestCode = 0
+    val registry = object : ActivityResultRegistry() {
+      override fun <I, O> onLaunch(code: Int, contract: ActivityResultContract<I, O>, input: I,
+        options: ActivityOptionsCompat?) { requestCode = code }
+    }
+    val owner = object : ActivityResultRegistryOwner { override val activityResultRegistry = registry }
+    val manager = object : AppUpdateManager by fake {
+      override fun getAppUpdateInfo() = if (++checks == 2) delayedResume.task else fake.appUpdateInfo
+      override fun startUpdateFlowForResult(info: AppUpdateInfo, launcher: ActivityResultLauncher<IntentSenderRequest>,
+        options: AppUpdateOptions): Boolean {
+        val started = fake.startUpdateFlowForResult(info, launcher, options)
+        val intent = PendingIntent.getActivity(compose.activity, 35,
+          Intent(compose.activity, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+        launcher.launch(IntentSenderRequest.Builder(intent.intentSender).build())
+        return started
+      }
+    }
+    compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+      CompositionLocalProvider(LocalActivityResultRegistryOwner provides owner) {
+        ShittimTheme(true) { PlayUpdateNotice(manager) }
+      }
+    } }
+    text(R.string.play_update_available).assertIsDisplayed()
+    compose.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+    compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+    compose.runOnIdle { fake.setUpdateAvailable(35) }
+    text(R.string.play_update_start).performClick()
+    compose.runOnIdle {
+      fake.userRejectsUpdate()
+      registry.dispatchResult(requestCode, Activity.RESULT_CANCELED, null)
+      delayedResume.setResult(olderInfo)
+    }
+    compose.onNodeWithTag("play-update-notice").assertDoesNotExist()
+    compose.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+    compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+    compose.onNodeWithTag("play-update-notice").assertDoesNotExist()
+  }
+
+  @Test fun resumeDoesNotStartAnotherQueryWhileTheExplicitActionIsChecking() {
+    val fake = FakeAppUpdateManager(compose.activity).apply { setUpdateAvailable(34) }
+    val delayedAction = TaskCompletionSource<AppUpdateInfo>()
+    var checks = 0
+    val manager = object : AppUpdateManager by fake {
+      override fun getAppUpdateInfo() = if (++checks == 2) delayedAction.task else fake.appUpdateInfo
+    }
+    show(manager)
+    text(R.string.play_update_start).performClick()
+    compose.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+    compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+    compose.runOnIdle {
+      assertEquals(2, checks)
+      delayedAction.setResult(fake.appUpdateInfo.result)
+    }
+    compose.runOnIdle { assertTrue(fake.isConfirmationDialogVisible) }
+  }
+
   @Test fun lateForegroundQueryCannotOverwriteACompletedDownloadEvent() {
     val fake = FakeAppUpdateManager(compose.activity).apply { setUpdateAvailable(34) }
     compose.runOnIdle {
@@ -348,6 +409,26 @@ class PlayUpdateNoticeTest {
     text(R.string.play_update_downloaded).assertIsDisplayed()
     assertFalse(fake.isConfirmationDialogVisible)
     assertFalse(fake.isInstallSplashScreenVisible)
+  }
+
+  @Test fun aLateActionQueryFailureCannotReplaceACompletedDownloadEvent() {
+    val fake = FakeAppUpdateManager(compose.activity).apply { setUpdateAvailable(34) }
+    val delayedQuery = TaskCompletionSource<AppUpdateInfo>()
+    var checks = 0
+    val manager = object : AppUpdateManager by fake {
+      override fun getAppUpdateInfo() = if (++checks == 1) fake.appUpdateInfo else delayedQuery.task
+    }
+    show(manager)
+    text(R.string.play_update_start).performClick()
+    compose.runOnIdle {
+      fake.startUpdateFlowForResult(fake.appUpdateInfo.result, AppUpdateType.FLEXIBLE, compose.activity, 34)
+      fake.userAcceptsUpdate()
+      fake.downloadStarts()
+      fake.downloadCompletes()
+      delayedQuery.setException(IllegalStateException("synthetic unavailable query"))
+    }
+    text(R.string.play_update_downloaded).assertIsDisplayed()
+    text(R.string.play_update_failed).assertDoesNotExist()
   }
 
   @Test fun aBackgroundDownloadFailureIsRememberedAndAllowsExplicitRetryOnResume() {
