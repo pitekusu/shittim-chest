@@ -17,9 +17,11 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
@@ -95,7 +97,7 @@ class Nav3SceneMotionUiTest {
     }
   }
 
-  private inner class Host {
+  private inner class Host(private val detailPreview: RecordPreviewState = preview) {
     val backStack = NavBackStack<NavKey>(RecordsList)
     val authorized = mutableStateOf(true)
     val events = mutableListOf<BootstrapScreen.Event>()
@@ -107,7 +109,7 @@ class Nav3SceneMotionUiTest {
         records = records, backStack = backStack.toList(),
         selectedRecordId = selected,
         // Match the presenter: the live preview disappears immediately on pop.
-        record = if (selected == null) RecordPreviewState.Idle else preview,
+        record = if (selected == null) RecordPreviewState.Idle else detailPreview,
         eventSink = { event ->
           events += event
           when (event) {
@@ -217,6 +219,94 @@ class Nav3SceneMotionUiTest {
       compose.onNodeWithTag("records-list-pane").assertDoesNotExist()
       compose.onNodeWithText(question).assertDoesNotExist()
       compose.runOnIdle { assertEquals(1, host.events.count { it == BootstrapScreen.Event.CloseRecord }) }
+    } finally {
+      compose.mainClock.autoAdvance = true
+    }
+  }
+
+  @Test fun committingPredictiveBackFinishesTheRemainingSlideAndKeepsListPosition() {
+    val host = Host()
+    show(host)
+    val position = listPosition()
+    compose.runOnIdle { host.backStack.openRecord(entries.last().recordId) }
+    compose.onNodeWithText(question).assertIsDisplayed()
+    compose.waitForIdle()
+    val dispatcher = compose.activity.onBackPressedDispatcher
+    val detail = compose.onNodeWithTag("records-detail-pane").fetchSemanticsNode()
+    val detailLeft = detail.positionInRoot.x
+    val paneWidth = detail.size.width.toFloat()
+    compose.mainClock.autoAdvance = false
+    try {
+      compose.runOnIdle {
+        dispatcher.dispatchOnBackStarted(BackEventCompat(0f, 0f, 0f, BackEventCompat.EDGE_LEFT))
+        dispatcher.dispatchOnBackProgressed(BackEventCompat(80f, 0f, .35f, BackEventCompat.EDGE_LEFT))
+      }
+      repeat(3) { compose.mainClock.advanceTimeByFrame() }
+      val previewLeft = compose.onNodeWithTag("records-detail-pane").fetchSemanticsNode().positionInRoot.x
+      assertTrue("The gesture must preview the outgoing detail", previewLeft > detailLeft + 1f)
+      compose.runOnIdle { dispatcher.onBackPressed() }
+      compose.mainClock.advanceTimeBy(48)
+      val committedLeft = compose.onNodeWithTag("records-detail-pane").fetchSemanticsNode().positionInRoot.x
+      assertTrue("Committing Back must finish the preview instead of snapping to the list",
+        committedLeft > previewLeft && committedLeft < detailLeft + paneWidth - 1f)
+      compose.onNodeWithText(question, useUnmergedTree = true).assertExists()
+      compose.runOnIdle {
+        assertEquals(listOf(RecordsList), host.backStack.toList())
+        assertEquals(1, host.events.count { it == BootstrapScreen.Event.CloseRecord })
+      }
+      compose.mainClock.advanceTimeBy(320)
+      finishOutgoingEntry("records-detail-pane")
+      compose.onNodeWithText(entries.last().questionPreview).assertIsDisplayed()
+      assertEquals(position, listPosition(), .01f)
+      compose.runOnIdle {
+        assertEquals(1, host.events.count { it == BootstrapScreen.Event.CloseRecord })
+      }
+    } finally {
+      compose.mainClock.autoAdvance = true
+    }
+  }
+
+  @Test fun buttonBackFromALongMarkdownAnswerKeepsTheOutgoingSlide() {
+    val paragraph = "これは架空の長文回答です。**複数の観点**を比較し、読みやすい段落で説明します。".repeat(3)
+    val answer = (1..25).joinToString("\n\n") { index ->
+      "### 架空の検討 $index\n\n$paragraph\n\n- 架空の提案\n- [参照用リンク](https://example.com/)"
+    }
+    val longPreview = RecordPreviewState.Ready(RecordPreview(
+      question = "架空の長文の議題です。複数の論点を検討してください。".repeat(20),
+      decision = answer, winnerName = "アロナ", winnerSlot = "participant-a",
+      opinions = listOf("アロナ", "プラナ", "安倍晋三AI").mapIndexed { index, name ->
+        RecordOpinion(name, "長文確認の初回意見$index", answer,
+          "長文確認の最終案$index", answer, participantSlot = "participant-${('a'.code + index).toChar()}")
+      }), saved = true)
+    val host = Host(longPreview)
+    show(host)
+    val position = listPosition()
+    compose.onNodeWithText(entries.last().questionPreview).performClick()
+    compose.waitUntil(10_000) {
+      compose.onAllNodesWithText("長文確認の初回意見0").fetchSemanticsNodes().isNotEmpty()
+    }
+    compose.onNodeWithText("長文確認の初回意見0").assertIsDisplayed()
+    compose.waitForIdle()
+    val detail = compose.onNodeWithTag("records-detail-pane").fetchSemanticsNode()
+    val detailLeft = detail.positionInRoot.x
+    val paneWidth = detail.size.width.toFloat()
+    compose.mainClock.autoAdvance = false
+    try {
+      InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+      compose.mainClock.advanceTimeBy(96)
+      val outgoing = compose.onNodeWithTag("records-detail-pane").fetchSemanticsNode().positionInRoot.x
+      assertTrue("Closing a long rendered answer must retain an intermediate slide frame",
+        outgoing > detailLeft + 1f && outgoing < detailLeft + paneWidth - 1f)
+      compose.onNodeWithText("長文確認の初回意見0", useUnmergedTree = true).assertExists()
+      compose.onNodeWithText(compose.activity.getString(R.string.record_loading)).assertDoesNotExist()
+      compose.mainClock.advanceTimeBy(320)
+      finishOutgoingEntry("records-detail-pane")
+      compose.onNodeWithText(entries.last().questionPreview).assertIsDisplayed()
+      assertEquals(position, listPosition(), .01f)
+      compose.runOnIdle {
+        assertEquals(listOf(RecordsList), host.backStack.toList())
+        assertEquals(1, host.events.count { it == BootstrapScreen.Event.CloseRecord })
+      }
     } finally {
       compose.mainClock.autoAdvance = true
     }
