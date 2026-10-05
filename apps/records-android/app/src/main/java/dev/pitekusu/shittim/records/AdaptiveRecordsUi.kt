@@ -14,16 +14,12 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MediumFloatingActionButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2
@@ -53,7 +49,6 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
@@ -181,15 +176,14 @@ internal fun AdaptiveRecordsUi(
                 Column(Modifier.padding(ShittimSpacing.Medium), horizontalAlignment = Alignment.End,
                   verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
                   // Drafts remain available even before records load or while reading offline.
-                  MediumFloatingActionButton(
-                    onClick = { state.eventSink(BootstrapScreen.Event.ComposeDebate) },
-                    modifier = Modifier.testTag("debate-compose-open"),
-                    shape = CircleShape,
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary) {
-                    Icon(painterResource(R.drawable.ic_add_debate),
-                      contentDescription = stringResource(R.string.debate_start), Modifier.size(36.dp))
-                  }
+                  DebateComposeFab(active = lifecycle.isAtLeast(Lifecycle.State.RESUMED), onClick = {
+                    val latest = currentState.value
+                    if (latest.canReadRecords && latest.recordOwner == state.recordOwner &&
+                      latest.backStack.lastOrNull() == RecordsList &&
+                      queryMode == RecordQueryMode.Closed && motionAllowed) {
+                      latest.eventSink(BootstrapScreen.Event.ComposeDebate)
+                    }
+                  })
                   if (queryAvailable) {
                     // Nav3 moves this entry between single- and two-pane lookahead roots. A local
                     // root keeps Material's toolbar alignment-line owner valid across that move.
