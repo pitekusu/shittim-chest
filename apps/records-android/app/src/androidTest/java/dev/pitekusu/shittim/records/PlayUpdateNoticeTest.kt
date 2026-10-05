@@ -340,4 +340,68 @@ class PlayUpdateNoticeTest {
     text(R.string.play_update_start).performClick()
     compose.runOnIdle { assertTrue(manager.isConfirmationDialogVisible) }
   }
+
+  @Test fun aNewReleaseClearsThePreviousVersionsFailure() {
+    val manager = FakeAppUpdateManager(compose.activity).apply { setUpdateAvailable(34) }
+    show(manager)
+    text(R.string.play_update_start).performClick()
+    compose.runOnIdle { manager.userAcceptsUpdate(); manager.downloadStarts(); manager.downloadFails() }
+    text(R.string.play_update_failed).assertIsDisplayed()
+    compose.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+    compose.runOnUiThread { manager.setUpdateAvailable(35) }
+    compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+    text(R.string.play_update_available).assertIsDisplayed()
+    text(R.string.play_update_failed).assertDoesNotExist()
+    assertFalse(manager.isConfirmationDialogVisible)
+    text(R.string.play_update_start).performClick()
+    compose.runOnIdle { assertTrue(manager.isConfirmationDialogVisible) }
+  }
+
+  @Test fun aWithdrawnReleaseClearsItsPreviousFailureNotice() {
+    val manager = FakeAppUpdateManager(compose.activity).apply { setUpdateAvailable(34) }
+    show(manager)
+    text(R.string.play_update_start).performClick()
+    compose.runOnIdle { manager.userAcceptsUpdate(); manager.downloadStarts(); manager.downloadFails() }
+    text(R.string.play_update_failed).assertIsDisplayed()
+    compose.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+    compose.runOnUiThread { manager.setUpdateNotAvailable() }
+    compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+    compose.onNodeWithTag("play-update-notice").assertDoesNotExist()
+    compose.onNodeWithText("架空の記録").assertIsDisplayed()
+  }
+
+  @Test fun lateConsentCannotReplaceAKnownDownloadFailureOrHideRetry() {
+    val fake = FakeAppUpdateManager(compose.activity).apply { setUpdateAvailable(34) }
+    var capturedRequestCode = 0
+    val registry = object : ActivityResultRegistry() {
+      override fun <I, O> onLaunch(requestCode: Int, contract: ActivityResultContract<I, O>, input: I,
+        options: ActivityOptionsCompat?) { capturedRequestCode = requestCode }
+    }
+    val owner = object : ActivityResultRegistryOwner { override val activityResultRegistry = registry }
+    val manager = object : AppUpdateManager by fake {
+      override fun startUpdateFlowForResult(info: AppUpdateInfo, launcher: ActivityResultLauncher<IntentSenderRequest>,
+        options: AppUpdateOptions): Boolean {
+        val started = fake.startUpdateFlowForResult(info, launcher, options)
+        val intent = PendingIntent.getActivity(compose.activity, 34,
+          Intent(compose.activity, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
+        launcher.launch(IntentSenderRequest.Builder(intent.intentSender).build())
+        return started
+      }
+    }
+    compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+      CompositionLocalProvider(LocalActivityResultRegistryOwner provides owner) {
+        ShittimTheme(true) { PlayUpdateNotice(manager) }
+      }
+    } }
+    text(R.string.play_update_start).performClick()
+    compose.runOnIdle {
+      fake.userAcceptsUpdate()
+      fake.downloadStarts()
+      fake.downloadFails()
+      registry.dispatchResult(capturedRequestCode, Activity.RESULT_OK, null)
+    }
+    text(R.string.play_update_failed).assertIsDisplayed()
+    text(R.string.play_update_start).performClick()
+    compose.runOnIdle { assertTrue(fake.isConfirmationDialogVisible) }
+  }
 }

@@ -71,6 +71,8 @@ internal fun PlayUpdateNotice(manager: AppUpdateManager? = null) {
     }
     available = availability == UpdateAvailability.UPDATE_AVAILABLE &&
       info.isUpdateTypeAllowed(AppUpdateType.FLEXIBLE)
+    // A known failure belongs to the requested release, not a replacement or withdrawn update.
+    if (status == InstallStatus.UNKNOWN) failed = failed && available && version == requestedVersion
   }
   val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
     busy = false
@@ -79,7 +81,8 @@ internal fun PlayUpdateNotice(manager: AppUpdateManager? = null) {
     if (result.resultCode != Activity.RESULT_OK) {
       deferredVersion = requestedVersion
       failed = result.resultCode != Activity.RESULT_CANCELED
-    } else if (status == InstallStatus.UNKNOWN || status == InstallStatus.FAILED) {
+    } else if (!failed && status == InstallStatus.UNKNOWN) {
+      // Consent may arrive after a newer SDK failure; never move a known failure back to pending.
       status = InstallStatus.PENDING
     }
   }
@@ -123,7 +126,7 @@ internal fun PlayUpdateNotice(manager: AppUpdateManager? = null) {
 
   val downloading = status == InstallStatus.PENDING || status == InstallStatus.DOWNLOADING
   val downloaded = status == InstallStatus.DOWNLOADED
-  // Play-side cancellation can happen while our listener is paused; do not re-offer that request.
+  // A cancellation event may be missed during recreation; do not re-offer that request.
   val offered = available && version != deferredVersion &&
     (version != requestedVersion || consentPending)
   if (!downloaded && !downloading && !offered && !failed) return
