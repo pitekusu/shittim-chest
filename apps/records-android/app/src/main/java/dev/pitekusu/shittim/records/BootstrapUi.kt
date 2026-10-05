@@ -90,8 +90,7 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
       var playedSections by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
       LaunchedEffect(state.canReadRecords) { if (!state.canReadRecords) menuOpen = false }
       Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
-        if (state.canReadRecords) RecordsAppBar(onMenuClick = { menuOpen = true },
-          onCompose = { state.eventSink(BootstrapScreen.Event.ComposeDebate) })
+        if (state.canReadRecords) RecordsAppBar(onMenuClick = { menuOpen = true })
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
           val listScrollState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
           val transientScrollState = rememberLazyListState()

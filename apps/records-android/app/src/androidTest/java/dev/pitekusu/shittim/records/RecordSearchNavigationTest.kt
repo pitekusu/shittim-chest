@@ -1,8 +1,10 @@
 package dev.pitekusu.shittim.records
 
 import android.graphics.Bitmap
+import android.view.KeyEvent
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.DeviceConfigurationOverride
 import androidx.compose.ui.test.FontScale
 import androidx.compose.ui.test.WindowSize
@@ -18,6 +20,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.test.then
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
@@ -49,6 +53,7 @@ class RecordSearchNavigationTest {
     compose.onNodeWithTag("records-search-toggle").performClick()
     compose.onNodeWithTag("record-search").assertIsDisplayed().assertIsFocused().performTextInput("散歩")
     compose.onNodeWithTag("records-query-toolbar").assertDoesNotExist()
+    compose.onNodeWithTag("debate-compose-open").assertDoesNotExist()
     compose.onNodeWithTag("records-search-close").performClick()
     compose.onNodeWithTag("record-search").assertDoesNotExist()
     compose.onNodeWithTag("records-query-text-chip").assertIsDisplayed()
@@ -67,6 +72,7 @@ class RecordSearchNavigationTest {
     compose.onNodeWithTag("records-filter-toggle").performClick()
     compose.onNodeWithTag("records-filter-sheet").assertIsDisplayed()
     compose.onNodeWithTag("records-query-toolbar").assertDoesNotExist()
+    compose.onNodeWithTag("debate-compose-open").assertDoesNotExist()
     compose.onNodeWithTag("records-filter-done").performScrollTo().performClick()
     compose.onNodeWithTag(anchor).assertIsDisplayed()
     assertEquals(top, compose.onNodeWithTag(anchor).fetchSemanticsNode().boundsInRoot.top, 1f)
@@ -100,6 +106,7 @@ class RecordSearchNavigationTest {
     compose.onNodeWithTag("record-search", useUnmergedTree = true).assertDoesNotExist()
     compose.onNodeWithTag("records-search-screen", useUnmergedTree = true).assertDoesNotExist()
     compose.onNodeWithTag("records-query-toolbar").assertDoesNotExist()
+    compose.onNodeWithTag("debate-compose-open").assertDoesNotExist()
     compose.mainClock.autoAdvance = false
     try {
       compose.runOnIdle { compose.activity.onBackPressedDispatcher.onBackPressed() }
@@ -109,6 +116,7 @@ class RecordSearchNavigationTest {
       }
     } finally { compose.mainClock.autoAdvance = true }
     compose.onNodeWithTag("journal-card-$id").assertIsDisplayed().assertIsNotSelected()
+    compose.onNodeWithTag("debate-compose-open").assertIsDisplayed()
     compose.onNodeWithTag("records-search-toggle").performClick()
     compose.onNodeWithTag("record-search").assertIsFocused()
     compose.runOnIdle { assertEquals("架空", host.query.text) }
@@ -162,6 +170,7 @@ class RecordSearchNavigationTest {
     compose.onNodeWithTag("record-search", useUnmergedTree = true).assertDoesNotExist()
     compose.onNodeWithTag("records-search-screen", useUnmergedTree = true).assertDoesNotExist()
     compose.onNodeWithTag("journal-card-${host.entries.first().recordId}").assertDoesNotExist()
+    compose.onNodeWithTag("debate-compose-open").assertDoesNotExist()
     compose.runOnIdle { host.setAuthorized(true) }
     compose.onNodeWithTag("record-search").assertDoesNotExist()
     compose.onNodeWithTag("records-filter-toggle").performClick()
@@ -171,6 +180,30 @@ class RecordSearchNavigationTest {
     compose.onNodeWithTag("records-filter-sheet", useUnmergedTree = true).assertDoesNotExist()
     compose.onNodeWithTag("winner-All", useUnmergedTree = true).assertDoesNotExist()
     compose.onNodeWithTag("requester-0", useUnmergedTree = true).assertDoesNotExist()
+    compose.onNodeWithTag("debate-compose-open").assertDoesNotExist()
+  }
+
+  @Test fun floatingDebateActionOpensOnlyTheDraftAndDoesNotOverlapTheMenu() {
+    val host = Host()
+    show(host)
+    compose.onNodeWithTag("debate-compose-open").assertIsDisplayed().performClick()
+    compose.onNodeWithTag("debate-compose").assertIsDisplayed()
+    compose.onNodeWithTag("debate-question").assertIsDisplayed()
+    compose.onNodeWithTag("debate-compose-open").assertDoesNotExist()
+    compose.onNodeWithTag("records-query-toolbar").assertDoesNotExist()
+    compose.runOnIdle { assertEquals(listOf(BootstrapScreen.Event.ComposeDebate), host.events) }
+    compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+    compose.onNodeWithTag("debate-compose-open").assertIsDisplayed()
+    compose.onNodeWithTag("records-menu-open").performClick()
+    compose.onNodeWithTag("records-menu").assertIsDisplayed()
+    compose.onNodeWithTag("debate-compose-open").assertDoesNotExist()
+    compose.onNodeWithTag("records-query-toolbar").assertDoesNotExist()
+    // The sheet owns a Dialog window: send Back to that window, not the Activity's root dispatcher.
+    compose.waitForIdle()
+    InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+    compose.onNodeWithTag("records-menu").assertDoesNotExist()
+    compose.onNodeWithTag("debate-compose-open").assertIsDisplayed()
+    compose.runOnIdle { assertTrue(BootstrapScreen.Event.SubmitDebate !in host.events) }
   }
 
   @Test fun narrowLargeTextKeepsToolbarAndAllWinnerChoicesReachable() {
@@ -180,7 +213,11 @@ class RecordSearchNavigationTest {
         DeviceConfigurationOverride.FontScale(2f)) { BootstrapUi(host.state.value) }
     } }
     compose.onNodeWithTag("records-search-toggle").assertIsDisplayed()
+    val debate = compose.onNodeWithTag("debate-compose-open").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+    val toolbar = compose.onNodeWithTag("records-query-toolbar").fetchSemanticsNode().boundsInRoot
+    assertTrue("Large text must not merge or overlap the independent floating actions", debate.bottom < toolbar.top)
     compose.onNodeWithTag("records-filter-toggle").assertIsDisplayed().performClick()
+    compose.onNodeWithTag("debate-compose-open").assertDoesNotExist()
     for (index in 0..1) {
       compose.onNodeWithTag("requester-$index").performScrollTo().performClick().assertIsSelected()
     }
@@ -191,6 +228,18 @@ class RecordSearchNavigationTest {
     }
     compose.onNodeWithTag("records-filter-done").performScrollTo().performClick()
     compose.onNodeWithTag("records-filter-sheet").assertDoesNotExist()
+    val last = "journal-card-${host.entries.last().recordId}"
+    compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasTestTag(last))
+    // Making the item visible does not consume the padding below it; exercise the actual end scroll.
+    repeat(2) { compose.onNodeWithTag("bootstrap-content").performTouchInput { swipeUp() } }
+    val card = compose.onNodeWithTag(last).assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+    val finalDebate = compose.onNodeWithTag("debate-compose-open").fetchSemanticsNode().boundsInRoot
+    val finalToolbar = compose.onNodeWithTag("records-query-toolbar").fetchSemanticsNode().boundsInRoot
+    val range = compose.onNodeWithTag("bootstrap-content").fetchSemanticsNode()
+      .config[SemanticsProperties.VerticalScrollAxisRange]
+    assertTrue("The final large-text card can scroll above both floating actions: " +
+      "card=$card, debate=$finalDebate, toolbar=$finalToolbar, scroll=${range.value()}/${range.maxValue()}",
+      card.bottom <= finalDebate.top)
   }
 
   @Test fun captureSearchAndFilterPreview() {
@@ -234,6 +283,7 @@ class RecordSearchNavigationTest {
 
   /** The fake API boundary publishes the same saved Paging Flow, like the real repository. */
   private class Host(avatarBytes: ByteArray? = null) {
+    val events = mutableListOf<BootstrapScreen.Event>()
     val entries = (1..24).map { index ->
       val slot = (index - 1) % 3
       RecordListEntry(index.toString().padStart(43, 'q'),
@@ -269,9 +319,11 @@ class RecordSearchNavigationTest {
         RecordPreview("架空の議題全文", "架空の結論", "アロナ")),
       selectedRecordId = (backStack.lastOrNull() as? RecordDetail)?.recordId, backStack = backStack.toList(),
       canReadRecords = authorized, listQuery = query,
+      debate = DebateSubmissionState(DebateWorkspace(draft = "架空の保存済み下書き")),
       requesters = if (authorized) recordRequesterChoices(entries) else emptyList(), eventSink = ::event)
 
     private fun event(event: BootstrapScreen.Event) {
+      events += event
       val old = query
       when (event) {
         is BootstrapScreen.Event.SearchRecords -> query = query.copy(text = event.text)
@@ -281,6 +333,10 @@ class RecordSearchNavigationTest {
         BootstrapScreen.Event.ClearRecordQuery -> query = RecordListQuery()
         is BootstrapScreen.Event.OpenRecord -> if (authorized) backStack.openRecord(event.recordId)
         BootstrapScreen.Event.CloseRecord -> if (authorized) backStack.closeRecord()
+        BootstrapScreen.Event.ComposeDebate -> if (authorized) {
+          backStack.closeRecord()
+          backStack.add(DebateCompose)
+        }
         else -> Unit
       }
       if (old != query) {

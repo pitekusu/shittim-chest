@@ -9,15 +9,20 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MediumFloatingActionButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2
@@ -47,6 +52,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
@@ -67,7 +73,7 @@ import dev.pitekusu.shittim.records.ui.ShittimBackdrop
 import dev.pitekusu.shittim.records.ui.ShittimSpacing
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3AdaptiveApi::class)
+@OptIn(ExperimentalMaterial3AdaptiveApi::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 internal fun AdaptiveRecordsUi(
   state: BootstrapScreen.State,
@@ -153,7 +159,8 @@ internal fun AdaptiveRecordsUi(
             LazyColumn(Modifier.widthIn(max = 560.dp).fillMaxSize().testTag("bootstrap-content"),
               state = listScrollState, contentPadding = PaddingValues(
                 start = ShittimSpacing.Large, end = ShittimSpacing.Large,
-                top = ShittimSpacing.Medium, bottom = 104.dp),
+                // Keep the final card above both independent floating actions.
+                top = ShittimSpacing.Medium, bottom = 200.dp),
               verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
               item(key = "brand") { BootstrapHeader(Modifier.fillMaxWidth(), compact = true, motionAllowed = listMotion) }
               if (!state.listQuery.isDefault) item(key = "records-query-active") {
@@ -166,15 +173,30 @@ internal fun AdaptiveRecordsUi(
                 selectedRecordId = state.selectedRecordId.takeIf { twoPanes }, motionAllowed = listMotion)
             }
             val queryAvailable = (state.records as? RecordListState.Ready)?.saved == true || !state.listQuery.isDefault
-            if (queryAvailable && onList && queryMode == RecordQueryMode.Closed && motionAllowed) {
+            if (state.canReadRecords && onList && queryMode == RecordQueryMode.Closed && motionAllowed) {
               Box(Modifier.align(Alignment.BottomCenter).widthIn(max = 560.dp).fillMaxWidth(),
                 contentAlignment = Alignment.BottomEnd) {
-                // Nav3 moves this entry between single- and two-pane lookahead roots. A local
-                // root keeps Material's toolbar alignment-line owner valid across that move.
-                LookaheadScope {
-                  RecordQueryToolbar(state.listQuery, Modifier.padding(ShittimSpacing.Medium),
-                    onSearch = { queryMode = RecordQueryMode.Search },
-                    onFilters = { focusManager.clearFocus(force = true); queryMode = RecordQueryMode.Filters })
+                // The parent already consumes safe-drawing/IME insets; do not pad them twice.
+                Column(Modifier.padding(ShittimSpacing.Medium), horizontalAlignment = Alignment.End,
+                  verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
+                  // Drafts remain available even before records load or while reading offline.
+                  MediumFloatingActionButton(
+                    onClick = { state.eventSink(BootstrapScreen.Event.ComposeDebate) },
+                    modifier = Modifier.testTag("debate-compose-open"),
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary) {
+                    Icon(painterResource(R.drawable.ic_add_debate),
+                      contentDescription = stringResource(R.string.debate_start), Modifier.size(36.dp))
+                  }
+                  if (queryAvailable) {
+                    // Nav3 moves this entry between single- and two-pane lookahead roots. A local
+                    // root keeps Material's toolbar alignment-line owner valid across that move.
+                    LookaheadScope {
+                      RecordQueryToolbar(state.listQuery,
+                        onSearch = { queryMode = RecordQueryMode.Search },
+                        onFilters = { focusManager.clearFocus(force = true); queryMode = RecordQueryMode.Filters })
+                    }
+                  }
                 }
               }
             }

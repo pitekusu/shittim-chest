@@ -125,7 +125,7 @@ class RecordJournalVisualTest {
     }
   }
 
-  @Test fun lastCardRemainsAboveTheToolbarAndSelectionIsOnlyHighlightedInTwoPanes() {
+  @Test fun lastCardRemainsAboveSeparatedFloatingActionsAndSelectionIsOnlyHighlightedInTwoPanes() {
     val entries = journalSamples()
     val records = RecordListState.Ready.fromSaved(entries)
     val window = mutableStateOf(DpSize(360.dp, 800.dp))
@@ -140,16 +140,43 @@ class RecordJournalVisualTest {
     compose.onNodeWithTag(lastTag).performScrollTo().assertIsDisplayed().assertIsNotSelected()
     val card = compose.onNodeWithTag(lastTag).fetchSemanticsNode().boundsInRoot
     val toolbar = compose.onNodeWithTag("records-query-toolbar").fetchSemanticsNode().boundsInRoot
-    assertTrue("The final card must be readable and tappable above the floating tools", card.bottom <= toolbar.top)
-    compose.runOnIdle { window.value = DpSize(1000.dp, 700.dp); selected.value = entries.last().recordId }
+    val debate = compose.onNodeWithTag("debate-compose-open").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+    assertTrue("Starting a debate must be a larger independent action above the search tools",
+      debate.height > toolbar.height && debate.bottom < toolbar.top)
+    assertTrue("The final card must scroll clear of both floating actions", card.bottom <= debate.top)
+    compose.runOnIdle { window.value = DpSize(1000.dp, 700.dp) }
+    val listPane = compose.onNodeWithTag("records-list-pane").fetchSemanticsNode().boundsInRoot
+    val wideDebate = compose.onNodeWithTag("debate-compose-open").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+    assertTrue("The debate action stays inside the wide list pane", wideDebate.left >= listPane.left &&
+      wideDebate.right <= listPane.right && wideDebate.bottom <= listPane.bottom)
+    compose.runOnIdle { selected.value = entries.last().recordId }
     // Width changes alter line wrapping and card heights; inspect the selected card explicitly.
     compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasTestTag(lastTag))
     compose.onNodeWithTag(lastTag).assertIsDisplayed().assertIsSelected()
     compose.onNodeWithTag("records-query-toolbar").assertDoesNotExist()
+    compose.onNodeWithTag("debate-compose-open").assertDoesNotExist()
     compose.runOnIdle { selected.value = null; window.value = DpSize(360.dp, 800.dp) }
     compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasTestTag(lastTag))
     compose.onNodeWithTag(lastTag).assertIsDisplayed().assertIsNotSelected()
     compose.onNodeWithTag("records-query-toolbar").assertIsDisplayed()
+    compose.onNodeWithTag("debate-compose-open").assertIsDisplayed()
+  }
+
+  @Test fun draftEntryDoesNotDependOnLoadedRecordsOrNetworkAvailability() {
+    val events = mutableListOf<BootstrapScreen.Event>()
+    val state = mutableStateOf(journalState(emptyList(), records = RecordListState.Idle, onEvent = events::add))
+    compose.activityRule.scenario.onActivity { it.setContent { BootstrapUi(state.value) } }
+    compose.onNodeWithText(compose.activity.getString(R.string.record_list_loading)).assertIsDisplayed()
+    compose.onNodeWithTag("records-query-toolbar").assertDoesNotExist()
+    compose.onNodeWithTag("debate-compose-open").assertIsDisplayed().performClick()
+    compose.runOnIdle { state.value = journalState(emptyList(), onEvent = events::add) }
+    compose.onNodeWithText(compose.activity.getString(R.string.record_empty)).assertIsDisplayed()
+    compose.onNodeWithTag("debate-compose-open").assertIsDisplayed().performClick()
+    compose.runOnIdle { state.value = journalState(journalSamples(), offline = true, onEvent = events::add) }
+    compose.onNodeWithTag("debate-compose-open").assertIsDisplayed().performClick()
+    compose.runOnIdle {
+      assertEquals(List(3) { BootstrapScreen.Event.ComposeDebate }, events)
+    }
   }
 
   /** Optional screenshots and real-frame pacing are not part of normal CI execution. */
@@ -224,11 +251,13 @@ class RecordJournalVisualTest {
   private fun journalState(entries: List<RecordListEntry>,
     records: RecordListState = RecordListState.Ready.fromSaved(entries),
     theme: ThemeChoice = ThemeChoice.Dark, sync: RecordSyncState = RecordSyncState.Idle,
+    offline: Boolean = false,
     selected: String? = null, onEvent: (BootstrapScreen.Event) -> Unit = {}): BootstrapScreen.State =
-    BootstrapScreen.State(theme, SessionState.SignedIn(
+    BootstrapScreen.State(theme, if (offline) SessionState.Unavailable else SessionState.SignedIn(
       MobileSessionUser("架空の利用者", MobileAvatar("placeholder", "確認用", "cyan")),
       "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z")),
       records = records, sync = sync, selectedRecordId = selected,
+      canReadRecords = true, recordOwner = "u".repeat(43), debateOnline = !offline,
       record = RecordPreviewState.Ready(RecordPreview("架空の議題の全文です。", "架空の結論", "アロナ")),
       eventSink = onEvent)
 
