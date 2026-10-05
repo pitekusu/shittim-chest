@@ -119,6 +119,7 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
         }
       }
       if (menuOpen && state.canReadRecords) RecordsNavigationMenu(state, onDismiss = { menuOpen = false })
+      PlayUpdateNotice()
       BrandIntroOverlay(state.loginCompletion, state.session is SessionState.SignedIn,
         LocalStartupIntro.current)
     }
