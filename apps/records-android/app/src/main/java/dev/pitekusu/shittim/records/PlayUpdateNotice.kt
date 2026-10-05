@@ -112,7 +112,9 @@ internal fun PlayUpdateNotice(manager: AppUpdateManager? = null) {
 
   val downloading = status == InstallStatus.PENDING || status == InstallStatus.DOWNLOADING
   val downloaded = status == InstallStatus.DOWNLOADED
-  val offered = available && version != deferredVersion
+  // Play-side cancellation can happen while our listener is paused; do not re-offer that request.
+  val offered = available && version != deferredVersion &&
+    (version != requestedVersion || consentPending)
   if (!downloaded && !downloading && !offered && !failed) return
 
   // An overlay leaves the journal's size and scroll anchor unchanged as the notice comes and goes.

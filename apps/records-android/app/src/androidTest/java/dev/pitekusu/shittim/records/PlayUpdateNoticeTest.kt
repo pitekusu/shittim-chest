@@ -255,4 +255,33 @@ class PlayUpdateNoticeTest {
     compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
     compose.onNodeWithTag("play-update-notice").assertDoesNotExist()
   }
+
+  @Test fun cancelingInPlayWhileBackgroundedDoesNotOfferTheSameRequestAgain() {
+    val manager = FakeAppUpdateManager(compose.activity).apply { setUpdateAvailable(34) }
+    show(manager)
+    text(R.string.play_update_start).performClick()
+    compose.runOnIdle { manager.userAcceptsUpdate(); manager.downloadStarts() }
+    compose.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+    compose.runOnUiThread { manager.userCancelsDownload() }
+    compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+    compose.onNodeWithTag("play-update-notice").assertDoesNotExist()
+    compose.runOnIdle { manager.setUpdateAvailable(35) }
+    compose.activityRule.scenario.moveToState(Lifecycle.State.CREATED)
+    compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+    text(R.string.play_update_available).assertIsDisplayed()
+  }
+
+  @Test fun anObservedDownloadFailureStillAllowsExplicitRetryOfTheSameVersion() {
+    val manager = FakeAppUpdateManager(compose.activity).apply { setUpdateAvailable(34) }
+    show(manager)
+    text(R.string.play_update_start).performClick()
+    compose.runOnIdle {
+      manager.userAcceptsUpdate()
+      manager.downloadStarts()
+      manager.downloadFails()
+    }
+    text(R.string.play_update_failed).assertIsDisplayed()
+    text(R.string.play_update_start).performClick()
+    compose.runOnIdle { assertTrue(manager.isConfirmationDialogVisible) }
+  }
 }
