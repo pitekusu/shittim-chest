@@ -25,10 +25,11 @@
   <string name="debate_phase_voting">投票しています</string>
   <string name="debate_phase_decision">結論をまとめています</string>
   <string name="debate_question">3人に相談する議題</string>
-  <string name="debate_publish_notice">議題と回答はDiscordの既定チャンネルと議論の記録に掲載されます。</string>
+  <string name="debate_versus" translatable="false">VS</string>
+  <string name="debate_versus_label">アロナ、プラナ、安倍晋三AIの対決</string>
   <string name="debate_characters">%1$d / 1000文字</string>
   <string name="debate_saving">暗号化して保存しています</string>
-  <string name="debate_submit">この議題で議論を開始</string>
+  <string name="debate_submit">シッテムの箱を開く</string>
   <string name="debate_offline">下書きは保存できます。送信にはオンラインでのログイン確認が必要です。</string>
   <string name="debate_storage_error">下書きを保存できませんでした。空き容量を確認してください。保存されるまで送信しません。</string>
   <string name="debate_reauth">議論の開始にはDiscordで再認証してください。保存済みの記録と下書きは保持します。</string>

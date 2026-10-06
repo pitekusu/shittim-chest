@@ -20,9 +20,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.pitekusu.shittim.records.ui.ShittimPanel
-import dev.pitekusu.shittim.records.ui.ShittimParticipantAvatar
 import dev.pitekusu.shittim.records.ui.ShittimSpacing
-import androidx.compose.foundation.layout.Row
 
 @Composable
 internal fun DebateComposeScreen(state: DebateSubmissionState, online: Boolean,
@@ -31,13 +29,8 @@ internal fun DebateComposeScreen(state: DebateSubmissionState, online: Boolean,
   modifier: Modifier = Modifier) {
   Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(ShittimSpacing.Medium)
     .testTag("debate-compose"), verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
-    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-      ShittimParticipantAvatar("アロナ", "participant-a", 48.dp)
-      ShittimParticipantAvatar("プラナ", "participant-b", 48.dp)
-      ShittimParticipantAvatar("安倍晋三AI", "participant-c", 48.dp)
-    }
+    DebateVersusHeader()
     Text(stringResource(R.string.debate_start), style = MaterialTheme.typography.headlineMediumEmphasized)
-    Text(stringResource(R.string.debate_publish_notice), style = MaterialTheme.typography.bodyMedium)
     val workspace = state.workspace
     if (workspace == null) {
       if (state.failure == null) CircularProgressIndicator()
