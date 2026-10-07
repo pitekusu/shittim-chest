@@ -1,6 +1,7 @@
 package dev.pitekusu.shittim.records
 
 import android.app.Activity
+import android.graphics.Bitmap
 import android.app.PendingIntent
 import android.content.Intent
 import android.view.ViewGroup
@@ -14,16 +15,24 @@ import androidx.activity.result.contract.ActivityResultContract
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
+import androidx.compose.material3.SnackbarDefaults
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.lifecycle.Lifecycle
 import androidx.core.app.ActivityOptionsCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -41,6 +50,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.File
+import kotlin.math.max
+import kotlin.math.min
 
 /** Official Play fake only: no network, credentials, downloaded APK or actual installation. */
 @ScreenTest
@@ -61,6 +73,35 @@ class PlayUpdateNoticeTest {
   }
 
   private fun text(resource: Int) = compose.onNodeWithText(compose.activity.getString(resource))
+
+  @Test fun updateAndLaterActionsKeepReadableContrastInBothThemes() {
+    for (dark in listOf(true, false)) {
+      val manager = FakeAppUpdateManager(compose.activity).apply { setUpdateAvailable(35) }
+      var background = Color.Unspecified
+      compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+        ShittimTheme(dark) {
+          background = SnackbarDefaults.color
+          Box(Modifier.fillMaxSize()) { PlayUpdateNotice(manager) }
+        }
+      } }
+      compose.waitForIdle()
+      for (resource in listOf(R.string.play_update_start, R.string.play_update_later)) {
+        val layouts = mutableListOf<TextLayoutResult>()
+        text(resource).assertIsDisplayed().performSemanticsAction(SemanticsActions.GetTextLayoutResult) {
+          it(layouts)
+        }
+        val foreground = layouts.single().layoutInput.style.color
+        val light = max(foreground.luminance(), background.luminance())
+        val dim = min(foreground.luminance(), background.luminance())
+        assertTrue("Both update actions must be readable on the actual Snackbar background", (light + .05f) / (dim + .05f) >= 4.5f)
+      }
+      val name = if (dark) "update-actions-dark.png" else "update-actions-light.png"
+      File(requireNotNull(compose.activity.getExternalFilesDir(null)), name).outputStream().use {
+        compose.onNodeWithTag("play-update-notice").captureToImage().asAndroidBitmap()
+          .compress(Bitmap.CompressFormat.PNG, 100, it)
+      }
+    }
+  }
 
   @Test fun noticeRequiresExplicitConsentAndCompletedDownloadRequiresExplicitRestart() {
     val manager = FakeAppUpdateManager(compose.activity).apply {
