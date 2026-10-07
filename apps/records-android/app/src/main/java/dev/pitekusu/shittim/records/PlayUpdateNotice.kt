@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarDefaults
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -136,13 +138,18 @@ internal fun PlayUpdateNotice(manager: AppUpdateManager? = null) {
     (version != requestedVersion || consentPending)
   if (!downloaded && !downloading && !offered && !failed) return
 
+  // Snackbar uses inverseSurface; ordinary TextButton primary is too pale in dark mode.
+  val actionColors = ButtonDefaults.textButtonColors(
+    contentColor = SnackbarDefaults.actionContentColor,
+    disabledContentColor = SnackbarDefaults.contentColor.copy(alpha = .38f),
+  )
   // An overlay leaves the journal's size and scroll anchor unchanged as the notice comes and goes.
   Box(Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp), contentAlignment = Alignment.BottomCenter) {
     Snackbar(
       Modifier.widthIn(max = 560.dp).fillMaxWidth().testTag("play-update-notice"),
       actionOnNewLine = true,
       action = {
-        if (!downloading) TextButton(enabled = resumed && !busy && !consentPending, onClick = {
+        if (!downloading) TextButton(colors = actionColors, enabled = resumed && !busy && !consentPending, onClick = {
           if (!resumed || busy || consentPending) return@TextButton
           // Task.await is cancellable: an older foreground response cannot replace this action.
           foregroundCheck?.cancel()
@@ -190,7 +197,7 @@ internal fun PlayUpdateNotice(manager: AppUpdateManager? = null) {
         }) { Text(stringResource(if (downloaded) R.string.play_update_restart else R.string.play_update_start)) }
       },
       dismissAction = {
-        TextButton(enabled = !busy && !consentPending, onClick = {
+        TextButton(colors = actionColors, enabled = !busy && !consentPending, onClick = {
           deferredVersion = version
           failed = false
           // A completed download stays in Play; remind on a later foreground visit, not immediately.

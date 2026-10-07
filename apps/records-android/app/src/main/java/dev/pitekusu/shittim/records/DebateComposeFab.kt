@@ -13,7 +13,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MediumFloatingActionButton
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -52,7 +53,7 @@ internal fun DebateComposeFab(active: Boolean, onClick: () -> Unit, modifier: Mo
       activation.snapTo(0f)
       return@LaunchedEffect
     }
-    if (animationsEnabled) activation.animateTo(1f, tween(120))
+    if (animationsEnabled) activation.animateTo(1f, tween(160))
     if (latestActive.value && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) latestClick.value()
     activating = false
     activation.snapTo(0f)
@@ -61,20 +62,23 @@ internal fun DebateComposeFab(active: Boolean, onClick: () -> Unit, modifier: Mo
     animationSpec = if (animationsEnabled) tween(80) else snap(), label = "debate fab press")
   val background by animateColorAsState(
     if (active && (pressed || activating)) lerp(MaterialTheme.colorScheme.primary,
-      MaterialTheme.colorScheme.onSurface, .12f) else MaterialTheme.colorScheme.primary,
+      MaterialTheme.colorScheme.scrim, .22f) else MaterialTheme.colorScheme.primary,
     animationSpec = if (animationsEnabled) MaterialTheme.motionScheme.fastEffectsSpec() else snap(),
     label = "debate fab feedback")
-  MediumFloatingActionButton(onClick = {
+  FloatingActionButton(onClick = {
     if (active && !activating && lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) activating = true
-  }, modifier = modifier.testTag("debate-compose-open"), interactionSource = interactions,
-    shape = CircleShape, containerColor = background, contentColor = MaterialTheme.colorScheme.onPrimary) {
-    // Transform only the symbol: the circular 80dp touch target and insets remain unchanged.
+  }, modifier = modifier.size(64.dp).testTag("debate-compose-open"), interactionSource = interactions,
+    shape = CircleShape, containerColor = background, contentColor = MaterialTheme.colorScheme.onPrimary,
+    elevation = FloatingActionButtonDefaults.elevation(
+      defaultElevation = if (activating) 0.dp else 6.dp, pressedElevation = 0.dp,
+    )) {
+    // The 64dp touch target stays fixed while the shadow drops and the symbol sinks into the face.
     Icon(painterResource(R.drawable.ic_add_debate), stringResource(R.string.debate_start),
-      Modifier.size(36.dp).graphicsLayer {
+      Modifier.size(32.dp).graphicsLayer {
         val amount = if (animationsEnabled) max(press, activation.value) else 0f
-        scaleX = 1f - .16f * amount
+        scaleX = 1f - .28f * amount
         scaleY = scaleX
-        translationY = 2.dp.toPx() * amount
+        translationY = 5.dp.toPx() * amount
       })
   }
 }
