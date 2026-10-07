@@ -2945,7 +2945,7 @@ test("refreshed workspaces fit PC and narrow viewports with the whole shell acce
       "/admin/prompts",
     ]) {
       await page.goto(path);
-      await expect(page.locator("main h1").first()).toBeVisible();
+      await expect(page.locator('main h1[tabindex="-1"]').first()).toBeVisible();
       await page.evaluate(() => document.fonts.ready);
       const overflow = await page.evaluate(
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -2962,7 +2962,7 @@ test("refreshed workspaces fit PC and narrow viewports with the whole shell acce
   await page.setViewportSize({ width: 1280, height: 900 });
   for (const path of ["/", `/records/${RECORD_ID}`, "/admin/prompts"]) {
     await page.goto(path);
-    await expect(page.locator("main h1").first()).toBeVisible();
+    await expect(page.locator('main h1[tabindex="-1"]').first()).toBeVisible();
     await page.evaluate(() => {
       document.documentElement.style.fontSize = "200%";
     });
