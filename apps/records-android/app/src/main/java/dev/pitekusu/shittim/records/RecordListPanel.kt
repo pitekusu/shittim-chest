@@ -202,8 +202,9 @@ private fun RecordJournalContext(ready: RecordListState.Ready?, shownCount: Int,
     Row(Modifier.fillMaxWidth().height(lineHeight * 2),
       horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
       if (sync == RecordSyncState.Running && !searching && !offline && failure == null) {
-        if (motionAllowed) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-        else CircularProgressIndicator(progress = { 1f }, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+        val progress = Modifier.size(16.dp).testTag("journal-sync-progress")
+        if (motionAllowed) CircularProgressIndicator(progress, strokeWidth = 2.dp)
+        else CircularProgressIndicator(progress = { 1f }, modifier = progress, strokeWidth = 2.dp)
       }
       if (status != null) Text(stringResource(status), style = MaterialTheme.typography.bodySmall,
         color = if (failure != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
