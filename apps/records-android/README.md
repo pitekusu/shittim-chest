@@ -227,6 +227,14 @@ CIで全試験を確認する場合は、手動実行の`android_screen_tests`�
 
 `DebateComposeFabTest`で待機前の反応、連打、前景離脱、無効設定を確認し、`RecordSearchNavigationTest`の既存FAB経路で下書きだけを開くことを確認する。押しただけで討論は送信しない。
 
+## 議論開始画面の対戦演出
+
+3人の顔を「アロナ VS プラナ VS 安倍晋三AI」と並べ、人格色の斜めのVSバッジと短い登場演出を表示する。Compose標準のAnimatableとMaterialのMotionSchemeを使い、背景では停止する。復帰・再作成で再演せず、アニメーション無効時は完成形を表示する。演出中も下書き入力・明示送信を待たせない。
+
+公開先の説明文は撤去し、送信ボタンは「シッテムの箱を開く」とする。空白・文字数・オフライン・送信中・受付済みの送信制御、暗号化下書き保存、APIとDiscordの投稿先は変更しない。
+
+`DebateScreensUiTest`を任意に実行し、架空の入力で[ダーク](screenshots/debate-versus-dark.png)、[ライト](screenshots/debate-versus-light.png)、[320dp・文字2倍](screenshots/debate-versus-large-text.png)を確認する。実Discord投稿・実機受入・内部テスト配布の証拠ではなく、重い画面試験CIは追加しない。
+
 ## Play内の更新案内
 
 - Google公式In-App UpdatesのFLEXIBLE方式を使用する。前景で更新を確認し、「更新／あとで」を表示する。更新を押した後だけPlayの同意画面を開き、バックグラウンドでダウンロードする。
