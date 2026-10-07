@@ -58,10 +58,9 @@ export function LoginPage({ session }: { readonly session: SessionResponse }): R
         <a
           className={`${commonStyles.primaryButton} ${authStyles.loginAuthButton}`}
           href={startPath}
-          lang="en"
           onClick={() => sessionStorage.setItem(LOGIN_TRANSITION_KEY, "pending")}
         >
-          AUTHENTICATE
+          Discordでログイン
         </a>
         <p
           className={`${authStyles.loginNote} ${commonStyles.japaneseText} ${commonStyles.japaneseProse}`}

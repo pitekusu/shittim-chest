@@ -286,12 +286,14 @@ export function DebateCard({
   motionTerminal = false,
   appended = false,
   onAppendAnimationEnd,
+  onOpen,
 }: {
   readonly record: RecordListItem;
   readonly motionDelay?: number;
   readonly motionTerminal?: boolean;
   readonly appended?: boolean;
   readonly onAppendAnimationEnd?: (recordId: string) => void;
+  readonly onOpen?: (recordId: string) => void;
 }) {
   const linkRef = useRef<HTMLAnchorElement>(null);
   const winner = record.participants.find(
@@ -320,6 +322,18 @@ export function DebateCard({
         appended ? routeStyles.routeMotionAppend : ""
       }`}
       to={`/records/${record.recordId}`}
+      data-record-id={record.recordId}
+      onClick={(event) => {
+        if (
+          !event.metaKey &&
+          !event.ctrlKey &&
+          !event.shiftKey &&
+          !event.altKey &&
+          event.button === 0
+        ) {
+          onOpen?.(record.recordId);
+        }
+      }}
       aria-label={`「${record.questionPreview}」の記録を読む`}
       data-route-motion-terminal={motionTerminal ? "" : undefined}
       ref={linkRef}

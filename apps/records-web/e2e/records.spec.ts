@@ -9,6 +9,7 @@ const AUTHENTICATED_ROUTE_CHUNK_NAMES = [
   "RecordDetail",
   "RankingsPage",
   "AdminPage",
+  "AdminPromptsPage",
   "MemorialPage",
   "MomotalkPage",
 ] as const;
@@ -29,6 +30,20 @@ function matchingChunkAssets(requestedAssets: ReadonlySet<string>, chunkName: st
       assetPath.startsWith(chunkPrefix) &&
       (assetPath.endsWith(".js") || assetPath.endsWith(".css")),
   );
+}
+
+async function revealVoteGraphBeforeFullPageCapture(page: Page): Promise<void> {
+  const graph = page.getByTestId("vote-graph");
+  await graph.scrollIntoViewIfNeeded();
+  await expect(graph).toHaveAttribute("data-revealed", "true");
+  const opinions = page
+    .getByRole("navigation", { name: "議論内ナビゲーション" })
+    .getByRole("link", { name: "3人の意見" });
+  await opinions.click();
+  await expect(opinions).toHaveAttribute("aria-current", "location");
+  await page.locator("main h1").focus();
+  await page.mouse.move(0, 0);
+  await page.evaluate(() => window.scrollTo({ top: 0, left: 0, behavior: "instant" }));
 }
 
 const placeholder = (displayName: string, fallbackVariant: string) => ({
@@ -912,24 +927,31 @@ test("authenticated member can browse the completed archive", async ({ page }) =
 
   const recordsHeading = page.getByRole("heading", { name: "議論の記録" });
   await expect(recordsHeading).toBeVisible();
-  const logoff = page.getByRole("button", { name: "LOGOFF" });
+  if (test.info().project.name === "mobile-chromium") {
+    await page.getByLabel("アカウントメニュー", { exact: true }).click();
+  }
+  const logoff = page.getByRole("button", { name: "ログアウト" });
   const logoffBox = await logoff.boundingBox();
   expect(logoffBox).not.toBeNull();
   expect(logoffBox!.height).toBeGreaterThanOrEqual(44);
+  if (test.info().project.name === "mobile-chromium") {
+    await page.keyboard.press("Escape");
+  }
   const card = page.getByRole("article");
   await expect(card).toContainText(detail.question);
   await expect(card.getByText("2026年8月15日 15:00")).toHaveAttribute(
     "datetime",
     detail.completedAt,
   );
-  await expect(page.getByRole("button", { name: "依頼者" })).toContainText("すべて");
-  await page.getByRole("button", { name: "依頼者" }).click();
+  await expect(page.getByRole("combobox", { name: "依頼者" })).toContainText("すべて");
+  await page.getByRole("combobox", { name: "依頼者" }).click();
   const requesterOption = page.getByRole("option", { name: "パワー系ウナギ" });
   await expect(requesterOption.locator("[aria-hidden=true]").first()).toBeVisible();
+  await expect(page.getByRole("listbox").locator("..")).toHaveCSS("opacity", "1");
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await requesterOption.click();
   await expect(card).toContainText(detail.question);
-  await page.getByRole("button", { name: "勝者" }).click();
+  await page.getByRole("combobox", { name: "勝者" }).click();
   await expect(
     page.getByRole("option", { name: "アロナ" }).locator("[aria-hidden=true]").first(),
   ).toBeVisible();
@@ -940,7 +962,7 @@ test("authenticated member can browse the completed archive", async ({ page }) =
   const sortSegment = page.locator("[data-sort]");
   await expect(newestSort).toBeChecked();
   await expect(oldestSort).not.toBeChecked();
-  await sortSegment.getByText("OLD", { exact: true }).click();
+  await sortSegment.getByText("古い順", { exact: true }).click();
   await expect(oldestSort).toBeChecked();
   await oldestSort.focus();
   await page.keyboard.press("ArrowLeft");
@@ -971,6 +993,7 @@ test("authenticated member can browse the completed archive", async ({ page }) =
   );
   await expect(page.getByText(/所要時間|Evidence|外部根拠/)).toHaveCount(0);
 
+  await revealVoteGraphBeforeFullPageCapture(page);
   await expect(page).toHaveScreenshot("records-detail.png", {
     animations: "disabled",
     fullPage: true,
@@ -996,7 +1019,7 @@ test("individual OGP follows detail navigation and returns to common preview", a
   await expect(page.getByRole("heading", { name: detail.question })).toBeVisible();
   await expect(page.locator('meta[property="og:image"]')).toHaveAttribute("content", ogImageUrl);
   await page.screenshot({ path: testInfo.outputPath("ogp-detail.png"), fullPage: true });
-  await page.getByRole("link", { name: "記録一覧へ" }).click();
+  await page.getByRole("link", { name: "← 記録一覧へ", exact: true }).click();
   await expect(page.locator('meta[property="og:image"]')).toHaveAttribute(
     "content",
     /\/assets\/shittim-chest-archive-og-/,
@@ -1063,7 +1086,9 @@ test("internal navigation keeps route headings focused", async ({ page }, testIn
   await page.getByRole("link", { name: `「${detail.question}」の記録を読む` }).click();
   await expect(page.getByRole("heading", { name: detail.question })).toBeFocused();
   await page.getByRole("link", { name: "← 記録一覧へ" }).click();
-  await expect(archiveHeading).toBeFocused();
+  await expect(
+    page.getByRole("link", { name: `「${detail.question}」の記録を読む` }),
+  ).toBeFocused();
 });
 
 test("archive controls remain usable across responsive breakpoints", async ({ page }) => {
@@ -1139,6 +1164,7 @@ test("dark theme covers login, archive, detail, and rankings", async ({ page }, 
   await page.getByRole("link", { name: `「${detail.question}」の記録を読む` }).click();
   await expect(page.getByRole("heading", { name: detail.question })).toBeVisible();
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await revealVoteGraphBeforeFullPageCapture(page);
   await expect(page).toHaveScreenshot("records-dark-detail.png", {
     animations: "disabled",
     fullPage: true,
@@ -1184,8 +1210,9 @@ test("manual theme survives reload and logoff while the mobile switch stays usab
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
 
   await page.setViewportSize({ width: 390, height: 844 });
-  const mobileNavigation = page.getByRole("navigation", { name: "モバイルナビゲーション" });
-  const mobileSwitch = mobileNavigation.getByRole("switch", { name: "ダークモード" });
+  await page.getByLabel("アカウントメニュー", { exact: true }).click();
+  const accountMenu = page.getByRole("navigation", { name: "アカウント操作" }).locator("..");
+  const mobileSwitch = accountMenu.getByRole("switch", { name: "ダークモード" });
   await expect(mobileSwitch).toBeVisible();
   expect((await mobileSwitch.boundingBox())?.height).toBeGreaterThanOrEqual(48);
   await expect(mobileSwitch).toHaveAttribute("aria-checked", "true");
@@ -1199,7 +1226,7 @@ test("manual theme survives reload and logoff while the mobile switch stays usab
   await page.setViewportSize({ width: 320, height: 800 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
   await expect(mobileSwitch).toBeVisible();
-  await mobileNavigation.getByRole("button", { name: "LOGOFF" }).click();
+  await accountMenu.getByRole("button", { name: "ログアウト" }).click();
   await expect(page.getByRole("heading", { name: "The Shittim Chest Archive" })).toBeVisible();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
 });
@@ -1208,7 +1235,10 @@ test("logoff shows the goodbye transition before returning to login", async ({ p
   await mockAuthenticatedApi(page);
   await page.goto("/");
 
-  await page.getByRole("button", { name: "LOGOFF" }).first().click();
+  if (await page.getByLabel("アカウントメニュー", { exact: true }).isVisible()) {
+    await page.getByLabel("アカウントメニュー", { exact: true }).click();
+  }
+  await page.getByRole("button", { name: "ログアウト" }).first().click();
 
   const transition = page.getByLabel("ログオフしました");
   await expect(transition).toBeVisible();
@@ -1263,8 +1293,26 @@ test("authenticated member can review responsive rankings", async ({ page }) => 
   await expect(wins).toBeVisible();
   await expect(requests).toBeVisible();
   await expect(wins.getByRole("listitem")).toHaveCount(3);
-  await expect(wins.getByRole("meter")).toHaveCount(3);
-  await expect(requests.getByRole("meter")).toHaveCount(3);
+  const winPodium = wins.getByRole("list", { name: "勝利回数ランキングの表彰台" });
+  const requestPodium = requests.getByRole("list", { name: "依頼回数ランキングの表彰台" });
+  await expect(winPodium).toHaveAttribute("data-podium-layout", "ranked");
+  await expect(requestPodium).toHaveAttribute("data-podium-layout", "shared");
+  await expect(requestPodium.getByRole("listitem")).toHaveCount(3);
+  const [first, second, third] = await Promise.all(
+    [1, 2, 3].map((rank) =>
+      winPodium.locator(`[data-podium-rank="${rank}"] > span`).first().boundingBox(),
+    ),
+  );
+  expect(first!.x).toBeGreaterThan(second!.x);
+  expect(first!.x).toBeLessThan(third!.x);
+  expect(first!.y).toBeLessThan(second!.y);
+  const tiedWinners = await requestPodium
+    .locator('[data-podium-rank="1"]')
+    .evaluateAll((entries) =>
+      entries.map((entry) => entry.querySelector("span")!.getBoundingClientRect().top),
+    );
+  expect(tiedWinners).toHaveLength(2);
+  expect(Math.abs(tiedWinners[0]! - tiedWinners[1]!)).toBeLessThanOrEqual(1);
   const affection = page.getByRole("region", { name: "親愛度ランキング" });
   await expect(affection.getByRole("heading", { name: "アロナ" })).toBeVisible();
   await expect(affection.getByRole("heading", { name: "プラナ" })).toBeVisible();
@@ -1294,19 +1342,16 @@ test("authenticated member can review responsive rankings", async ({ page }) => 
   await expect(affection.getByText("メモリアルロビーのリセット 2回", { exact: true })).toHaveCount(
     3,
   );
+  await expect(affection.getByRole("button", { name: "4位以下を表示" })).toBeVisible();
   await expect(
     affection.getByRole("button", { name: "親愛度ランキングの続きを読み込む" }),
-  ).toBeVisible();
+  ).toHaveCount(0);
   const costDashboard = page.getByRole("region", { name: "概算費用" });
   await expect(costDashboard).toContainText("¥124");
   await expect(costDashboard).toContainText("一部集計中");
-  const podium = wins.locator('[data-podium-layout="ranked"]');
-  const podiumBox = await podium.boundingBox();
   const winsBox = await wins.boundingBox();
-  expect(podiumBox).not.toBeNull();
   expect(winsBox).not.toBeNull();
-  expect(podiumBox!.x).toBeGreaterThanOrEqual(winsBox!.x);
-  expect(podiumBox!.x + podiumBox!.width).toBeLessThanOrEqual(winsBox!.x + winsBox!.width);
+  await expect(wins.getByRole("list")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
     await page.evaluate(() => document.documentElement.clientWidth),
   );
@@ -1328,12 +1373,45 @@ test("authenticated member can review responsive rankings", async ({ page }) => 
   }
 });
 
-test("loads the next affection ranking page from the keyboard", async ({ page }, testInfo) => {
+test("expands all affection ranks together, keeps cached pages and leaves lower requests visible", async ({
+  page,
+}, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
   await mockAuthenticatedApi(page);
+  await page.route("**/api/v1/insights/rankings", (route) =>
+    route.fulfill({
+      json: {
+        ...rankings,
+        requests: [
+          ...rankings.requests,
+          { rank: 4, displayName: "4位の依頼者", avatar: placeholder("先生", "cyan"), count: 6 },
+        ],
+      },
+    }),
+  );
+  const cursors: (string | null)[] = [];
   await page.route("**/api/v1/insights/affection-rankings?*", (route) => {
     const cursor = new URL(route.request().url()).searchParams.get("cursor");
+    cursors.push(cursor);
     if (cursor === null) return route.fulfill({ json: affectionRankings });
+    if (cursor === "beyond-top-three")
+      return route.fulfill({
+        json: {
+          ...affectionRankings,
+          nextCursor: null,
+          rankings: affectionRankings.rankings.map((ranking) => ({
+            ...ranking,
+            entries: [
+              {
+                rank: 5,
+                displayName: "5位の質問者",
+                avatar: placeholder("先生", "cyan"),
+                score: 200,
+              },
+            ],
+          })),
+        },
+      });
     return route.fulfill({
       json: {
         ...affectionRankings,
@@ -1346,25 +1424,78 @@ test("loads the next affection ranking page from the keyboard", async ({ page },
               avatar: placeholder("追加の質問者", "lavender"),
               score: 400,
             },
+            {
+              rank: 4,
+              displayName: "4位の質問者",
+              avatar: placeholder("先生", "cyan"),
+              score: 300,
+            },
           ],
         })),
-        nextCursor: null,
+        nextCursor: "beyond-top-three",
       },
     });
   });
 
   await page.goto("/insights");
+  const requests = page.getByRole("region", { name: "依頼回数ランキング" });
+  const lowerRequests = requests.getByRole("list", { name: "依頼回数ランキングの4位以下" });
+  await expect(lowerRequests.getByRole("listitem")).toHaveCount(1);
+  await expect(lowerRequests).toContainText("4位の依頼者");
+  await expect(lowerRequests).toContainText("6");
+  await expect(
+    requests.getByRole("list", { name: "依頼回数ランキングの表彰台" }).getByText("4位の依頼者"),
+  ).toHaveCount(0);
   const affection = page.getByRole("region", { name: "親愛度ランキング" });
   const loadMore = affection.getByRole("button", {
     name: "親愛度ランキングの続きを読み込む",
   });
+  await expect(loadMore).toHaveCount(0);
+  const toggle = affection.getByRole("button", { name: "4位以下を表示" });
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  await expect(affection.getByRole("button", { name: "3位までに戻す" })).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  expect(cursors).toEqual([null]);
   await expect(loadMore).toBeVisible();
   await loadMore.focus();
   await page.keyboard.press("Enter");
 
   await expect(affection.getByText("追加の質問者", { exact: true })).toHaveCount(3);
+  await expect(affection.getByRole("listitem")).toHaveCount(12);
+  await expect(affection.getByText("4位の質問者", { exact: true })).toHaveCount(3);
+  await affection.getByRole("button", { name: "3位までに戻す" }).click();
   await expect(affection.getByRole("listitem")).toHaveCount(9);
   await expect(loadMore).toHaveCount(0);
+  await affection.getByRole("button", { name: "4位以下を表示" }).click();
+  await expect(affection.getByRole("listitem")).toHaveCount(12);
+  expect(cursors).toEqual([null, affectionRankings.nextCursor]);
+  await loadMore.click();
+  await expect(affection.getByText("5位の質問者", { exact: true })).toHaveCount(3);
+  await expect(loadMore).toHaveCount(0);
+  await affection.getByRole("button", { name: "3位までに戻す" }).click();
+  await expect(affection.getByRole("listitem")).toHaveCount(9);
+  await affection.getByRole("button", { name: "4位以下を表示" }).click();
+  await expect(affection.getByRole("listitem")).toHaveCount(15);
+  expect(cursors).toEqual([null, affectionRankings.nextCursor, "beyond-top-three"]);
+  await page.mouse.move(0, 0);
+  await page.evaluate(() => window.scrollTo({ top: 0, left: 0, behavior: "instant" }));
+  await page.screenshot({
+    path: testInfo.outputPath("rankings-top-three.png"),
+    fullPage: true,
+    animations: "disabled",
+  });
+  await page.reload();
+  await expect(affection.getByRole("button", { name: "4位以下を表示" })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  await expect(affection.getByRole("listitem")).toHaveCount(6);
+  await page.setViewportSize({ width: 320, height: 900 });
+  await expect(lowerRequests).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
 });
 
 test("English login product name keeps the approved two-line break at narrow widths", async ({
@@ -1494,6 +1625,10 @@ test("record detail stays inside the mobile viewport with long Japanese content"
     "最初に必要な道具と時間を整理してから小さく試し、途中で休憩を入れながら、参加する全員が無理なく楽しめる進め方を選びます。最後に感想を共有して次回の工夫へつなげます。";
   const longDetail = {
     ...detail,
+    requester: {
+      ...detail.requester,
+      displayName: "髙﨑𡨚𠮟 か\u3099 ハ\u309a e\u0301 🙂☕️ と長い名前の先生",
+    },
     question:
       "新しい趣味を始めるなら、庭で植物を育てるか室内で工作を楽しむか、それぞれの価値観から話し合って決める",
     initialOpinions: detail.initialOpinions.map((opinion) => ({
@@ -1510,6 +1645,8 @@ test("record detail stays inside the mobile viewport with long Japanese content"
   await mockAuthenticatedApi(page, longDetail);
   await page.goto(`/records/${RECORD_ID}`);
   await expect(page.getByRole("heading", { name: longDetail.question })).toBeVisible();
+  await expect(page.getByText(longDetail.requester.displayName)).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
 
   const viewport = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,
@@ -1641,7 +1778,10 @@ test("reduced motion skips the long login and logoff transitions", async ({ page
     "animation-name",
     "none",
   );
-  await page.getByRole("button", { name: "LOGOFF" }).first().click();
+  if (await page.getByLabel("アカウントメニュー", { exact: true }).isVisible()) {
+    await page.getByLabel("アカウントメニュー", { exact: true }).click();
+  }
+  await page.getByRole("button", { name: "ログアウト" }).first().click();
   await expect(page.getByRole("heading", { name: "The Shittim Chest Archive" })).toBeVisible({
     timeout: 1_000,
   });
@@ -1745,7 +1885,7 @@ test("anonymous login page boots under the production CSP without dynamic evalua
 
   await page.goto("/");
 
-  const loginButton = page.getByRole("link", { name: "AUTHENTICATE" });
+  const loginButton = page.getByRole("link", { name: "Discordでログイン" });
   await expect(loginButton).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
   expect(pageErrors).toEqual([]);
@@ -1767,11 +1907,12 @@ test("anonymous login does not request authenticated route assets", async ({ pag
   );
 
   await page.goto("/login");
-  await expect(page.getByRole("link", { name: "AUTHENTICATE" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Discordでログイン" })).toBeVisible();
 
   for (const chunkName of AUTHENTICATED_ROUTE_CHUNK_NAMES) {
     expect(matchingChunkAssets(requestedAssets, chunkName), chunkName).toEqual([]);
   }
+  expect(matchingChunkAssets(requestedAssets, "AdminPanelState")).toEqual([]);
 });
 
 test("Memorial and SYSTEM ACCESS keep usable targets in the narrow mobile navigation", async ({
@@ -1789,11 +1930,19 @@ test("Memorial and SYSTEM ACCESS keep usable targets in the narrow mobile naviga
     name: "モバイルナビゲーション",
   });
   await expect(mobileNavigation).toBeVisible();
-  await expect(mobileNavigation.locator(":scope > a, :scope > button")).toHaveCount(8);
+  await expect(mobileNavigation.getByRole("link")).toHaveCount(4);
   await expect(mobileNavigation.getByRole("link", { name: "モモトーク" })).toBeVisible();
   await expect(mobileNavigation.getByRole("link", { name: "メモリアルロビー" })).toBeVisible();
-  await expect(mobileNavigation.getByRole("link", { name: "サービス状態確認" })).toBeVisible();
-  await expect(mobileNavigation.getByRole("link", { name: "プロンプト管理" })).toBeVisible();
+  const accountToggle = page.getByLabel("アカウントメニュー", { exact: true });
+  await accountToggle.click();
+  const accountNavigation = page.getByRole("navigation", { name: "アカウント操作" });
+  await expect(accountToggle.locator("..")).toHaveAttribute("data-pointer-entry", "true");
+  await expect(accountNavigation.locator("..")).toHaveCSS("transition-duration", "0.18s, 0.18s");
+  await expect(accountNavigation.getByRole("link", { name: "サービス状態確認" })).toBeVisible();
+  await expect(accountNavigation.getByRole("link", { name: "プロンプト管理" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(accountToggle).toBeFocused();
+  await expect(accountNavigation).toBeHidden();
   for (const width of [320, 340, 360, 377, 378]) {
     await page.setViewportSize({ width, height: 720 });
     const viewport = await page.evaluate(() => ({
@@ -1861,6 +2010,10 @@ test("unlocked Memorial plays the three-second entry before opening creation", a
   await expect(transition).toHaveCSS("animation-duration", "3s");
   await expect(transition.getByRole("heading", { name: "閲覧者" })).toBeVisible();
   await expect(transition).toHaveCount(0, { timeout: 5_000 });
+
+  const lobbyHeading = page.getByRole("heading", { name: "メモリアルロビー", exact: true });
+  await expect(lobbyHeading).toBeFocused();
+  await expect(lobbyHeading).toHaveCSS("outline-style", "none");
 
   await expect(
     page.getByRole("heading", { name: "アロナとのメモリアルロビーが解放されました" }),
@@ -1987,6 +2140,12 @@ test("Memorial previews an image under production CSP and queues generation once
   });
   await page.getByRole("button", { name: "メモリアルロビーを開放" }).click();
   const dialog = page.getByRole("dialog", { name: "思い出を一度だけ生成します。" });
+  await expect(dialog.getByRole("button", { name: "キャンセル" })).toBeFocused();
+  for (let press = 0; press < 3; press += 1) await page.keyboard.press("Enter");
+  expect(operations).toEqual([]);
+  await expect(dialog).toHaveCount(0);
+  await page.getByRole("button", { name: "メモリアルロビーを開放" }).click();
+  await expect(dialog.getByRole("button", { name: "キャンセル" })).toBeFocused();
   await expect(dialog).toContainText(
     "このメモリアルロビーで生成できるアロナとの思い出は一度だけです。",
   );
@@ -2260,6 +2419,11 @@ test("ready Memorial downloads the selected image and confirms reset", async ({
 
   await page.getByRole("button", { name: "親愛度をリセット" }).click();
   const dialog = page.getByRole("dialog", { name: "親愛度をリセットしますか？" });
+  await expect(dialog.getByRole("button", { name: "キャンセル" })).toBeFocused();
+  for (let press = 0; press < 3; press += 1) await page.keyboard.press("Enter");
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByText(memorialMemory.narrative)).toBeVisible();
+  await page.getByRole("button", { name: "親愛度をリセット" }).click();
   await expect(dialog).toContainText("3人の親愛度をすべて500点に戻します。");
   await dialog.getByRole("button", { name: "500点にリセット" }).click();
   await expect(
@@ -2592,6 +2756,7 @@ for (const directRoute of [
   { path: "/insights", chunkName: "RankingsPage", heading: "いろいろな記録" },
   { path: "/memorial", chunkName: "MemorialPage", heading: "メモリアルロビー" },
   { path: "/admin", chunkName: "AdminPage", heading: "サービス状態確認" },
+  { path: "/admin/prompts", chunkName: "AdminPromptsPage", heading: "プロンプト管理" },
 ] as const) {
   test(`direct ${directRoute.path} navigation loads its route chunk`, async ({
     page,
@@ -2610,8 +2775,13 @@ for (const directRoute of [
       requiredRouteAssets.filter((assetPath) => assetPath.endsWith(".js")),
       `${directRoute.chunkName} JavaScript`,
     ).toHaveLength(1);
+    const stylesheetChunk = directRoute.chunkName.startsWith("Admin")
+      ? "AdminPanelState"
+      : directRoute.chunkName;
     expect(
-      requiredRouteAssets.filter((assetPath) => assetPath.endsWith(".css")),
+      matchingChunkAssets(requestedAssets, stylesheetChunk).filter((assetPath) =>
+        assetPath.endsWith(".css"),
+      ),
       `${directRoute.chunkName} CSS`,
     ).toHaveLength(1);
     for (const unrelatedChunkName of AUTHENTICATED_ROUTE_CHUNK_NAMES.filter(
@@ -2626,3 +2796,270 @@ for (const directRoute of [
     );
   });
 }
+
+test("archive restores its in-memory filters, focus and reading position", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockAuthenticatedApi(page);
+  const items = Array.from({ length: 8 }, (_, index) => ({
+    schemaVersion: 1,
+    recordId: index === 7 ? RECORD_ID : String.fromCharCode(65 + index).repeat(43),
+    completedAt: detail.completedAt,
+    questionPreview: index === 7 ? detail.question : `休日の記録 ${index + 1}`,
+    requester: detail.requester,
+    participants: detail.participants,
+    result: detail.result,
+  }));
+  await page.route("**/api/v1/records?*", (route) =>
+    route.fulfill({ json: { schemaVersion: 1, items, nextCursor: null } }),
+  );
+  await page.goto("/");
+  const search = page.getByRole("searchbox", { name: "フリーワード検索" });
+  await search.fill("休日");
+  const target = page.getByRole("link", { name: `「${detail.question}」の記録を読む` });
+  await target.scrollIntoViewIfNeeded();
+  const top = await page.evaluate(() => window.scrollY);
+  await target.click();
+  await expect(page.getByRole("heading", { name: detail.question })).toBeVisible();
+  await page.getByRole("link", { name: "← 記録一覧へ", exact: true }).click();
+  await expect(search).toHaveValue("休日");
+  await expect(target).toBeFocused();
+  expect(Math.abs((await page.evaluate(() => window.scrollY)) - top)).toBeLessThanOrEqual(2);
+  expect(
+    await page.evaluate(() => ({
+      search: window.location.search,
+      history: JSON.stringify(history.state),
+      local: JSON.stringify(localStorage),
+      session: JSON.stringify(sessionStorage),
+    })),
+  ).toEqual({
+    search: "",
+    history: expect.not.stringContaining("休日"),
+    local: expect.not.stringContaining("休日"),
+    session: expect.not.stringContaining("休日"),
+  });
+  await page.reload();
+  await expect(search).toHaveValue("");
+});
+
+test("refreshed workspaces fit PC and narrow viewports with the whole shell accessible", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockAuthenticatedApi(page, detailWithAffection, true);
+  for (const width of [1280, 1440, 1920, 320, 390, 808]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const path of [
+      "/",
+      `/records/${RECORD_ID}`,
+      "/insights",
+      "/memorial",
+      "/admin",
+      "/admin/prompts",
+    ]) {
+      await page.goto(path);
+      await expect(page.locator("main h1").first()).toBeVisible();
+      await page.evaluate(() => document.fonts.ready);
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow, `${path} at ${width}px`).toBeLessThanOrEqual(1);
+      if (width === 320 || width === 1920) {
+        expect(
+          (await new AxeBuilder({ page }).analyze()).violations,
+          `${path} at ${width}px`,
+        ).toEqual([]);
+      }
+    }
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+  for (const path of ["/", `/records/${RECORD_ID}`, "/admin/prompts"]) {
+    await page.goto(path);
+    await expect(page.locator("main h1").first()).toBeVisible();
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "200%";
+    });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      ),
+    ).toBeLessThanOrEqual(1);
+  }
+});
+
+test("logout preserves the current page on failure and suppresses duplicate retries", async ({
+  page,
+}, testInfo) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockAuthenticatedApi(page);
+  let calls = 0;
+  let finishRetry: (() => void) | undefined;
+  const retryPending = new Promise<void>((resolve) => {
+    finishRetry = resolve;
+  });
+  await page.route("**/api/v1/logout", async (route) => {
+    calls += 1;
+    expect(route.request().headers()["x-csrf-token"]).toBe("csrf-token");
+    if (calls === 1) {
+      await route.fulfill({
+        status: 500,
+        json: {
+          error: {
+            code: "INTERNAL_ERROR",
+            message: "一時的な失敗です。",
+            requestId: "test-request",
+          },
+        },
+      });
+    } else {
+      await retryPending;
+      await route.fulfill({ status: 204 });
+    }
+  });
+  await page.goto("/");
+  await page.getByRole("searchbox", { name: "フリーワード検索" }).fill("休日");
+  if (testInfo.project.name === "mobile-chromium") {
+    await page.getByLabel("アカウントメニュー", { exact: true }).click();
+  }
+  await page
+    .getByRole("button", { name: "ログアウト", exact: true })
+    .filter({ visible: true })
+    .click();
+  await expect(page.getByRole("alert")).toContainText("ログアウトできませんでした");
+  await expect(page.getByRole("searchbox", { name: "フリーワード検索" })).toHaveValue("休日");
+  const retry = page.getByRole("button", { name: "もう一度ログアウト" });
+  await retry.click();
+  await expect(retry).toHaveCount(0);
+  if (testInfo.project.name === "mobile-chromium") {
+    await page.getByLabel("アカウントメニュー", { exact: true }).click();
+  }
+  const pendingLogout = page
+    .getByRole("button", { name: "ログアウト中…" })
+    .filter({ visible: true });
+  await expect(pendingLogout).toBeDisabled();
+  await pendingLogout.dispatchEvent("click");
+  expect(calls).toBe(2);
+  finishRetry?.();
+  await expect(page.getByRole("link", { name: "Discordでログイン" })).toBeVisible();
+  expect(calls).toBe(2);
+});
+
+for (const conflict of [false, true]) {
+  test(`prompt ${conflict ? "conflict" : "saved write"} retains editing when synchronization fails`, async ({
+    page,
+  }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chromium");
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await mockAuthenticatedApi(page, detail, true);
+    let reads = 0;
+    let writes = 0;
+    const nextDraft = `${adminPromptValues.system}\n検証用の未保存変更。`;
+    await page.route("**/api/v1/admin/prompts", async (route) => {
+      reads += 1;
+      await route.fulfill(
+        reads === 2
+          ? {
+              status: 500,
+              json: {
+                error: {
+                  code: "INTERNAL_ERROR",
+                  message: "設定を再取得できません。",
+                  requestId: "test-request",
+                },
+              },
+            }
+          : {
+              json:
+                reads === 1
+                  ? adminPrompts
+                  : { ...adminPrompts, prompts: { ...adminPromptValues, system: nextDraft } },
+            },
+      );
+    });
+    await page.route("**/api/v1/admin/prompts/apply", async (route) => {
+      writes += 1;
+      await route.fulfill(
+        conflict
+          ? {
+              status: 409,
+              json: {
+                error: {
+                  code: "PROMPT_REVISION_CONFLICT",
+                  message: "設定が変更されています。",
+                  requestId: "test-request",
+                },
+              },
+            }
+          : { json: { schemaVersion: 1, revision: activePromptRevision, state: "saved" } },
+      );
+    });
+    await page.goto("/admin/prompts");
+    const editor = page.getByLabel("システムプロンプト");
+    await expect(editor).toHaveValue(adminPromptValues.system);
+    await editor.fill(nextDraft);
+    await page.getByLabel(/変更用確認文字列/u).fill("APPLY SYSTEM PROMPT");
+    await page.getByRole("button", { name: "変更を反映" }).click();
+    const syncFailure = page.getByText(
+      conflict ? "最新revisionを取得できませんでした" : "保存した設定を再取得できませんでした",
+      { exact: true },
+    );
+    await expect(syncFailure).toBeVisible();
+    await expect(editor).toHaveValue(nextDraft);
+    await expect(page.getByRole("button", { name: "変更を反映" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "最新revisionを基準にする" })).toHaveCount(0);
+    const newestDraft = `${nextDraft}\n取得失敗中も編集できます。`;
+    await editor.fill(newestDraft);
+    await page.getByRole("button", { name: "もう一度試す" }).click();
+    await expect(syncFailure).toHaveCount(0);
+    await expect(editor).toHaveValue(newestDraft);
+    if (conflict)
+      await expect(page.getByRole("button", { name: "最新revisionを基準にする" })).toBeVisible();
+    expect(writes).toBe(1);
+    expect(reads).toBe(3);
+  });
+}
+
+test("accessibility preferences keep account surfaces opaque and keyboard actions still", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  await page.setViewportSize({ width: 390, height: 844 });
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Emulation.setEmulatedMedia", {
+    features: [
+      { name: "prefers-reduced-motion", value: "reduce" },
+      { name: "prefers-reduced-transparency", value: "reduce" },
+      { name: "prefers-contrast", value: "more" },
+    ],
+  });
+  await mockAuthenticatedApi(page);
+  await page.goto("/insights");
+  const toggle = page.getByLabel("アカウントメニュー", { exact: true });
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  const panel = page.getByRole("navigation", { name: "アカウント操作" }).locator("..");
+  await expect(panel).toBeVisible();
+  await expect(toggle.locator("..")).toHaveAttribute("data-pointer-entry", "false");
+  await expect(panel).toHaveCSS("transition-duration", "0s");
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(
+      (value) => document.documentElement.setAttribute("data-theme", value),
+      theme,
+    );
+    const surface = await panel.evaluate((element) => {
+      const css = getComputedStyle(element);
+      return { background: css.backgroundColor, blur: css.backdropFilter };
+    });
+    expect(surface.background).toMatch(/^rgb\(/u);
+    expect(surface.blur).toBe("none");
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  }
+  await page.keyboard.press("Escape");
+  await expect(toggle).toBeFocused();
+  await expect(panel).toBeHidden();
+  const button = page.getByRole("button", { name: "4位以下を表示" });
+  await button.focus();
+  await page.keyboard.down("Space");
+  await expect(button).toHaveCSS("transform", "none");
+  await page.keyboard.up("Space");
+});

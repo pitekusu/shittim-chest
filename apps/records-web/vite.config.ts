@@ -9,12 +9,22 @@ assertGeneratedValidatorCurrent();
 export default defineConfig({
   plugins: [react(), codeSplittingModuleOwnershipGuard()],
   fmt: {
-    ignorePatterns: ["dist/**", "node_modules/**", "src/generated/**"],
+    ignorePatterns: [
+      "dist/**",
+      "node_modules/**",
+      "src/generated/**",
+      "src/styles/fonts.generated.css",
+    ],
     semi: true,
     singleQuote: false,
   },
   lint: {
-    ignorePatterns: ["dist/**", "node_modules/**", "src/generated/**"],
+    ignorePatterns: [
+      "dist/**",
+      "node_modules/**",
+      "src/generated/**",
+      "src/styles/fonts.generated.css",
+    ],
     plugins: ["eslint", "typescript", "unicorn", "oxc", "react", "import", "jsx-a11y", "vitest"],
     // React Compiler is not enabled. Preserve these existing DOM/query synchronization
     // paths during the toolchain upgrade; new files keep the compiler-readiness rules.

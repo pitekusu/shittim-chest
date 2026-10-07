@@ -134,6 +134,39 @@ afterEach(() => {
 });
 
 describe("Memorial API", () => {
+  it("forwards cancellation to owner-scoped reads without translating an abort", async () => {
+    const controller = new AbortController();
+    const summary = readyState().memories[0]!;
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(readyState()))
+      .mockResolvedValueOnce(jsonResponse(memoryResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getMemorialState(controller.signal);
+    await getMemorialMemory(summary, controller.signal);
+    for (const [, init] of fetchMock.mock.calls) expect(init?.signal).toBe(controller.signal);
+
+    const abort = new DOMException("The operation was aborted", "AbortError");
+    fetchMock.mockRejectedValueOnce(abort);
+    controller.abort();
+    await expect(getMemorialState(controller.signal)).rejects.toBe(abort);
+  });
+
+  it.each([0, 10 * 1024 * 1024 + 1])(
+    "rejects a %i-byte image before hashing or requesting an upload",
+    async (size) => {
+      const fetchMock = vi.fn<typeof fetch>();
+      vi.stubGlobal("fetch", fetchMock);
+      const source = new File([Uint8Array.of(1)], "source.png", { type: "image/png" });
+      Object.defineProperty(source, "size", { value: size });
+      await expect(
+        prepareMemorialUpload(source, 1, "csrf-token", "idempotency-key"),
+      ).rejects.toMatchObject({ status: 400, code: "REQUEST_INVALID" });
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("uses the Memorial query key and validates owner-scoped state", async () => {
     const state = readyState();
     vi.stubGlobal(

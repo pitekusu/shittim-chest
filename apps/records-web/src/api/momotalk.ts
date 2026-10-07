@@ -54,21 +54,35 @@ function pageQuery(cursor?: string): string {
   if (cursor) query.set("cursor", cursor);
   return query.toString();
 }
-export function getMomotalkWeeks(cursor?: string): Promise<MomotalkWeeksResponse> {
+export function getMomotalkWeeks(
+  cursor?: string,
+  signal?: AbortSignal,
+): Promise<MomotalkWeeksResponse> {
   return requestJson(
     `/api/v1/momotalk/weeks?${pageQuery(cursor)}`,
     (value): value is MomotalkWeeksResponse => weeksValidator(value),
+    { signal },
   );
 }
-export function getMomotalkRooms(week: string, cursor?: string): Promise<MomotalkRoomsResponse> {
+export function getMomotalkRooms(
+  week: string,
+  cursor?: string,
+  signal?: AbortSignal,
+): Promise<MomotalkRoomsResponse> {
   return requestJson(
     `/api/v1/momotalk/weeks/${encodeURIComponent(week)}/rooms?${pageQuery(cursor)}`,
     (value): value is MomotalkRoomsResponse => roomsValidator(value),
+    { signal },
   );
 }
-export function getMomotalkRoom(week: string, room: string): Promise<MomotalkRoomResponse> {
+export function getMomotalkRoom(
+  week: string,
+  room: string,
+  signal?: AbortSignal,
+): Promise<MomotalkRoomResponse> {
   return requestJson(
     `/api/v1/momotalk/weeks/${encodeURIComponent(week)}/rooms/${encodeURIComponent(room)}`,
     (value): value is MomotalkRoomResponse => roomValidator(value),
+    { signal },
   );
 }

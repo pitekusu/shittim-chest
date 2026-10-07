@@ -2,11 +2,14 @@ import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { RecordsApiError } from "../api/http";
+import { recoverSession } from "../lib/protectedQueries";
+import { useOptionalRecordsArchiveActions } from "./useRecordsArchive";
 
 export const SESSION_QUERY_KEY = ["records-session"] as const;
 
 export function useAuthenticationRecovery(error: unknown): void {
   const client = useQueryClient();
+  const resetArchive = useOptionalRecordsArchiveActions()?.reset;
 
   useEffect(() => {
     if (
@@ -17,17 +20,7 @@ export function useAuthenticationRecovery(error: unknown): void {
       return;
     }
 
-    void client.invalidateQueries({ queryKey: SESSION_QUERY_KEY, exact: true }).finally(() => {
-      client.removeQueries({
-        predicate: (query) =>
-          query.queryKey[0] === "records" ||
-          query.queryKey[0] === "record" ||
-          query.queryKey[0] === "rankings" ||
-          query.queryKey[0] === "affection-rankings" ||
-          query.queryKey[0] === "memorial" ||
-          query.queryKey[0] === "momotalk" ||
-          query.queryKey[0] === "admin",
-      });
-    });
-  }, [client, error]);
+    resetArchive?.();
+    void recoverSession(client, SESSION_QUERY_KEY);
+  }, [client, error, resetArchive]);
 }

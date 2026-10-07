@@ -15,6 +15,26 @@ Vendored WOFF2 checksums:
 | `LINESeedJP-Bold.woff2`      | `bb4008ed0dfce2d74273f2d58d4b3f67c739c0ea23af49825544fea99aa27450` |
 | `LINESeedJP-ExtraBold.woff2` | `d37cb0244179cee1bc9d1b46af27437523dedb042d2024d9707990672f5d057a` |
 
+Web-only derivatives in `src/assets/fonts/web/` split all supported characters
+into disjoint CSS `unicode-range` groups. The common group covers the interface,
+kana, Latin text, and punctuation; every remaining character is retained in
+another group. Combining marks are included as shaping support. The original
+fonts above remain unchanged for server-side OG rendering.
+
+CSS ranges include gaps absent from the original cmap to keep the stylesheet
+small; those characters retain the original system-font fallback. Common
+characters are excluded from the other ranges to avoid overlapping ownership.
+
+These derivatives keep the copyright and OFL metadata and use the same OFL 1.1
+license. `manifest.json` records the source and derivative checksums. FontTools
+and Brotli are pinned in the separate build-only `scripts/fonts/uv.lock`.
+
+- Regenerate: `uv run --project scripts/fonts --frozen python scripts/fonts/generate_fonts.py --write`
+- Check all original Unicode coverage and advance metrics: `uv run --project scripts/fonts --frozen python scripts/fonts/generate_fonts.py --check`
+- Check reproducibility: use `--check-determinism` instead of `--check`
+- Compare original and sharded glyph pixels, combining text, and system fallback: `node scripts/fonts/check-rendering.mjs`
+- Normal Web builds verify the checked-in derivative checksums without Python.
+
 ## Delogy
 
 - Designer: Rasul Hasan

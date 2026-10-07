@@ -6,7 +6,7 @@ function isCostsResponse(value: unknown): value is CostsResponse {
   return costsResponseValidator(value);
 }
 
-export async function getCosts(period: CostPeriod): Promise<CostsResponse> {
+export async function getCosts(period: CostPeriod, signal?: AbortSignal): Promise<CostsResponse> {
   const query = new URLSearchParams({ period });
-  return requestJson(`/api/v1/insights/costs?${query.toString()}`, isCostsResponse);
+  return requestJson(`/api/v1/insights/costs?${query.toString()}`, isCostsResponse, { signal });
 }

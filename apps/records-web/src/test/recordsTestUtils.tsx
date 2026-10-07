@@ -10,6 +10,7 @@ import type {
   RecordDetailResponse,
   SessionResponse,
 } from "../api/types";
+import { RecordsArchiveProvider } from "../hooks/useRecordsArchive";
 
 export const RECORD_ID = "r".repeat(43);
 
@@ -314,11 +315,13 @@ export function renderRoute(
     client,
     ...render(
       <QueryClientProvider client={client}>
-        <MemoryRouter initialEntries={[initialEntry]}>
-          <Routes>
-            <Route path={path} element={element} />
-          </Routes>
-        </MemoryRouter>
+        <RecordsArchiveProvider>
+          <MemoryRouter initialEntries={[initialEntry]}>
+            <Routes>
+              <Route path={path} element={element} />
+            </Routes>
+          </MemoryRouter>
+        </RecordsArchiveProvider>
       </QueryClientProvider>,
     ),
   };

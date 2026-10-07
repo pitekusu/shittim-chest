@@ -6,8 +6,8 @@ function isSessionResponse(value: unknown): value is SessionResponse {
   return sessionResponseValidator(value);
 }
 
-export async function getSession(): Promise<SessionResponse> {
-  return requestJson("/api/v1/session?contract=admin-v1", isSessionResponse);
+export async function getSession(signal?: AbortSignal): Promise<SessionResponse> {
+  return requestJson("/api/v1/session?contract=admin-v1", isSessionResponse, { signal });
 }
 
 export async function logout(csrfToken: string): Promise<void> {

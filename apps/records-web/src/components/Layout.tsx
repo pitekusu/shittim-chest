@@ -1,5 +1,5 @@
-import type { PropsWithChildren } from "react";
-import { Link, NavLink } from "react-router-dom";
+import { useEffect, useRef, type PropsWithChildren } from "react";
+import { Link, NavLink, useLocation } from "react-router-dom";
 
 import type { AvatarRef } from "../api/types";
 import commonStyles from "../styles/common.module.css";
@@ -25,6 +25,24 @@ function MoonIcon() {
   );
 }
 
+function NavigationIcon({
+  kind,
+}: {
+  readonly kind: "records" | "insights" | "momotalk" | "memorial";
+}) {
+  const paths = {
+    records: "M5 3h14v18H5zM8 8h8M8 12h8M8 16h5",
+    insights: "M4 20h16M7 16V9M12 16V4M17 16v-5",
+    momotalk: "M4 4h16v12H9l-5 4zM8 9h8M8 12h5",
+    memorial: "M4 4h16v16H4zM4 16l5-5 4 4 3-3 4 4M15 8h.01",
+  };
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" className={styles.navigationIcon}>
+      <path d={paths[kind]} />
+    </svg>
+  );
+}
+
 export function ThemeSwitch({
   theme,
   compact = false,
@@ -44,11 +62,7 @@ export function ThemeSwitch({
       aria-checked={dark}
       onClick={onToggle}
     >
-      {!compact && (
-        <span className={styles.themeSwitchLabel} lang="en">
-          DARK MODE
-        </span>
-      )}
+      {!compact && <span className={styles.themeSwitchLabel}>ダークモード</span>}
       <span className={styles.themeSwitchTrack} aria-hidden="true">
         <span className={styles.themeSwitchSun}>
           <SunIcon />
@@ -67,18 +81,88 @@ export function Layout({
   displayName,
   avatar,
   onLogout,
+  logoutPending = false,
+  logoutError = null,
   theme,
   onThemeToggle,
 }: PropsWithChildren<{
   readonly displayName: string;
   readonly avatar: AvatarRef;
   readonly onLogout: () => void;
+  readonly logoutPending?: boolean;
+  readonly logoutError?: string | null;
   readonly theme: Theme;
   readonly onThemeToggle: () => void;
 }>) {
+  const location = useLocation();
+  const accountMenu = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    const menu = accountMenu.current;
+    if (menu) menu.open = false;
+  }, [location.pathname]);
+  useEffect(() => {
+    const closeOutside = (event: PointerEvent) => {
+      const menu = accountMenu.current;
+      if (menu && event.target instanceof Node && !menu.contains(event.target)) menu.open = false;
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      const menu = accountMenu.current;
+      if (event.key === "Escape" && menu?.open) {
+        menu.open = false;
+        menu.querySelector("summary")?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, []);
   return (
     <div className={styles.appShell}>
       <div className={commonStyles.backgroundGrid} aria-hidden="true" />
+      <header className={styles.mobileHeader}>
+        <Link className={styles.mobileBrand} to="/" aria-label="記録一覧へ">
+          <BrandMark compact />
+          <ProductName />
+        </Link>
+        <details className={styles.accountMenu} ref={accountMenu}>
+          <summary
+            aria-label="アカウントメニュー"
+            onClick={(event) => {
+              if (accountMenu.current && !accountMenu.current.open) {
+                accountMenu.current.dataset.pointerEntry = String(event.detail > 0);
+              }
+            }}
+          >
+            <Avatar avatar={avatar} />
+            <span aria-hidden="true">···</span>
+          </summary>
+          <div className={styles.accountMenuPanel}>
+            <p className={styles.accountMenuName}>{displayName}</p>
+            <nav aria-label="アカウント操作">
+              <Link to="/admin">サービス状態確認</Link>
+              <Link to="/admin/prompts">プロンプト管理</Link>
+            </nav>
+            <ThemeSwitch theme={theme} onToggle={onThemeToggle} />
+            <button
+              className={commonStyles.secondaryButton}
+              type="button"
+              disabled={logoutPending}
+              onClick={() => {
+                if (accountMenu.current) {
+                  accountMenu.current.open = false;
+                  accountMenu.current.querySelector("summary")?.focus();
+                }
+                onLogout();
+              }}
+            >
+              {logoutPending ? "ログアウト中…" : "ログアウト"}
+            </button>
+          </div>
+        </details>
+      </header>
       <aside className={styles.sidebar} aria-label="主要ナビゲーション">
         <Link className={styles.brandLink} to="/">
           <BrandMark compact />
@@ -91,24 +175,28 @@ export function Layout({
               to="/"
               end
             >
+              <NavigationIcon kind="records" />
               議論の記録
             </NavLink>
             <NavLink
               className={({ isActive }) => (isActive ? styles.navActive : styles.navLink)}
               to="/insights"
             >
+              <NavigationIcon kind="insights" />
               いろいろな記録
             </NavLink>
             <NavLink
               className={({ isActive }) => (isActive ? styles.navActive : styles.navLink)}
               to="/momotalk"
             >
+              <NavigationIcon kind="momotalk" />
               モモトーク
             </NavLink>
             <NavLink
               className={({ isActive }) => (isActive ? styles.navActive : styles.navLink)}
               to="/memorial"
             >
+              <NavigationIcon kind="memorial" />
               メモリアルロビー
             </NavLink>
           </div>
@@ -137,13 +225,31 @@ export function Layout({
           <div className={styles.account}>
             <Avatar avatar={avatar} />
             <span>{displayName}</span>
-            <button className={commonStyles.quietButton} type="button" lang="en" onClick={onLogout}>
-              LOGOFF
+            <button
+              className={commonStyles.quietButton}
+              type="button"
+              disabled={logoutPending}
+              onClick={onLogout}
+            >
+              {logoutPending ? "ログアウト中…" : "ログアウト"}
             </button>
           </div>
         </div>
       </aside>
       <main className={styles.mainContent} id="main-content" tabIndex={-1}>
+        {logoutError && (
+          <div className={styles.logoutError} role="alert">
+            <p>{logoutError}</p>
+            <button
+              className={commonStyles.secondaryButton}
+              type="button"
+              disabled={logoutPending}
+              onClick={onLogout}
+            >
+              もう一度ログアウト
+            </button>
+          </div>
+        )}
         {children}
       </main>
       <nav className={styles.mobileNav} aria-label="モバイルナビゲーション">
@@ -152,13 +258,15 @@ export function Layout({
           to="/"
           end
         >
-          記録
+          <NavigationIcon kind="records" />
+          <span>記録</span>
         </NavLink>
         <NavLink
           className={({ isActive }) => (isActive ? styles.navActive : styles.navLink)}
           to="/insights"
         >
-          いろいろ
+          <NavigationIcon kind="insights" />
+          <span>いろいろ</span>
         </NavLink>
         <NavLink
           aria-label="モモトーク"
@@ -167,7 +275,8 @@ export function Layout({
           }
           to="/momotalk"
         >
-          モモトーク
+          <NavigationIcon kind="momotalk" />
+          <span>モモトーク</span>
         </NavLink>
         <NavLink
           aria-label="メモリアルロビー"
@@ -176,31 +285,9 @@ export function Layout({
           }
           to="/memorial"
         >
-          メモリアル
+          <NavigationIcon kind="memorial" />
+          <span>メモリアル</span>
         </NavLink>
-        <NavLink
-          aria-label="サービス状態確認"
-          className={({ isActive }) =>
-            `${isActive ? styles.navActive : styles.navLink} ${styles.mobileAdminLink}`
-          }
-          to="/admin"
-          end
-        >
-          <span>状態確認</span>
-        </NavLink>
-        <NavLink
-          aria-label="プロンプト管理"
-          className={({ isActive }) =>
-            `${isActive ? styles.navActive : styles.navLink} ${styles.mobileAdminLink}`
-          }
-          to="/admin/prompts"
-        >
-          <span>プロンプト</span>
-        </NavLink>
-        <ThemeSwitch compact theme={theme} onToggle={onThemeToggle} />
-        <button className={styles.mobileLogout} type="button" lang="en" onClick={onLogout}>
-          LOGOFF
-        </button>
       </nav>
     </div>
   );

@@ -1,7 +1,7 @@
 .loginShell {
   position: relative;
   display: grid;
-  min-height: 100vh;
+  min-height: 100dvh;
   grid-template-columns: minmax(0, 1.15fr) minmax(360px, 0.85fr);
   overflow: hidden;
   background: var(--records-login-background);
@@ -68,7 +68,7 @@
   margin: 24px;
   padding: clamp(36px, 6vw, 68px);
   border: 1px solid var(--records-panel-border);
-  border-radius: 32px;
+  border-radius: 24px;
   background: var(--records-surface);
   box-shadow: var(--records-shadow);
   text-align: center;
@@ -88,13 +88,11 @@
 }
 
 .loginAuthButton {
-  min-width: 124px;
-  padding: 9px 16px;
-  font-family: var(--records-font-display);
-  font-size: 0.66rem;
-  font-weight: 400;
-  letter-spacing: 0.08em;
-  line-height: 1;
+  min-height: 48px;
+  padding: 12px 24px;
+  font-size: 1rem;
+  font-weight: 800;
+  line-height: 1.5;
 }
 
 .loginPanel > p:not(.eyebrow, .loginNote) {
@@ -114,7 +112,7 @@
 .errorShell,
 .brandTransition {
   display: grid;
-  min-height: 100vh;
+  min-height: 100dvh;
   place-content: center;
   place-items: center;
   gap: 28px;
@@ -265,7 +263,7 @@
 
 @keyframes transitionMark {
   0% {
-    transform: scale(0.72);
+    transform: scale(0.95);
   }
   42%,
   82% {
@@ -279,7 +277,7 @@
   }
 
   .loginVisual {
-    min-height: 36vh;
+    min-height: 36svh;
   }
 
   .loginPanel {

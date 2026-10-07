@@ -22,7 +22,7 @@
 
 .adminWorkspace {
   display: grid;
-  grid-template-columns: minmax(176px, 200px) minmax(0, 1fr);
+  grid-template-columns: 184px minmax(0, 1fr);
   align-items: start;
   gap: 22px;
 }
@@ -33,7 +33,8 @@
   top: 28px;
   display: grid;
   gap: 6px;
-  max-height: calc(100vh - 56px);
+  max-height: calc(100dvh - 56px);
+  overscroll-behavior: contain;
   overflow-y: auto;
   padding: 10px;
   border: 1px solid var(--records-panel-border);
@@ -54,8 +55,8 @@
   font-weight: 700;
   text-decoration: none;
   transition:
-    background 150ms ease,
-    color 150ms ease;
+    background 120ms var(--records-ease-out),
+    color 120ms var(--records-ease-out);
 }
 
 .sectionPrimaryLink::before {
@@ -65,10 +66,7 @@
   background: var(--records-line-strong);
   content: "";
 }
-
-.sectionPrimaryLink:hover,
 .sectionPrimaryLink:focus-visible,
-.serviceAnchorList a:hover,
 .serviceAnchorList a:focus-visible {
   background: var(--records-cyan-100);
   color: var(--records-ink-900);
@@ -84,19 +82,19 @@
 
 .serviceAnchorList a {
   display: flex;
-  min-height: 34px;
+  min-height: 44px;
   align-items: center;
   gap: 9px;
   padding: 5px 8px;
   border-radius: 9px;
   color: var(--records-ink-600);
-  font-size: 0.67rem;
+  font-size: 0.75rem;
   font-weight: 700;
   text-decoration: none;
   transition:
-    background 150ms ease,
-    box-shadow 150ms ease,
-    color 150ms ease;
+    background 120ms var(--records-ease-out),
+    box-shadow 120ms var(--records-ease-out),
+    color 120ms var(--records-ease-out);
 }
 
 .serviceAnchorMarker {
@@ -106,21 +104,28 @@
   border: 1px solid var(--records-cyan-ink);
   transform: rotate(45deg);
   transition:
-    background 160ms ease,
-    box-shadow 160ms ease,
-    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    background 120ms var(--records-ease-out),
+    box-shadow 120ms var(--records-ease-out);
 }
-
-.serviceAnchorList a:hover,
 .serviceAnchorList a:focus-visible {
   box-shadow: inset 0 0 0 1px var(--records-line);
 }
-
-.serviceAnchorList a:hover > .serviceAnchorMarker,
 .serviceAnchorList a:focus-visible > .serviceAnchorMarker {
   background: var(--records-cyan-100);
   box-shadow: 0 0 0 3px var(--records-line);
-  transform: rotate(45deg) scale(1.22);
+}
+
+.sectionPrimaryLink[aria-current="location"],
+.serviceAnchorList a[aria-current="location"] {
+  background: var(--records-cyan-100);
+  color: var(--records-ink-900);
+  outline: 1px solid var(--records-line-strong);
+  outline-offset: -1px;
+}
+
+.sectionPrimaryLink[aria-current="location"]::before,
+.serviceAnchorList a[aria-current="location"] > .serviceAnchorMarker {
+  background: var(--records-cyan-ink);
 }
 
 .serviceAnchorList a[data-state="warning"],
@@ -185,7 +190,7 @@
 
 .adminPanel {
   min-width: 0;
-  padding: clamp(20px, 3vw, 32px);
+  padding: clamp(20px, 2vw, 28px);
   border-radius: var(--records-radius-card);
   scroll-margin-top: 28px;
 }
@@ -237,18 +242,18 @@
 
 .overviewBody {
   display: grid;
-  grid-template-columns: minmax(220px, 0.75fr) minmax(0, 1.7fr);
-  gap: 18px;
-  margin-top: 22px;
+  grid-template-columns: minmax(180px, 0.8fr) minmax(0, 2fr);
+  gap: 12px;
+  margin-top: 18px;
 }
 
 .systemSignal {
   position: relative;
   display: flex;
-  min-height: 142px;
+  min-height: 112px;
   align-items: center;
-  gap: 18px;
-  padding: 20px;
+  gap: 12px;
+  padding: 16px;
   overflow: clip;
   border: 1px solid var(--records-line-strong);
   border-radius: 22px;
@@ -272,8 +277,8 @@
   position: relative;
   z-index: 1;
   display: grid;
-  width: 78px;
-  height: 78px;
+  width: 56px;
+  height: 56px;
   flex: 0 0 auto;
   place-items: center;
   border: 1px solid var(--records-line-strong);
@@ -284,8 +289,8 @@
 }
 
 .systemSignalSvg {
-  width: 64px;
-  height: 64px;
+  width: 46px;
+  height: 46px;
 }
 
 .systemSignalLabel {
@@ -306,11 +311,11 @@
 .overviewStat {
   display: grid;
   min-width: 0;
-  min-height: 142px;
+  min-height: 112px;
   align-content: center;
   justify-items: start;
-  gap: 13px;
-  padding: 18px;
+  gap: 10px;
+  padding: 14px;
   border: 1px solid var(--records-line);
   border-radius: 20px;
   background: var(--records-control-background-soft);
@@ -318,8 +323,8 @@
 
 .overviewStatIcon {
   display: grid;
-  width: 34px;
-  height: 34px;
+  width: 24px;
+  height: 24px;
   place-items: center;
   border: 1px solid var(--records-line-strong);
   border-radius: 10px;
@@ -341,8 +346,9 @@
 }
 
 .overviewStat dt {
-  display: grid;
-  gap: 13px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
   color: var(--records-ink-600);
   font-size: 0.7rem;
   font-weight: 700;
@@ -357,8 +363,15 @@
 }
 
 .overviewStat time {
-  font-size: 0.78rem;
+  color: var(--records-ink-600);
+  font-size: 0.72rem;
+  font-weight: 400;
   line-height: 1.5;
+}
+
+.overviewFreshness {
+  display: grid;
+  gap: 6px;
 }
 
 .activeAlarms {
@@ -427,19 +440,14 @@
   background: var(--records-surface);
   color: var(--records-ink-900);
   text-decoration: none;
-  transition:
-    border-color 150ms ease,
-    transform 150ms ease;
+  transition: border-color 120ms var(--records-ease-out);
 }
 
 .activeAlarms li[data-severity="critical"] a {
   border-left-color: var(--admin-severity-critical);
 }
-
-.activeAlarms li a:hover,
 .activeAlarms li a:focus-visible {
   border-color: var(--records-line-strong);
-  transform: translateX(3px);
 }
 
 .activeAlarms li a > span:last-child {
@@ -613,6 +621,7 @@
 }
 
 .serviceSummary {
+  max-width: 48ic;
   min-height: 1.7em;
   margin: 0;
   color: var(--records-ink-600);
@@ -803,8 +812,6 @@
   text-decoration: none;
   white-space: nowrap;
 }
-
-.nextTaskEcrLink:hover,
 .nextTaskEcrLink:focus-visible {
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -1511,10 +1518,6 @@
   border-bottom: 0;
 }
 
-.resourceTable tbody tr:hover {
-  background: rgb(79 199 220 / 6%);
-}
-
 .inlineFacts {
   display: flex;
   flex-wrap: wrap;
@@ -1852,22 +1855,60 @@
 
 .promptWorkspace {
   display: grid;
-  gap: 22px;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  align-items: start;
+  gap: 20px;
+}
+
+.promptOverview {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(200px, 0.8fr) minmax(0, 2fr);
+  align-items: center;
+  gap: 16px 24px;
+  padding-block: 18px;
+}
+
+.promptOverview .panelHeader {
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  padding: 0;
+  border: 0;
+}
+
+.promptOverview .panelHeader h2 {
+  font-size: 1rem;
+}
+
+.promptOverview .promptStatusNote {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.promptEditorPanel,
+.promptHistory {
+  min-width: 0;
+}
+
+.promptHistory {
+  padding: 20px 16px;
+}
+
+.promptHistory .panelHeader h2 {
+  font-size: 1.15rem;
 }
 
 .promptOverviewFacts {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
-  margin: 20px 0 0;
+  margin: 0;
 }
 
 .promptOverviewFacts > div {
   min-width: 0;
-  padding: 14px 16px;
-  border: 1px solid var(--records-line);
-  border-radius: 14px;
-  background: var(--records-control-background-soft);
+  padding: 4px 0 4px 16px;
+  border-left: 1px solid var(--records-line);
 }
 
 .promptOverviewFacts dt {
@@ -1957,10 +1998,6 @@
   font-size: 0.74rem;
   font-weight: 800;
   cursor: pointer;
-  transition:
-    background 150ms ease,
-    border-color 150ms ease,
-    color 150ms ease;
 }
 
 .promptTabs button[aria-selected="true"] {
@@ -2019,7 +2056,7 @@
   background: var(--records-control-background);
   color: var(--records-ink-900);
   font: inherit;
-  font-size: 0.86rem;
+  font-size: 1rem;
   line-height: 1.75;
 }
 
@@ -2085,6 +2122,8 @@
 
 .promptConfirmationField input {
   width: min(100%, 460px);
+  min-height: 44px;
+  font-size: 1rem;
   padding: 10px 12px;
   border: 1px solid var(--records-line-strong);
   border-radius: 12px;
@@ -2127,10 +2166,9 @@
 
 .promptHistoryList li {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 14px;
-  padding: 14px 16px;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  padding: 14px 12px;
   border-top: 1px solid var(--records-line);
   background: var(--records-control-background-soft);
 }
@@ -2177,7 +2215,8 @@
 }
 
 .promptHistoryList .promptHistoryActions {
-  min-width: 226px;
+  justify-content: flex-start;
+  gap: 8px;
 }
 
 .promptLoadMore {
@@ -2186,8 +2225,9 @@
 
 .promptRevisionDetail {
   display: grid;
+  grid-column: 1 / -1;
   gap: 16px;
-  margin-top: 20px;
+  margin-top: 0;
   padding: clamp(16px, 2.4vw, 22px);
   border: 1px solid var(--records-line-strong);
   border-radius: 18px;
@@ -2201,6 +2241,7 @@
   gap: 14px;
 }
 
+.promptRevisionDetail h2,
 .promptRevisionDetail h3,
 .promptRevisionDetail p {
   margin: 0;
@@ -2223,6 +2264,8 @@
 }
 
 .promptRevisionCompare summary {
+  min-height: 44px;
+  align-content: center;
   color: var(--records-ink-900);
   font-size: 0.78rem;
   font-weight: 800;
@@ -2428,20 +2471,29 @@
 }
 
 @media (max-width: 1180px) {
-  .overviewBody {
+  .overviewBody,
+  .promptOverview,
+  .promptWorkspace {
     grid-template-columns: 1fr;
   }
 
-  .systemSignal {
-    min-height: 120px;
+  .systemSignal,
+  .overviewStat {
+    min-height: 96px;
   }
 
-  .overviewStat {
-    min-height: 120px;
+  .promptOverviewFacts > div:first-child {
+    border-left: 0;
+    padding-left: 0;
   }
 }
 
 @media (max-width: 1023px) {
+  .adminPanel,
+  .statusCard {
+    scroll-margin-top: 164px;
+  }
+
   .adminWorkspace {
     grid-template-columns: 1fr;
   }
@@ -2468,6 +2520,7 @@
     grid-column: 1 / -1;
     display: flex;
     overflow-x: auto;
+    overscroll-behavior-inline: contain;
     padding: 7px 2px 1px;
     scrollbar-color: var(--records-line-strong) transparent;
   }
@@ -2665,8 +2718,21 @@
     grid-template-columns: 1fr;
   }
 
+  .promptOverviewFacts > div {
+    padding-left: 0;
+    border-left: 0;
+  }
+
   .promptTabs {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    display: flex;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+  }
+
+  .promptTabs button {
+    flex: 0 0 auto;
+    padding-inline: 14px;
+    white-space: nowrap;
   }
 
   .promptEditorHeading,
@@ -2732,13 +2798,39 @@
     grid-template-columns: 1fr;
   }
 
-  .promptTabs {
-    grid-template-columns: 1fr;
-  }
-
   .promptActions {
     align-items: stretch;
     flex-direction: column;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .sectionPrimaryLink:hover,
+  .serviceAnchorList a:hover {
+    background: var(--records-cyan-100);
+    color: var(--records-ink-900);
+  }
+
+  .serviceAnchorList a:hover {
+    box-shadow: inset 0 0 0 1px var(--records-line);
+  }
+
+  .serviceAnchorList a:hover > .serviceAnchorMarker {
+    background: var(--records-cyan-100);
+    box-shadow: 0 0 0 3px var(--records-line);
+  }
+
+  .activeAlarms li a:hover {
+    border-color: var(--records-line-strong);
+  }
+
+  .nextTaskEcrLink:hover {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .resourceTable tbody tr:hover {
+    background: rgb(79 199 220 / 6%);
   }
 }
 
@@ -2763,10 +2855,5 @@
   .statusLoadingTrack > span,
   .refreshProgress > span {
     animation: none;
-  }
-
-  .activeAlarms li a:hover,
-  .activeAlarms li a:focus-visible {
-    transform: none;
   }
 }

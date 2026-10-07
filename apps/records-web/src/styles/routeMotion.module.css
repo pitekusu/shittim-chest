@@ -15,7 +15,7 @@
 }
 
 .routeScene[data-route-motion="active"] {
-  animation: routeSceneEnter 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation: routeSceneEnter 260ms var(--records-ease-out);
 }
 
 .routeMotionItem {
@@ -23,7 +23,7 @@
 }
 
 .routeScene[data-route-motion="active"] .routeMotionItem {
-  animation: routeMotionItemEnter 220ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+  animation: routeMotionItemEnter 220ms var(--records-ease-out) backwards;
   animation-delay: var(--route-motion-delay);
 }
 

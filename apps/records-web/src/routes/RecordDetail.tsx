@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { RecordsApiError } from "../api/http";
@@ -22,6 +22,61 @@ const JAPANESE_HEADING_CLASS = `${commonStyles.japaneseText} ${commonStyles.japa
 const JAPANESE_PROSE_CLASS = `${commonStyles.japaneseText} ${commonStyles.japaneseProse}`;
 const READABLE_JAPANESE_PROSE_CLASS = `${JAPANESE_PROSE_CLASS} ${commonStyles.readableMeasure}`;
 const AFFECTION_HEART_COUNT = 10;
+
+function DetailNavigation({ hasAffection }: { readonly hasAffection: boolean }) {
+  const [activeSection, setActiveSection] = useState("opinions-title");
+  const navigationRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!("IntersectionObserver" in window)) return;
+    const links = navigationRef.current?.querySelectorAll<HTMLAnchorElement>("a[href^='#']");
+    if (!links) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries.filter((entry) => entry.isIntersecting);
+        const first = visible.sort(
+          (left, right) => left.boundingClientRect.top - right.boundingClientRect.top,
+        )[0];
+        if (first) setActiveSection(first.target.id);
+      },
+      { rootMargin: "-96px 0px -55% 0px" },
+    );
+    for (const link of links) {
+      const heading = document.getElementById(link.hash.slice(1));
+      if (heading) observer.observe(heading);
+    }
+    return () => observer.disconnect();
+  }, [hasAffection]);
+  const items = [
+    { id: "opinions-title", label: "3人の意見" },
+    ...(hasAffection ? [{ id: "affection-title", label: "親愛度" }] : []),
+    { id: "votes-title", label: "投票" },
+    { id: "decision-title", label: "最終決定" },
+  ];
+  return (
+    <nav
+      className={detailStyles.detailNavigation}
+      aria-label="議論内ナビゲーション"
+      ref={navigationRef}
+    >
+      {items.map(({ id, label }) => (
+        <a
+          href={`#${id}`}
+          key={id}
+          aria-current={activeSection === id ? "location" : undefined}
+          onClick={(event) => {
+            event.preventDefault();
+            const heading = document.getElementById(id);
+            heading?.scrollIntoView({ behavior: "instant", block: "start" });
+            heading?.focus({ preventScroll: true });
+            setActiveSection(id);
+          }}
+        >
+          {label}
+        </a>
+      ))}
+    </nav>
+  );
+}
 
 function AffectionHearts({
   participantName,
@@ -62,7 +117,7 @@ export default function RecordDetail(): React.JSX.Element {
   const { recordId = "" } = useParams();
   const record = useQuery({
     queryKey: ["record", recordId],
-    queryFn: () => getRecord(recordId),
+    queryFn: ({ signal }) => getRecord(recordId, signal),
     enabled: RECORD_ID_PATTERN.test(recordId),
   });
   useAuthenticationRecovery(record.error);
@@ -105,6 +160,16 @@ export function RecordDocument({
     record.participants.find((item) => item.slot === slot)!;
   const count = (slot: ParticipantSlot) =>
     record.result.voteCounts.find((item) => item.participant === slot)?.count ?? 0;
+  const winner = participant(record.result.winner);
+  const decisionMethod = record.voting
+    ? record.voting.decidedBy === "majority"
+      ? "多数決"
+      : record.voting.decidedBy === "composite_score"
+        ? "総合評価"
+        : "抽選"
+    : record.result.tieBreakApplied
+      ? "同票時の判定"
+      : "多数決";
 
   return (
     <article className={detailStyles.recordDocument} data-route-motion-ready="">
@@ -115,27 +180,63 @@ export function RecordDocument({
         <Link className={detailStyles.backLink} to="/">
           ← 記録一覧へ
         </Link>
-        <p className={commonStyles.eyebrow} lang="en">
-          COMPLETED DEBATE
-        </p>
-        <h1 className={JAPANESE_HEADING_CLASS} tabIndex={-1}>
-          {record.question}
-        </h1>
-        <div className={detailStyles.recordMeta}>
-          <Avatar avatar={record.requester.avatar} />
-          <span>
-            <small>依頼者</small>
-            {record.requester.displayName}
-          </span>
-          <time dateTime={record.completedAt}>{formatCompletedDateTime(record.completedAt)}</time>
+        <div className={detailStyles.recordHero}>
+          <div>
+            <p className={commonStyles.eyebrow} lang="en">
+              COMPLETED DEBATE
+            </p>
+            <h1 className={JAPANESE_HEADING_CLASS} tabIndex={-1}>
+              {record.question}
+            </h1>
+            <div className={detailStyles.recordMeta}>
+              <Avatar avatar={record.requester.avatar} />
+              <span>
+                <small>依頼者</small>
+                {record.requester.displayName}
+              </span>
+              <time dateTime={record.completedAt}>
+                {formatCompletedDateTime(record.completedAt)}
+              </time>
+            </div>
+          </div>
+          <aside className={detailStyles.resultSummary} aria-label="議論の結果">
+            <p className={commonStyles.eyebrow} lang="en">
+              FINAL RESULT
+            </p>
+            <div>
+              <Avatar avatar={winner.avatar} />
+              <span>
+                <small>勝者</small>
+                <strong>{winner.displayName}</strong>
+              </span>
+            </div>
+            <p className={detailStyles.resultVotes}>
+              <strong>{count(record.result.winner)}</strong> / 3票
+              <small>{decisionMethod}</small>
+            </p>
+            <a
+              href="#decision-title"
+              onClick={(event) => {
+                event.preventDefault();
+                const heading = document.getElementById("decision-title");
+                heading?.scrollIntoView({ behavior: "instant", block: "start" });
+                heading?.focus({ preventScroll: true });
+              }}
+            >
+              最終決定を読む <span aria-hidden="true">↓</span>
+            </a>
+          </aside>
         </div>
       </header>
+      <DetailNavigation
+        hasAffection={record.affection !== null && record.affection !== undefined}
+      />
       <section
         className={`${detailStyles.detailSection} ${routeStyles.routeMotionItem}`}
         style={routeMotionDelay(40)}
         aria-labelledby="opinions-title"
       >
-        <h2 id="opinions-title" className={JAPANESE_HEADING_CLASS}>
+        <h2 id="opinions-title" className={JAPANESE_HEADING_CLASS} tabIndex={-1}>
           3人の意見
         </h2>
         <div className={detailStyles.opinionGrid}>
@@ -176,7 +277,7 @@ export function RecordDocument({
               <p className={commonStyles.eyebrow} lang="en">
                 AFFECTION UPDATE
               </p>
-              <h2 id="affection-title" className={JAPANESE_HEADING_CLASS}>
+              <h2 id="affection-title" className={JAPANESE_HEADING_CLASS} tabIndex={-1}>
                 親愛度の変化
               </h2>
             </div>
@@ -258,7 +359,7 @@ export function RecordDocument({
         style={routeMotionDelay(record.affection ? 120 : 80)}
         aria-labelledby="votes-title"
       >
-        <h2 id="votes-title" className={JAPANESE_HEADING_CLASS}>
+        <h2 id="votes-title" className={JAPANESE_HEADING_CLASS} tabIndex={-1}>
           投票
         </h2>
         <VoteGraph record={record} />
@@ -343,7 +444,7 @@ export function RecordDocument({
         <p className={commonStyles.eyebrow} lang="en">
           FINAL DECISION
         </p>
-        <h2 id="decision-title" className={JAPANESE_HEADING_CLASS}>
+        <h2 id="decision-title" className={JAPANESE_HEADING_CLASS} tabIndex={-1}>
           最終決定
         </h2>
         <div className={detailStyles.winnerPanel}>

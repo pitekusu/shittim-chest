@@ -272,6 +272,110 @@ afterEach(() => {
 });
 
 describe("MemorialPage", () => {
+  it("cancels owner state and selected memory reads when their view disappears", async () => {
+    const pendingState = deferred<MemorialStateResponse>();
+    getStateMock.mockReturnValue(pendingState.promise);
+    const stateView = renderMemorial();
+    await waitFor(() => expect(getStateMock).toHaveBeenCalledTimes(1));
+    const stateSignal = getStateMock.mock.calls[0]?.[0];
+    expect(stateSignal).toBeInstanceOf(AbortSignal);
+    stateView.unmount();
+    expect(stateSignal?.aborted).toBe(true);
+
+    getMemoryMock.mockReturnValue(deferred<MemoryResponse>().promise);
+    const memoryView = renderMemorial(readyState());
+    await waitFor(() => expect(getMemoryMock).toHaveBeenCalledTimes(1));
+    const memorySignal = getMemoryMock.mock.calls[0]?.[1];
+    expect(memorySignal).toBeInstanceOf(AbortSignal);
+    memoryView.unmount();
+    expect(memorySignal?.aborted).toBe(true);
+  });
+
+  it("keeps existing artwork and narrative after a failed state refresh and blocks reset until fresh success", async () => {
+    getMemoryMock.mockResolvedValue(memory(2));
+    const { client } = await enterMemorial(readyState());
+    const artwork = await screen.findByRole("img", { name: "プラナとのメモリアルロビー" });
+    getStateMock.mockRejectedValueOnce(
+      new RecordsApiError(
+        503,
+        "MEMORIAL_STATE_INVALID",
+        "状態の更新を確認できません。",
+        "request-state",
+      ),
+    );
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["memorial"], exact: true });
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent("最新の状態を確認できませんでした");
+    expect(screen.getByRole("img", { name: "プラナとのメモリアルロビー" })).toBe(artwork);
+    expect(screen.getByText("プラナとの思い出です。")).toBeVisible();
+    expect(screen.getByRole("button", { name: "親愛度をリセット" })).toBeDisabled();
+    expect(
+      screen.queryByRole("heading", { name: "メモリアルロビーを開けません" }),
+    ).not.toBeInTheDocument();
+    const fresh = deferred<MemorialStateResponse>();
+    getStateMock.mockReturnValueOnce(fresh.promise);
+    fireEvent.click(screen.getByRole("button", { name: "最新の状態を確認" }));
+    expect(screen.getByRole("button", { name: "親愛度をリセット" })).toBeDisabled();
+    await act(async () => {
+      fresh.resolve(readyState());
+      await fresh.promise;
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "親愛度をリセット" })).toBeEnabled(),
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(queueGenerationMock).not.toHaveBeenCalled();
+    expect(resetMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves a selected image and disables a pending confirmation when a state refresh fails", async () => {
+    const { client } = await enterMemorial(unlockedState());
+    selectImage(new File([Uint8Array.of(1)], "selected.png", { type: "image/png" }));
+    fireEvent.click(screen.getByRole("button", { name: "メモリアルロビーを開放" }), { detail: 1 });
+    const dialog = screen.getByRole("dialog", { name: "思い出を一度だけ生成します。" });
+    expect(dialog).toHaveAttribute("data-pointer-initiated", "true");
+    expect(within(dialog).getByRole("button", { name: "キャンセル" })).toHaveFocus();
+    getStateMock.mockRejectedValueOnce(new Error("offline"));
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["memorial"], exact: true });
+    });
+    const confirm = within(dialog).getByRole("button", { name: "理解して生成する" });
+    await waitFor(() => expect(confirm).toBeDisabled());
+    fireEvent.click(confirm);
+    expect(prepareUploadMock).not.toHaveBeenCalled();
+    expect(queueGenerationMock).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "キャンセル" }));
+    expect(screen.getByText(/selected\.png/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "メモリアルロビーを開放" })).toBeDisabled();
+  });
+
+  it("retains an accepted memory after a background memory read fails and retries only its details", async () => {
+    getMemoryMock.mockResolvedValue(memory(2));
+    const { client } = await enterMemorial(readyState());
+    const artwork = await screen.findByRole("img", { name: "プラナとのメモリアルロビー" });
+    getMemoryMock.mockRejectedValueOnce(
+      new RecordsApiError(
+        503,
+        "MEMORIAL_MEMORY_UNAVAILABLE",
+        "思い出を更新できません。",
+        "request-memory",
+      ),
+    );
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["memorial", "memory"] });
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent("思い出を更新できません。");
+    expect(screen.getByRole("img", { name: "プラナとのメモリアルロビー" })).toBe(artwork);
+    expect(screen.getByText("プラナとの思い出です。")).toBeVisible();
+    getMemoryMock.mockResolvedValueOnce(memory(2));
+    fireEvent.click(screen.getByRole("button", { name: "もう一度読み込む" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(screen.getByRole("img", { name: "プラナとのメモリアルロビー" })).toBeVisible();
+    expect(getStateMock).not.toHaveBeenCalled();
+    expect(queueGenerationMock).not.toHaveBeenCalled();
+  });
+
   it("shows the locked explanation without playing the entry transition", () => {
     renderMemorial(lockedState());
 
@@ -430,8 +534,7 @@ describe("MemorialPage", () => {
     fireEvent.click(generateButton);
 
     const dialog = screen.getByRole("dialog", { name: "思い出を一度だけ生成します。" });
-    const confirm = within(dialog).getByRole("button", { name: "理解して生成する" });
-    expect(confirm).toHaveFocus();
+    expect(within(dialog).getByRole("button", { name: "キャンセル" })).toHaveFocus();
     expect(dialog).toHaveTextContent(
       "このメモリアルロビーで生成できるアロナとの思い出は一度だけです。",
     );
@@ -813,6 +916,7 @@ describe("MemorialPage", () => {
     "ignores a stale retry %s after the same cycle becomes ready",
     async (outcome) => {
       const pendingRetry = deferred<MemorialStateResponse>();
+      getMemoryMock.mockResolvedValue(memory(1));
       queueGenerationMock.mockReturnValue(pendingRetry.promise);
       const { client } = await enterMemorial(unlockedState("failed"));
 
@@ -1047,6 +1151,35 @@ describe("MemorialPage", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("does not restore private cache when a reset POST finishes after session cleanup", async () => {
+    const pendingReset = deferred<MemorialStateResponse>();
+    resetMock.mockReturnValue(pendingReset.promise);
+    getMemoryMock.mockResolvedValue(memory(2));
+    const { client, unmount } = await enterMemorial(readyState());
+    confirmReset();
+    await waitFor(() => expect(resetMock).toHaveBeenCalledOnce());
+    const mutation = client.getMutationCache().getAll()[0]!;
+    const submittedKey = resetMock.mock.calls[0]?.[3];
+
+    await act(async () => {
+      await client.cancelQueries({ queryKey: ["memorial"] });
+      client.removeQueries({ queryKey: ["memorial"] });
+      unmount();
+    });
+    expect(client.getQueryCache().find({ queryKey: ["memorial"], exact: true })).toBeUndefined();
+    expect(mutation.state.status).toBe("pending");
+
+    await act(async () => {
+      pendingReset.resolve({ ...lockedState(3), latestReadyCycle: 2, memories: MEMORY_SUMMARIES });
+      await pendingReset.promise;
+    });
+    await waitFor(() => expect(mutation.state.status).toBe("success"));
+    expect(client.getQueryCache().find({ queryKey: ["memorial"], exact: true })).toBeUndefined();
+    expect(client.getQueryData(["memorial"])).toBeUndefined();
+    expect(resetMock).toHaveBeenCalledOnce();
+    expect(resetMock).toHaveBeenCalledWith(2, "RESET AFFECTION", "csrf-token", submittedKey);
+  });
+
   it("keeps the reset warning open across a same-cycle ready refetch", async () => {
     useReducedMotion();
     getMemoryMock.mockResolvedValue(memory(2));
@@ -1179,8 +1312,8 @@ describe("MemorialPage", () => {
     fireEvent.keyDown(tabs[1]!, { key: "ArrowRight" });
 
     expect(await screen.findByRole("img", { name: "アロナとのメモリアルロビー" })).toBeVisible();
-    expect(getMemoryMock).toHaveBeenNthCalledWith(1, MEMORY_SUMMARIES[1]);
-    expect(getMemoryMock).toHaveBeenNthCalledWith(2, MEMORY_SUMMARIES[0]);
+    expect(getMemoryMock).toHaveBeenNthCalledWith(1, MEMORY_SUMMARIES[1], expect.any(AbortSignal));
+    expect(getMemoryMock).toHaveBeenNthCalledWith(2, MEMORY_SUMMARIES[0], expect.any(AbortSignal));
     expect(tabs[0]).toHaveAttribute("aria-selected", "true");
     expect(tabs[0]).toHaveAttribute("tabindex", "0");
     expect(tabs[1]).toHaveAttribute("tabindex", "-1");
@@ -1266,8 +1399,8 @@ describe("MemorialPage", () => {
     await act(async () => client.setQueryData(["memorial"], readyState()));
 
     expect(await screen.findByRole("img", { name: "プラナとのメモリアルロビー" })).toBeVisible();
-    expect(getMemoryMock).toHaveBeenNthCalledWith(1, MEMORY_SUMMARIES[0]);
-    expect(getMemoryMock).toHaveBeenNthCalledWith(2, MEMORY_SUMMARIES[1]);
+    expect(getMemoryMock).toHaveBeenNthCalledWith(1, MEMORY_SUMMARIES[0], expect.any(AbortSignal));
+    expect(getMemoryMock).toHaveBeenNthCalledWith(2, MEMORY_SUMMARIES[1], expect.any(AbortSignal));
   });
 
   it("shows a history-level error and retries only that memory", async () => {
@@ -1423,7 +1556,7 @@ describe("MemorialPage", () => {
     await waitFor(() => expect(removeQueries).toHaveBeenCalledTimes(1));
     const predicate = removeQueries.mock.calls[0]?.[0]?.predicate;
     expect(predicate?.({ queryKey: ["memorial"] } as never)).toBe(true);
-    expect(predicate?.({ queryKey: ["costs"] } as never)).toBe(false);
+    expect(predicate?.({ queryKey: ["costs"] } as never)).toBe(true);
   });
 
   it("recovers authentication when a Memorial mutation reports an expired session", async () => {

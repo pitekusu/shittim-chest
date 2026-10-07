@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import type { AdminStatusResponse } from "../api/types";
 import { response } from "../test/recordsTestUtils";
 import AdminPage from "./AdminPage";
+import AdminPromptsPage from "./AdminPromptsPage";
 
 const statusResponse: AdminStatusResponse = {
   schemaVersion: 1,
@@ -51,7 +52,11 @@ function renderAdmin(isAdmin = true, view: "status" | "prompts" = "status") {
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter>
-        <AdminPage isAdmin={isAdmin} csrfToken="csrf-token" view={view} />
+        {view === "prompts" ? (
+          <AdminPromptsPage isAdmin={isAdmin} csrfToken="csrf-token" />
+        ) : (
+          <AdminPage csrfToken="csrf-token" />
+        )}
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -262,6 +267,53 @@ describe("AdminPage", () => {
         "一部のサービスを確認できませんでした。取得できた状態だけを表示しています。",
       ),
     ).toBeVisible();
+  });
+
+  it("tracks the visible service without fetching another snapshot", async () => {
+    const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(response(statusResponse)));
+    vi.stubGlobal("fetch", fetchMock);
+    renderAdmin();
+    await screen.findByText("Scale-to-Zeroで待機しています。");
+
+    const overviewLink = screen.getByRole("link", { name: "概要" });
+    const inspectorLink = screen.getByRole("link", { name: "Inspector" });
+    expect(overviewLink).toHaveAttribute("aria-current", "location");
+    fireEvent.click(inspectorLink);
+    expect(inspectorLink).toHaveAttribute("aria-current", "location");
+    expect(overviewLink).not.toHaveAttribute("aria-current");
+
+    const tops: Record<string, number> = {
+      "admin-overview": -800,
+      "admin-status": -600,
+      "admin-service-ecs": -400,
+      "admin-service-inspector": -150,
+      "admin-service-dynamodb": 50,
+    };
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: HTMLElement) {
+        const top = tops[this.id] ?? 0;
+        return {
+          top,
+          bottom: top + 20,
+          left: 0,
+          right: 300,
+          width: 300,
+          height: 20,
+          x: 0,
+          y: top,
+          toJSON: () => ({}),
+        };
+      },
+    );
+    fireEvent.scroll(window);
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: "DynamoDB" })).toHaveAttribute(
+        "aria-current",
+        "location",
+      );
+    });
+    expect(inspectorLink).not.toHaveAttribute("aria-current");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("shows animated graphical progress while the AWS snapshot is pending", () => {

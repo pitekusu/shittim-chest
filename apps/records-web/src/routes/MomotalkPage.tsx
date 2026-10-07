@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { Popover } from "@base-ui/react/popover";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
 import {
@@ -31,6 +32,7 @@ function WeekPicker({
   onChange,
   hasMore,
   loadingMore,
+  loadError,
   onLoadMore,
 }: {
   readonly weeks: readonly MomotalkWeek[];
@@ -38,10 +40,11 @@ function WeekPicker({
   readonly onChange: (weekId: string) => void;
   readonly hasMore: boolean;
   readonly loadingMore: boolean;
+  readonly loadError: boolean;
   readonly onLoadMore: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const root = useRef<HTMLDivElement>(null);
+  const [instant, setInstant] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const options = useRef<(HTMLButtonElement | null)[]>([]);
   const selectedIndex = Math.max(
@@ -50,34 +53,8 @@ function WeekPicker({
   );
   const selected = weeks[selectedIndex];
 
-  useEffect(() => {
-    if (!open) return;
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!root.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const closeOnOutsideFocus = (event: FocusEvent) => {
-      if (!root.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape" && root.current?.contains(document.activeElement)) {
-        event.preventDefault();
-        closeAndFocus();
-      }
-    };
-    document.addEventListener("pointerdown", closeOnOutsidePointer);
-    document.addEventListener("focusin", closeOnOutsideFocus);
-    document.addEventListener("keydown", closeOnEscape);
-    options.current[selectedIndex]?.focus();
-    return () => {
-      document.removeEventListener("pointerdown", closeOnOutsidePointer);
-      document.removeEventListener("focusin", closeOnOutsideFocus);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [open, selectedIndex]);
-
   function closeAndFocus() {
     setOpen(false);
-    trigger.current?.focus();
   }
 
   function moveOption(event: KeyboardEvent<HTMLButtonElement>, index: number) {
@@ -92,89 +69,124 @@ function WeekPicker({
   }
 
   return (
-    <div ref={root} className={styles.weekPicker}>
-      <span id="momotalk-week-label">今週とこれまでの会話</span>
-      <button
-        ref={trigger}
-        className={styles.weekTrigger}
-        type="button"
-        aria-labelledby="momotalk-week-label momotalk-week-value"
-        aria-expanded={open}
-        aria-controls="momotalk-week-menu"
-        onClick={() => setOpen(!open)}
-        onKeyDown={(event) => {
-          if (!open && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
-            event.preventDefault();
-            setOpen(true);
-          }
-        }}
-      >
-        <span className={styles.weekTriggerIcon} aria-hidden="true">
-          <svg
-            viewBox="0 0 24 24"
-            width="18"
-            height="18"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <rect x="3" y="5" width="18" height="16" rx="2" />
-            <path d="M7 3v4m10-4v4M3 10h18" />
-          </svg>
-        </span>
-        <span id="momotalk-week-value" className={styles.weekTriggerValue}>
-          {selected ? `${weekDate.format(new Date(selected.publishAt))}の週` : "週を選択"}
-        </span>
-        <span className={styles.weekChevron} aria-hidden="true">
-          ⌄
-        </span>
-      </button>
-      {open && (
-        <div id="momotalk-week-menu" className={styles.weekMenu}>
-          <div className={styles.weekMenuHeading}>会話の週を選択</div>
-          <div className={styles.weekOptions}>
-            {weeks.map((week, index) => (
-              <button
-                key={week.weekId}
-                ref={(node) => {
-                  options.current[index] = node;
-                }}
-                type="button"
-                className={styles.weekOption}
-                aria-current={week.weekId === value ? "true" : undefined}
-                onKeyDown={(event) => moveOption(event, index)}
-                onClick={() => {
-                  onChange(week.weekId);
-                  closeAndFocus();
-                }}
-              >
-                <span className={styles.weekOptionDate}>
-                  {weekDate.format(new Date(week.publishAt))}の週
-                </span>
-                {index === 0 && <span className={styles.weekLatest}>最新</span>}
-                {week.weekId === value && (
-                  <span className={styles.weekCheck} aria-hidden="true">
-                    ✓
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-          {hasMore && (
-            <button
-              type="button"
-              className={styles.weekLoadMore}
-              disabled={loadingMore}
-              onClick={onLoadMore}
+    <Popover.Root
+      open={open}
+      onOpenChange={(next, details) => {
+        setInstant(
+          details.event.type.startsWith("key") ||
+            ("detail" in details.event && details.event.detail === 0),
+        );
+        setOpen(next);
+      }}
+    >
+      <div className={styles.weekPicker}>
+        <span id="momotalk-week-label">今週とこれまでの会話</span>
+        <Popover.Trigger
+          ref={trigger}
+          className={styles.weekTrigger}
+          type="button"
+          aria-labelledby="momotalk-week-label momotalk-week-value"
+          aria-expanded={open}
+          aria-controls="momotalk-week-menu"
+          onKeyDown={(event) => {
+            if (!open && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+              event.preventDefault();
+              setInstant(true);
+              setOpen(true);
+            }
+          }}
+        >
+          <span className={styles.weekTriggerIcon} aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              width="18"
+              height="18"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
             >
-              {loadingMore ? "読み込み中…" : "以前の週を読み込む"}
-            </button>
-          )}
-        </div>
-      )}
-    </div>
+              <rect x="3" y="5" width="18" height="16" rx="2" />
+              <path d="M7 3v4m10-4v4M3 10h18" />
+            </svg>
+          </span>
+          <span id="momotalk-week-value" className={styles.weekTriggerValue}>
+            {selected ? `${weekDate.format(new Date(selected.publishAt))}の週` : "週を選択"}
+          </span>
+          <span className={styles.weekChevron} aria-hidden="true">
+            ⌄
+          </span>
+        </Popover.Trigger>
+      </div>
+      <Popover.Portal>
+        <Popover.Positioner
+          className={styles.weekPositioner}
+          sideOffset={8}
+          align="end"
+          collisionPadding={16}
+        >
+          <Popover.Popup
+            id="momotalk-week-menu"
+            className={styles.weekMenu}
+            data-instant={instant}
+            initialFocus={() => options.current[selectedIndex] ?? true}
+            finalFocus={trigger}
+            aria-label="会話の週を選択"
+          >
+            <Popover.Title className={styles.weekMenuHeading}>会話の週を選択</Popover.Title>
+            <div className={styles.weekOptions}>
+              {weeks.map((week, index) => (
+                <button
+                  key={week.weekId}
+                  ref={(node) => {
+                    options.current[index] = node;
+                  }}
+                  type="button"
+                  className={styles.weekOption}
+                  aria-current={week.weekId === value ? "true" : undefined}
+                  onKeyDown={(event) => moveOption(event, index)}
+                  onClick={(event) => {
+                    if (event.detail === 0) setInstant(true);
+                    onChange(week.weekId);
+                    closeAndFocus();
+                  }}
+                >
+                  <span className={styles.weekOptionDate}>
+                    {weekDate.format(new Date(week.publishAt))}の週
+                  </span>
+                  {index === 0 && <span className={styles.weekLatest}>最新</span>}
+                  {week.weekId === value && (
+                    <span className={styles.weekCheck} aria-hidden="true">
+                      ✓
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+            {loadError && (
+              <p className={styles.weekLoadError} role="alert">
+                以前の週を読み込めませんでした。
+              </p>
+            )}
+            {(hasMore || loadError) && (
+              <button
+                type="button"
+                className={styles.weekLoadMore}
+                disabled={loadingMore}
+                onClick={onLoadMore}
+              >
+                {loadingMore
+                  ? "読み込み中…"
+                  : loadError
+                    ? "以前の週をもう一度読み込む"
+                    : "以前の週を読み込む"}
+              </button>
+            )}
+          </Popover.Popup>
+        </Popover.Positioner>
+      </Popover.Portal>
+    </Popover.Root>
   );
 }
 
@@ -200,9 +212,14 @@ function usePlayback(messages: readonly MomotalkMessage[]) {
   }, []);
 
   const current = messages[completed];
-  const units = current
-    ? Array.from(graphemes.segment(current.text), ({ segment }) => segment)
-    : [];
+  const currentText = current?.text;
+  const units = useMemo(
+    () =>
+      currentText === undefined
+        ? []
+        : Array.from(graphemes.segment(currentText), ({ segment }) => segment),
+    [currentText],
+  );
   useEffect(() => {
     if (skipped || reduced || !visible || !current) return;
     const timeout = window.setTimeout(
@@ -235,7 +252,9 @@ function usePlayback(messages: readonly MomotalkMessage[]) {
 function ImageViewer({
   image,
   onClose,
+  pointerEntry,
 }: {
+  readonly pointerEntry: boolean;
   readonly image: MomotalkImage;
   readonly onClose: () => void;
 }) {
@@ -253,6 +272,7 @@ function ImageViewer({
     <dialog
       ref={dialog}
       className={styles.imageDialog}
+      data-pointer-entry={pointerEntry}
       aria-label="モモトークの画像"
       onCancel={onClose}
     >
@@ -273,6 +293,34 @@ function ImageViewer({
   );
 }
 
+const CompletedMessages = memo(function CompletedMessages({
+  messages,
+  participants,
+  shown,
+}: {
+  readonly messages: readonly MomotalkMessage[];
+  readonly participants: MomotalkRoomResponse["participants"];
+  readonly shown: number;
+}) {
+  return (
+    <>
+      {messages.slice(0, shown).map((message) => {
+        const participant = participants.find((item) => item.slot === message.participant);
+        if (!participant) return null;
+        return (
+          <li key={message.id} className={styles.message} data-participant={message.participant}>
+            <Avatar avatar={participant.avatar} />
+            <div>
+              <strong>{participant.displayName}</strong>
+              <p className={styles.bubble}>{message.text}</p>
+            </div>
+          </li>
+        );
+      })}
+    </>
+  );
+});
+
 function Conversation({
   data,
   onBack,
@@ -284,13 +332,18 @@ function Conversation({
   const transcript = useRef<HTMLDivElement>(null);
   const followsBottom = useRef(true);
   const [awayFromBottom, setAwayFromBottom] = useState(false);
+  const [imagePointerEntry, setImagePointerEntry] = useState(false);
   const [imageMood, setImageMood] = useState<MomotalkImage["mood"] | null>(null);
   const image = data.images.find((candidate) => candidate.mood === imageMood);
 
   useEffect(() => {
-    if (followsBottom.current && transcript.current) {
-      transcript.current.scrollTop = transcript.current.scrollHeight;
-    }
+    if (!followsBottom.current) return;
+    const frame = requestAnimationFrame(() => {
+      if (followsBottom.current && transcript.current) {
+        transcript.current.scrollTop = transcript.current.scrollHeight;
+      }
+    });
+    return () => cancelAnimationFrame(frame);
   }, [playback.partial, playback.shown, data.images]);
 
   function toBottom() {
@@ -353,23 +406,11 @@ function Conversation({
           </output>
         )}
         <ol className={styles.messages} aria-label="チャットの発言">
-          {data.messages.slice(0, playback.shown).map((message) => {
-            const participant = data.participants.find((item) => item.slot === message.participant);
-            if (!participant) return null;
-            return (
-              <li
-                key={message.id}
-                className={styles.message}
-                data-participant={message.participant}
-              >
-                <Avatar avatar={participant.avatar} />
-                <div>
-                  <strong>{participant.displayName}</strong>
-                  <p className={styles.bubble}>{message.text}</p>
-                </div>
-              </li>
-            );
-          })}
+          <CompletedMessages
+            messages={data.messages}
+            participants={data.participants}
+            shown={playback.shown}
+          />
           {!playback.done && currentSpeaker && (
             <li
               className={styles.message}
@@ -406,7 +447,10 @@ function Conversation({
                       <button
                         className={styles.thumbnail}
                         type="button"
-                        onClick={() => setImageMood(item.mood)}
+                        onClick={(event) => {
+                          setImagePointerEntry(event.detail > 0);
+                          setImageMood(item.mood);
+                        }}
                         aria-label={`${participant.displayName}の画像を拡大`}
                       >
                         <img
@@ -445,7 +489,13 @@ function Conversation({
           会話の続きへ
         </button>
       )}
-      {image?.state === "ready" && <ImageViewer image={image} onClose={() => setImageMood(null)} />}
+      {image?.state === "ready" && (
+        <ImageViewer
+          image={image}
+          pointerEntry={imagePointerEntry}
+          onClose={() => setImageMood(null)}
+        />
+      )}
     </section>
   );
 }
@@ -455,7 +505,7 @@ export default function MomotalkPage() {
   const [roomId, setRoomId] = useState<string | null>(null);
   const weeksQuery = useInfiniteQuery({
     queryKey: ["momotalk", "weeks"],
-    queryFn: ({ pageParam }) => getMomotalkWeeks(pageParam),
+    queryFn: ({ pageParam, signal }) => getMomotalkWeeks(pageParam, signal),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.nextCursor ?? undefined,
     refetchInterval: 60_000,
@@ -465,7 +515,7 @@ export default function MomotalkPage() {
   const roomsQuery = useInfiniteQuery({
     queryKey: ["momotalk", "rooms", weekId],
     enabled: Boolean(weekId),
-    queryFn: ({ pageParam }) => getMomotalkRooms(weekId ?? "", pageParam),
+    queryFn: ({ pageParam, signal }) => getMomotalkRooms(weekId ?? "", pageParam, signal),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.nextCursor ?? undefined,
     refetchInterval: 60_000,
@@ -474,20 +524,24 @@ export default function MomotalkPage() {
   const roomQuery = useQuery({
     queryKey: ["momotalk", "room", weekId, roomId],
     enabled: Boolean(weekId && roomId),
-    queryFn: () => getMomotalkRoom(weekId ?? "", roomId ?? ""),
+    queryFn: ({ signal }) => getMomotalkRoom(weekId ?? "", roomId ?? "", signal),
     refetchInterval: 60_000,
   });
-  const error = weeksQuery.error ?? roomsQuery.error ?? roomQuery.error;
-  useAuthenticationRecovery(error);
+  useAuthenticationRecovery(weeksQuery.error);
+  useAuthenticationRecovery(roomsQuery.error);
+  useAuthenticationRecovery(roomQuery.error);
 
   return (
-    <section className={styles.page}>
+    <section
+      className={styles.page}
+      data-route-motion-ready={weeksQuery.isPending ? undefined : ""}
+    >
       <header className={styles.heading}>
         <div>
           <p className={common.eyebrow} lang="en">
             MOMOTALK
           </p>
-          <h1>モモトーク</h1>
+          <h1 tabIndex={-1}>モモトーク</h1>
         </div>
         {weekId && (
           <WeekPicker
@@ -499,27 +553,42 @@ export default function MomotalkPage() {
             }}
             hasMore={Boolean(weeksQuery.hasNextPage)}
             loadingMore={weeksQuery.isFetchingNextPage}
+            loadError={weeksQuery.isFetchNextPageError}
             onLoadMore={() => void weeksQuery.fetchNextPage()}
           />
         )}
       </header>
-      {error && (
-        <ErrorPanel
-          title="モモトークを読み込めません"
-          message="時間をおいて、もう一度お試しください。"
-          onRetry={() => {
-            void weeksQuery.refetch();
-            if (weekId) void roomsQuery.refetch();
-            if (roomId) void roomQuery.refetch();
-          }}
-        />
+      {weeksQuery.error && !weeksQuery.isFetchNextPageError && (
+        <div className={styles.panelError}>
+          <ErrorPanel
+            title="会話の週を読み込めません"
+            message="読み込み済みの会話は引き続き読めます。時間をおいて、もう一度お試しください。"
+            onRetry={() => void weeksQuery.refetch()}
+          />
+        </div>
       )}
       <div className={styles.workspace} data-room-open={Boolean(roomId)}>
         <aside className={styles.contacts} aria-label="質問者一覧">
           <div className={styles.contactsHeading}>
-            <span>CHAT ROOMS</span>
-            <span>{rooms.length}</span>
+            <span>質問者</span>
+            <span>{rooms.length}人</span>
           </div>
+          {roomsQuery.error && (
+            <div className={styles.panelError}>
+              <ErrorPanel
+                title={
+                  roomsQuery.isFetchNextPageError
+                    ? "質問者の続きを読み込めません"
+                    : "質問者一覧を読み込めません"
+                }
+                message="表示中の会話は引き続き読めます。"
+                onRetry={() => {
+                  if (roomsQuery.isFetchNextPageError) void roomsQuery.fetchNextPage();
+                  else void roomsQuery.refetch();
+                }}
+              />
+            </div>
+          )}
           {(weeksQuery.isPending || (weekId && roomsQuery.isPending)) && (
             <output className={styles.empty}>
               会話を読み込んでいます
@@ -530,8 +599,13 @@ export default function MomotalkPage() {
               </span>
             </output>
           )}
-          {!weeksQuery.isPending && weeks.length === 0 && !error && (
+          {!weeksQuery.isPending && weeks.length === 0 && !weeksQuery.error && (
             <p className={styles.empty}>最初のモモトークは日曜日20時に届きます。</p>
+          )}
+          {weekId && !roomsQuery.isPending && !roomsQuery.error && rooms.length === 0 && (
+            <p className={styles.empty}>
+              この週の会話はまだありません。別の週を選んでみてください。
+            </p>
           )}
           <ul>
             {rooms.map((room) => (
@@ -539,7 +613,10 @@ export default function MomotalkPage() {
                 <button
                   type="button"
                   aria-current={roomId === room.roomId ? "true" : undefined}
-                  onClick={() => setRoomId(room.roomId)}
+                  onClick={() => {
+                    setChosenWeek(weekId ?? null);
+                    setRoomId(room.roomId);
+                  }}
                 >
                   <Avatar avatar={room.requester.avatar} />
                   <span>
@@ -551,9 +628,10 @@ export default function MomotalkPage() {
               </li>
             ))}
           </ul>
-          {roomsQuery.hasNextPage && (
+          {roomsQuery.hasNextPage && !roomsQuery.isFetchNextPageError && (
             <button
               type="button"
+              className={styles.contactsLoadMore}
               disabled={roomsQuery.isFetchingNextPage}
               onClick={() => void roomsQuery.fetchNextPage()}
             >
@@ -561,31 +639,43 @@ export default function MomotalkPage() {
             </button>
           )}
         </aside>
-        {roomId && roomQuery.data ? (
-          <Conversation
-            key={`${weekId}/${roomId}`}
-            data={roomQuery.data}
-            onBack={() => setRoomId(null)}
-          />
-        ) : (
-          <section className={styles.welcome} aria-label="会話を選択">
-            <div className={styles.welcomeMark} aria-hidden="true">
-              …
+        <div className={styles.conversationPane}>
+          {roomId && roomQuery.error && (
+            <div className={styles.panelError}>
+              <ErrorPanel
+                title="会話を読み込めません"
+                message="他の質問者や、過去の週の会話も選べます。"
+                onRetry={() => void roomQuery.refetch()}
+              />
             </div>
-            {roomId ? (
-              <>
-                <button type="button" className={styles.back} onClick={() => setRoomId(null)}>
-                  一覧へ戻る
-                </button>
-                <output>
-                  {roomQuery.error ? "会話を取得できませんでした" : "会話を読み込んでいます"}
-                </output>
-              </>
-            ) : (
-              <h2>質問者を選択してください。</h2>
-            )}
-          </section>
-        )}
+          )}
+          {roomId && roomQuery.data ? (
+            <Conversation
+              key={`${weekId}/${roomId}`}
+              data={roomQuery.data}
+              onBack={() => setRoomId(null)}
+            />
+          ) : (
+            <section className={styles.welcome} aria-label="会話を選択">
+              {roomId ? (
+                <>
+                  <button type="button" className={styles.back} onClick={() => setRoomId(null)}>
+                    一覧へ戻る
+                  </button>
+                  {!roomQuery.error && <output>会話を読み込んでいます</output>}
+                </>
+              ) : (
+                <>
+                  <div className={styles.welcomeMark} aria-hidden="true">
+                    …
+                  </div>
+                  <h2>質問者を選択してください。</h2>
+                  <p>左の一覧から、この週の会話を開けます。</p>
+                </>
+              )}
+            </section>
+          )}
+        </div>
       </div>
     </section>
   );

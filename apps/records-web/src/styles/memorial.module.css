@@ -3,7 +3,7 @@
   --memorial-pink: #f0a4c7;
   --memorial-lavender: #aaa5e7;
   display: grid;
-  gap: 22px;
+  gap: 24px;
 }
 
 .pageHeader {
@@ -23,6 +23,11 @@
   margin-bottom: 0;
   grid-column: 1;
   grid-row: 2;
+}
+
+/* The heading receives focus after entry and recovery; it is not a control. */
+.pageHeader > h1:focus {
+  outline: none;
 }
 
 .pageHeader > .requesterIdentity {
@@ -62,9 +67,46 @@
   font-size: 0.8rem;
 }
 
+.stateSummary {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
+  border: 1px solid var(--records-line);
+  border-radius: 12px;
+  background: var(--records-control-background-soft);
+}
+
+.stateSummary p {
+  margin: 0;
+  color: var(--records-ink-600);
+  font-size: 0.9rem;
+  line-height: 1.8;
+}
+
+.stateBadge {
+  flex: none;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--records-cyan-100);
+  color: var(--records-ink-900);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.stateBadge[data-state="locked"] {
+  background: var(--records-control-background);
+  color: var(--records-ink-600);
+}
+
+.stateBadge[data-state="failed"] {
+  background: var(--records-pink-100);
+  color: var(--records-pink-ink);
+}
+
 .loadingPage {
   display: grid;
-  min-height: min(720px, calc(100vh - 148px));
+  min-height: min(540px, calc(100dvh - 148px));
   place-content: center;
   place-items: center;
   gap: 10px;
@@ -112,36 +154,18 @@
 .resetPanel {
   position: relative;
   min-width: 0;
-  overflow: hidden;
-  border: 1px solid var(--records-panel-border);
+  border: 1px solid var(--records-line);
   border-radius: var(--records-radius-card);
-  background: var(--records-ranking-panel-background);
-  box-shadow: var(--records-shadow-soft);
-  backdrop-filter: blur(18px);
+  background: var(--records-surface-strong);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 3%);
 }
 
 .lockedPanel {
   display: grid;
-  min-height: 290px;
-  grid-template-columns: auto minmax(0, 650px) auto;
+  grid-template-columns: 64px minmax(0, 1fr);
   align-items: center;
-  justify-content: center;
-  gap: 30px;
-  padding: clamp(32px, 6vw, 76px);
-}
-
-.lockedPanel::before,
-.unlockPanel::before,
-.memoryPanel::before {
-  position: absolute;
-  right: -74px;
-  bottom: -112px;
-  width: 250px;
-  height: 250px;
-  border: 1px solid color-mix(in srgb, var(--records-cyan-500) 22%, transparent);
-  border-radius: 50%;
-  content: "";
-  pointer-events: none;
+  gap: 20px;
+  padding: 28px;
 }
 
 .lockedPanel h2,
@@ -150,7 +174,8 @@
 .memoryPanel h2,
 .resetPanel h2 {
   margin: 7px 0 8px;
-  font-size: clamp(1.25rem, 2.2vw, 1.8rem);
+  font-size: clamp(1.05rem, 1.5vw, 1.3rem);
+  letter-spacing: -0.025em;
 }
 
 .lockedPanel p:last-child,
@@ -164,13 +189,14 @@
 
 .lockedSeal {
   position: relative;
-  width: 104px;
-  height: 104px;
+  width: 60px;
+  height: 60px;
+  box-shadow: none;
 }
 
 .lockedSeal > span {
   color: var(--records-ink-600);
-  font-size: 3.2rem;
+  font-size: 2rem;
   opacity: 0.42;
 }
 
@@ -183,8 +209,8 @@
 
 .cycleBadge {
   position: absolute;
-  top: 20px;
-  right: 24px;
+  top: 16px;
+  right: 20px;
   padding: 7px 11px;
   border: 1px solid var(--records-line);
   border-radius: 999px;
@@ -198,19 +224,10 @@
 .unlockPanel {
   --memorial-persona: var(--memorial-cyan);
   display: grid;
-  min-height: 245px;
-  grid-template-columns: 138px minmax(0, 1fr) 150px;
+  grid-template-columns: 72px minmax(0, 1fr);
   align-items: center;
-  gap: clamp(22px, 4vw, 52px);
-  padding: clamp(28px, 5vw, 58px);
-  border-color: color-mix(in srgb, var(--memorial-persona) 56%, var(--records-panel-border));
-  background:
-    radial-gradient(
-      circle at 12% 48%,
-      color-mix(in srgb, var(--memorial-persona) 20%, transparent),
-      transparent 28%
-    ),
-    var(--records-ranking-panel-background);
+  gap: 24px;
+  padding: 28px;
 }
 
 .unlockPanel.pink {
@@ -224,34 +241,31 @@
 .unlockPortrait {
   position: relative;
   display: grid;
-  width: 128px;
-  height: 128px;
+  width: 68px;
+  height: 68px;
   place-items: center;
   border: 1px solid color-mix(in srgb, var(--memorial-persona) 70%, transparent);
   border-radius: 50%;
-  box-shadow:
-    0 0 0 12px color-mix(in srgb, var(--memorial-persona) 10%, transparent),
-    0 20px 38px rgb(14 93 119 / 18%);
 }
 
 .unlockPortrait > :first-child {
-  width: 108px;
-  height: 108px;
+  width: 58px;
+  height: 58px;
   border-color: color-mix(in srgb, var(--memorial-persona) 50%, var(--records-avatar-border));
 }
 
 .unlockPortrait > span {
   position: absolute;
-  right: -9px;
+  right: -6px;
   bottom: 2px;
-  min-width: 48px;
-  padding: 6px 9px;
+  min-width: 42px;
+  padding: 4px 6px;
   border: 2px solid var(--records-surface-strong);
   border-radius: 999px;
   background: var(--memorial-persona);
   color: #102a43;
-  font-size: 0.74rem;
-  font-weight: 900;
+  font-size: 0.65rem;
+  font-weight: 700;
   text-align: center;
 }
 
@@ -263,48 +277,10 @@
   max-width: 710px;
 }
 
-.heartOrbit {
-  position: relative;
-  width: 132px;
-  height: 132px;
-  border: 1px solid color-mix(in srgb, var(--memorial-persona) 42%, transparent);
-  border-radius: 50%;
-  animation: heart-orbit 12s linear infinite;
-}
-
-.heartOrbit::before {
-  position: absolute;
-  inset: 24px;
-  border: 1px dashed color-mix(in srgb, var(--memorial-persona) 40%, transparent);
-  border-radius: 50%;
-  content: "";
-}
-
-.heartOrbit span {
-  position: absolute;
-  color: var(--memorial-persona);
-  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--memorial-persona) 55%, transparent));
-}
-
-.heartOrbit span:nth-child(1) {
-  top: -8px;
-  left: 53px;
-}
-.heartOrbit span:nth-child(2) {
-  right: 3px;
-  bottom: 17px;
-  font-size: 0.72rem;
-}
-.heartOrbit span:nth-child(3) {
-  bottom: 13px;
-  left: 4px;
-  font-size: 0.62rem;
-}
-
 .generationProgress {
   display: grid;
   gap: 16px;
-  padding: 23px 28px;
+  padding: 24px;
   border-color: var(--records-line-strong);
 }
 
@@ -373,20 +349,23 @@
 
 .progressTrack > span > span {
   display: block;
-  width: 0;
+  width: 100%;
   height: 100%;
   border-radius: inherit;
+  transform: scaleX(0);
+  transform-origin: left;
   background: linear-gradient(90deg, var(--records-cyan-500), var(--memorial-pink));
   box-shadow: 0 0 12px color-mix(in srgb, var(--records-cyan-500) 56%, transparent);
-  transition: width 500ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: transform 180ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 
 .progressTrack > span[data-complete="true"] > span {
-  width: 100%;
+  transform: scaleX(1);
 }
 
 .progressTrack > span[data-current="true"] > span {
   width: 34%;
+  transform: none;
   animation: memorial-progress-scan 1.45s ease-in-out infinite;
 }
 
@@ -438,7 +417,7 @@
 
 .creationPanel,
 .memoryPanel {
-  padding: clamp(24px, 4vw, 40px);
+  padding: 24px;
 }
 
 .creationPanel > header,
@@ -464,33 +443,22 @@
 .dropZone {
   display: grid;
   width: 100%;
-  min-height: 210px;
-  margin-top: 24px;
+  min-height: 190px;
+  margin-top: 20px;
   place-content: center;
   place-items: center;
   gap: 7px;
   padding: 28px;
   border: 1px dashed var(--records-line-strong);
-  border-radius: 22px;
-  background:
-    linear-gradient(
-      135deg,
-      transparent 44%,
-      color-mix(in srgb, var(--records-cyan-500) 8%, transparent) 44% 56%,
-      transparent 56%
-    ),
-    var(--records-control-background-soft);
-  background-size:
-    34px 34px,
-    auto;
+  border-radius: 12px;
+  background: var(--records-control-background-soft);
   cursor: pointer;
   color: var(--records-ink-900);
   font: inherit;
   text-align: center;
-  transition:
-    border-color 160ms ease,
-    background 160ms ease,
-    box-shadow 160ms ease;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .dropZone:disabled {
@@ -498,8 +466,7 @@
   opacity: 0.52;
 }
 
-.dropZone:hover,
-.dropZone:focus-within,
+.dropZone:focus-visible,
 .dropZone[data-dragging="true"],
 .dropZone[data-selected="true"] {
   border-color: var(--records-cyan-500);
@@ -616,7 +583,7 @@
   gap: 3px;
   padding: 11px 14px;
   border: 1px solid var(--records-line);
-  border-radius: 15px;
+  border-radius: 10px;
   background: var(--records-control-background-soft);
   color: var(--records-ink-600);
   cursor: pointer;
@@ -646,8 +613,9 @@
 
 .memoryDetail {
   display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(260px, 0.75fr);
-  gap: 25px;
+  grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr);
+  align-items: start;
+  gap: 24px;
 }
 
 .memoryDetail figure {
@@ -656,9 +624,8 @@
   margin: 0;
   overflow: hidden;
   border: 1px solid var(--records-line-strong);
-  border-radius: 20px;
+  border-radius: 12px;
   background: var(--records-control-background-soft);
-  box-shadow: 0 18px 42px rgb(9 64 86 / 15%);
 }
 
 .memoryArtwork {
@@ -742,11 +709,9 @@
 }
 
 .memoryNarrative {
-  align-self: stretch;
-  padding: 23px;
-  border: 1px solid var(--records-line);
-  border-radius: 20px;
-  background: var(--records-control-background-soft);
+  align-self: start;
+  padding: 12px 4px;
+  min-width: 0;
 }
 
 .memoryNarrative h3 {
@@ -757,8 +722,11 @@
 .memoryNarrative > p:last-child {
   margin: 0;
   color: var(--records-ink-600);
-  font-size: 0.84rem;
-  line-height: 2;
+  font-size: 1rem;
+  line-height: 1.9;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
   white-space: pre-wrap;
 }
 
@@ -779,7 +747,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 28px;
-  padding: 25px 29px;
+  padding: 24px;
+  box-shadow: none;
 }
 
 .resetPanel h2 {
@@ -805,7 +774,7 @@
 .confirmationDialog {
   display: grid;
   width: min(100%, 600px);
-  max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
   place-items: center;
   padding: clamp(26px, 5vw, 44px);
   overflow-y: auto;
@@ -818,6 +787,48 @@
 
 .confirmationDialog::backdrop {
   background: transparent;
+}
+
+.confirmationDialog[open][data-pointer-initiated="true"] {
+  transition:
+    opacity 250ms var(--records-ease-out),
+    transform 250ms var(--records-ease-out);
+}
+
+@starting-style {
+  .confirmationDialog[open][data-pointer-initiated="true"] {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+.refreshError {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  border: 1px solid var(--records-line-strong);
+  border-radius: var(--records-radius-control);
+  background: var(--records-surface-strong);
+  color: var(--records-ink-900);
+  font-size: 0.875rem;
+  line-height: 1.7;
+}
+
+.refreshError p {
+  margin: 0;
+}
+
+.refreshError button {
+  flex-shrink: 0;
+}
+
+@media (max-width: 767px) {
+  .refreshError {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
 
 .dialogIcon {
@@ -1022,12 +1033,6 @@
   }
 }
 
-@keyframes heart-orbit {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 @keyframes progress-pulse {
   70% {
     box-shadow: 0 0 0 9px transparent;
@@ -1099,24 +1104,6 @@
   .memoryDetail {
     grid-template-columns: 1fr;
   }
-
-  .unlockPanel {
-    grid-template-columns: 112px minmax(0, 1fr);
-  }
-
-  .unlockPortrait {
-    width: 104px;
-    height: 104px;
-  }
-
-  .unlockPortrait > :first-child {
-    width: 88px;
-    height: 88px;
-  }
-
-  .heartOrbit {
-    display: none;
-  }
 }
 
 @media (max-width: 620px) {
@@ -1142,18 +1129,29 @@
     justify-self: start;
   }
 
-  .lockedPanel,
-  .unlockPanel {
-    grid-template-columns: 1fr;
-    justify-items: center;
-    gap: 20px;
-    padding: 55px 22px 30px;
-    text-align: center;
+  .stateSummary {
+    align-items: start;
+    flex-direction: column;
+    gap: 8px;
+    padding: 16px;
   }
 
+  .lockedPanel,
+  .unlockPanel {
+    grid-template-columns: 48px minmax(0, 1fr);
+    gap: 14px;
+    padding: 52px 18px 22px;
+  }
+
+  .lockedSeal,
   .unlockPortrait {
-    width: 104px;
-    height: 104px;
+    width: 48px;
+    height: 48px;
+  }
+
+  .unlockPortrait > :first-child {
+    width: 40px;
+    height: 40px;
   }
 
   .creationPanel,
@@ -1208,9 +1206,20 @@
   }
 }
 
+@media (hover: hover) and (pointer: fine) {
+  .dropZone:hover:not(:disabled) {
+    border-color: var(--records-cyan-500);
+    background: var(--records-cyan-100);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .confirmationDialog[open][data-pointer-initiated="true"] {
+    transition: none;
+    transform: none;
+  }
+
   .loadingSeal,
-  .heartOrbit,
   .progressPulse,
   .entryGeometry,
   .entrySeal,
@@ -1223,7 +1232,13 @@
 
   .progressTrack > span > span {
     animation: none;
-    transform: none;
     transition: none;
+  }
+
+  @starting-style {
+    .confirmationDialog[open][data-pointer-initiated="true"] {
+      opacity: 1;
+      transform: none;
+    }
   }
 }

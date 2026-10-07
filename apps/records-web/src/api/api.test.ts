@@ -18,10 +18,9 @@ import {
   getAdminPrompts,
   getAdminRevision,
   getAdminRevisions,
-  getAdminStatus,
-  refreshAdminStatus,
   rollbackAdminPrompts,
 } from "./admin";
+import { getAdminStatus, refreshAdminStatus } from "./adminStatus";
 import { getRecord } from "./recordDetail";
 import { getRecords } from "./recordList";
 import { getRankings } from "./rankings";

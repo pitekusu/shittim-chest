@@ -2,6 +2,7 @@ import memorialMemoryResponseValidator from "../generated/memorial-memory-respon
 import memorialStateResponseValidator from "../generated/memorial-state-response-validator.mjs";
 import memorialUploadResponseValidator from "../generated/memorial-upload-response-validator.mjs";
 import { RecordsApiError, requestJson } from "./http";
+import { validateMemorialImage } from "./memorialImage";
 import type {
   MemorialGenerateRequest,
   MemoryResponse,
@@ -15,12 +16,6 @@ import type {
 
 export const MEMORIAL_QUERY_KEY = ["memorial"] as const;
 
-const MAX_MEMORIAL_UPLOAD_BYTES = 10 * 1024 * 1024;
-const MEMORIAL_UPLOAD_CONTENT_TYPES = new Set<MemorialUploadContentType>([
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-]);
 const MEMORIAL_GENERATION_RESPONSE_STATES = new Set<MemorialStateResponse["state"]>([
   "queued",
   "generating",
@@ -110,10 +105,6 @@ function isMemorialMemoryResponse(
   );
 }
 
-function isMemorialUploadContentType(value: string): value is MemorialUploadContentType {
-  return MEMORIAL_UPLOAD_CONTENT_TYPES.has(value as MemorialUploadContentType);
-}
-
 function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
 }
@@ -137,8 +128,8 @@ function unavailableUpload(status: number): RecordsApiError {
   );
 }
 
-export function getMemorialState(): Promise<MemorialStateResponse> {
-  return requestJson("/api/v1/memorial", isMemorialStateResponse);
+export function getMemorialState(signal?: AbortSignal): Promise<MemorialStateResponse> {
+  return requestJson("/api/v1/memorial", isMemorialStateResponse, { signal });
 }
 
 export async function prepareMemorialUpload(
@@ -147,19 +138,14 @@ export async function prepareMemorialUpload(
   csrfToken: string,
   idempotencyKey: string,
 ): Promise<UploadResponse> {
-  if (
-    !isMemorialUploadContentType(source.type) ||
-    source.size < 1 ||
-    source.size > MAX_MEMORIAL_UPLOAD_BYTES
-  ) {
-    throw invalidUpload("JPEG、PNG、WebPの10 MiB以下の画像を選択してください。");
-  }
+  const validation = validateMemorialImage(source);
+  if (validation !== null) throw invalidUpload(validation);
 
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", await source.arrayBuffer()));
   const request: MemorialUploadRequest = {
     schemaVersion: 1,
     expectedCycle,
-    contentType: source.type,
+    contentType: source.type as MemorialUploadContentType,
     sizeBytes: source.size,
     sha256: bytesToHex(digest),
   };
@@ -223,9 +209,14 @@ export function queueMemorialGeneration(
   });
 }
 
-export function getMemorialMemory(summary: MemorialMemorySummary): Promise<MemoryResponse> {
-  return requestJson(`/api/v1/memorial/memories/${summary.cycle}`, (value) =>
-    isMemorialMemoryResponse(value, summary),
+export function getMemorialMemory(
+  summary: MemorialMemorySummary,
+  signal?: AbortSignal,
+): Promise<MemoryResponse> {
+  return requestJson(
+    `/api/v1/memorial/memories/${summary.cycle}`,
+    (value) => isMemorialMemoryResponse(value, summary),
+    { signal },
   );
 }
 
