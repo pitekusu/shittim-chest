@@ -105,9 +105,13 @@ internal fun AdaptiveRecordsUi(
     val listMotion = visibleMotion && queryMode == RecordQueryMode.Closed && onList
     val refreshAvailable = state.canReadRecords && onList &&
       queryMode == RecordQueryMode.Closed && motionAllowed && lifecycle.isAtLeast(Lifecycle.State.STARTED)
-    // WorkManager owns the operation. Queued/offline work must not keep the gesture spinner alive.
-    val refreshing = refreshAvailable && state.sync == RecordSyncState.Running
+    val syncRunning = state.sync == RecordSyncState.Running
     val refreshState = rememberPullToRefreshState()
+    // Pull feedback belongs to the gesture. The fixed journal status describes async work.
+    // Never pin a large, unexplained spinner to the brand during automatic/offline sync.
+    LaunchedEffect(refreshAvailable, syncRunning) {
+      if (!refreshAvailable || syncRunning) refreshState.animateToHidden()
+    }
     val searchScrollState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
@@ -139,15 +143,15 @@ internal fun AdaptiveRecordsUi(
           paneTitle = listTitle
           isTraversalGroup = true
         }) {
-          PullToRefreshBox(isRefreshing = refreshing,
-            onRefresh = { if (refreshAvailable) state.eventSink(BootstrapScreen.Event.RefreshRecords) },
-            enabled = refreshAvailable && !refreshing,
+          PullToRefreshBox(isRefreshing = false,
+            onRefresh = { if (refreshAvailable && !syncRunning) state.eventSink(BootstrapScreen.Event.RefreshRecords) },
+            enabled = refreshAvailable && !syncRunning,
             state = refreshState,
             modifier = Modifier.fillMaxSize().testTag("records-pull-refresh"),
             contentAlignment = Alignment.TopCenter,
             indicator = {
-              if (refreshAvailable) PullToRefreshDefaults.Indicator(
-                state = refreshState, isRefreshing = refreshing,
+              if (refreshAvailable && !syncRunning && refreshState.distanceFraction > 0f) PullToRefreshDefaults.Indicator(
+                state = refreshState, isRefreshing = false,
                 modifier = Modifier.align(Alignment.TopCenter).testTag("records-refresh-indicator"),
                 containerColor = MaterialTheme.colorScheme.primaryContainer,
                 color = MaterialTheme.colorScheme.onPrimaryContainer)
