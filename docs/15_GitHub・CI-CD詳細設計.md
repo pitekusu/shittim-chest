@@ -122,6 +122,7 @@ Android追加後のJava/Kotlin解析は未完了であり、Kotlin 2.4.20へのC
 サービス別撮影を含む管理画面単独のテスト全体は60秒とする。
 複数ルートを画面幅ごとに順に開き、axeで共通画面枠と本文を確認する横断テストだけは全体120秒とする。
 画像比較用Chromiumは`--font-render-hinting=none`でhintingを固定する。アプリの描画設定は変えず、改行・寸法を含めた画像レビュー後に基準画像を採用し、比較許容差は広げない。
+画像基準の正はCIのUbuntu 26.04上の固定Playwright/Chromiumとする。異なるLinuxのFreeType/fontconfigでは文字輪郭に差が出るため、基準画像はCIの比較artifactを寸法・改行・図形と合わせてレビューして採用する。ローカルの機能検証と別OSでのpixel完全一致は区別する。
 画像差分の許容値と再試行回数は増やさない。
 
 ### CodeQLの既存3言語の移行とAndroid追加
