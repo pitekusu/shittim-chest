@@ -226,8 +226,18 @@
 }
 
 .selectChevron {
+  display: grid;
+  width: 14px;
+  height: 14px;
+  place-items: center;
   color: var(--records-ink-600);
+  line-height: 0;
   transition: none;
+}
+
+.selectChevron svg,
+.selectedCheck svg {
+  display: block;
 }
 
 .avatarSelectButton[aria-expanded="true"] .selectChevron {
@@ -290,8 +300,12 @@
 }
 
 .selectedCheck {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
   color: var(--records-cyan-ink);
-  text-align: center;
+  line-height: 0;
 }
 
 .cardGrid {
@@ -496,10 +510,14 @@
   border-top: 1px solid var(--records-line);
   color: var(--records-link);
   font-weight: 800;
+  line-height: 1.5;
 }
 
-.cardAction::after {
-  content: "↗";
+.cardAction svg {
+  display: block;
+  width: 1em;
+  height: 1em;
+  flex: none;
 }
 
 .loadMore {

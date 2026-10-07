@@ -433,7 +433,7 @@
 @media (max-width: 767px) {
   .appShell {
     display: block;
-    padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: calc(5.5rem + env(safe-area-inset-bottom, 0px));
   }
   .sidebar {
     display: none;
@@ -445,6 +445,7 @@
     position: relative;
     z-index: 30;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     gap: 16px;
@@ -454,6 +455,7 @@
   }
   .mobileBrand {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 12px;
     min-width: 0;
@@ -472,6 +474,7 @@
   .accountMenu {
     position: relative;
     flex: 0 0 auto;
+    margin-left: auto;
   }
   .accountMenu summary {
     display: flex;
@@ -565,6 +568,11 @@
   .mobileNav .navigationIcon {
     width: 20px;
     height: 20px;
+  }
+  .mobileNav a > span {
+    min-width: 0;
+    white-space: normal;
+    text-align: center;
   }
 }
 

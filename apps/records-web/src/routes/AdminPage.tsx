@@ -604,7 +604,19 @@ function OverviewPanel({
             data-busy={refresh.isPending || undefined}
             onClick={() => refresh.mutate()}
           >
-            <span aria-hidden="true">↻</span>
+            <svg
+              aria-hidden="true"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M20 7v5h-5M20 12a8 8 0 1 0-2.3 5.7" />
+            </svg>
             {refresh.isPending ? "更新しています" : "状態を更新"}
           </button>
         </div>
@@ -641,7 +653,18 @@ function OverviewPanel({
           <div className={adminStyles.overviewStat} data-tone="time">
             <dt>
               <span className={adminStyles.overviewStatIcon} aria-hidden="true">
-                ◷
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                >
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="M12 6v6l4 2" />
+                </svg>
               </span>
               情報の鮮度
             </dt>

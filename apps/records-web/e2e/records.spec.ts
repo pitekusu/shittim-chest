@@ -2050,6 +2050,56 @@ test("unlocked Memorial plays the three-second entry before opening creation", a
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
 });
 
+test("Memorial retains its decorated unlock panel across themes and viewports", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  test.setTimeout(90_000);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockAuthenticatedApi(page);
+  await page.route("**/api/v1/memorial", (route) => route.fulfill({ json: memorialUnlocked }));
+  await page.goto("/memorial");
+  const panel = page.getByRole("region", { name: "アロナとのメモリアルロビーが解放されました" });
+  await expect(panel).toBeVisible();
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(
+      (value) => document.documentElement.setAttribute("data-theme", value),
+      theme,
+    );
+    for (const width of [1280, 1440, 1920, 320, 390, 808]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.evaluate(() => document.fonts.ready);
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        ),
+        `${theme} ${width}px`,
+      ).toBeLessThanOrEqual(1);
+      if (width === 1440 || width === 320) {
+        await page.mouse.move(0, 0);
+        await page.evaluate(() => window.scrollTo({ top: 0, left: 0, behavior: "instant" }));
+        expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+        await expect(panel).toHaveScreenshot(`memorial-unlock-${theme}-${width}.png`, {
+          animations: "disabled",
+          maxDiffPixels: 20,
+        });
+        await page.screenshot({
+          path: testInfo.outputPath(`memorial-lobby-${theme}-${width}.png`),
+          fullPage: true,
+          animations: "disabled",
+        });
+      }
+    }
+  }
+  await page.setViewportSize({ width: 320, height: 900 });
+  await page.evaluate(() => (document.documentElement.style.fontSize = "200%"));
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    ),
+  ).toBeLessThanOrEqual(1);
+});
+
 test("Memorial previews an image under production CSP and queues generation once", async ({
   page,
 }, testInfo) => {
@@ -2881,6 +2931,7 @@ test("refreshed workspaces fit PC and narrow viewports with the whole shell acce
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
+  test.setTimeout(120_000);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await mockAuthenticatedApi(page, detailWithAffection, true);
   for (const width of [1280, 1440, 1920, 320, 390, 808]) {

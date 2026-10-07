@@ -370,6 +370,20 @@ export function DebateCard({
         </div>
         <span className={styles.cardAction} aria-hidden="true">
           記録を読む
+          <svg
+            viewBox="0 0 24 24"
+            width="16"
+            height="16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path d="M6 18 18 6M6 6h12v12" />
+          </svg>
         </span>
       </article>
     </Link>

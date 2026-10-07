@@ -1508,13 +1508,46 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         "vp install --frozen-lockfile",
         "pnpm exec vp check",
         "pnpm exec vp test",
-        "pnpm exec vp build",
+        "pnpm run build",
         "python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low",
     )
     if any(marker not in records_web for marker in required_records_web):
         raise WorkflowPolicyError("Records CI must retain the frozen install and web gates")
     if "npm ci" in records_web or "package-lock.json" in records_web:
         raise WorkflowPolicyError("Records CI must not fall back to the retired npm lock")
+
+    browser_step_name = "Test Records browser flows and visual contracts"
+    comparisons_step_name = "Preserve Records browser comparison images"
+    if f"name: {comparisons_step_name}" not in records_web:
+        raise WorkflowPolicyError("Records CI must retain bounded browser comparison images")
+    browser = _workflow_step_block(records_web, browser_step_name)
+    comparisons = _workflow_step_block(records_web, comparisons_step_name)
+    required_browser = ("id: browser-tests", "run: pnpm exec playwright test")
+    required_comparisons = (
+        "if: ${{ failure() && steps.browser-tests.outcome == 'failure' }}",
+        "uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
+        "name: records-web-comparison-${{ github.run_id }}-${{ github.run_attempt }}",
+        "if-no-files-found: ignore",
+        "retention-days: 7",
+    )
+    if (
+        any(marker not in browser for marker in required_browser)
+        or "continue-on-error:" in browser
+        or any(marker not in comparisons for marker in required_comparisons)
+        or records_web.index(comparisons_step_name) < records_web.index(browser_step_name)
+    ):
+        raise WorkflowPolicyError("Records CI must retain bounded browser comparison images")
+    paths = re.search(r"(?m)^          path: \|\n((?:            [^\n]+\n)+)", comparisons)
+    expected_paths = (
+        "apps/records-web/test-results/**/*-actual.png",
+        "apps/records-web/test-results/**/*-expected.png",
+        "apps/records-web/test-results/**/*-diff.png",
+    )
+    if (
+        paths is None
+        or tuple(line.strip() for line in paths.group(1).splitlines()) != expected_paths
+    ):
+        raise WorkflowPolicyError("Records CI browser evidence must include only comparison PNGs")
 
     records_gate = _workflow_job_block(records_text, "records-gate")
     required_records_gate = (
@@ -1587,7 +1620,7 @@ def _validate_records_workflows(directory: Path) -> None:
         "            cd apps/records-web\n"
         "            pnpm exec vp check\n"
         "            pnpm exec vp test\n"
-        "            pnpm exec vp build\n"
+        "            pnpm run build\n"
         "            python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low\n"
         "          )"
     )

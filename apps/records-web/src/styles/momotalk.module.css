@@ -73,10 +73,18 @@
   font-weight: 700;
 }
 .weekChevron {
+  display: grid;
   flex: none;
+  width: 20px;
+  height: 20px;
+  place-items: center;
   color: var(--records-cyan-ink);
-  font-size: 1.3rem;
-  line-height: 1;
+  line-height: 0;
+}
+
+.weekChevron svg,
+.weekCheck svg {
+  display: block;
 }
 .weekTrigger[aria-expanded="true"] .weekChevron {
   transform: rotate(180deg);
@@ -164,8 +172,13 @@
   font-weight: 700;
 }
 .weekCheck {
+  display: grid;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  place-items: center;
   color: var(--records-cyan-ink);
-  font-weight: 800;
+  line-height: 0;
 }
 .weekLoadMore {
   width: 100%;

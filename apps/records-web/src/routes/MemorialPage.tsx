@@ -23,34 +23,6 @@ import commonStyles from "../styles/common.module.css";
 import styles from "../styles/memorial.module.css";
 
 const GENERATION_STEPS = ["画像確認", "生成受付", "思い出生成", "完成"] as const;
-const MEMORIAL_STATUS: Readonly<
-  Record<MemorialStateResponse["state"], { readonly label: string; readonly next: string }>
-> = {
-  locked: {
-    label: "開放を待っています",
-    next: "誰か1人との親愛度が1000点に達すると、新しい思い出をつくれます。",
-  },
-  unlocked: {
-    label: "思い出をつくれます",
-    next: "下から画像を選び、確認してから生成を始めましょう。",
-  },
-  queued: {
-    label: "生成を受け付けました",
-    next: "生成が始まるまでお待ちください。受付が進まない場合は、同じ依頼を再送できます。",
-  },
-  generating: {
-    label: "思い出を生成しています",
-    next: "完成するとここに画像とメッセージが届きます。画面を離れても処理は続きます。",
-  },
-  ready: {
-    label: "思い出が完成しました",
-    next: "画像とメッセージを楽しめます。次の思い出は、下の親愛度リセットから始められます。",
-  },
-  failed: {
-    label: "生成を再開できます",
-    next: "前回の画像で再開するか、別の画像を選んでもう一度お試しください。",
-  },
-};
 
 const PARTICIPANT_PRESENTATION: Readonly<
   Record<
@@ -140,6 +112,41 @@ function SelectedImagePreview({ file }: { readonly file: File }): React.JSX.Elem
       alt="選択した画像のプレビュー"
       onError={() => setFailedFile(file)}
     />
+  );
+}
+
+function UnlockOrbit(): React.JSX.Element {
+  const orbitRef = useRef<HTMLDivElement>(null);
+  const [animating, setAnimating] = useState(false);
+  useEffect(() => {
+    const orbit = orbitRef.current;
+    if (orbit === null) return;
+    let inViewport = false;
+    const update = () => setAnimating(inViewport && document.visibilityState !== "hidden");
+    const observer =
+      typeof IntersectionObserver === "function"
+        ? new IntersectionObserver(([entry]) => {
+            inViewport = entry?.isIntersecting ?? false;
+            update();
+          })
+        : null;
+    if (observer) observer.observe(orbit);
+    else {
+      inViewport = true;
+      update();
+    }
+    document.addEventListener("visibilitychange", update);
+    return () => {
+      observer?.disconnect();
+      document.removeEventListener("visibilitychange", update);
+    };
+  }, []);
+  return (
+    <div ref={orbitRef} className={styles.heartOrbit} data-animating={animating} aria-hidden="true">
+      <span>♥</span>
+      <span>♥</span>
+      <span>♥</span>
+    </div>
   );
 }
 
@@ -288,7 +295,25 @@ function ConfirmationDialog({
         }}
       >
         <span className={styles.dialogIcon} aria-hidden="true">
-          {generate ? "✦" : "↺"}
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            {generate ? (
+              <path
+                fill="currentColor"
+                d="M12 1.5c1.8 6.2 4.3 8.7 10.5 10.5-6.2 1.8-8.7 4.3-10.5 10.5C10.2 16.3 7.7 13.8 1.5 12 7.7 10.2 10.2 7.7 12 1.5Z"
+              />
+            ) : (
+              <g
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M4.6 7.2A8 8 0 1 1 4 14" />
+                <path d="M4 3v5h5" />
+              </g>
+            )}
+          </svg>
         </span>
         <p className={commonStyles.eyebrow} lang="en">
           {generate ? "ONE-TIME GENERATION" : "RESET AFFECTION"}
@@ -685,13 +710,6 @@ export default function MemorialPage({
         </div>
       )}
 
-      <section className={styles.stateSummary} aria-label="現在のメモリアル">
-        <span className={styles.stateBadge} data-state={state.state}>
-          {MEMORIAL_STATUS[state.state].label}
-        </span>
-        <p>{MEMORIAL_STATUS[state.state].next}</p>
-      </section>
-
       {state.state === "locked" ? (
         <section className={styles.lockedPanel} aria-labelledby="memorial-locked-title">
           <div className={styles.lockedSeal} aria-hidden="true">
@@ -702,7 +720,10 @@ export default function MemorialPage({
             <p className={commonStyles.eyebrow} lang="en">
               ACCESS LOCKED
             </p>
-            <h2 id="memorial-locked-title">
+            <h2
+              id="memorial-locked-title"
+              className={`${commonStyles.japaneseText} ${commonStyles.japaneseHeading}`}
+            >
               {previouslyOpened
                 ? "次のメモリアルロビーはまだ開放されていません"
                 : "まだメモリアルロビーにはログインできません"}
@@ -731,7 +752,10 @@ export default function MemorialPage({
               <p className={commonStyles.eyebrow} lang="en">
                 AFFECTION MAX
               </p>
-              <h2 id="memorial-unlock-title">
+              <h2
+                id="memorial-unlock-title"
+                className={`${commonStyles.japaneseText} ${commonStyles.japaneseHeading}`}
+              >
                 {participant?.name}とのメモリアルロビーが解放されました
               </h2>
               {state.unlockedAt && (
@@ -743,6 +767,7 @@ export default function MemorialPage({
                 </p>
               )}
             </div>
+            <UnlockOrbit />
             <span className={styles.cycleBadge}>{state.cycle}回目</span>
           </section>
 
