@@ -12,6 +12,7 @@
     52px 52px,
     auto;
   mask-image: linear-gradient(to bottom, black, transparent 95%);
+  pointer-events: none;
 }
 
 .brandMark,
@@ -158,8 +159,33 @@
 }
 
 .pageHeader {
+  position: relative;
+  isolation: isolate;
   max-width: 820px;
   margin-bottom: var(--records-space-6);
+}
+
+.pageHeader::before {
+  position: absolute;
+  z-index: -1;
+  inset: -18px -16px;
+  border-radius: 28px;
+  background: var(--records-header-glow);
+  content: "";
+  pointer-events: none;
+}
+
+.pageHeader::after {
+  position: absolute;
+  z-index: -1;
+  top: -8px;
+  right: 8px;
+  width: 112px;
+  height: 112px;
+  border: 1px solid var(--records-line);
+  border-radius: 50%;
+  content: "";
+  pointer-events: none;
 }
 
 .pageHeader h1 {

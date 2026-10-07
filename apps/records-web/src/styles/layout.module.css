@@ -1,5 +1,6 @@
 .appShell {
   position: relative;
+  isolation: isolate;
   display: grid;
   min-height: 100dvh;
   grid-template-columns: 248px minmax(0, 1fr);
@@ -167,7 +168,8 @@
 }
 
 .navActive {
-  background: var(--records-cyan-100);
+  background: var(--records-panel-background);
+  box-shadow: inset 3px 0 0 var(--records-cyan-500);
   color: var(--records-ink-900);
 }
 
@@ -187,7 +189,7 @@
   font-size: 0.56rem;
   font-weight: 400;
   letter-spacing: 0.16em;
-  opacity: 0.74;
+  opacity: 1;
   white-space: nowrap;
 }
 

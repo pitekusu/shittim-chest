@@ -4,6 +4,7 @@
 }
 
 .filters {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(220px, 1.6fr) repeat(2, minmax(150px, 1fr)) minmax(120px, 0.8fr);
   gap: 18px;
@@ -11,8 +12,8 @@
   padding: 24px;
   border: 1px solid var(--records-panel-border-soft);
   border-radius: 18px;
-  background: var(--records-surface);
-  box-shadow: var(--records-shadow-soft);
+  background: var(--records-panel-background);
+  box-shadow: var(--records-panel-shadow);
 }
 
 .archiveResults {
@@ -155,7 +156,7 @@
 }
 
 .filters .sortOption:has(input:focus-visible) {
-  outline: 2px solid var(--records-cyan-500);
+  outline: 2px solid var(--records-focus);
   outline-offset: -2px;
 }
 
@@ -183,8 +184,8 @@
 }
 
 .avatarSelectButton:focus-visible {
-  border-color: var(--records-cyan-500);
-  outline: 2px solid rgb(88 217 232 / 20%);
+  border-color: var(--records-focus);
+  outline: 2px solid var(--records-focus);
   outline-offset: 2px;
 }
 
@@ -328,10 +329,29 @@
 }
 
 .debateCard {
+  --archive-card-light: var(--records-cyan-500);
   border: 1px solid var(--records-panel-border);
   border-radius: var(--records-radius-card);
-  background: var(--records-surface);
-  box-shadow: var(--records-shadow-soft);
+  background:
+    radial-gradient(
+      ellipse at 100% 100%,
+      color-mix(in srgb, var(--archive-card-light) 14%, transparent),
+      transparent 62%
+    ),
+    var(--records-panel-background);
+  box-shadow: var(--records-panel-shadow);
+}
+
+.debateCard:has(.cardDecoration[data-card-decoration-accent="azure"]) {
+  --archive-card-light: #77c6ee;
+}
+
+.debateCard:has(.cardDecoration[data-card-decoration-accent="pink"]) {
+  --archive-card-light: #f0a4c7;
+}
+
+.debateCard:has(.cardDecoration[data-card-decoration-accent="lavender"]) {
+  --archive-card-light: #aaa5e7;
 }
 
 .debateCard {
@@ -349,6 +369,20 @@
 .debateCard > :not(.cardDecoration) {
   position: relative;
   z-index: 1;
+}
+
+.filters::before,
+.debateCard::before {
+  position: absolute;
+  top: 0;
+  right: 24px;
+  left: 24px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--records-panel-accent-line);
+  content: "";
+  opacity: 0.65;
+  pointer-events: none;
 }
 
 .cardDecoration {
@@ -436,7 +470,7 @@
 }
 
 .debateCardLink:focus-visible .debateCard {
-  outline: 3px solid var(--records-cyan-500);
+  outline: 3px solid var(--records-focus);
   outline-offset: 3px;
 }
 
@@ -607,4 +641,10 @@
 }
 .avatarSelectButton:focus-visible:active {
   transform: none;
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .debateCard {
+    background: var(--records-panel-background);
+  }
 }

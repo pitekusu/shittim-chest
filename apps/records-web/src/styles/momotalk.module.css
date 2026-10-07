@@ -211,6 +211,7 @@
   background: var(--records-ranking-panel-background);
 }
 .workspace {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(240px, 0.75fr) minmax(0, 2fr);
   min-height: 520px;
@@ -218,14 +219,27 @@
   overflow: hidden;
   border: 1px solid var(--records-line);
   border-radius: var(--records-radius-card);
-  background: var(--records-surface-strong);
-  box-shadow: 0 2px 8px rgb(0 0 0 / 3%);
+  background: var(--records-panel-background);
+  box-shadow: var(--records-panel-shadow);
+}
+.workspace::before {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: 24px;
+  left: 24px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--records-panel-accent-line);
+  opacity: 0.58;
+  pointer-events: none;
+  content: "";
 }
 .contacts {
   min-width: 0;
   overflow-y: auto;
   border-right: 1px solid var(--records-line);
-  background: var(--records-control-background-soft);
+  background: var(--records-reading-surface);
 }
 .contactsHeading {
   display: flex;
@@ -236,6 +250,8 @@
   font-variant-numeric: tabular-nums;
   color: var(--records-ink-600);
   border-bottom: 1px solid var(--records-line);
+  background: var(--records-panel-background);
+  box-shadow: inset 0 1px 0 var(--records-line);
 }
 .contacts ul,
 .messages {
@@ -256,8 +272,10 @@
   text-align: left;
 }
 .contacts li > button[aria-current="true"] {
-  background: var(--records-cyan-100);
-  box-shadow: inset 3px 0 var(--records-cyan-500);
+  background: var(--records-panel-background);
+  box-shadow:
+    inset 3px 0 var(--records-cyan-ink),
+    inset 0 1px 0 var(--records-line);
 }
 .contacts strong {
   display: block;
@@ -316,6 +334,8 @@
   gap: 13px;
   padding: 18px 28px;
   border-bottom: 1px solid var(--records-line);
+  background: var(--records-panel-background);
+  box-shadow: inset 0 1px 0 var(--records-line);
 }
 .roomHeader h2 {
   margin: 0;
@@ -339,6 +359,7 @@
   border-bottom: 1px solid var(--records-line);
   color: var(--records-ink-600);
   font-size: 0.72rem;
+  background: var(--records-reading-surface);
 }
 .playbackBar button {
   flex-shrink: 0;
@@ -351,7 +372,7 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 22px 24px 36px;
-  background: var(--records-control-background-soft);
+  background: transparent;
 }
 .dateChip {
   width: fit-content;
@@ -361,6 +382,8 @@
   border-radius: 99px;
   font-size: 0.74rem;
   color: var(--records-ink-600);
+  background: var(--records-reading-surface);
+  box-shadow: inset 0 1px 0 var(--records-line);
 }
 .messages {
   display: grid;
@@ -393,7 +416,10 @@
   border: 1px solid var(--records-line);
   border-left: 3px solid var(--chat-accent);
   border-radius: 3px 14px 14px;
-  background: var(--records-surface-strong);
+  background: var(--records-reading-surface);
+  box-shadow:
+    inset 0 1px 0 var(--records-line),
+    0 3px 12px color-mix(in srgb, var(--chat-accent) 9%, transparent);
   line-height: 1.85;
   font-size: 0.9375rem;
   user-select: text;
@@ -440,7 +466,8 @@
   padding: 6px;
   border: 1px solid var(--records-panel-border);
   border-radius: 15px;
-  background: var(--records-ranking-panel-background);
+  background: var(--records-panel-background);
+  box-shadow: inset 0 1px 0 var(--records-line);
   text-align: center;
 }
 .thumbnail img {
@@ -477,7 +504,8 @@
   border-radius: 30px 30px 30px 5px;
   font-size: 2.8rem;
   color: var(--records-cyan-500);
-
+  background: var(--records-panel-background);
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--records-cyan-500) 9%, transparent);
   margin-bottom: 20px;
 }
 .welcome h2 {
@@ -498,12 +526,23 @@
   border: 1px solid var(--records-panel-border);
   border-radius: 20px;
   padding: 16px;
-  background: var(--records-ranking-panel-background);
+  background: var(--records-panel-background);
+  box-shadow: var(--records-panel-shadow);
   color: var(--records-ink-900);
 }
+
 .imageDialog::backdrop {
   background: rgb(2 15 29 / 82%);
   backdrop-filter: blur(8px);
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .bubble,
+  .welcomeMark {
+    box-shadow: none;
+  }
+  .imageDialog::backdrop {
+    backdrop-filter: none;
+  }
 }
 .imageDialog > img {
   display: block;

@@ -1005,7 +1005,7 @@ test("authenticated member can browse the completed archive", async ({ page }) =
   const cardBox = await card.boundingBox();
   expect(cardBox).not.toBeNull();
   await card.click({ position: { x: cardBox!.width - 12, y: cardBox!.height - 12 } });
-  const questionHeading = page.getByRole("heading", { name: detail.question });
+  const questionHeading = page.getByRole("heading", { name: detail.question, level: 1 });
   const opinionsHeading = page.getByRole("heading", { name: "3人の意見" });
   await expect(questionHeading).toBeVisible();
   await expect(opinionsHeading).toBeVisible();
@@ -1038,10 +1038,10 @@ test("individual OGP follows detail navigation and returns to common preview", a
   await mockAuthenticatedApi(page, { ...detail, ogImageUrl });
   await page.goto("/");
   await page.getByRole("link", { name: `「${detail.question}」の記録を読む` }).click();
-  await expect(page.getByRole("heading", { name: detail.question })).toBeVisible();
+  await expect(page.getByRole("heading", { name: detail.question, level: 1 })).toBeVisible();
   await expect(page.locator('meta[property="og:image"]')).toHaveAttribute("content", ogImageUrl);
   await page.reload();
-  await expect(page.getByRole("heading", { name: detail.question })).toBeVisible();
+  await expect(page.getByRole("heading", { name: detail.question, level: 1 })).toBeVisible();
   await expect(page.locator('meta[property="og:image"]')).toHaveAttribute("content", ogImageUrl);
   await page.screenshot({ path: testInfo.outputPath("ogp-detail.png"), fullPage: true });
   await page.getByRole("link", { name: "← 記録一覧へ", exact: true }).click();
@@ -1094,7 +1094,7 @@ test("record card opens from its native keyboard link", async ({ page }) => {
   await page.keyboard.press("Enter");
 
   await expect(page).toHaveURL(`/records/${RECORD_ID}`);
-  await expect(page.getByRole("heading", { name: detail.question })).toBeVisible();
+  await expect(page.getByRole("heading", { name: detail.question, level: 1 })).toBeVisible();
 });
 
 test("internal navigation keeps route headings focused", async ({ page }, testInfo) => {
@@ -1109,7 +1109,7 @@ test("internal navigation keeps route headings focused", async ({ page }, testIn
   await expect(archiveHeading).toBeFocused();
 
   await page.getByRole("link", { name: `「${detail.question}」の記録を読む` }).click();
-  await expect(page.getByRole("heading", { name: detail.question })).toBeFocused();
+  await expect(page.getByRole("heading", { name: detail.question, level: 1 })).toBeFocused();
   await page.getByRole("link", { name: "← 記録一覧へ" }).click();
   await expect(
     page.getByRole("link", { name: `「${detail.question}」の記録を読む` }),
@@ -1187,7 +1187,7 @@ test("dark theme covers login, archive, detail, and rankings", async ({ page }, 
   });
 
   await page.getByRole("link", { name: `「${detail.question}」の記録を読む` }).click();
-  await expect(page.getByRole("heading", { name: detail.question })).toBeVisible();
+  await expect(page.getByRole("heading", { name: detail.question, level: 1 })).toBeVisible();
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await revealVoteGraphBeforeFullPageCapture(page);
   await expect(page).toHaveScreenshot("records-dark-detail.png", {
@@ -2905,7 +2905,7 @@ test("archive restores its in-memory filters, focus and reading position", async
   await target.scrollIntoViewIfNeeded();
   const top = await page.evaluate(() => window.scrollY);
   await target.click();
-  await expect(page.getByRole("heading", { name: detail.question })).toBeVisible();
+  await expect(page.getByRole("heading", { name: detail.question, level: 1 })).toBeVisible();
   await page.getByRole("link", { name: "← 記録一覧へ", exact: true }).click();
   await expect(search).toHaveValue("休日");
   await expect(target).toBeFocused();
@@ -3121,6 +3121,7 @@ test("accessibility preferences keep account surfaces opaque and keyboard action
   });
   await mockAuthenticatedApi(page);
   await page.goto("/insights");
+  await expect(page.getByRole("heading", { name: "いろいろな記録", level: 1 })).toBeVisible();
   const toggle = page.getByLabel("アカウントメニュー", { exact: true });
   await toggle.focus();
   await page.keyboard.press("Enter");

@@ -11,10 +11,20 @@
 }
 
 .opinionCard {
+  --opinion-accent: var(--records-cyan-500);
+  position: relative;
   border: 1px solid var(--records-panel-border);
   border-radius: var(--records-radius-card);
-  background: var(--records-surface);
-  box-shadow: var(--records-shadow-soft);
+  background: var(--records-reading-surface);
+  box-shadow: var(--records-panel-shadow);
+}
+
+.opinionCard:nth-child(2) {
+  --opinion-accent: #f0a4c7;
+}
+
+.opinionCard:nth-child(3) {
+  --opinion-accent: #aaa5e7;
 }
 
 .recordMeta {
@@ -66,12 +76,29 @@
 }
 
 .resultSummary {
+  position: relative;
   display: grid;
   align-content: start;
   padding: 24px;
   border: 1px solid var(--records-line-strong);
   border-radius: 18px;
   background: var(--records-decision-background);
+  box-shadow: var(--records-panel-shadow);
+}
+
+.opinionCard::before,
+.resultSummary::before,
+.decisionSection::before {
+  position: absolute;
+  top: 0;
+  right: 24px;
+  left: 24px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--records-panel-accent-line);
+  content: "";
+  opacity: 0.65;
+  pointer-events: none;
 }
 
 .resultSummary > div {
@@ -190,8 +217,22 @@
 }
 
 .detailSection > h2 {
+  position: relative;
   margin: 0 0 28px;
   font-size: clamp(1.3rem, 2vw, 1.8rem);
+}
+
+.detailSection > h2::after {
+  position: absolute;
+  bottom: -10px;
+  left: 0;
+  width: min(96px, 30%);
+  height: 2px;
+  border-radius: 999px;
+  background: var(--records-panel-accent-line);
+  content: "";
+  opacity: 0.65;
+  pointer-events: none;
 }
 
 .opinionGrid {
@@ -203,7 +244,6 @@
 .opinionCard {
   display: block;
   overflow: hidden;
-  box-shadow: none;
 }
 
 .opinionCard > header,
@@ -216,6 +256,17 @@
   align-items: center;
   gap: 13px;
   border-bottom: 1px solid var(--records-line);
+  background:
+    radial-gradient(
+      ellipse at 100% 0,
+      color-mix(in srgb, var(--opinion-accent) 16%, transparent),
+      transparent 72%
+    ),
+    var(--records-panel-background);
+}
+
+.opinionCard > div {
+  background: var(--records-reading-surface);
 }
 
 .opinionCard h3,
@@ -240,7 +291,7 @@
 }
 
 .finalProposal {
-  background: var(--records-final-proposal);
+  box-shadow: inset 0 1px var(--records-line);
 }
 
 .voteList {
@@ -256,7 +307,8 @@
   padding: 18px;
   border: 1px solid var(--records-line);
   border-radius: 18px;
-  background: var(--records-control-background-soft);
+  background: var(--records-reading-surface);
+  box-shadow: inset 0 1px var(--records-line-strong);
 }
 
 .voteCard h3 {
@@ -322,8 +374,8 @@
   padding: 28px;
   border: 1px solid var(--records-panel-border);
   border-radius: var(--records-radius-card);
-  background:
-    linear-gradient(135deg, rgb(88 217 232 / 7%), transparent 48%), var(--records-surface);
+  background: var(--records-panel-background);
+  box-shadow: var(--records-panel-shadow);
 }
 
 .affectionSection::after {
@@ -412,11 +464,13 @@
 .affectionCard {
   --affection-start: #58d9e8;
   --affection-end: #2498b5;
+  --affection-ink: color-mix(in srgb, var(--affection-end) 60%, var(--records-ink-900));
   min-width: 0;
   padding: 18px;
   border: 1px solid var(--records-panel-border-soft);
   border-radius: 18px;
-  background: var(--records-control-background-soft);
+  background: var(--records-reading-surface);
+  box-shadow: inset 0 1px var(--records-line-strong);
 }
 
 .participant-b {
@@ -446,7 +500,7 @@
 }
 
 .affectionCard header span strong {
-  color: var(--affection-end);
+  color: var(--affection-ink);
   font-variant-numeric: tabular-nums;
 }
 
@@ -495,12 +549,12 @@
 
 .affectionPositive {
   background: rgb(88 217 232 / 15%);
-  color: var(--affection-end);
+  color: var(--affection-ink);
 }
 
 .affectionNegative {
   background: rgb(240 164 199 / 16%);
-  color: #cf5f93;
+  color: var(--records-pink-ink);
 }
 
 .affectionNeutral {
@@ -545,6 +599,7 @@
   border: 1px solid var(--records-panel-border);
   border-radius: var(--records-radius-card);
   background: var(--records-decision-background);
+  box-shadow: var(--records-panel-shadow);
 }
 
 .winnerPanel {
@@ -589,7 +644,7 @@
   padding: 22px;
   border: 1px solid var(--records-line);
   border-radius: 18px;
-  background: var(--records-control-background-soft);
+  background: var(--records-reading-surface);
 }
 
 .decisionColumns h3 {
@@ -694,5 +749,11 @@
   }
   .detailNavigation a:active {
     transform: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .opinionCard > header {
+    background: var(--records-panel-background);
   }
 }
