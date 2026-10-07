@@ -12,7 +12,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.unit.dp
@@ -57,29 +56,30 @@ fun ShittimBackdrop(modifier: Modifier = Modifier, content: @Composable BoxScope
 fun ShittimEmblem(modifier: Modifier = Modifier, ringRotation: Float = 0f) {
   val colors = MaterialTheme.colorScheme
   Canvas(modifier) {
-    val radius = size.minDimension / 2f
-    drawCircle(colors.primary.copy(alpha = 0.08f), radius)
-    drawCircle(colors.outlineVariant, radius * 0.86f, style = Stroke(1.dp.toPx()))
+    val side = size.minDimension
+    val radius = side / 2f
+    // Match the Web brand mark: halo, two circular borders, and a rotated square.
+    drawCircle(colors.primary.copy(alpha = 0.12f), radius)
+    drawCircle(colors.outlineVariant, radius * 0.94f, style = Stroke(1.5.dp.toPx()))
+    drawCircle(colors.primary.copy(alpha = 0.58f), radius * 0.74f,
+      style = Stroke(1.dp.toPx()))
     rotate(ringRotation) {
       drawArc(
         colors.primary,
         -80f,
         220f,
         false,
-        topLeft = Offset(radius * 0.08f, radius * 0.08f),
-        size = Size(radius * 1.84f, radius * 1.84f),
+        topLeft = Offset(radius * 0.06f, radius * 0.06f),
+        size = Size(radius * 1.88f, radius * 1.88f),
         style = Stroke(2.dp.toPx()),
       )
     }
-    val diamond =
-      Path().apply {
-        moveTo(center.x, center.y - radius * 0.45f)
-        lineTo(center.x + radius * 0.35f, center.y)
-        lineTo(center.x, center.y + radius * 0.45f)
-        lineTo(center.x - radius * 0.35f, center.y)
-        close()
-      }
-    drawPath(diamond, colors.primary, style = Stroke(2.dp.toPx()))
-    drawCircle(colors.primary, radius * 0.07f)
+    val squareSide = side * 0.38f
+    val squareTopLeft = Offset(center.x - squareSide / 2f, center.y - squareSide / 2f)
+    rotate(45f) {
+      drawRect(colors.primary.copy(alpha = 0.12f), squareTopLeft, Size(squareSide, squareSide))
+      drawRect(colors.primary, squareTopLeft, Size(squareSide, squareSide),
+        style = Stroke(side * 0.085f))
+    }
   }
 }

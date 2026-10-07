@@ -23,6 +23,11 @@ Issues = "https://github.com/pitekusu/shittim-chest/issues"
 Repository = "https://github.com/pitekusu/shittim-chest"
 
 [dependency-groups]
+android-release = [
+    "cryptography>=50.0.2,<51",
+    "google-api-python-client>=2.201.0,<3",
+    "google-auth[requests]>=2.59.1,<3",
+]
 dev = [
     "boto3-stubs[dynamodb,ecs,lambda,ssm]>=1.43.62,<2",
     "cyclonedx-python-lib[json-validation]>=11.11.0,<12",

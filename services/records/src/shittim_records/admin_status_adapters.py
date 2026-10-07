@@ -72,6 +72,8 @@ ADMIN_STATUS_FUNCTION_NAMES: Mapping[str, str] = MappingProxyType(
         "records_momotalk_collector": "shittim-chest-production-records-momotalk-collector",
         "records_momotalk_worker": "shittim-chest-production-records-momotalk-worker",
         "records_momotalk_announcement": "shittim-chest-production-records-momotalk-announcement",
+        "records_mobile_push_worker": "shittim-chest-production-records-mobile-push-worker",
+        "records_mobile_debate_api": "shittim-chest-production-records-mobile-debate-api",
         "records_read": "shittim-chest-production-records-read",
         "records_ogp": "shittim-chest-production-records-ogp",
         "records_admin_config": "shittim-chest-production-records-admin-config",
@@ -130,7 +132,9 @@ _EVENT_RULE_DESCRIPTIONS = {
     "inspector_translation": "Translate unseen active Inspector descriptions hourly at minute 7",
     "abnormal_stop": "Notify only abnormal singleton runtime task stops",
     "momotalk_weekly": "Collect weekly MomoTalk inputs at 18:00 JST Sunday",
+    "momotalk_continuation": "Resume checkpointed MomoTalk after bounded SQS invocation chains",
     "momotalk_announcement": "Announce readable MomoTalk at 20:00 JST Sunday",
+    "mobile_push_sweep": "Recover pending Android record notifications every minute",
 }
 _STABLE_STACK_STATUSES = frozenset({"CREATE_COMPLETE", "IMPORT_COMPLETE", "UPDATE_COMPLETE"})
 _CRITICAL_STACK_STATUS_PARTS = ("FAILED", "ROLLBACK_IN_PROGRESS", "DELETE_")
@@ -197,6 +201,8 @@ class AwsAdminStatusConfiguration:
     anomaly_subscription_name: str
     momotalk_generation_queue_url: str = ""
     momotalk_generation_dlq_url: str = ""
+    mobile_push_queue_url: str = ""
+    mobile_push_dlq_url: str = ""
     alarm_prefix: str = _PRODUCTION_ALARM_PREFIX
 
     def __post_init__(self) -> None:
@@ -1706,20 +1712,23 @@ class AwsAdminStatusSource:
             self._config.memorial_generation_dlq_url,
             now=now,
         )
-        momotalk_metrics = []
-        momotalk_warning = False
+        additional_metrics = []
+        additional_warning = False
         for prefix, url, dlq in (
             ("momotalk", self._config.momotalk_generation_queue_url, False),
             ("momotalk_dlq", self._config.momotalk_generation_dlq_url, True),
+            ("mobile_push", self._config.mobile_push_queue_url, False),
+            ("mobile_push_dlq", self._config.mobile_push_dlq_url, True),
         ):
             if not url:
                 continue
             queue = self._queue_status(url, now=now)
             oldest = float(queue[5]) if queue[5] is not None else 0.0
-            momotalk_warning |= (
+            stale_seconds = 300 if prefix == "mobile_push" else 7200
+            additional_warning |= (
                 not queue[3]
                 or queue[4] != (14 * 86400 if dlq else 86400)
-                or (any(queue[:3]) if dlq else oldest > 7200)
+                or (any(queue[:3]) if dlq else oldest > stale_seconds)
             )
             for name, value in zip(
                 (
@@ -1733,7 +1742,7 @@ class AwsAdminStatusSource:
                 queue,
                 strict=True,
             ):
-                momotalk_metrics.append(_metric(f"{prefix}_{name}", value))
+                additional_metrics.append(_metric(f"{prefix}_{name}", value))
         projector_warning = (
             projector[0] > 0
             or projector[1] > 0
@@ -1756,7 +1765,7 @@ class AwsAdminStatusSource:
         )
         state: AdminHealthState = (
             "warning"
-            if projector_warning or memorial_warning or memorial_dlq_warning or momotalk_warning
+            if projector_warning or memorial_warning or memorial_dlq_warning or additional_warning
             else "healthy"
         )
         return AdminStatusSection(
@@ -1764,7 +1773,7 @@ class AwsAdminStatusSource:
             state=state,
             summary="非同期処理の滞留、DLQ、または保護設定を確認してください。"
             if state == "warning"
-            else "投影DLQとメモリアル・モモトーク生成キューの状態は正常です。",
+            else "投影DLQ、生成キュー、Android通知キューの状態は正常です。",
             metrics=(
                 _metric("visible_messages", projector[0]),
                 _metric("inflight_messages", projector[1]),
@@ -1784,7 +1793,7 @@ class AwsAdminStatusSource:
                 _metric("memorial_dlq_oldest_message_age_seconds", memorial_dlq[5]),
                 _metric("memorial_dlq_encrypted", memorial_dlq[3]),
                 _metric("memorial_dlq_retention_seconds", memorial_dlq[4]),
-                *momotalk_metrics,
+                *additional_metrics,
             ),
         )
 

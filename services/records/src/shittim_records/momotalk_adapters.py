@@ -13,6 +13,7 @@ from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_records.contracts import MomotalkWeek
 from shittim_records.memorial_adapters import MemorialConfigurationRepository
 from shittim_records.momotalk import (
+    MAX_CHAIN_STEPS,
     PARTICIPANTS,
     MomotalkFailure,
     Question,
@@ -399,13 +400,14 @@ class MomotalkQueue:
         self.client = client
         self.url = url
 
-    def send(self, week_id: date, room_id: str) -> None:
+    def send(self, week_id: date, room_id: str, *, steps_remaining: int = MAX_CHAIN_STEPS) -> None:
         self.client.send_message(
             QueueUrl=self.url,
             MessageBody=json.dumps(
                 {
                     "weekId": str(week_id),
                     "roomId": room_id,
+                    "stepsRemaining": steps_remaining,
                 }
             ),
         )

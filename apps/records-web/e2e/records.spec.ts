@@ -242,7 +242,9 @@ const adminFunctionKeys = [
   "records_momotalk_worker",
   "records_momotalk_announcement",
   "records_admin_status",
+  "records_mobile_push_worker",
   "records_admin_config",
+  "records_mobile_debate_api",
 ] as const;
 
 const nextTaskReleaseTag = "release-b7c975496109a6cf1b343fa1481a8577e999ec41-33177843936-1";
@@ -498,6 +500,17 @@ const adminStatus = {
         { name: "memorial_dlq_oldest_message_age_seconds", value: "0.000" },
         { name: "memorial_dlq_encrypted", value: true },
         { name: "memorial_dlq_retention_seconds", value: 1_209_600 },
+        ...["mobile_push", "mobile_push_dlq"].flatMap((prefix) => [
+          { name: `${prefix}_visible_messages`, value: 0 },
+          { name: `${prefix}_inflight_messages`, value: 0 },
+          { name: `${prefix}_delayed_messages`, value: 0 },
+          { name: `${prefix}_oldest_message_age_seconds`, value: "0.000" },
+          { name: `${prefix}_encrypted`, value: true },
+          {
+            name: `${prefix}_retention_seconds`,
+            value: prefix.endsWith("dlq") ? 1_209_600 : 86_400,
+          },
+        ]),
         ...["momotalk", "momotalk_dlq"].flatMap((prefix) => [
           { name: `${prefix}_visible_messages`, value: prefix.endsWith("dlq") ? 2 : 0 },
           { name: `${prefix}_inflight_messages`, value: 0 },
@@ -555,12 +568,24 @@ const adminStatus = {
             { name: `${key}_day_failures`, value: 0 },
           ],
         ),
-        ...["momotalk_weekly", "momotalk_announcement"].flatMap((key, index) => [
-          { name: `${key}_state`, value: "ENABLED" },
-          { name: `${key}_expression`, value: `cron(0 ${index === 0 ? 9 : 11} ? * SUN *)` },
-          { name: `${key}_day_invocations`, value: 0 },
-          { name: `${key}_day_failures`, value: 0 },
-        ]),
+        ...["momotalk_weekly", "momotalk_continuation", "momotalk_announcement"].flatMap(
+          (key, index) => [
+            { name: `${key}_state`, value: "ENABLED" },
+            {
+              name: `${key}_expression`,
+              value:
+                key === "momotalk_continuation"
+                  ? "rate(5 minutes)"
+                  : `cron(0 ${index === 0 ? 9 : 11} ? * SUN *)`,
+            },
+            { name: `${key}_day_invocations`, value: 0 },
+            { name: `${key}_day_failures`, value: 0 },
+          ],
+        ),
+        { name: "mobile_push_sweep_state", value: "ENABLED" },
+        { name: "mobile_push_sweep_expression", value: "rate(1 minute)" },
+        { name: "mobile_push_sweep_day_invocations", value: 1440 },
+        { name: "mobile_push_sweep_day_failures", value: 0 },
       ],
     },
     {
@@ -2529,8 +2554,16 @@ test("service status page presents localized visual status", async ({ page }, te
   await expect(translationCache).toContainText("未翻訳件数0");
   await expect(translationCache).toContainText("最終翻訳日時2026年8月29日 11:07");
   await expect(page.getByRole("region", { name: "Lambda関数状態" })).toBeVisible();
+  await expect(
+    page
+      .locator("#admin-service-lambda")
+      .getByRole("rowheader", { name: /^Android議論受付・進捗API/ }),
+  ).toContainText("稼働中 · 更新 正常");
   await expect(page.getByRole("region", { name: "API Gateway状態" })).toBeVisible();
   await expect(page.getByRole("region", { name: "定期実行とイベント配信" })).toBeVisible();
+  await expect(page.getByRole("row", { name: /^モモトーク生成の再開/ })).toContainText(
+    "rate(5 minutes)",
+  );
   await expect(page.locator("#admin-service-affection")).toHaveCount(0);
   const dynamodbCard = page.locator("#admin-service-dynamodb");
   await expect(dynamodbCard.getByRole("region", { name: "親愛度データ" })).toBeVisible();
@@ -2541,7 +2574,10 @@ test("service status page presents localized visual status", async ({ page }, te
   await expect(page.getByRole("rowheader", { name: /^ランキング・親愛度集計/ })).toHaveCount(2);
   await expect(page.getByText("非同期処理・失敗イベント", { exact: true })).toBeVisible();
   const queues = page.getByRole("region", { name: "SQSキュー一覧" });
-  await expect(queues.getByRole("row")).toHaveCount(6);
+  await expect(queues.getByRole("row")).toHaveCount(8);
+  await expect(
+    queues.getByRole("rowheader", { name: "Android通知 通知キュー", exact: true }),
+  ).toBeVisible();
   await expect(
     queues.getByRole("rowheader", { name: "モモトーク 生成キュー", exact: true }),
   ).toBeVisible();
@@ -2587,7 +2623,7 @@ test("service status page presents localized visual status", async ({ page }, te
     maxDiffPixels: 20,
     timeout: 15_000,
   });
-  for (const service of ["s3", "dynamodb", "lambda", "apigateway", "sqs"]) {
+  for (const service of ["s3", "dynamodb", "lambda", "apigateway", "sqs", "eventbridge"]) {
     await page.locator(`#admin-service-${service}`).screenshot({
       path: testInfo.outputPath(`${service}-desktop.png`),
       animations: "disabled",

@@ -24,6 +24,8 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.isSelected
+import androidx.compose.ui.test.hasStateDescription
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -38,17 +40,19 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
+@ScreenTest
 class RecordPreviewPanelTest {
   @get:Rule val compose = createAndroidComposeRule<MainActivity>()
 
   @Test
   fun oneRecordAndRetryAreVisibleWithoutShowingOldBodyInErrorState() {
     val state = mutableStateOf<RecordPreviewState>(RecordPreviewState.Ready(
-      RecordPreview("架空の議題", "架空の結論", "アロナ")))
+      RecordPreview("架空の議題", "架空の結論", "アロナ"), saved = true))
     val events = mutableListOf<BootstrapScreen.Event>()
     compose.activityRule.scenario.onActivity { activity ->
-      activity.setContent { ShittimTheme(false) { RecordPreviewPanel(state.value, events::add) } }
+      activity.setContent { ShittimTheme(false) { RecordDetailScreen(state.value, "sample", events::add) } }
     }
+    compose.onNodeWithTag("detail-section-Result").performClick()
     // Markdown parsing is asynchronous; wait for both bodies before checking the ready screen.
     compose.waitUntil(10_000) {
       compose.onNodeWithText("架空の議題").isDisplayed() &&
@@ -57,6 +61,7 @@ class RecordPreviewPanelTest {
     compose.onNodeWithText("架空の議題").assertIsDisplayed()
     compose.onNodeWithText("アロナ").assertIsDisplayed()
     compose.onNodeWithText("架空の結論").assertIsDisplayed()
+    compose.onNodeWithText(label(R.string.record_saved)).assertDoesNotExist()
     compose.runOnIdle { state.value = RecordPreviewState.Error(RecordReadFailure.UNAVAILABLE) }
     compose.onNodeWithText("架空の議題").assertDoesNotExist()
     compose.onNodeWithText(label(R.string.record_retry)).performClick()
@@ -64,7 +69,7 @@ class RecordPreviewPanelTest {
   }
 
   @Test
-  fun markdownBodyShowsAllThreeOpinionsAndLongText() {
+  fun markdownBodyKeepsEveryPersonAndAnswerStageReachable() {
     val longProposal = "長文の提案です。".repeat(80)
     val opinions = listOf("アロナ", "プラナ", "安倍晋三AI").mapIndexed { index, name ->
       RecordOpinion(name, "要約${index + 1}", "**強調** と [資料](https://example.com)\n\n- 箇条書き",
@@ -72,22 +77,35 @@ class RecordPreviewPanelTest {
     }
     compose.activityRule.scenario.onActivity { activity ->
       activity.setContent { ShittimTheme(false) {
-        RecordPreviewPanel(RecordPreviewState.Ready(
-          RecordPreview("架空の議題", "架空の結論", "アロナ", opinions)), {})
+        RecordDetailScreen(RecordPreviewState.Ready(
+          RecordPreview("架空の議題", "架空の結論", "アロナ", opinions)), "sample", {})
       } }
     }
-    compose.onNodeWithText("3人の意見").assertExists()
-    for (name in listOf("アロナ", "プラナ", "安倍晋三AI")) {
-      compose.onAllNodesWithText(name).onFirst().assertExists()
-    }
-    val markdownTexts = listOf("強調", "資料", "箇条書き", longProposal)
-    compose.waitUntil(10_000) {
-      markdownTexts.all { text ->
-        compose.onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty()
+    compose.onNodeWithTag("detail-section-Opinions").performClick()
+    compose.waitForIdle()
+    for (index in opinions.indices) {
+      if (index != 0) compose.onNodeWithTag("opinion-person-$index").performClick()
+      compose.onNode(isSelected() and hasStateDescription(label(R.string.record_initial_opinion))).performClick()
+      compose.waitUntil(10_000) {
+        compose.onAllNodesWithText(longProposal, substring = true).fetchSemanticsNodes().isNotEmpty()
       }
-    }
-    for (text in markdownTexts) {
-      compose.onAllNodesWithText(text, substring = true).onFirst().assertExists()
+      compose.onNodeWithText("案${index + 1}").assertExists()
+      compose.onNode(isSelected() and hasStateDescription(label(R.string.record_final_proposal))).performClick()
+      val markdownTexts = listOf("強調", "資料", "箇条書き")
+      compose.waitUntil(10_000) {
+        markdownTexts.all { text ->
+          compose.onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+      }
+      compose.onNodeWithText("要約${index + 1}").assertExists()
+      val slot = listOf("participant-a", "participant-b", "participant-c")[index]
+      compose.onNodeWithTag("opinion-avatar-$slot").assertExists()
+      val avatar = compose.onNodeWithTag("opinion-avatar-$slot").fetchSemanticsNode()
+      val expectedSize = with(compose.density) { 96.dp.toPx() }
+      assertEquals(expectedSize, avatar.size.width.toFloat(), 1f)
+      assertEquals(expectedSize, avatar.size.height.toFloat(), 1f)
+      compose.onNode(isSelected() and hasStateDescription(label(R.string.record_initial_opinion))).performClick()
+      compose.onNodeWithTag("opinion-avatar-$slot").assertExists()
     }
   }
 
@@ -155,7 +173,7 @@ class RecordPreviewPanelTest {
   }
 
   @Test
-  fun affectionSeparatesQuestionScoreFromRealChangeAndOptionalDecisionText() {
+  fun affectionShowsAppliedChangeAndOptionalDecisionTextWithoutQuestionScore() {
     val affection = RecordAffection(RecordAffectionStatus.APPLIED, listOf(
       RecordAffectionChange("アロナ", 995, 50, 5, 1000),
       RecordAffectionChange("プラナ", 500, -20, -20, 480),
@@ -163,16 +181,23 @@ class RecordPreviewPanelTest {
     ))
     compose.activityRule.scenario.onActivity { activity ->
       activity.setContent { ShittimTheme(false) {
-        RecordPreviewPanel(RecordPreviewState.Ready(RecordPreview(
+        RecordDetailScreen(RecordPreviewState.Ready(RecordPreview(
           "架空の議題", "架空の結論", "アロナ", victoryMessage = "ありがとう！",
           actions = listOf("まず確認する"), caveats = listOf("無理をしない"), affection = affection,
-        )), {})
+        )), "sample", {}, motionAllowed = false)
       } }
     }
-    for (text in listOf("ありがとう！", "• まず確認する", "• 無理をしない",
-      "質問評価：+50点", "親愛度：995 → 1000", "実増減：+5点", "質問評価：-20点")) {
+    compose.onNodeWithTag("detail-section-Result").performClick()
+    compose.onNodeWithTag("detail-actions-expand").performClick()
+    compose.onNodeWithTag("detail-caveats-expand").performClick()
+    for (text in listOf("ありがとう！", "• まず確認する", "• 無理をしない")) {
       compose.onNodeWithText(text).assertExists()
     }
+    compose.onNodeWithTag("detail-section-Affection").performClick()
+    compose.waitForIdle()
+    compose.onNodeWithText("親愛度：995 → 1000").assertExists()
+    compose.onNodeWithText("実増減：+5点").assertExists()
+    compose.onNodeWithText("質問評価：+50点").assertDoesNotExist()
   }
 
   @Test
@@ -188,7 +213,7 @@ class RecordPreviewPanelTest {
       ))
     }
     compose.onNodeWithText("質問の評価を完了できなかったため、親愛度は変更されませんでした。").assertExists()
-    compose.onNodeWithText("質問評価：未評価").assertExists()
+    compose.onNodeWithText("質問評価：未評価").assertDoesNotExist()
     compose.onNodeWithText("実増減：0点").assertExists()
     compose.onNodeWithText("この記録には親愛度データがありません。").assertDoesNotExist()
   }
@@ -203,13 +228,19 @@ class RecordPreviewPanelTest {
     compose.activityRule.scenario.onActivity { activity ->
       activity.setContent { ShittimTheme(true) {
         Surface(color = MaterialTheme.colorScheme.background) {
-          Column { RecordAffectionPanel(affection) }
+          RecordDetailScreen(RecordPreviewState.Ready(RecordPreview(
+            "架空の議題", "結論", "アロナ", affection = affection)),
+            "sample", {}, motionAllowed = false)
         }
       } }
     }
+    compose.onNodeWithTag("detail-section-Affection").performClick()
+    compose.waitForIdle()
     compose.onNodeWithText("親愛度：995 → 1000").assertExists()
     compose.onNodeWithText("実増減：+5点").assertExists()
+    compose.onNodeWithTag("affection-person-1").performClick()
     compose.onNodeWithText("親愛度：500 → 480").assertExists()
+    compose.onNodeWithTag("affection-person-2").performClick()
     compose.onNodeWithText("実増減：0点").assertExists()
     capture("affection-cards")
   }
@@ -240,7 +271,7 @@ class RecordPreviewPanelTest {
     } }
     compose.onNodeWithTag("vote-route-0").assertExists()
     compose.onNodeWithText("親愛度：995 → 1000").assertExists()
-    compose.onNodeWithText("質問評価：+50点").assertExists()
+    compose.onNodeWithText("質問評価：+50点").assertDoesNotExist()
   }
 
   @Test

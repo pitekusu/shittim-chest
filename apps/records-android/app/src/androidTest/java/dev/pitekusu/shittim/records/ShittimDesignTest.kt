@@ -47,6 +47,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
+@ScreenTest
 class ShittimDesignTest {
   @get:Rule val compose = createAndroidComposeRule<MainActivity>()
 
@@ -90,7 +91,7 @@ class ShittimDesignTest {
   @Test fun sharedComponentsRemainOperableInLightDarkAndLargeTextScreens() {
     val events = mutableListOf<BootstrapScreen.Event>()
     val user = MobileSessionUser("デザイン確認用", MobileAvatar("placeholder", "確認用", "cyan"))
-    val session = SessionState.SignedIn(user, "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"), "/")
+    val session = SessionState.SignedIn(user, "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"))
     val entries = listOf("アロナ", "プラナ", "安倍晋三AI").mapIndexed { index, name ->
       RecordListEntry(('a' + index).toString().repeat(43), "架空の相談：休日をどう過ごそう？",
         "デザイン確認用", RecordAvatar(null, listOf("cyan", "pink", "lavender")[index]),
@@ -119,10 +120,11 @@ class ShittimDesignTest {
     list.performScrollToNode(hasText("勝者：プラナ"))
     compose.onNodeWithText("勝者：プラナ").assertIsDisplayed()
     compose.runOnIdle { large.value = true }
-    list.performScrollToNode(hasTestTag("winner-Abe"))
-    compose.onNodeWithTag("winner-Abe").assertIsDisplayed().performClick()
+    compose.onNodeWithTag("records-filter-toggle").assertIsDisplayed().performClick()
+    compose.onNodeWithTag("winner-Abe").performScrollTo().assertIsDisplayed().performClick()
     compose.runOnIdle { assertEquals(BootstrapScreen.Event.SelectWinner(RecordWinner.Abe), events.last()) }
     capture("design-large-text")
+    compose.onNodeWithTag("records-filter-done").performScrollTo().performClick()
     compose.onNodeWithTag("records-menu-open").performClick()
     compose.onNodeWithText(compose.activity.getString(R.string.session_logout)).performScrollTo().performClick()
     compose.runOnIdle { assertEquals(BootstrapScreen.Event.Logout, events.last()) }
@@ -138,7 +140,9 @@ class ShittimDesignTest {
         record = RecordPreviewState.Ready(RecordPreview("架空の相談：休日をどう過ごそう？",
           "気分に合わせて、小さな楽しみを選びましょう。", "アロナ", opinions)), eventSink = events::add)
     }
-    list.performScrollToNode(hasText("プラナ"))
+    compose.onNodeWithTag("detail-section-Opinions").performClick()
+    compose.waitForIdle()
+    compose.onNodeWithTag("opinion-person-1").performClick()
     compose.onNodeWithText("プラナ").assertIsDisplayed()
     capture("design-detail-dark")
   }

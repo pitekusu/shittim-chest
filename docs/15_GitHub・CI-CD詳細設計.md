@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-09-23
+updated: 2026-10-04
 ---
 
 # GitHub・CI-CD詳細設計
@@ -146,11 +146,18 @@ Androidは同じ`ci.yml`の`android-gate`で検証し、独立した大規模mat
 |---|---|
 | ツールチェーン | JDKはAndroidの`.java-version`、GradleはWrapper、SDK／Build Toolsはアプリの固定値と一致 |
 | ビルド・静的確認 | debug APK、テストAPK、Android Lint |
-| 画面の接続 | API 36 x86_64のエミュレーター1台で既存のinstrumentation test |
-| 結果 | `android-gate`で分類成功と実行結果を確認。必要なジョブの失敗・取消・skipは不合格 |
+| 通常の端末試験 | API 36 x86_64のエミュレーター1台で認証・鍵・暗号化保存・DB・API・同期などの非画面instrumentation test |
+| 画面・操作の確認 | 既存試験を保持し、UI変更時と配布前に対象を選んで実行。手動CIの`android_screen_tests`で全試験を選択可能 |
+| 結果 | `android-gate`で分類成功と実行済みJUnit結果を確認。結果欠落・0件・失敗・取消・skipは不合格 |
 | 成果物 | Lint・テストのレポートのみ7日保持。APK配布・署名・Play認証は行わない |
 
 PR、mainへのpush、手動実行でチェックを作成する。手動実行はAndroidとCore全検証を明示的に実行する。
+Composeの画面・操作試験は実行時annotationの`@ScreenTest`で分離し、通常のPR／mainでは全件実行しない。
+AndroidJUnitRunnerの標準`notAnnotation`フィルターを使い、非画面試験は必須のまま維持する。
+手動CIの`android_screen_tests`は既定falseとし、trueの場合だけフィルターを外して画面を含む全試験を実行する。
+UI変更時と配布前には関連する画面試験を標準の`class`フィルターで選び、必要な明暗・狭幅・操作を確認する。
+選択方法はAndroid READMEを参照する。未実施と実行成功を区別し、タイムアウト・取消・skipを成功扱いしない。
+端末やインストールの異常でGradleが成功終了しても、実行済みJUnit結果がなければ不合格とする。試験件数の固定目標は設けない。
 `apps/records-android/`、共通CI、変更範囲判定とその試験の変更でAndroidを検証する。
 Androidのみや文書を伴う差分では、Coreの全pytest・wheel作成・CDKを省略する。
 `tests`・`package`・`cdk`の必須チェック名は実処理のジョブで維持し、対象外と実行成功を区別する。
@@ -163,7 +170,7 @@ Gradle Wrapper検証を有効にし、キャッシュへの書き込みはmain�
 Android system imageとAVD snapshotもmainだけで保存し、PRは復元だけを行う。
 キャッシュはUbuntu版・runnerのCPU・API・ABI・emulator版で分離し、AVDはsystem imageの版も含める。
 mainのcache missではアプリを入れる前のAVDを起動して保存する。試験中はsnapshotを保存せず、
-cache hitでも全instrumentation testを実行する。cache missや互換性不一致では通常起動して同じ試験を実行する。
+cache hitでも選択対象のinstrumentation testを実行する。cache missや互換性不一致では通常起動して同じ選択対象を実行する。
 
 Records WebのCIとReleaseは完全SHA固定の`voidzero-dev/setup-vp`でNode・Vite+・pnpmを設定し、
 Actionのpnpm依存キャッシュを使う。CIのキャッシュ保存はmainのみとし、依存は`vp install --frozen-lockfile`で固定する。
@@ -172,6 +179,18 @@ Dependabotの通常更新は設定順に09:00から15分間隔で開始し、既
 初回成功とC03のマージを確認し、`android-gate`をmainの必須チェックへ登録済み。
 KotlinのCodeQL解析はC04の別作業であり、このCIの成功を解析成功として扱わない。
 
+### Android内部テスト配布（C39）
+
+`android-release.yml`は固定main SHAの手動実行だけを受け付け、`android-internal` Environmentに配布認証を分離する。同一SHAの最新CI・Records CI・CodeQL成功を確認し、署名・manifest・hashを検証した同一AABだけを内部トラックへ提出する。Core／Records配信やPlay掲載情報は変更しない。
+
+GitHub OIDCからGoogle WIFとサービスアカウントへ委譲し、短寿命のADCを使う。AWS権限と長期Play API秘密鍵は渡さない。署名用upload keyとFirebase Android設定はEnvironment Secretとして別途保護する。外部設定未完了では`ANDROID_RELEASE_ENABLED=false`により起動を拒否する。
+
+完全SHA固定の`r0adkll/upload-google-play`が単一の検証済みAABを`internal`・`completed`へupload・commitする。WIF資格情報ファイルのpathを渡し、helperは公式Google SDKによる版番号読取・AAB検証・提出後照合と秘密の準備・回収に限定する。独自commitやedit受け渡しは行わない。
+
+通常のcommitは既存審査を取り消し、未送信変更を審査へ送信し得るため、起動前にPlay Consoleで他の審査と意図しない掲載情報変更がないことを確認する。失敗・応答不明では自動再送せず、Play側の状態と副作用を調べてから新しい手動実行を判断する。公開artifactは7日保持の`verification.json`と簡単な`receipt.json`だけとし、提出後照合と実機での更新可能性を区別する。
+
+外部設定、最小権限、配布・失敗時の手順は[Androidアプリ設計](29_Androidアプリ設計.md#c39内部テスト配布の自動化)を参照する。既存3言語のCodeQLとC04のAndroid解析待ちを混同しない。
+
 ### npm監査サービスの障害
 
 `npm audit`/`pnpm audit`は通常どおり必須である。
@@ -179,6 +198,26 @@ npm公式Statuspageで「Security Auditコンポーネントの劣化」と「�
 同時に確認できた実行だけ、Node系の外部監査を省略し、警告を残す。
 公式情報の取得失敗・不正な形式・インシデント不明は拒否し、監査で検出された脆弱性や通常の非0終了を省略理由にしない。
 ビルド、試験、CodeQL、Grype、依存レビュー等は継続する。省略した監査を成功として記録しない。
+
+### CDK依存の期限付きリスク受容
+
+2026-10-03、所有者の明示承認により、`brace-expansion`の次の3件だけを一時受容する。
+ID・パッケージ・重大度・理由・期限の正は`infra/npm-audit-exceptions.json`とする。
+既存の監査checkerを使用し、未知ID、パッケージ／重大度の不一致、期限切れ、未使用の例外は拒否する。
+期限は2026-10-10 00:00 UTC（日本時間09:00）であり、その時刻以降は再びCIを拒否する。自動延長しない。
+
+| 対象 | 重大度 | 残るリスク |
+|---|---|---|
+| [GHSA-q2hr-2g5m-vwhr](https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-q2hr-2g5m-vwhr) | moderate | globの処理時間増大によるCPU停止 |
+| [GHSA-qhr7-859c-m2p7](https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-qhr7-859c-m2p7) | high | 入れ子globによるstack枯渇 |
+| [GHSA-6j4f-fj2g-mc7p](https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-6j4f-fj2g-mc7p) | high | comma-group globによるstack枯渇 |
+
+承認時の検出箇所はCDK内包の開発・CI依存だけで、本番のPython討論runtime・Records Lambdaへは含めない。
+アプリやDiscord入力からこのglob処理へ到達する経路は確認されていないが、安全性の完全な証明とは扱わない。
+例外の照合はパッケージ単位であり、CDKのpathだけに限定する機能ではない。依存経路が変わった場合は受容根拠を再確認する。
+公式CDKの[上流修正](https://github.com/aws/aws-cdk/pull/38929)を含む配布物が公開されたら、内包依存の実体を確認して更新し、
+3件の例外を削除して通常の監査と関連検証を実施する。CIの成功は「脆弱性0件」や「修復済み」を意味しない。
+Webの`fast-uri`は修正版へ更新し、同じリスク受容へ混ぜない。他の監査・必須試験・CodeQLは維持する。
 
 ## 3. 依存と配信ツールの更新
 
@@ -362,6 +401,10 @@ Lambdaのbase64 SHA-256は既定値のないCloudFormationパラメーター、�
 モバイル認証は匿名の`GET /api/v1/auth/mobile/session`と`POST /api/v1/auth/mobile/logout`について、
 401・`private, no-store`・Bearer challengeを確認する。tokenを渡さないためセッションの作成・削除は行わない。
 App Linksの実機確認はAndroid配布工程で別に実施し、Release smokeで実Discordログインを開始しない。
+
+Androidの議論開始は専用Lambdaを配信しても初期無効とする。同一SHAのRecords→Core公開後にのみ有効化し、実投稿・有料生成を通常smokeへ追加しない。
+Records Applicationの既存開始フラグ・投稿先は`UsePreviousValue`で維持し、初回だけ無効／未設定を明示する。
+開始フラグ変更は公開Lambda versionの更新へ結び付ける。投稿先の変更は無効化→変更→再有効化の順で行い、非公開設定を説明・ログへ出さない。
 
 変更セットは次の条件で扱う。
 

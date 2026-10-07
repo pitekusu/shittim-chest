@@ -16,6 +16,7 @@ DRIFT_WORKFLOW = "drift.yml"
 RECORDS_CI_WORKFLOW = "records-ci.yml"
 RECORDS_RELEASE_WORKFLOW = "records-release.yml"
 RECORDS_BACKFILL_WORKFLOW = "records-backfill.yml"
+ANDROID_RELEASE_WORKFLOW = "android-release.yml"
 WORKFLOW_RUN_NOTIFICATION = "discord-workflow-run.yml"
 PINNED_BUILDX_VERSION = "v0.37.0"
 PERMISSIONS_KEY = re.compile(r"(?<![a-zA-Z0-9_-])(?:\"|')?permissions(?:\"|')?\s*:")
@@ -100,7 +101,9 @@ def validate_notification_workflows(directory: Path = WORKFLOW_DIRECTORY) -> int
     _validate_release(directory)
     _validate_ci_container_risk(directory)
     _validate_ci_path_isolation(directory)
+    _validate_android_test_selection(directory)
     _validate_records_workflows(directory)
+    _validate_android_release(directory)
     _validate_drift(directory)
     _validate_aws_capability_boundary(directory)
     _validate_workflow_run_allowlist(directory)
@@ -228,10 +231,170 @@ def _validate_aws_capability_boundary(directory: Path) -> None:
         if path.name in approved:
             continue
         text = path.read_text(encoding="utf-8")
-        if _contains_forbidden_non_guard_permissions(text) or AWS_OR_DEPLOY_CAPABILITY.search(text):
+        forbidden_permissions = (
+            path.name != ANDROID_RELEASE_WORKFLOW
+            and _contains_forbidden_non_guard_permissions(text)
+        )
+        if forbidden_permissions or AWS_OR_DEPLOY_CAPABILITY.search(text):
             raise WorkflowPolicyError(
                 f"workflow {path.name} contains AWS or deployment capability outside Deploy Guard"
             )
+
+
+def _validate_android_release(directory: Path) -> None:
+    """Allow narrowly scoped Play OIDC without exempting the workflow from AWS policy."""
+
+    path = directory / ANDROID_RELEASE_WORKFLOW
+    if not path.is_file():
+        return
+    text = path.read_text(encoding="utf-8")
+    if _top_level_triggers(text) != ("workflow_dispatch",):
+        raise WorkflowPolicyError("Android Release must use exactly workflow_dispatch")
+    if (
+        _permission_blocks(text)
+        != (
+            (),
+            (("actions", "read"), ("contents", "read"), ("id-token", "write")),
+        )
+        or re.search(r"(?m)^permissions: \{\}$", text) is None
+    ):
+        raise WorkflowPolicyError("Android Release permissions are not canonical")
+    _require_full_action_pins(text, "Android Release")
+    job_names = re.findall(r"(?m)^  ([a-zA-Z0-9_-]+):\s*$", text.split("jobs:\n", 1)[-1])
+    if job_names != ["release"]:
+        raise WorkflowPolicyError("Android Release must have one literal release job")
+    job = _workflow_job_block(text, "release")
+    if any(
+        marker not in job.splitlines()
+        for marker in (
+            "    if: github.repository == 'pitekusu/shittim-chest' "
+            "&& github.ref == 'refs/heads/main'",
+            "    environment: android-internal",
+        )
+    ):
+        raise WorkflowPolicyError("Android Release must retain its trusted main-only boundary")
+    required = (
+        "cancel-in-progress: false",
+        "ref: ${{ github.sha }}",
+        "persist-credentials: false",
+    )
+    if any(marker not in text for marker in required) or "continue-on-error:" in text:
+        raise WorkflowPolicyError("Android Release must retain its trusted main-only boundary")
+    if _contains_untrusted_run_expression(text) or _contains_run_expression(text, "${{ inputs."):
+        raise WorkflowPolicyError("Android Release must pass untrusted inputs through env")
+    protected_steps = (
+        "Require successful same-SHA main CI and CodeQL",
+        "Authenticate only to inspect current Play versions",
+        "Verify signature certificate package version and immutable bundle digest",
+        "Renew federated credentials immediately before publishing",
+        "Upload the verified AAB to internal with the maintained Action",
+        "Read back the submitted internal track and bundle digest",
+        "Retain only non-secret verification and submission receipt",
+        "Remove private signing Firebase and Gradle log files",
+    )
+    if any(text.count(f"      - name: {name}\n") != 1 for name in protected_steps):
+        raise WorkflowPolicyError("Android Release must retain its mandatory trust-boundary steps")
+    positions = [text.index(f"      - name: {name}\n") for name in protected_steps]
+    if positions != sorted(positions):
+        raise WorkflowPolicyError(
+            "Android Release must verify its bundle before renewed auth and publish"
+        )
+    for name, action in ((protected_steps[2], "verify"), (protected_steps[5], "readback")):
+        block = _workflow_step_block(text, name)
+        command = (
+            f'run: uv run --frozen python -m tools.android_release {action} --state "${{STATE}}"'
+        )
+        if block.count(command) != 1 or "        if:" in block:
+            raise WorkflowPolicyError(
+                "Android Release must verify and read back only after prior steps succeed"
+            )
+    gate = _workflow_step_block(text, "Require successful same-SHA main CI and CodeQL")
+    if (
+        gate.count("uv run --frozen python tools/check_release_ci.py") != 1
+        or "GH_TOKEN: ${{ github.token }}" not in gate
+        or 'test "${RELEASE_ENABLED}" = true' not in gate
+        or 'test "${GITHUB_RUN_ATTEMPT}" = 1' not in gate
+        or "        if:" in gate
+    ):
+        raise WorkflowPolicyError(
+            "Android Release must unconditionally require same-SHA main gates"
+        )
+    auth_action = "google-github-actions/auth@"
+    if text.count(f"uses: {auth_action}") != 2 or re.search(
+        r"credentials_json:|token_format:|\.outputs\.(?:auth|access|id)_token\b|"
+        r"ANDROID_PUBLISHER_CREDENTIALS",
+        text,
+    ):
+        raise WorkflowPolicyError("Android Release must use only two federated ADC authentications")
+    for name in (
+        "Authenticate only to inspect current Play versions",
+        "Renew federated credentials immediately before publishing",
+    ):
+        block = _workflow_step_block(text, name)
+        if (
+            any(
+                marker not in block
+                for marker in (
+                    f"uses: {auth_action}",
+                    "workload_identity_provider: ${{ vars.PLAY_WORKLOAD_IDENTITY_PROVIDER }}",
+                    "service_account: ${{ vars.PLAY_SERVICE_ACCOUNT }}",
+                    "create_credentials_file: true",
+                    "export_environment_variables: true",
+                )
+            )
+            or "        if:" in block
+        ):
+            raise WorkflowPolicyError(
+                "Android Release must use the fixed WIF and Play service account"
+            )
+    renewed_auth = _workflow_step_block(text, protected_steps[3])
+    if renewed_auth.count("        id: play-auth\n") != 1:
+        raise WorkflowPolicyError("Android Release must name its renewed WIF credentials")
+    upload = _workflow_step_block(text, protected_steps[4])
+    upload_action = "uses: r0adkll/upload-google-play@"
+    expected_inputs = {
+        "serviceAccountJson": "${{ steps.play-auth.outputs.credentials_file_path }}",
+        "packageName": "dev.pitekusu.shittim.records",
+        "releaseFiles": "${{ runner.temp }}/android-release/verified/app-release.aab",
+        "tracks": "internal",
+        "status": "completed",
+        "releaseName": '"0.0.${{ steps.version.outputs.version_code }}"',
+    }
+    inputs = re.findall(r"(?m)^          (\S[^:\n]*):[ \t]*(.*)$", upload)
+    if (
+        text.count(upload_action) != 1
+        or upload.count(upload_action) != 1
+        or "        if:" in upload
+        or len(inputs) != len(expected_inputs)
+        or dict(inputs) != expected_inputs
+    ):
+        raise WorkflowPolicyError(
+            "Android Release must upload its single verified internal AAB once with only WIF inputs"
+        )
+    receipts = _workflow_step_block(
+        text, "Retain only non-secret verification and submission receipt"
+    )
+    paths = re.search(r"(?m)^          path: \|\n((?: {12}.+\n)+)", receipts)
+    expected_paths = tuple(
+        f"${{{{ runner.temp }}}}/android-release/{name}.json"
+        for name in ("verification", "receipt")
+    )
+    if (
+        text.count("uses: actions/upload-artifact@") != 1
+        or paths is None
+        or tuple(line.strip() for line in paths.group(1).splitlines()) != expected_paths
+        or "          retention-days: 7" not in receipts.splitlines()
+    ):
+        raise WorkflowPolicyError("Android Release may retain only its non-secret JSON receipts")
+    if "        if: always()" not in receipts.splitlines():
+        raise WorkflowPolicyError("Android Release must retain receipts even after cancellation")
+    cleanup = _workflow_step_block(text, protected_steps[7])
+    if (
+        'run: uv run --frozen python -m tools.android_release cleanup --state "${STATE}"'
+        not in cleanup
+        or "        if: always()" not in cleanup.splitlines()
+    ):
+        raise WorkflowPolicyError("Android Release must always clean up private release inputs")
 
 
 def _validate_release_main_checks(text: str) -> None:
@@ -1167,6 +1330,65 @@ def _validate_ci_container_risk(directory: Path) -> None:
         )
 
 
+def _validate_android_test_selection(directory: Path) -> None:
+    """Only screen execution is optional; builds and device-bound checks remain required."""
+
+    text = (directory / "ci.yml").read_text(encoding="utf-8")
+    android = _workflow_job_block(text, "android-gate")
+    try:
+        build = _workflow_step_block(android, "Build debug APKs and run Android Lint")
+        selection = _workflow_step_block(android, "Select Android instrumentation suite")
+        verify = _workflow_step_block(
+            android, "Run the selected instrumentation tests on one emulator"
+        )
+        results = _workflow_step_block(android, "Require executed Android test results")
+    except ValueError as error:
+        raise WorkflowPolicyError(
+            "Android CI must retain its build and device test steps"
+        ) from error
+    if any(
+        task not in build.split()
+        for task in (":app:assembleDebug", ":app:assembleDebugAndroidTest", ":app:lintDebug")
+    ):
+        raise WorkflowPolicyError("Android CI must retain APK builds and Lint")
+    required_verify = (
+        "timeout 12m",
+        "-Pandroid.testInstrumentationRunnerArguments.timeout_msec=120000",
+        "${{ steps.android-tests.outputs.runner_args }}",
+        ":app:connectedDebugAndroidTest",
+    )
+    if any(marker not in verify for marker in required_verify):
+        raise WorkflowPolicyError("Android CI must run bounded selected instrumentation tests")
+    if (
+        "id: verify-android-results" not in results
+        or "python3 tools/check_ci_scope.py --junit-reports "
+        "apps/records-android/app/build/outputs/androidTest-results/connected/debug"
+        not in " ".join(results.split())
+    ):
+        raise WorkflowPolicyError("Android CI must require executed JUnit test results")
+    input_block = re.search(r"(?m)^      android_screen_tests:\n((?:        .+\n)+)", text)
+    required_selection = (
+        "id: android-tests",
+        "RUN_SCREEN_TESTS: ${{ github.event_name == 'workflow_dispatch' "
+        "&& inputs.android_screen_tests }}",
+        'if [ "${RUN_SCREEN_TESTS}" = true ]; then',
+        'echo "runner_args=" >> "${GITHUB_OUTPUT}"',
+        "runner_args=-Pandroid.testInstrumentationRunnerArguments.notAnnotation="
+        "dev.pitekusu.shittim.records.ScreenTest",
+    )
+    if (
+        input_block is None
+        or "        type: boolean\n" not in input_block[1]
+        or "        default: false\n" not in input_block[1]
+        or any(marker not in selection for marker in required_selection)
+    ):
+        raise WorkflowPolicyError("Android screen tests must be an explicit manual opt-in")
+    if "continue-on-error:" in android or any(
+        "|| true" in step for step in (build, selection, verify, results)
+    ):
+        raise WorkflowPolicyError("Android CI must not mask build or instrumentation failures")
+
+
 def _validate_ci_path_isolation(directory: Path) -> None:
     ci_text = (directory / "ci.yml").read_text(encoding="utf-8")
     records_path = directory / RECORDS_CI_WORKFLOW
@@ -1198,7 +1420,10 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         "tests": ("core_tests", ("verify-tests",)),
         "package": ("core_package", ("build-package", "verify-package")),
         "cdk": ("infra", ("audit-infra", "verify-infra")),
-        "android-gate": ("android", ("build-android", "verify-android", "reports-android")),
+        "android-gate": (
+            "android",
+            ("build-android", "verify-android", "verify-android-results", "reports-android"),
+        ),
         "container-arm64": (
             "runtime_container",
             ("verify-container", "verify-sbom", "verify-record", "retain-sbom"),
@@ -1431,6 +1656,22 @@ def _validate_records_workflows(directory: Path) -> None:
     if any(release.count(call) != 1 for call in change_set_calls):
         raise WorkflowPolicyError("Records Release must propagate each create_plan safety failure")
     plan_step = _workflow_step_block(release, "Create and validate the three Records Change Sets")
+    mobile_settings = (
+        'any(.Stacks[0].Parameters[]; .ParameterKey == "MobileDebateEnabled")',
+        'any(.Stacks[0].Parameters[]; .ParameterKey == "MobileDebateChannelId")',
+        "ParameterKey=MobileDebateEnabled,UsePreviousValue=true",
+        "ParameterKey=MobileDebateChannelId,UsePreviousValue=true",
+        "ParameterKey=MobileDebateEnabled,ParameterValue=false",
+        '"ParameterKey=MobileDebateChannelId,ParameterValue=")',
+        '"$@" "${mobile_debate_parameters[@]}" --query Id --output text',
+        '--expected-parameter "MobileDebateEnabled=${mobile_debate_enabled}"',
+    )
+    if any(marker not in plan_step for marker in mobile_settings):
+        raise WorkflowPolicyError(
+            "Records Release must preserve fail-closed mobile debate settings"
+        )
+    if 'select(.ParameterKey == "MobileDebateChannelId")' in plan_step:
+        raise WorkflowPolicyError("Records Release must not read the NoEcho mobile channel value")
     if (
         "          set -e\n          create_plan stateful" not in plan_step
         or "|| true" in plan_step
@@ -1760,7 +2001,7 @@ def _validate_grype_database_action(directory: Path) -> None:
 
 
 def _require_full_action_pins(text: str, label: str) -> None:
-    for action in re.findall(r"(?m)^\s*uses:\s*([^\s#]+)", text):
+    for action in re.findall(r"(?m)^\s*(?:-\s*)?uses:\s*([^\s#]+)", text):
         # This one local action is bound to the workflow's immutable checkout SHA.
         if action == "./.github/actions/prepare-grype-db":
             continue

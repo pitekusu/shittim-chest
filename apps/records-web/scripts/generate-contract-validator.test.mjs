@@ -34,6 +34,17 @@ const revision = {
 };
 const week = { weekId: "2026-10-04", periodStart: date, periodEnd: date, publishAt: date };
 const room = { roomId: RECORD_ID, requester: detail.requester, questionCount: 1, state: "ready" };
+const queuedRequest = {
+  requestId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  question: "test",
+  status: "queued",
+  phase: null,
+  createdAt: date,
+  updatedAt: date,
+  recordId: null,
+  errorCode: null,
+};
+const publishedRequest = { ...queuedRequest, status: "published", recordId: RECORD_ID };
 /** @type {[string, string, object][]} */
 const samples = [
   ["ErrorResponse", "error", { error: { code: "TEST", message: "test", requestId: "test" } }],
@@ -164,6 +175,13 @@ const samples = [
       images: [],
     },
   ],
+  ["DebateRequestResponse", "debate-request", queuedRequest],
+  ["DebateRequestResponse", "debate-request", publishedRequest],
+  [
+    "DebateRequestsResponse",
+    "debate-requests",
+    { items: [queuedRequest, publishedRequest], nextCursor: null },
+  ],
 ];
 
 const previous = new Ajv2020({ allErrors: true, strict: true });
@@ -205,3 +223,22 @@ test.each(samples)(
     }
   },
 );
+
+test("retains the request status and published-record consistency constraint", async () => {
+  const beforeRequest = previous.compile({ $ref: "records-api#/$defs/DebateRequestResponse" });
+  const beforeRequests = previous.compile({ $ref: "records-api#/$defs/DebateRequestsResponse" });
+  const { default: afterRequest } =
+    await import("../src/generated/debate-request-response-validator.mjs");
+  const { default: afterRequests } =
+    await import("../src/generated/debate-requests-response-validator.mjs");
+  for (const inconsistent of [
+    { ...queuedRequest, recordId: RECORD_ID },
+    { ...publishedRequest, recordId: null },
+  ]) {
+    expect(beforeRequest(inconsistent)).toBe(false);
+    expect(afterRequest(inconsistent)).toBe(false);
+    const list = { items: [inconsistent], nextCursor: null };
+    expect(beforeRequests(list)).toBe(false);
+    expect(afterRequests(list)).toBe(false);
+  }
+});

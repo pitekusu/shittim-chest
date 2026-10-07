@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 import uuid
@@ -45,6 +46,15 @@ from shittim_records.memorial import MemorialFailure
 from shittim_records.memorial_adapters import DynamoMemorialRepository
 from shittim_records.mobile_auth import MobileSessionRecord
 from shittim_records.mobile_auth_adapters import DynamoMobileAuthStore
+from shittim_records.mobile_notification_adapters import DynamoMobileNotificationStore
+from shittim_records.mobile_notifications import (
+    DELIVERY_PREFIX,
+    DEVICE_PK,
+    OUTBOX_PK,
+    NotificationDevice,
+    device_token_hash,
+    timestamp,
+)
 from shittim_records.momotalk_adapters import DynamoMomotalkStore, MomotalkInputSource
 from shittim_records.momotalk_announcements import RECEIPTS_PK, DynamoMomotalkAnnouncements
 from shittim_records.projector import project_affection_profile
@@ -53,10 +63,96 @@ from shittim_records.rankings import RankingService
 from shittim_records.read_adapters import DynamoRecordsReader
 
 
-def test_mobile_grant_roundtrip_races_and_atomic_consumption(dynamodb_client, table_names):
+@pytest.mark.parametrize("condition", ["live", "revoked", "expired", "changed"])
+def test_mobile_admission_and_session_fence_are_atomic(
+    dynamodb_client: DynamoDBClient,
+    table_names: tuple[str, str, str],
+    memorial_source_table: str,
+    condition: str,
+) -> None:
+    from shittim_chest.adapters.dynamodb.control_records import DynamoDbControlRecordInitializer
+    from shittim_chest.application.scale_to_zero import IngressRequest
+    from tests.test_mobile_debate import CHANNEL, GUILD, KEY, REQUEST_ID, USER, Sessions
+    from tests.test_mobile_debate import NOW as MOBILE_NOW
+
+    from shittim_records.mobile_auth_adapters import _session_item
+    from shittim_records.mobile_debate_adapters import DynamoMobileDebateRepository
+
+    session = Sessions().session
+    assert session is not None
+    # Production already has its deployment-owned counter/lock manifest.
+    DynamoDbControlRecordInitializer(
+        client=dynamodb_client, table_name=memorial_source_table
+    ).initialize()
+    session_table, archive_table, _ = table_names
+    session_hash = "a" * 64
+    stored = (
+        session
+        if condition != "changed"
+        else session.model_copy(update={"display_name": "Changed"})
+    )
+    dynamodb_client.put_item(
+        TableName=session_table, Item=marshal_item(_session_item(session_hash, stored))
+    )
+    if condition == "revoked":
+        DynamoMobileAuthStore(dynamodb_client, session_table).delete_session(
+            session_hash=session_hash
+        )
+    now = MOBILE_NOW if condition != "expired" else datetime.fromtimestamp(session.expires_at, UTC)
+    request = IngressRequest.mobile_debate(
+        request_id=REQUEST_ID,
+        owner_key=session.requester_key,
+        application_id="fixture-application",
+        question="Fictional atomic admission",
+        requester_id=USER,
+        requester_username="fixture",
+        requester_display_name="Fixture",
+        guild_id=GUILD,
+        channel_id=CHANNEL,
+        created_at=MOBILE_NOW,
+    )
+    repo = DynamoMobileDebateRepository(
+        client=dynamodb_client,
+        source_table=memorial_source_table,
+        session_table=session_table,
+        archive_table=archive_table,
+        identity_key=KEY,
+    )
+    operation = repo.enqueue(request, session_hash=session_hash, session=session, now=now)
+    if condition == "live":
+        assert asyncio.run(operation).created
+        assert (
+            asyncio.run(repo.get(owner_key=session.requester_key, request_id=REQUEST_ID))
+            is not None
+        )
+        assert (
+            len(
+                asyncio.run(
+                    repo.page(owner_key=session.requester_key, limit=20, after=None)
+                ).requests
+            )
+            == 1
+        )
+    else:
+        with pytest.raises(AuthFailure, match="session_required"):
+            asyncio.run(operation)
+        assert asyncio.run(repo.get(owner_key=session.requester_key, request_id=REQUEST_ID)) is None
+        assert not asyncio.run(
+            repo.page(owner_key=session.requester_key, limit=20, after=None)
+        ).requests
+
+
+@pytest.mark.parametrize("with_identity", [False, True])
+def test_mobile_grant_roundtrip_races_and_atomic_consumption(
+    dynamodb_client, table_names, with_identity
+):
     table = table_names[0]
     store = DynamoMobileAuthStore(dynamodb_client, table)
     started, authorizing, authorized = mobile_states()
+    identity = (
+        {"discord_user_id": "1" * 18, "discord_username": "verified-user"} if with_identity else {}
+    )
+    authorized = authorized.model_copy(update=identity)
     store.create(started, now_epoch=1000)
     with pytest.raises(AuthFailure, match=r"^mobile_grant_invalid$"):
         store.create(started, now_epoch=1000)
@@ -91,7 +187,7 @@ def test_mobile_grant_roundtrip_races_and_atomic_consumption(dynamodb_client, ta
     # Exercise real C09 issuance: a collision cannot consume the code or update the profile.
     collision = {"PK": "MOBILE_SESSION#" + "a" * 64, "SK": "META", "sentinel": "unchanged"}
     dynamodb_client.put_item(TableName=table, Item=marshal_item(collision))
-    session = mobile_session()
+    session = mobile_session().model_copy(update=identity)
     with pytest.raises(AuthFailure, match=r"^mobile_session_unavailable$"):
         store.issue_session(authorized, session_hash="a" * 64, session=session, now_epoch=1041)
     assert store.get(started.transaction_hash, now_epoch=1041) == authorized
@@ -154,6 +250,8 @@ def test_mobile_grant_roundtrip_races_and_atomic_consumption(dynamodb_client, ta
     )
     assert profile["display_name"] == session.display_name
     assert profile["updated_at"] == session.guild_verified_at.isoformat()
+    assert "discord_user_id" not in profile
+    assert "discord_username" not in profile
 
     # C10 reads C09's exact format and revokes only the presented mobile session.
     digest = str(stored["PK"]).removeprefix("MOBILE_SESSION#")
@@ -170,6 +268,108 @@ def test_mobile_grant_roundtrip_races_and_atomic_consumption(dynamodb_client, ta
             ConsistentRead=True,
         )
         assert unmarshal_item(result["Item"]) == untouched
+
+
+def test_mobile_push_native_resource_registration_leases_receipts_and_cleanup(
+    dynamodb_client, table_names
+):
+    from shittim_records.mobile_auth_adapters import _session_item
+
+    sessions_table, archive_table, statistics_table = table_names
+    resource = boto3.resource(
+        "dynamodb",
+        region_name="ap-northeast-1",
+        endpoint_url=dynamodb_client.meta.endpoint_url,
+        aws_access_key_id="local",
+        aws_secret_access_key="local",  # noqa: S106 - local dummy.
+    )
+    store = DynamoMobileNotificationStore(
+        resource, statistics=statistics_table, sessions=sessions_table, archive=archive_table
+    )
+    session = mobile_session().model_copy(
+        update={
+            "created_at": int(NOW.timestamp()) - 60,
+            "expires_at": int(NOW.timestamp()) - 60 + 90 * 24 * 60 * 60,
+        }
+    )
+    digest = "a" * 64
+    dynamodb_client.put_item(
+        TableName=sessions_table, Item=marshal_item(_session_item(digest, session))
+    )
+    device = NotificationDevice(
+        token="invented-fid",  # noqa: S106 - local fixture only.
+        token_hash=device_token_hash("invented-fid"),
+        binding_id="b" * 43,
+        session_hash=digest,
+        session_created_at=session.created_at,
+        registered_at=timestamp(NOW - timedelta(seconds=1)),
+        expires_at=session.expires_at,
+    )
+    store.register(device, now_epoch=int(NOW.timestamp()))
+    assert store.current_device(device.token_hash) == device
+    store.register(
+        device.model_copy(update={"registered_at": timestamp(NOW)}), now_epoch=int(NOW.timestamp())
+    )
+    registered = store.current_device(device.token_hash)
+    assert registered is not None and registered.registered_at == device.registered_at
+    assert list(store.devices()) == [device]
+    assert not list(store.devices(after=device.token_hash))
+
+    projection = project_completed_debate(
+        completed_snapshot(),
+        identity_hmac_key=b"test-identity-key-is-long-enough-for-hmac",
+        presentation=presentation(),
+        projected_at=NOW,
+    )
+    assert ArchiveRepository(
+        dynamodb_client, archive_table, notification_table_name=statistics_table
+    ).put_projection(projection, mobile_notification_created_at=NOW)
+    record_id = projection.record_id
+    assert store.record_requester_name(record_id) == completed_snapshot().requester_display_name
+    assert list(store.pending_events(now_epoch=int(NOW.timestamp()))) == [record_id]
+    assert store.claim_event(record_id, now_epoch=int(NOW.timestamp()))
+    assert not store.claim_event(record_id, now_epoch=int(NOW.timestamp()))
+    store.finish_event(record_id, state="pending", wait_only=True)
+    waiting = store.get_event(record_id)
+    assert waiting is not None and waiting["runs"] == 0 and "lease_until" not in waiting
+    with pytest.raises(resource.meta.client.exceptions.ConditionalCheckFailedException):
+        store.finish_event(record_id, state="pending", wait_only=True)
+    assert store.claim_event(record_id, now_epoch=int(NOW.timestamp()))
+    assert store.claim_delivery(record_id, device, now_epoch=int(NOW.timestamp())) == "send"
+    assert store.claim_delivery(record_id, device, now_epoch=int(NOW.timestamp())) == "done"
+    store.finish_delivery(record_id, device, state="retry", now_epoch=int(NOW.timestamp()))
+    assert store.claim_delivery(record_id, device, now_epoch=int(NOW.timestamp()) + 1) == "wait"
+    assert store.claim_delivery(record_id, device, now_epoch=int(NOW.timestamp()) + 60) == "send"
+    store.finish_delivery(record_id, device, state="sent", now_epoch=int(NOW.timestamp()) + 60)
+    store.checkpoint(record_id, cursor=device.token_hash, retry_needed=False)
+    checkpoint = store.get_event(record_id)
+    assert checkpoint is not None and checkpoint["cursor"] == device.token_hash
+    store.finish_event(record_id, state="complete")
+
+    newer = device.model_copy(update={"binding_id": "n" * 43})
+    store.register(newer, now_epoch=int(NOW.timestamp()))
+    store.unregister(
+        token_hash=device.token_hash, binding_id=device.binding_id, session_hash=digest
+    )
+    assert store.current_device(device.token_hash) == newer
+    DynamoMobileAuthStore(dynamodb_client, sessions_table).delete_session(session_hash=digest)
+    with pytest.raises(AuthFailure):
+        store.register(newer, now_epoch=int(NOW.timestamp()))
+
+    # No TTL schema exists on Statistics. Runtime cleanup is bounded and preserves
+    # unrelated metadata while eventually removing delivery receipts and addresses.
+    stats = resource.Table(statistics_table)
+    stats.put_item(Item={"PK": "UNRELATED", "SK": "META", "sentinel": "unchanged"})
+    assert store.cleanup(now_epoch=session.expires_at + 1, limit=1) == 1
+    assert store.current_device(device.token_hash) is None
+    assert store.cleanup(now_epoch=session.expires_at + 1, limit=1) == 1
+    assert store.cleanup(now_epoch=session.expires_at + 1, limit=1) == 1
+    assert store.get_event(record_id) is None
+    for pk in (DEVICE_PK, OUTBOX_PK, DELIVERY_PREFIX + record_id):
+        assert not stats.query(
+            KeyConditionExpression="PK = :pk", ExpressionAttributeValues={":pk": pk}
+        )["Items"]
+    assert stats.get_item(Key={"PK": "UNRELATED", "SK": "META"})["Item"]["sentinel"] == "unchanged"
 
 
 def test_mobile_grants_expire_without_waiting_for_ttl(dynamodb_client, table_names):

@@ -130,6 +130,12 @@ const S3_RESOURCES = [
 const SQS_QUEUES = [
   { prefix: "memorial_", label: "メモリアル", dlq: false, waiting: "memorial_queued_messages" },
   { prefix: "momotalk_", label: "モモトーク", dlq: false, waiting: "momotalk_visible_messages" },
+  {
+    prefix: "mobile_push_",
+    label: "Android通知",
+    dlq: false,
+    waiting: "mobile_push_visible_messages",
+  },
   { prefix: "", label: "記録・親愛度投影", dlq: true, waiting: "visible_messages" },
   {
     prefix: "memorial_dlq_",
@@ -142,6 +148,12 @@ const SQS_QUEUES = [
     label: "モモトーク",
     dlq: true,
     waiting: "momotalk_dlq_visible_messages",
+  },
+  {
+    prefix: "mobile_push_dlq_",
+    label: "Android通知",
+    dlq: true,
+    waiting: "mobile_push_dlq_visible_messages",
   },
 ] as const;
 
@@ -170,6 +182,8 @@ const LAMBDA_RESOURCES = [
   { key: "records_momotalk_collector", label: "モモトーク週次集計" },
   { key: "records_momotalk_worker", label: "モモトーク生成" },
   { key: "records_momotalk_announcement", label: "モモトーク公開通知" },
+  { key: "records_mobile_push_worker", label: "Android議論通知" },
+  { key: "records_mobile_debate_api", label: "Android議論受付・進捗API" },
   { key: "records_admin_status", label: "管理状態API" },
   { key: "records_admin_config", label: "プロンプト管理API" },
 ] as const;
@@ -192,7 +206,9 @@ const EVENT_RESOURCES = [
   { key: "openai", label: "OpenAI集計", hasDeliveryMetrics: true },
   { key: "inspector_translation", label: "脆弱性概要翻訳", hasDeliveryMetrics: true },
   { key: "momotalk_weekly", label: "モモトーク週次集計", hasDeliveryMetrics: true },
+  { key: "momotalk_continuation", label: "モモトーク生成の再開", hasDeliveryMetrics: true },
   { key: "momotalk_announcement", label: "モモトーク公開通知", hasDeliveryMetrics: true },
+  { key: "mobile_push_sweep", label: "Android通知の配送確認", hasDeliveryMetrics: true },
   { key: "abnormal_stop", label: "異常終了通知", hasDeliveryMetrics: true },
 ] as const;
 
@@ -754,7 +770,11 @@ function SqsMetrics({ metrics: source }: { readonly metrics: readonly AdminStatu
                   <th scope="row">
                     {queue.label}
                     <span className={adminStyles.queueKind}>
-                      {queue.dlq ? "失敗キュー / DLQ" : "生成キュー"}
+                      {queue.dlq
+                        ? "失敗キュー / DLQ"
+                        : queue.prefix === "mobile_push_"
+                          ? "通知キュー"
+                          : "生成キュー"}
                     </span>
                     {hasFailedMessages && (
                       <span className={adminStyles.queueAlert}>! 失敗メッセージあり</span>
@@ -796,7 +816,11 @@ function SqsMetrics({ metrics: source }: { readonly metrics: readonly AdminStatu
                   <th scope="row">
                     {queue.label}
                     <span className={adminStyles.queueKind}>
-                      {queue.dlq ? "失敗キュー / DLQ" : "生成キュー"}
+                      {queue.dlq
+                        ? "失敗キュー / DLQ"
+                        : queue.prefix === "mobile_push_"
+                          ? "通知キュー"
+                          : "生成キュー"}
                     </span>
                   </th>
                   <td

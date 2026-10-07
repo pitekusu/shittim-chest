@@ -22,6 +22,7 @@ from shittim_records.momotalk import (
     Utterance,
     WeekDigest,
     image_key,
+    image_targets,
 )
 from shittim_records.momotalk_adapters import MomotalkAssets
 from shittim_records.momotalk_generation import collect_week
@@ -65,7 +66,7 @@ def test_image_failure_logs_only_allowlisted_diagnostics(caplog, code, param):
         client=client,
     )
     try:
-        with pytest.raises(MomotalkFailure):
+        with pytest.raises(MomotalkFailure) as caught:
             generator.selfie(value, value.requesters[0], room.images[0], room.plan.images[0])
     finally:
         generator.close()
@@ -74,6 +75,50 @@ def test_image_failure_logs_only_allowlisted_diagnostics(caplog, code, param):
     assert "private" not in caplog.text
     assert "fictional-key" not in caplog.text
     assert value.requesters[0].questions[0].text not in caplog.text
+    assert caught.value.code == (
+        "MOMOTALK_IMAGE_MODERATION_BLOCKED"
+        if code == "moderation_blocked"
+        else "MOMOTALK_GENERATION_FAILED"
+    )
+
+
+@pytest.mark.parametrize("record_id", ["r" * 43, "q" * 43, "x" * 43])
+def test_image_reselection_uses_only_other_weekly_discussions(record_id):
+    value = snapshot()
+    requester = value.requesters[0]
+    candidate = requester.questions[0].model_copy(
+        update={"record_id": "r" * 43, "text": "雨の日に読む本を選ぶなら?"}
+    )
+    calls = []
+
+    def parse(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(
+            status="completed",
+            output_parsed=kwargs["text_format"].model_validate(
+                {"record_id": record_id, "brief": "本を片手に室内で自撮り"}
+            ),
+        )
+
+    generator = OpenAIMomotalkGenerator(
+        cast(Any, None),
+        cast(Any, None),
+        client=SimpleNamespace(responses=SimpleNamespace(parse=parse)),
+    )
+    image = image_targets(requester, WEEK.week_id)[1]
+    if record_id == candidate.record_id:
+        choice = generator.reselect_image(value, requester, image, [candidate])
+        assert choice.record_id == candidate.record_id and choice.mood == image.mood
+    else:
+        with pytest.raises(MomotalkFailure, match="MOMOTALK_OUTPUT_INVALID"):
+            generator.reselect_image(value, requester, image, [candidate])
+    assert len(calls) == 1
+    request = calls[0]
+    assert json.loads(request["input"]) == {"questions": [candidate.model_dump(mode="json")]}
+    assert requester.questions[0].text not in request["input"]
+    assert request["store"] is False and request["tools"] == []
+    assert request["max_output_tokens"] == 1000
+    assert value.personas[image.participant] in request["instructions"]
 
 
 @pytest.mark.parametrize(

@@ -19,6 +19,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
+@ScreenTest
 class SessionPanelTest {
   @get:Rule val compose = createAndroidComposeRule<MainActivity>()
 
@@ -26,7 +27,7 @@ class SessionPanelTest {
   fun expiryRemovesProfileAndExposesOnlyRelevantActions() {
     val state = mutableStateOf<SessionState>(SessionState.SignedIn(
       MobileSessionUser("架空の利用者", MobileAvatar("placeholder", "架空", "cyan")),
-      "u".repeat(43), Instant.parse("2030-01-01T00:00:00Z"), "/"))
+      "u".repeat(43), Instant.parse("2030-01-01T00:00:00Z")))
     val events = mutableListOf<BootstrapScreen.Event>()
     compose.activityRule.scenario.onActivity { activity ->
       activity.setContent { ShittimTheme(false) { SessionPanel(state.value, events::add) } }

@@ -14,6 +14,9 @@ import java.time.ZoneOffset
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -25,6 +28,52 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class MobileSessionModelTest {
+  @Test
+  fun permissionUpgradePreservesEncryptedDataAndCancellationDoesNotInvokeLogout() = runBlocking {
+    withContext(Dispatchers.Main) {
+      Fixture().use { fixture ->
+        fixture.stored = fixture.validToken
+        val model = fixture.start()
+        model.await<SessionState.SignedIn>()
+        yield()
+        var ready = false
+        model.reauthenticate { ready = true }
+        assertNull(model.cachePermit.value)
+        assertEquals(SessionNotice.REAUTH_REQUIRED, model.await<SessionState.SignedOut>().notice)
+        assertTrue(ready)
+        assertNull(fixture.stored)
+        assertEquals(0, fixture.cacheClears)
+        assertEquals(0, fixture.posts)
+        assertTrue(model.beginLogin())
+        model.loginResult(MobileLoginStep.Finished(MobileLoginStatus.CANCELLED))
+        assertEquals(SessionNotice.CANCELLED, (model.state.value as SessionState.SignedOut).notice)
+        assertEquals(0, fixture.cacheClears)
+      }
+    }
+  }
+
+  @Test
+  fun notificationsAreRevokedBeforeOfflineLogoutWaitsForNetwork(): Unit = runBlocking {
+    withContext(Dispatchers.Main) {
+      Fixture().use { fixture ->
+        fixture.stored = fixture.validToken
+        val model = fixture.start()
+        model.await<SessionState.SignedIn>()
+        yield()
+        fixture.logoutGate = CompletableDeferred()
+        val before = fixture.notificationRevocations
+        model.logout()
+        assertTrue(fixture.notificationRevocations > before)
+        assertEquals(SessionState.SigningOut, model.state.value)
+        withTimeout(5_000) { fixture.postStarted.await() }
+        assertNull(fixture.stored)
+        fixture.logoutGate!!.complete(Unit)
+        model.await<SessionState.SignedOut>()
+        Unit
+      }
+    }
+  }
+
   @Test
   fun knownDenialStaysLockedAfterNetworkFailureAndOfflineRestart() = runBlocking {
     withContext(Dispatchers.Main) {
@@ -58,17 +107,29 @@ class MobileSessionModelTest {
       Fixture().use { fixture ->
         fixture.stored = fixture.validToken
         val model = fixture.start()
-        model.await<SessionState.SignedIn>()
-        yield()
+        suspend fun awaitStage(stage: String, action: suspend () -> Unit) {
+          try { withTimeout(5_000) { action() } }
+          catch (error: TimeoutCancellationException) {
+            // Fixed state names and booleans only; never print a profile, token, or account identifier.
+            throw AssertionError("session_test_wait:$stage,state=${model.state.value::class.simpleName}," +
+              "gets=${fixture.gets},activationCompleted=${fixture.activationJob?.isCompleted}," +
+              "activationCancelled=${fixture.activationJob?.isCancelled},permit=${model.cachePermit.value != null}," +
+              "stored=${fixture.stored != null},storedPermit=${fixture.stored?.cacheAuthorization != null}", error)
+          }
+        }
+        awaitStage("signed_in") { model.await<SessionState.SignedIn>() }
+        // SignedIn is emitted before the refresh Job completes; one yield is not a completion barrier.
+        awaitStage("initial_refresh_finished") { checkNotNull(fixture.activationJob).join() }
         fixture.activationGate = CompletableDeferred()
         fixture.activationStarted = CompletableDeferred()
         model.onForeground()
-        withTimeout(5_000) { fixture.activationStarted.await() }
+        awaitStage("cache_activation") { fixture.activationStarted.await() }
+        // The old 200 response is already decoded; only the next server check must reject access.
+        fixture.status = HttpStatusCode.Forbidden
         model.onAuthenticationRequired()
         assertNull(model.cachePermit.value)
-        fixture.status = HttpStatusCode.Forbidden
         fixture.activationGate!!.complete(Unit)
-        model.await<SessionState.SignedOut>()
+        awaitStage("signed_out") { model.await<SessionState.SignedOut>() }
         assertNull(model.cachePermit.value)
         assertNull(fixture.stored)
         assertEquals(3, fixture.gets) // The final check starts after the denial.
@@ -208,11 +269,12 @@ class MobileSessionModelTest {
   }
 
   @Test
-  fun recordLinkBecomesLoginDestinationAndUpdatesActiveSession() = runBlocking {
+  fun recordLinkIsConsumedOnceAndCannotChangeAnInflightLoginDestination() = runBlocking {
     withContext(Dispatchers.Main) {
       Fixture().use { fixture ->
         val model = fixture.start()
         model.await<SessionState.SignedOut>()
+        assertFalse(model.beginLogin("/admin"))
         val first = "/records/${"a".repeat(43)}"
         val second = "/records/${"b".repeat(43)}"
         model.openDestination(first)
@@ -222,19 +284,56 @@ class MobileSessionModelTest {
         assertEquals(first, model.loginDestination)
         fixture.stored = fixture.validToken
         model.loginResult(MobileLoginStep.Finished(MobileLoginStatus.SIGNED_IN, first))
-        assertEquals(first, model.await<SessionState.SignedIn>().returnTo)
+        val accountId = model.await<SessionState.SignedIn>().cacheAccountId
+        val firstRequest = checkNotNull(model.pendingDestination.value)
+        assertEquals(first, firstRequest.returnTo)
+        assertTrue(model.consumeDestination(firstRequest, accountId))
+        assertNull(model.pendingDestination.value)
+        assertFalse(model.consumeDestination(firstRequest, accountId))
         model.openDestination(second)
-        assertEquals(second, model.await<SessionState.SignedIn>().returnTo)
+        val secondRequest = checkNotNull(model.pendingDestination.value)
+        assertEquals(second, secondRequest.returnTo)
         model.openDestination("/admin")
         assertEquals(second, model.loginDestination)
         yield()
         model.onForeground()
-        assertEquals(second, model.await<SessionState.SignedIn>().returnTo)
-        model.closeDestination()
-        assertEquals("/", model.await<SessionState.SignedIn>().returnTo)
+        model.await<SessionState.SignedIn>()
+        assertSame(secondRequest, model.pendingDestination.value)
+        assertTrue(model.consumeDestination(secondRequest, accountId))
+        assertEquals("/", model.loginDestination)
         yield()
         model.onForeground()
-        assertEquals("/", model.await<SessionState.SignedIn>().returnTo)
+        model.await<SessionState.SignedIn>()
+        assertNull(model.pendingDestination.value) // Foreground verification cannot replay a consumed link.
+      }
+    }
+  }
+
+  @Test
+  fun onlyTheCurrentRequestAndAuthorizedAccountCanConsumeAnExternalDestination() = runBlocking {
+    withContext(Dispatchers.Main) {
+      Fixture().use { fixture ->
+        fixture.stored = fixture.validToken
+        val model = fixture.start()
+        val accountId = model.await<SessionState.SignedIn>().cacheAccountId
+        model.openDestination("/records/${"a".repeat(43)}")
+        val older = checkNotNull(model.pendingDestination.value)
+        model.openDestination("/records/${"b".repeat(43)}")
+        model.openDestination(older.returnTo) // Same path again is a new external request, not the old event.
+        val current = checkNotNull(model.pendingDestination.value)
+        assertEquals(older.returnTo, current.returnTo)
+        assertNotSame(older, current)
+        assertFalse(model.consumeDestination(older, accountId))
+        assertFalse(model.consumeDestination(PendingDestination(current.returnTo), accountId))
+        assertFalse(model.consumeDestination(current, "v".repeat(43)))
+        assertSame(current, model.pendingDestination.value)
+        assertTrue(model.consumeDestination(current, accountId))
+        assertNull(model.pendingDestination.value)
+        model.openDestination(current.returnTo)
+        val discarded = checkNotNull(model.pendingDestination.value)
+        model.discardDestination()
+        assertNull(model.pendingDestination.value)
+        assertFalse(model.consumeDestination(discarded, accountId))
       }
     }
   }
@@ -250,8 +349,11 @@ class MobileSessionModelTest {
           val model = fixture.start()
           val destination = "/records/${"c".repeat(43)}"
           model.openDestination(destination)
+          val pending = checkNotNull(model.pendingDestination.value)
           assertEquals(SessionNotice.EXPIRED, model.await<SessionState.SignedOut>().notice)
           assertEquals(destination, model.loginDestination)
+          assertFalse(model.consumeDestination(pending, "u".repeat(43)))
+          assertSame(pending, model.pendingDestination.value)
         }
       }
     }
@@ -268,18 +370,19 @@ class MobileSessionModelTest {
         model.loginResult(MobileLoginStep.Finished(MobileLoginStatus.CANCELLED))
         assertEquals(SessionNotice.CANCELLED, model.await<SessionState.SignedOut>().notice)
         assertEquals(0, model.loginCompletion.value)
-        assertTrue(model.beginLogin())
+        val destination = "/records/${"r".repeat(43)}"
+        assertTrue(model.beginLogin(destination))
         fixture.stored = fixture.validToken
         fixture.sessionGate = CompletableDeferred()
-        val destination = "/records/${"r".repeat(43)}"
         val result = MobileLoginStep.Finished(MobileLoginStatus.SIGNED_IN, destination)
         model.loginResult(result)
         model.loginResult(result)
         withTimeout(5_000) { fixture.sessionStarted.await() }
         assertEquals(0, model.loginCompletion.value) // Activity success alone is not authentication.
+        assertNull(model.pendingDestination.value)
         fixture.sessionGate!!.complete(Unit)
         val state = model.await<SessionState.SignedIn>()
-        assertEquals(destination, state.returnTo)
+        assertEquals(destination, model.pendingDestination.value?.returnTo)
         assertEquals("利用者A", state.user.displayName)
         assertEquals(1, fixture.gets)
         assertEquals(1, model.loginCompletion.value)
@@ -347,14 +450,16 @@ class MobileSessionModelTest {
         assertNotNull(fixture.stored)
         val destination = "/records/${"r".repeat(43)}"
         model.openDestination(destination)
-        assertEquals(destination, model.destination.value)
+        val pending = checkNotNull(model.pendingDestination.value)
+        assertEquals(destination, pending.returnTo)
         assertNotNull(model.offlineCacheAccountId)
-        model.closeDestination()
-        assertEquals("/", model.destination.value)
+        assertTrue(model.consumeDestination(pending, "u".repeat(43)))
+        assertNull(model.pendingDestination.value)
         fixture.status = HttpStatusCode.OK
         fixture.sessionGate = null
         model.retry()
         assertEquals("利用者A", model.await<SessionState.SignedIn>().user.displayName)
+        assertNull(model.pendingDestination.value)
       }
     }
   }
@@ -366,11 +471,15 @@ class MobileSessionModelTest {
         fixture.stored = fixture.validToken
         val model = fixture.start()
         model.await<SessionState.SignedIn>()
+        model.openDestination("/records/${"r".repeat(43)}")
+        val oldRequest = checkNotNull(model.pendingDestination.value)
         fixture.logoutGate = CompletableDeferred()
         fixture.status = HttpStatusCode.ServiceUnavailable
         model.logout()
         model.logout()
         assertEquals(SessionState.SigningOut, model.state.value)
+        assertNull(model.pendingDestination.value)
+        assertFalse(model.consumeDestination(oldRequest, "u".repeat(43)))
         fixture.postStarted.await()
         assertNull(fixture.stored)
         assertEquals(1, fixture.cacheClears)
@@ -384,6 +493,7 @@ class MobileSessionModelTest {
         fixture.status = HttpStatusCode.OK
         model.loginResult(MobileLoginStep.Finished(MobileLoginStatus.SIGNED_IN))
         assertEquals("利用者B", model.await<SessionState.SignedIn>().user.displayName)
+        assertFalse(model.consumeDestination(oldRequest, "u".repeat(43)))
       }
     }
   }
@@ -599,6 +709,7 @@ class MobileSessionModelTest {
     var cacheClearFails = false
     var logoutPending = false
     var cacheClears = 0
+    var notificationRevocations = 0
     val activatedAccounts = mutableListOf<String>()
     var gets = 0
     var posts = 0
@@ -607,6 +718,7 @@ class MobileSessionModelTest {
     var sessionStarted = CompletableDeferred<Unit>()
     var activationGate: CompletableDeferred<Unit>? = null
     var activationStarted = CompletableDeferred<Unit>()
+    var activationJob: Job? = null
     var logoutGate: CompletableDeferred<Unit>? = null
     val postStarted = CompletableDeferred<Unit>()
     val owner = ViewModelStore()
@@ -647,10 +759,14 @@ class MobileSessionModelTest {
       assertNull(stored)
       assertFalse(cacheClearFails)
       logoutPending = false
-    }, { activationStarted.complete(Unit); activationGate?.await(); activatedAccounts.add(it) }, {
+    }, {
+      activationJob = currentCoroutineContext()[Job]
+      activationStarted.complete(Unit); activationGate?.await(); activatedAccounts.add(it)
+    }, {
       cacheClears++
       if (cacheClearFails) throw dev.pitekusu.shittim.records.storage.RecordCacheException()
-    }, Clock.fixed(now, ZoneOffset.UTC)).also { owner.put("session", it) }
+    }, Clock.fixed(now, ZoneOffset.UTC), revokeNotifications = { notificationRevocations++ })
+      .also { owner.put("session", it) }
 
     override fun close() { owner.clear(); client.close() }
   }

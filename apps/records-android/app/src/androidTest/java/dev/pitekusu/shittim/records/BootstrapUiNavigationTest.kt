@@ -12,6 +12,8 @@ import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.hasText
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.paging.PagingData
+import androidx.navigation3.runtime.NavBackStack
+import androidx.navigation3.runtime.NavKey
 import dev.pitekusu.shittim.records.auth.MobileAvatar
 import dev.pitekusu.shittim.records.auth.MobileSessionUser
 import dev.pitekusu.shittim.records.auth.SessionState
@@ -23,13 +25,14 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
+@ScreenTest
 class BootstrapUiNavigationTest {
   @get:Rule val compose = createAndroidComposeRule<MainActivity>()
 
   @Test fun menuContainsWebDestinationsAndMovesLogoutOutOfTheRecordList() {
     val events = mutableListOf<BootstrapScreen.Event>()
     val user = MobileSessionUser("架空の依頼者", MobileAvatar("placeholder", "依頼者", "cyan"))
-    val session = SessionState.SignedIn(user, "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"), "/")
+    val session = SessionState.SignedIn(user, "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"))
     compose.activityRule.scenario.onActivity { it.setContent {
       BootstrapUi(BootstrapScreen.State(ThemeChoice.System, session, eventSink = events::add))
     } }
@@ -44,52 +47,60 @@ class BootstrapUiNavigationTest {
   @Test fun systemBackClosesSelectedRecordInsteadOfFinishingActivity() {
     val events = mutableListOf<BootstrapScreen.Event>()
     val user = MobileSessionUser("架空の依頼者", MobileAvatar("placeholder", "依頼者", "cyan"))
-    val state = BootstrapScreen.State(
-      ThemeChoice.System,
-      SessionState.SignedIn(user, "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"), "/records/${"a".repeat(43)}"),
-      record = RecordPreviewState.Ready(RecordPreview("架空の議題", "架空の結論", "アロナ")),
-      selectedRecordId = "a".repeat(43),
-      eventSink = events::add,
-    )
-    compose.activityRule.scenario.onActivity { it.setContent { BootstrapUi(state) } }
+    val backStack = NavBackStack<NavKey>(RecordsList, RecordDetail("a".repeat(43)))
+    compose.activityRule.scenario.onActivity { it.setContent {
+      BootstrapUi(BootstrapScreen.State(
+        ThemeChoice.System,
+        SessionState.SignedIn(user, "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z")),
+        record = RecordPreviewState.Ready(RecordPreview("架空の議題", "架空の結論", "アロナ")),
+        selectedRecordId = (backStack.lastOrNull() as? RecordDetail)?.recordId,
+        backStack = backStack.toList(), eventSink = { event ->
+          events += event
+          if (event == BootstrapScreen.Event.CloseRecord) backStack.closeRecord()
+        },
+      ))
+    } }
     compose.waitForIdle()
     compose.activityRule.scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
-    compose.runOnIdle { assertEquals(listOf(BootstrapScreen.Event.CloseRecord), events) }
+    compose.runOnIdle {
+      assertEquals(listOf(BootstrapScreen.Event.CloseRecord), events)
+      assertEquals(listOf(RecordsList), backStack.toList())
+    }
   }
 
   @Test fun listKeepsItsScrollPositionWhileDetailIsOpen() {
     val id = "a".repeat(43)
     val user = MobileSessionUser("架空の依頼者", MobileAvatar("placeholder", "依頼者", "cyan"))
-    val session = SessionState.SignedIn(user, "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"), "/")
+    val session = SessionState.SignedIn(user, "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"))
     val entries = (1..12).map { index ->
       RecordListEntry(index.toString().padStart(43, 'a'), "議題 $index", "架空の依頼者",
         RecordAvatar(null, "cyan"), Instant.parse("2026-09-24T00:00:00Z"), "アロナ")
     }
     val recordList = RecordListState.Ready(flowOf(PagingData.from(entries)), entries.map { it.recordId }.toSet())
-    val list = BootstrapScreen.State(ThemeChoice.System, session,
-      records = recordList, eventSink = {})
-    val detail = BootstrapScreen.State(ThemeChoice.System, session,
-      records = recordList,
-      record = RecordPreviewState.Ready(RecordPreview("架空の議題", "架空の結論", "アロナ")),
-      selectedRecordId = id, eventSink = {})
-    val state = mutableStateOf(list)
-    compose.activityRule.scenario.onActivity { it.setContent { BootstrapUi(state.value) } }
+    val backStack = NavBackStack<NavKey>(RecordsList)
+    compose.activityRule.scenario.onActivity { it.setContent {
+      BootstrapUi(BootstrapScreen.State(ThemeChoice.System, session, records = recordList,
+        record = RecordPreviewState.Ready(RecordPreview("架空の議題", "架空の結論", "アロナ")),
+        selectedRecordId = (backStack.lastOrNull() as? RecordDetail)?.recordId,
+        backStack = backStack.toList(), eventSink = {}))
+    } }
     // The first card may start below the fold on a smaller CI device.
     compose.waitForIdle()
     compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText("議題 12"))
     compose.onNodeWithText("議題 12").assertIsDisplayed()
-    compose.runOnIdle { state.value = detail }
-    compose.runOnIdle { state.value = list }
+    compose.runOnIdle { backStack.openRecord(id) }
+    compose.onNodeWithText("架空の議題").assertIsDisplayed()
+    compose.runOnIdle { backStack.closeRecord() }
     compose.onNodeWithText("議題 12").assertIsDisplayed()
   }
 
   @Test fun automaticSyncStatusIsHiddenAfterLeavingTheAuthenticatedSession() {
     val user = MobileSessionUser("架空の依頼者", MobileAvatar("placeholder", "依頼者", "cyan"))
     val state = mutableStateOf(BootstrapScreen.State(ThemeChoice.System,
-      SessionState.SignedIn(user, "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"), "/"),
+      SessionState.SignedIn(user, "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z")),
       sync = RecordSyncState.Running, eventSink = {}))
     compose.activityRule.scenario.onActivity { it.setContent { BootstrapUi(state.value) } }
-    val status = compose.activity.getString(R.string.record_sync_running)
+    val status = compose.activity.getString(R.string.journal_sync_running)
     compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText(status))
     compose.onNodeWithText(status).assertIsDisplayed()
     compose.runOnIdle { state.value = BootstrapScreen.State(ThemeChoice.System) {} }
@@ -98,7 +109,7 @@ class BootstrapUiNavigationTest {
 
   @Test fun savedSnapshotsKeepTheVisibleRecordWhileSyncIsRunningAndNewRecordsArrive() {
     val user = MobileSessionUser("架空の依頼者", MobileAvatar("placeholder", "依頼者", "cyan"))
-    val session = SessionState.SignedIn(user, "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"), "/")
+    val session = SessionState.SignedIn(user, "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"))
     val entries = (1..12).map { index ->
       RecordListEntry(index.toString().padStart(43, 'a'), "同期中の議題 $index", "架空の依頼者",
         RecordAvatar(null, "cyan"), Instant.parse("2026-09-24T00:00:00Z"), "アロナ")

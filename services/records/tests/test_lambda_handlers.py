@@ -499,14 +499,29 @@ def test_auth_factory_connects_mobile_routes_with_existing_configuration(monkeyp
     writes = []
     database = SimpleNamespace(put_item=lambda **kwargs: writes.append(kwargs))
     clients = []
+    resources = []
+    tables = []
 
     def client(service, **kwargs):
+        assert service in {"dynamodb", "ssm"}
+        assert kwargs == {"config": lambda_handlers.SDK_CONFIG}
         clients.append(service)
         return database if service == "dynamodb" else object()
+
+    def table(name):
+        tables.append(name)
+        return SimpleNamespace(name=name)
+
+    def resource(service, **kwargs):
+        assert service == "dynamodb"
+        assert kwargs == {"config": lambda_handlers.SDK_CONFIG}
+        resources.append(service)
+        return SimpleNamespace(Table=table, meta=SimpleNamespace(client=database))
 
     monkeypatch.setattr(lambda_handlers, "_AUTH_CONTROLLER", None)
     monkeypatch.setattr(lambda_handlers, "_environment", lambda name: name.lower())
     monkeypatch.setattr(lambda_handlers.boto3, "client", client)
+    monkeypatch.setattr(lambda_handlers.boto3, "resource", resource)
     monkeypatch.setattr(lambda_handlers, "_regional_s3_client", lambda: object())
     monkeypatch.setattr(
         lambda_handlers,
@@ -520,6 +535,8 @@ def test_auth_factory_connects_mobile_routes_with_existing_configuration(monkeyp
     denied = lambda_handlers.auth_handler(event("GET /api/v1/auth/mobile/session"), object())
     assert denied["statusCode"] == 401
     assert clients == ["dynamodb", "ssm"]  # Cached factory, no new credential source.
+    assert resources == ["dynamodb"]
+    assert tables == ["statistics_table_name"]  # All SDK construction stays inside fakes.
 
 
 def test_auth_and_read_handlers_delegate_without_logging_request_content(monkeypatch: Any) -> None:

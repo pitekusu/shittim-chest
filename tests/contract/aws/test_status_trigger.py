@@ -163,3 +163,29 @@ async def test_reconciler_trigger_maps_non_202_to_content_free_failure() -> None
             match=r"^reconciliation_trigger_unavailable$",
         ):
             await trigger.request_reconciliation(INTERACTION_ID)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reconciliation", [False, True])
+async def test_mobile_trigger_uses_opaque_v2_without_a_fake_interaction(
+    reconciliation: bool,
+) -> None:
+    sdk = client()
+    internal_id = "m_" + "a" * 64
+    payload = ('{"schema_version":2,"source":"mobile","request_id":"' + internal_id + '"}').encode()
+    with Stubber(sdk) as stubber:
+        stubber.add_response(
+            "invoke",
+            {"StatusCode": 202},
+            {"FunctionName": FUNCTION_NAME, "InvocationType": "Event", "Payload": payload},
+        )
+        if reconciliation:
+            await LambdaRuntimeReconciliationTrigger(
+                client=sdk, function_name=FUNCTION_NAME
+            ).request_reconciliation(internal_id)
+        else:
+            await LambdaStatusPublicationTrigger(
+                client=sdk, function_name=FUNCTION_NAME
+            ).request_publication(internal_id)
+        stubber.assert_no_pending_responses()
+    assert "interaction_id" not in json.loads(payload)

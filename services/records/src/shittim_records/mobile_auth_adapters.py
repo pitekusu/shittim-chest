@@ -136,6 +136,8 @@ class DynamoMobileAuthStore:
                     "display_name",
                     "avatar_asset_key",
                     "guild_verified_at",
+                    "discord_user_id",
+                    "discord_username",
                 )
             )
         ):
@@ -240,7 +242,7 @@ class DynamoMobileAuthStore:
                 {
                     ":version": 1,
                     ":kind": "mobile_transaction",
-                    ":expected": expected.model_dump_json(by_alias=True),
+                    ":expected": _private_payload(expected),
                     ":expires": expected.expires_at,
                     ":now": now_epoch,
                 }
@@ -255,7 +257,7 @@ def _item(state: MobileTransactionState) -> dict[str, str | int]:
         "schema_version": 1,
         "record_type": "mobile_transaction",
         "expiresAt": state.expires_at,
-        "payload": state.model_dump_json(by_alias=True),
+        "payload": _private_payload(state),
     }
 
 
@@ -271,8 +273,20 @@ def _session_item(session_hash: str, session: MobileSessionRecord) -> dict[str, 
         "schema_version": 1,
         "record_type": "mobile_session",
         "expiresAt": session.expires_at,
-        "payload": session.model_dump_json(),
+        "payload": _private_payload(session),
     }
+
+
+def _private_payload(state: MobileTransactionState | MobileSessionRecord) -> str:
+    # Readers and grant CAS require exact canonical JSON. Preserve old payload bytes
+    # when identity is absent; do not drop existing nullable fields such as avatar.
+    exclude = (
+        {"discord_user_id", "discord_username"}
+        if isinstance(state, MobileAuthorizedTransaction | MobileSessionRecord)
+        and state.discord_user_id is None
+        else set()
+    )
+    return state.model_dump_json(by_alias=True, exclude=exclude)
 
 
 def _require_live(state: MobileTransactionState, now_epoch: int) -> None:

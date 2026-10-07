@@ -42,6 +42,7 @@ from shittim_chest.application.scale_to_zero import (
     IngressOperationResult,
     IngressRequest,
     IngressSemanticOperationBinding,
+    IngressSource,
     IngressStatus,
     IngressStatusPublication,
     RuntimeState,
@@ -1327,6 +1328,12 @@ def serialize_ingress_request(request: IngressRequest) -> DynamoItem:
         ("ttl", request.ttl),
     ):
         _put_optional(item, field, value)
+    # Omit additive fields for Discord so legacy records and CAS bytes stay unchanged.
+    if request.source is IngressSource.MOBILE:
+        item["source"] = request.source.value
+        _put_optional(item, "owner_key", request.owner_key)
+        _put_optional(item, "mobile_request_id", request.mobile_request_id)
+        _put_optional(item, "history_after_snowflake", request.history_after_snowflake)
     return _validated_item(item)
 
 
@@ -1375,6 +1382,10 @@ def deserialize_ingress_request(raw_item: Mapping[str, DynamoValue]) -> IngressR
             completed_at=_optional_datetime(item, "completed_at"),
             ttl=_optional_integer(item, "ttl"),
             schema_version=_integer(item, "record_schema_version"),
+            source=IngressSource(_optional_text(item, "source") or IngressSource.DISCORD.value),
+            owner_key=_optional_text(item, "owner_key"),
+            mobile_request_id=_optional_text(item, "mobile_request_id"),
+            history_after_snowflake=_optional_text(item, "history_after_snowflake"),
         )
     except ValueError as error:
         raise PersistenceFormatError("invalid ingress request") from error
@@ -1512,6 +1523,7 @@ def serialize_ingress_status_publication(
         "incarnation": publication.incarnation,
     }
     for field, value in (
+        ("history_after_snowflake", publication.history_after_snowflake),
         (
             "delivered_state",
             publication.delivered_state.value if publication.delivered_state is not None else None,
@@ -1594,6 +1606,7 @@ def deserialize_ingress_status_publication(
             status_message_id=_optional_text(item, "status_message_id"),
             status_message_updated_at=_optional_datetime(item, "status_message_updated_at"),
             history_checkpoint=history_checkpoint,
+            history_after_snowflake=_optional_text(item, "history_after_snowflake"),
             history_reconciliation_required=_boolean(
                 item,
                 "history_reconciliation_required",

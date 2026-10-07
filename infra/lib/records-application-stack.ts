@@ -41,6 +41,10 @@ const MEMORIAL_WORKER_FUNCTION_NAME = "shittim-chest-production-records-memorial
 const RANKING_FUNCTION_NAME = "shittim-chest-production-records-ranking";
 const READ_FUNCTION_NAME = "shittim-chest-production-records-read";
 const OGP_FUNCTION_NAME = "shittim-chest-production-records-ogp";
+const MOBILE_PUSH_FUNCTION_NAME = "shittim-chest-production-records-mobile-push-worker";
+const MOBILE_DEBATE_FUNCTION_NAME = "shittim-chest-production-records-mobile-debate-api";
+const FIREBASE_SERVICE_ACCOUNT_PARAMETER_NAME =
+  "/shittim-chest/production/records/firebase/service-account";
 const MODERATOR_TOKEN_PARAMETER_NAME =
   "/shittim-chest/production/discord/moderator/token";
 
@@ -57,6 +61,8 @@ export class RecordsApplicationStack extends Stack {
   public readonly rankingFunction: lambda.Function;
   public readonly readFunction: lambda.Function;
   public readonly ogpFunction: lambda.Function;
+  public readonly mobilePushFunction: lambda.Function;
+  public readonly mobileDebateFunction: lambda.Function;
 
   public constructor(
     scope: Construct,
@@ -106,6 +112,15 @@ export class RecordsApplicationStack extends Stack {
         description: "Exact version currently bound to the production Runtime stack",
       },
     );
+    const mobileDebateEnabled = new CfnParameter(this, "MobileDebateEnabled", {
+      type: "String", default: "false", allowedValues: ["false", "true"],
+      description: "Enable new Android submissions only after compatible Core deployment",
+    });
+    const mobileDebateChannel = new CfnParameter(this, "MobileDebateChannelId", {
+      type: "String", default: "", allowedPattern: "^$|^[0-9]{17,20}$",
+      description: "One normal text channel from the existing Core allowlist; required when enabled",
+      noEcho: true,
+    });
 
     const sourceTable = dynamodb.Table.fromTableAttributes(this, "SourceDebateTable", {
       tableName: sourceTableName.valueAsString,
@@ -175,6 +190,12 @@ export class RecordsApplicationStack extends Stack {
     }));
     const momotalkDlq = sqs.Queue.fromQueueArn(this, "MomotalkGenerationDlq", this.formatArn({
       service: "sqs", resource: "shittim-chest-production-records-momotalk-generation-dlq",
+    }));
+    const mobilePushQueue = sqs.Queue.fromQueueArn(this, "MobilePushQueue", this.formatArn({
+      service: "sqs", resource: "shittim-chest-production-records-mobile-push.fifo",
+    }));
+    const mobilePushDlq = sqs.Queue.fromQueueArn(this, "MobilePushDlq", this.formatArn({
+      service: "sqs", resource: "shittim-chest-production-records-mobile-push-dlq.fifo",
     }));
     const code = lambda.Code.fromBucket(
       bundleBucket,
@@ -275,6 +296,17 @@ export class RecordsApplicationStack extends Stack {
         moderatorTokenParameterName: MODERATOR_TOKEN_PARAMETER_NAME,
       },
     });
+    this.projectorFunction.addEnvironment("MOBILE_PUSH_QUEUE_URL", mobilePushQueue.queueUrl);
+    mobilePushQueue.grantSendMessages(this.projectorFunction);
+    this.projectorFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ["dynamodb:PutItem"],
+      resources: [statisticsTable.tableArn],
+      conditions: {
+        StringEquals: { "dynamodb:EnclosingOperation": "TransactWriteItems" },
+        "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["MOBILE_PUSH_OUTBOX"] },
+        Null: { "dynamodb:LeadingKeys": "false" },
+      },
+    }));
     this.projectorFunction.addEventSource(
       new eventSources.DynamoEventSource(sourceTable, {
         startingPosition: lambda.StartingPosition.TRIM_HORIZON,
@@ -347,6 +379,7 @@ export class RecordsApplicationStack extends Stack {
       reservedConcurrentExecutions: 2,
       environment: {
         SESSION_TABLE_NAME: sessionTable.tableName,
+        STATISTICS_TABLE_NAME: statisticsTable.tableName,
         MEDIA_BUCKET_NAME: mediaBucket.bucketName,
         IDENTITY_HMAC_PARAMETER_NAME: identityParameter.parameterName,
         ADMIN_DISCORD_USER_ID_PARAMETER_NAME: adminDiscordIdParameter.parameterName,
@@ -364,6 +397,22 @@ export class RecordsApplicationStack extends Stack {
             "dynamodb:TransactWriteItems",
           ],
           resources: [sessionTable.tableArn],
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:ConditionCheckItem"],
+          resources: [sessionTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["MOBILE_SESSION#*"] },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:DeleteItem"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["MOBILE_PUSH_DEVICE"] },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
         }),
         new iam.PolicyStatement({
           actions: ["ssm:GetParameters"],
@@ -391,6 +440,82 @@ export class RecordsApplicationStack extends Stack {
         ]),
       ),
     );
+    this.mobilePushFunction = this.httpFunctionWithRole({
+      id: "MobilePushFunction",
+      functionName: MOBILE_PUSH_FUNCTION_NAME,
+      handler: "shittim_records.mobile_notification_handlers.handler",
+      code,
+      timeout: Duration.minutes(2),
+      memorySize: 1024,
+      reservedConcurrentExecutions: 1,
+      environment: {
+        MOBILE_PUSH_QUEUE_URL: mobilePushQueue.queueUrl,
+        FIREBASE_SERVICE_ACCOUNT_PARAMETER_NAME,
+        STATISTICS_TABLE_NAME: statisticsTable.tableName,
+        SESSION_TABLE_NAME: sessionTable.tableName,
+        ARCHIVE_TABLE_NAME: archiveTable.tableName,
+      },
+      policyStatements: [
+        new iam.PolicyStatement({
+          actions: ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": {
+              "dynamodb:LeadingKeys": ["MOBILE_PUSH_DEVICE", "MOBILE_PUSH_OUTBOX", "MOBILE_PUSH_DELIVERY#*"],
+            },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:PutItem"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["MOBILE_PUSH_DELIVERY#*"] },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"],
+          resources: [sessionTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["MOBILE_SESSION#*"] },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"],
+          resources: [archiveTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["RECORD#*"] },
+            "ForAllValues:StringEquals": { "dynamodb:Attributes": [
+              "PK", "SK", "record_id", "record_type", "requester_display_name",
+            ] },
+            Null: { "dynamodb:LeadingKeys": "false", "dynamodb:Attributes": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["ssm:GetParameter"],
+          resources: [this.formatArn({
+            service: "ssm", resource: "parameter",
+            resourceName: FIREBASE_SERVICE_ACCOUNT_PARAMETER_NAME.slice(1),
+          })],
+        }),
+      ],
+    });
+    mobilePushQueue.grantSendMessages(this.mobilePushFunction);
+    this.mobilePushFunction.addEventSource(new eventSources.SqsEventSource(mobilePushQueue, {
+      batchSize: 1,
+      reportBatchItemFailures: true,
+      // FIFO uses a single message group; SQS maximumConcurrency cannot be set below 2.
+    }));
+    this.mobilePushFunction.configureAsyncInvoke({ retryAttempts: 0, maxEventAge: Duration.minutes(1) });
+    const mobilePushSweepRule = new events.Rule(this, "MobilePushSweepRule", {
+      description: "Recover pending Android record notifications every minute",
+      schedule: events.Schedule.rate(Duration.minutes(1)),
+      targets: [new eventTargets.LambdaFunction(this.mobilePushFunction, {
+        retryAttempts: 0, maxEventAge: Duration.minutes(1),
+      })],
+    });
     this.rankingFunction = this.httpFunctionWithRole({
       id: "RankingFunction",
       functionName: RANKING_FUNCTION_NAME,
@@ -1314,6 +1439,17 @@ export class RecordsApplicationStack extends Stack {
         retryAttempts: 2, maxEventAge: Duration.hours(6),
       })],
     });
+    const momotalkContinuationRule = new events.Rule(this, "MomotalkContinuationRule", {
+      description: "Resume checkpointed MomoTalk after bounded SQS invocation chains",
+      schedule: events.Schedule.rate(Duration.minutes(5)),
+      targets: [new eventTargets.LambdaFunction(momotalkCollector, {
+        event: events.RuleTargetInput.fromObject({
+          source: "shittim.momotalk.continuation",
+          time: events.EventField.time,
+        }),
+        retryAttempts: 2, maxEventAge: Duration.minutes(10),
+      })],
+    });
     for (const fn of [momotalkCollector, momotalkWorker]) {
       fn.role!.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, Object.fromEntries(
         ["arn:aws", "arn:<AWS::Partition>"].flatMap((partition) => [
@@ -1370,6 +1506,8 @@ export class RecordsApplicationStack extends Stack {
       account: "shittim-chest-production-account",
     } as const;
     const statusFunctionNames = {
+      records_mobile_debate_api: MOBILE_DEBATE_FUNCTION_NAME,
+      records_mobile_push_worker: MOBILE_PUSH_FUNCTION_NAME,
       records_momotalk_collector: MOMOTALK_COLLECTOR_FUNCTION_NAME,
       records_momotalk_worker: MOMOTALK_WORKER_FUNCTION_NAME,
       records_momotalk_announcement: MOMOTALK_ANNOUNCEMENT_FUNCTION_NAME,
@@ -1391,11 +1529,13 @@ export class RecordsApplicationStack extends Stack {
       records_admin_status: ADMIN_STATUS_FUNCTION_NAME,
     } as const;
     const memorialStatusFunctionNames = [
+      MOBILE_DEBATE_FUNCTION_NAME,
       MEMORIAL_API_FUNCTION_NAME,
       MEMORIAL_WORKER_FUNCTION_NAME,
       MOMOTALK_COLLECTOR_FUNCTION_NAME,
       MOMOTALK_WORKER_FUNCTION_NAME,
       MOMOTALK_ANNOUNCEMENT_FUNCTION_NAME,
+      MOBILE_PUSH_FUNCTION_NAME,
     ] as const;
     const memorialStatusFunctionArns = memorialStatusFunctionNames.map((functionName) =>
       this.formatArn({
@@ -1453,6 +1593,8 @@ export class RecordsApplicationStack extends Stack {
         MEMORIAL_GENERATION_DLQ_URL: memorialGenerationDlq.queueUrl,
         MOMOTALK_GENERATION_QUEUE_URL: momotalkQueue.queueUrl,
         MOMOTALK_GENERATION_DLQ_URL: momotalkDlq.queueUrl,
+        MOBILE_PUSH_QUEUE_URL: mobilePushQueue.queueUrl,
+        MOBILE_PUSH_DLQ_URL: mobilePushDlq.queueUrl,
         ECS_CLUSTER_NAME: "shittim-chest-production",
         ECS_SERVICE_NAME: "shittim-chest-production",
         ECS_CONTAINER_NAME: "application",
@@ -1720,7 +1862,9 @@ export class RecordsApplicationStack extends Stack {
               openAiCostSchedule.ruleArn,
               inspectorTranslationSchedule.ruleArn,
               momotalkWeeklyRule.ruleArn,
+              momotalkContinuationRule.ruleArn,
               momotalkAnnouncementRule.ruleArn,
+              mobilePushSweepRule.ruleArn,
               this.formatArn({
                 service: "events",
                 resource: "rule",
@@ -1744,7 +1888,7 @@ export class RecordsApplicationStack extends Stack {
           }),
           new iam.PolicyStatement({
             actions: ["sqs:GetQueueAttributes"],
-            resources: [memorialGenerationQueue.queueArn, memorialGenerationDlq.queueArn, momotalkQueue.queueArn, momotalkDlq.queueArn],
+            resources: [memorialGenerationQueue.queueArn, memorialGenerationDlq.queueArn, momotalkQueue.queueArn, momotalkDlq.queueArn, mobilePushQueue.queueArn, mobilePushDlq.queueArn],
           }),
         ],
       }),
@@ -1836,6 +1980,99 @@ export class RecordsApplicationStack extends Stack {
       version: memorialApiVersion,
     });
 
+    const ingressPartitions = [
+      "CONTROL#INGRESS", "CONTROL#INGRESS#ACTIVE", "INGRESS_OPERATION#m_*", "MOBILE_INGRESS#*",
+    ];
+    const sourceMetaFields = [
+      "PK", "SK", "schema_version", "record_type", "debate_id", "requester_id",
+      "guild_id", "channel_id", "current_phase", "updated_at",
+    ];
+    const runtimeParameterName = `/shittim-chest/production/runtime/${legacyRuntimeConfigVersion.valueAsString}`;
+    this.mobileDebateFunction = this.httpFunctionWithRole({
+      id: "MobileDebateFunction", functionName: MOBILE_DEBATE_FUNCTION_NAME,
+      handler: "shittim_records.mobile_debate_handler.handler", code,
+      timeout: Duration.seconds(29), reservedConcurrentExecutions: 2,
+      environment: {
+        SOURCE_TABLE_NAME: sourceTable.tableName, SESSION_TABLE_NAME: sessionTable.tableName,
+        ARCHIVE_TABLE_NAME: archiveTable.tableName,
+        IDENTITY_HMAC_PARAMETER_NAME: identityParameter.parameterName,
+        SESSION_KEY_PARAMETER_NAME: sessionKeyParameter.parameterName,
+        RUNTIME_CONFIG_PARAMETER_NAME: runtimeParameterName,
+        MODERATOR_TOKEN_PARAMETER_NAME,
+        PUBLIC_ORIGIN: `https://${recordsPublicHostname.valueAsString}`,
+        MOBILE_DEBATE_ENABLED: mobileDebateEnabled.valueAsString,
+        MOBILE_DEBATE_CHANNEL_ID: mobileDebateChannel.valueAsString,
+      },
+      policyStatements: [
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem", "dynamodb:Query"], resources: [sourceTable.tableArn],
+          conditions: { "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ingressPartitions }, Null: { "dynamodb:LeadingKeys": "false" } },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:PutItem", "dynamodb:UpdateItem"], resources: [sourceTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ingressPartitions },
+            StringEquals: { "dynamodb:EnclosingOperation": "TransactWriteItems" },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:ConditionCheckItem"], resources: [sourceTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["CONTROL#DEPLOYMENT"] },
+            StringEquals: { "dynamodb:EnclosingOperation": "TransactWriteItems" },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"], resources: [sourceTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEBATE#*"] },
+            "ForAllValues:StringEquals": { "dynamodb:Attributes": sourceMetaFields },
+            StringEqualsIfExists: { "dynamodb:Select": "SPECIFIC_ATTRIBUTES" },
+            Null: { "dynamodb:Attributes": "false", "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem", "dynamodb:DeleteItem"], resources: [sessionTable.tableArn],
+          conditions: { "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["MOBILE_SESSION#*"] }, Null: { "dynamodb:LeadingKeys": "false" } },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:ConditionCheckItem"], resources: [sessionTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["MOBILE_SESSION#*"] },
+            StringEquals: { "dynamodb:EnclosingOperation": "TransactWriteItems" },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"], resources: [archiveTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["RECORD#*"] },
+            "ForAllValues:StringEquals": { "dynamodb:Attributes": ["PK", "SK", "schema_version", "record_type", "record_id", "requester_key", "question"] },
+            StringEqualsIfExists: { "dynamodb:Select": "SPECIFIC_ATTRIBUTES" },
+            Null: { "dynamodb:Attributes": "false", "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["ssm:GetParameters"], resources: [
+            identityParameter.parameterArn, sessionKeyParameter.parameterArn,
+            this.formatArn({ service: "ssm", resource: "parameter", resourceName: runtimeParameterName.slice(1) }),
+            this.formatArn({ service: "ssm", resource: "parameter", resourceName: MODERATOR_TOKEN_PARAMETER_NAME.slice(1) }),
+          ],
+        }),
+      ],
+    });
+    const mobileDebateVersion = new lambda.Version(this, "MobileDebateVersion", {
+      lambda: this.mobileDebateFunction, codeSha256: bundleCodeSha256.valueAsString,
+      // Lambda versions freeze configuration. Flag changes must replace the
+      // version and advance live even when the reviewed code bundle is unchanged.
+      description: `Native debate admission enabled=${mobileDebateEnabled.valueAsString}`,
+    });
+    const mobileDebateAlias = new lambda.Alias(this, "MobileDebateLiveAlias", {
+      aliasName: "live", version: mobileDebateVersion,
+    });
+
     const accessLogs = new logs.LogGroup(this, "RecordsApiAccessLogs", {
       logGroupName: "/aws/apigateway/shittim-chest-production-records",
       retention: logs.RetentionDays.THREE_MONTHS,
@@ -1868,6 +2105,12 @@ export class RecordsApplicationStack extends Stack {
       authAlias,
       { payloadFormatVersion: apigatewayv2.PayloadFormatVersion.VERSION_2_0 },
     );
+    const mobileDebateIntegration = new integrations.HttpLambdaIntegration(
+      "MobileDebateIntegration", mobileDebateAlias,
+      { payloadFormatVersion: apigatewayv2.PayloadFormatVersion.VERSION_2_0 },
+    );
+    api.addRoutes({ path: "/api/v1/debate-requests", methods: [apigatewayv2.HttpMethod.GET, apigatewayv2.HttpMethod.POST], integration: mobileDebateIntegration });
+    api.addRoutes({ path: "/api/v1/debate-requests/{requestId}", methods: [apigatewayv2.HttpMethod.GET], integration: mobileDebateIntegration });
     const readIntegration = new integrations.HttpLambdaIntegration(
       "ReadIntegration",
       readAlias,
@@ -1909,6 +2152,11 @@ export class RecordsApplicationStack extends Stack {
     ]) {
       api.addRoutes({ path, methods: [apigatewayv2.HttpMethod.POST], integration: authIntegration });
     }
+    api.addRoutes({
+      path: "/api/v1/auth/mobile/notifications/device",
+      methods: [apigatewayv2.HttpMethod.PUT, apigatewayv2.HttpMethod.DELETE],
+      integration: authIntegration,
+    });
     api.addRoutes({
       path: "/api/v1/records",
       methods: [apigatewayv2.HttpMethod.GET],

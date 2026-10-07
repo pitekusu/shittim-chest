@@ -26,7 +26,11 @@ from shittim_chest.application.ports import (
     RepositoryConflict,
     RepositoryUnavailable,
 )
-from shittim_chest.application.scale_to_zero import IngressKind, IngressRequest
+from shittim_chest.application.scale_to_zero import (
+    IngressKind,
+    IngressRequest,
+    is_mobile_ingress_id,
+)
 from shittim_chest.application.status_publication import (
     DiscordStatusGateway,
     PublicStatusPublisher,
@@ -150,9 +154,19 @@ def _get_handler() -> DiscordStatusPublisherLambda:
 
 
 def _parse_event(event: object) -> str:
-    if not isinstance(event, Mapping) or set(event) != {"schema_version", "interaction_id"}:
+    if not isinstance(event, Mapping):
         raise ValueError("status publisher event shape is invalid")
     schema_version = event.get("schema_version")
+    if (
+        schema_version == 2
+        and isinstance(schema_version, int)
+        and set(event) == {"schema_version", "source", "request_id"}
+        and event.get("source") == "mobile"
+        and is_mobile_ingress_id(event.get("request_id"))
+    ):
+        return str(event["request_id"])
+    if set(event) != {"schema_version", "interaction_id"}:
+        raise ValueError("status publisher event shape is invalid")
     interaction_id = event.get("interaction_id")
     if schema_version != 1 or isinstance(schema_version, bool):
         raise ValueError("status publisher event schema is invalid")

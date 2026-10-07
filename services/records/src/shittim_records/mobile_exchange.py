@@ -97,6 +97,8 @@ class MobileExchangeService:
             guild_verified_at=grant.guild_verified_at,
             created_at=now_epoch,
             expires_at=now_epoch + MOBILE_SESSION_TTL_SECONDS,
+            discord_user_id=grant.discord_user_id,
+            discord_username=grant.discord_username,
         )
         response = MobileExchangeResponse.model_validate(
             {

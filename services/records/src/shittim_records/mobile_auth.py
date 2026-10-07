@@ -102,6 +102,20 @@ class MobileExchangeResponse(MobileSessionResponse):
     return_to: ReturnDestination
 
 
+class MobileNotificationDeviceRequest(MobileModel):
+    """Private FCM address, never echoed in responses or validation errors."""
+
+    token: Annotated[
+        str, Field(min_length=1, max_length=2048, pattern=r"^[A-Za-z0-9:_\-.]+$", repr=False)
+    ]
+    binding_id: OpaqueValue
+
+
+class MobileNotificationDeviceResponse(MobileModel):
+    schema_version: Literal[1]
+    expires_at: AwareDatetime
+
+
 def parse_mobile_request[Model: MobileModel](model: type[Model], value: object) -> Model:
     """Expose only a stable category, never Pydantic's input-bearing error details."""
 
@@ -150,6 +164,17 @@ class MobileAuthorizedTransaction(MobileTransaction):
     display_name: NonEmptyText = Field(repr=False)
     avatar_asset_key: str | None = Field(repr=False)
     guild_verified_at: AwareDatetime
+    # Verified OAuth identity for native submission, not part of any public DTO.
+    discord_user_id: Annotated[str | None, Field(pattern=r"^[0-9]{17,20}$")] = Field(
+        default=None, repr=False
+    )
+    discord_username: NonEmptyText | None = Field(default=None, repr=False, max_length=80)
+
+    @model_validator(mode="after")
+    def validate_discord_identity(self) -> MobileAuthorizedTransaction:
+        if (self.discord_user_id is None) != (self.discord_username is None):
+            raise ValueError("invalid_mobile_discord_identity")
+        return self
 
     @model_validator(mode="after")
     def validate_code_lifetime(self) -> MobileAuthorizedTransaction:
@@ -189,6 +214,10 @@ class MobileSessionRecord(BaseModel):
     guild_verified_at: AwareDatetime
     created_at: EpochSeconds
     expires_at: EpochSeconds
+    discord_user_id: Annotated[str | None, Field(pattern=r"^[0-9]{17,20}$")] = Field(
+        default=None, repr=False
+    )
+    discord_username: NonEmptyText | None = Field(default=None, repr=False, max_length=80)
 
     @model_validator(mode="after")
     def validate_session(self) -> MobileSessionRecord:
@@ -196,6 +225,8 @@ class MobileSessionRecord(BaseModel):
             raise ValueError("invalid_mobile_session_lifetime")
         if self.avatar_asset_key not in (None, f"requesters/{self.requester_key}/avatar.webp"):
             raise ValueError("invalid_mobile_avatar_asset")
+        if (self.discord_user_id is None) != (self.discord_username is None):
+            raise ValueError("invalid_mobile_discord_identity")
         return self
 
 
@@ -216,6 +247,8 @@ MOBILE_WIRE_MODELS = (
     MobileExchangeRequest,
     MobileSessionResponse,
     MobileExchangeResponse,
+    MobileNotificationDeviceRequest,
+    MobileNotificationDeviceResponse,
 )
 
 

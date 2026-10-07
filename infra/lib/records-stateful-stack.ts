@@ -21,6 +21,8 @@ export class RecordsStatefulStack extends Stack {
   public readonly memorialGenerationQueue: sqs.Queue;
   public readonly momotalkGenerationQueue: sqs.Queue;
   public readonly momotalkGenerationDlq: sqs.Queue;
+  public readonly mobilePushQueue: sqs.Queue;
+  public readonly mobilePushDlq: sqs.Queue;
 
   public constructor(scope: Construct, id: string, props: StackProps) {
     super(scope, id, props);
@@ -155,6 +157,29 @@ export class RecordsStatefulStack extends Stack {
     Validations.of(this.momotalkGenerationDlq).acknowledge({
       id: "AwsSolutions-SQS3",
       reason: "Terminal failure destination for bounded weekly MomoTalk generation retries.",
+    });
+    this.mobilePushDlq = new sqs.Queue(this, "MobilePushDlq", {
+      queueName: "shittim-chest-production-records-mobile-push-dlq.fifo",
+      fifo: true,
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      enforceSSL: true,
+      retentionPeriod: Duration.days(14),
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+    this.mobilePushQueue = new sqs.Queue(this, "MobilePushQueue", {
+      queueName: "shittim-chest-production-records-mobile-push.fifo",
+      fifo: true,
+      contentBasedDeduplication: false,
+      deadLetterQueue: { maxReceiveCount: 4, queue: this.mobilePushDlq },
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      enforceSSL: true,
+      retentionPeriod: Duration.days(1),
+      visibilityTimeout: Duration.minutes(12),
+      removalPolicy: RemovalPolicy.RETAIN,
+    });
+    Validations.of(this.mobilePushDlq).acknowledge({
+      id: "AwsSolutions-SQS3",
+      reason: "Terminal failure destination for bounded Android record notification retries.",
     });
     Validations.of(this.memorialGenerationDlq).acknowledge({
       id: "AwsSolutions-SQS3",

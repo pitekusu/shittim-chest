@@ -20,6 +20,27 @@ CodeQL接続（C04）はKotlin 2.4.20への対応待ちとする。Kotlinはダ�
   Android Studioが作る`local.properties`でもSDKを指定できるが、Gitへ追加しない。
 - Gradleは同梱Wrapperを使う。プラグイン・ライブラリは`gradle/libs.versions.toml`を正とする。
 
+### ローカルの一時ビルドをため込まない
+
+ローカルではリポジトリのrootから管理用の入口を使う。設定済みの`JAVA_HOME`と`ANDROID_HOME`、署名・Firebaseの環境変数は引き継ぐ。
+
+```sh
+uv run --frozen python -m tools.run_android_build -- :app:assembleDebug :app:lintDebug
+```
+
+Android projectを明示する場合は`--project apps/records-android`を指定する。この端末に配置した`shittim-android-build`も同じ入口である。
+Release配布のヘルパーもこの入口へ接続し、`--output-dir`の出力から検証済みAABを取り出す。実署名・versionCode確認・Playへの提出手順は変えない。
+
+- 中間生成物、project cache、Kotlinのpersistent project data、JVM／nativeの一時ファイルは、`XDG_CACHE_HOME`配下の専用ディスク領域で作る。Kotlin公式の`kotlin.project.persistent.dir`を使い、checkoutの`.kotlin`にも蓄積させない。`/tmp`のtmpfsや使い捨てソースコピーには蓄積させない。
+- 標準の`TemporaryDirectory`とGradle init-scriptを使い、処理終了を確認してから一時領域を削除する。強制終了の残骸は、次回実行時にこの入口が作った非使用領域だけを回収する。同時ビルドによる衝突を防ぐ。Gradleの単発JVMも使用権ロックを持ち、起動途中の中断などで終了を保証できなければ`android_build_cleanup_needed`で止める。使用中・状態不明の領域を自動削除して新しいビルドを重ねない。
+- Wrapper取得失敗などinit前の通常終了は、launcherとprocess groupの終了を確認した記録がある場合だけ回収する。終了確認のない中断は従来どおり保持し、記録があってもJVMの使用権ロックを優先する。
+- 所有マーカーだけを作成して起動前に中断した領域は次回実行で回収する。使用権ロックのリンクや他の状態・ファイルが残る領域は、起動前と決めつけず保持する。
+- この入口だけはKotlin標準の`in-process`実行を指定し、コンパイラを使用権ロックのあるGradle JVM内で動かす。共有SDK・依存バージョン・CIの実行方式は変更しない。
+- 出力先の既定値は`$XDG_CACHE_HOME/shittim-chest/android-artifacts`（未指定時は`$HOME/.cache`配下）。APK／AAB、必要なLint報告とprivate logを固定名で残し、実行ごとの大きな履歴ディレクトリは増やさない。`--output-dir`でリポジトリ外の保存先を指定できる。
+- `assembleDebug`・`bundleRelease`・`build`など既知の生成taskを完全な名前で指定したビルドでは、開始前に固定出力先のmodule直下にある旧APK／AABだけを消去し、成功した今回の成果物だけを配置する。失敗・中断後に旧版を今回の成果物として残さず、リンク・別の保存階層・再送防止記録は消去しない。help・Lint・単体試験・dry-run・検証済みAABの提出は保持し、生成taskの省略名やtask除外は使わない。
+- SDK・JDK・共有Gradle cache・秘密鍵は保持する。完了した使い捨てworktree／仮想環境は、未保存変更や実行中の参照がないことを確認して片付ける。署名済みの大きな配布成果物は直近2版に限定し、Play反映結果・SHAなどの小さな再送防止記録は残す。
+- ビルド失敗と後片付け失敗は成功扱いにしない。OS／CI全体のtemp設定は変更せず、このローカルAndroid処理だけを管理する。
+
 ### Kotlin Compiler Native Image（単体CLI）
 
 Kotlin 2.4.20の公式Native Image版を、単体ソースのコンパイルに利用する。
@@ -45,16 +66,18 @@ Linux版で単体Kotlinのコンパイル・実行と、Compose Compiler 2.4.20�
 
 ## 確認
 
+ビルドコマンドはリポジトリのrootで実行する。
+
 ```sh
-./gradlew :app:assembleDebug :app:lintDebug
+uv run --frozen python -m tools.run_android_build -- :app:assembleDebug :app:lintDebug
 ```
 
-APKは`app/build/outputs/apk/debug/app-debug.apk`に出力する。
+APKは既定の成果物ディレクトリの`app/app-debug.apk`に出力する。
 debug版のapplication IDは`dev.pitekusu.shittim.records.dev`であり、配布版と分離する。
 C02の接続確認は、専用エミュレーターまたはテスト端末で次を実行する。
 
 ```sh
-./gradlew :app:connectedDebugAndroidTest
+uv run --frozen python -m tools.run_android_build -- :app:connectedDebugAndroidTest
 ```
 
 実Activityを起動する2件でMetro→Circuit→UIの接続、表示切替、Activity再生成後の復元を確認する。
@@ -89,11 +112,13 @@ AVDは`shittim-expressive-preview`を使用する。別の環境ではDevice Man
 以下は`apps/records-android`で実行する。接続先を明示し、実機や別AVDへ誤操作しない。
 
 ```sh
+SHITTIM_ANDROID_ARTIFACTS="${XDG_CACHE_HOME:-$HOME/.cache}/shittim-chest/android-artifacts"
+umask 077
 "$ANDROID_HOME/platform-tools/adb" -s emulator-5580 shell getprop sys.boot_completed
-"$ANDROID_HOME/platform-tools/adb" -s emulator-5580 install -r app/build/outputs/apk/debug/app-debug.apk
+"$ANDROID_HOME/platform-tools/adb" -s emulator-5580 install -r "$SHITTIM_ANDROID_ARTIFACTS/app/app-debug.apk"
 "$ANDROID_HOME/platform-tools/adb" -s emulator-5580 shell am start -W \
   -n dev.pitekusu.shittim.records.dev/dev.pitekusu.shittim.records.MainActivity
-"$ANDROID_HOME/platform-tools/adb" -s emulator-5580 exec-out screencap -p > /tmp/shittim-preview.png
+"$ANDROID_HOME/platform-tools/adb" -s emulator-5580 exec-out screencap -p > "$SHITTIM_ANDROID_ARTIFACTS/shittim-preview.png"
 ```
 
 操作は`adb -s emulator-5580 shell input`、画面要素の確認は`uiautomator dump`で行える。
@@ -128,11 +153,50 @@ C16のログイン画面（API 36、未認証・実データなし）：
 
 ## C03のCI
 
-- 共通CIの`android-gate`でdebug APK・テストAPK・Lintを実行し、API 36のエミュレーター1台で画面・保存のinstrumentation testを確認する。
+- 共通CIの`android-gate`でdebug APK・テストAPK・Lintを実行し、API 36のエミュレーター1台で認証・鍵・暗号化保存・DB・API・同期などの非画面instrumentation testを確認する。
+- Composeの画面・操作試験には実行時annotationの`@ScreenTest`を付け、通常のPR／main CIでは全件実行しない。試験自体は残し、UI変更時と配布前には影響する画面を選んで確認する。
 - JDKは`.java-version`、GradleはWrapperをローカルと共有する。CIにもアプリと同じSDK／Build Toolsを用意する。
 - Android配下と関連文書だけの差分ではCoreの全pytest・パッケージ・CDK検証を省略する。
-- `android-gate`は必要な処理の失敗・取消・skipを不合格にする。手動CIではAndroidも必ず検証する。
+- `android-gate`は必要な処理の失敗・取消・skipを不合格にする。Gradleの終了コードだけで判断せず、JUnitレポートの実行済み試験を必須にし、結果欠落・0件・失敗・skipも拒否する。手動CIではAndroidも必ず検証する。
 - Lint・テストのレポートを7日保存する。APK配布・CodeQL対応待ちのC04は含めない。
+
+### instrumentation testの選択
+
+[AndroidJUnitRunnerの標準フィルター](https://developer.android.com/reference/androidx/test/runner/AndroidJUnitRunner)を使う。専用の選択基盤や新しい依存は追加しない。以下はリポジトリのrootから、専用エミュレーターを起動した状態で実行する。
+
+通常CIと同じ非画面試験：
+
+```sh
+uv run --frozen python -m tools.run_android_build -- \
+  -Pandroid.testInstrumentationRunnerArguments.notAnnotation=dev.pitekusu.shittim.records.ScreenTest \
+  :app:connectedDebugAndroidTest
+```
+
+画面・操作試験だけ：
+
+```sh
+uv run --frozen python -m tools.run_android_build -- \
+  -Pandroid.testInstrumentationRunnerArguments.annotation=dev.pitekusu.shittim.records.ScreenTest \
+  :app:connectedDebugAndroidTest
+```
+
+変更した画面のクラスだけ（例：一覧ジャーナル）：
+
+```sh
+uv run --frozen python -m tools.run_android_build -- \
+  -Pandroid.testInstrumentationRunnerArguments.class=dev.pitekusu.shittim.records.RecordJournalVisualTest \
+  :app:connectedDebugAndroidTest
+```
+
+全試験はフィルターを付けずに実行する：
+
+```sh
+uv run --frozen python -m tools.run_android_build -- :app:connectedDebugAndroidTest
+```
+
+`notAnnotation`と`class`は同時指定しない。フィルターは積集合になるため、画面クラスを指定しても`notAnnotation`で除外される。
+CIで全試験を確認する場合は、手動実行の`android_screen_tests`を有効にする。既定は無効であり、手動実行でも非画面試験は常に実行する。
+対象の試験、結果、未実施の確認をPRへ記載し、タイムアウト・取消・skipを合格扱いしない。画面試験の選択変更は、既存タイムアウトの原因解消や性能改善を証明するものではない。
 
 ## C02の責務
 
@@ -156,6 +220,35 @@ C16のログイン画面（API 36、未認証・実データなし）：
 - 固定認証callbackと`/records/{43文字のID}`だけがアプリのHTTPSリンク対象。記録リンクは固定host・query／fragmentなしを確認してから画面へ渡す。
 - 未ログインで記録リンクを開いた場合はその記録をログイン後の復帰先にし、ログイン済みなら記録を再取得する。記録の公開範囲はAPIの認可で決まる。
 - Play配布版でのOS検証、実Discordログイン、実upload keyで署名したAABの提出は、本番配布の準備ができた時点で行う。debug署名のエミュレーター確認はその代替にならない。
+
+## 「＋」の押下フィードバック
+
+円形FABは64dpにし、Material標準の押下反応に、記号の28%の縮み・5dpの沈み込み、濃い押下色と影の低下を組み合わせる。約160ms後に下書きを開くが、64dpのタップ領域は動かさない。連打、待機中の認可・画面変更、背面への移動では古い操作を適用しない。アニメーション無効時は待機しない。
+
+架空操作の[通常状態](screenshots/debate-fab-resting.png)／[押下中](screenshots/debate-fab-pressed.png)で見た目を比較できる。
+
+`DebateComposeFabTest`で待機前の反応、連打、前景離脱、無効設定を確認し、`RecordSearchNavigationTest`の既存FAB経路で下書きだけを開くことを確認する。押しただけで討論は送信しない。
+
+## 議論開始画面の対戦演出
+
+3人の顔を「アロナ VS プラナ VS 安倍晋三AI」と並べ、人格色の斜めのVSバッジと短い登場演出を表示する。Compose標準のAnimatableとMaterialのMotionSchemeを使い、背景では停止する。復帰・再作成で再演せず、アニメーション無効時は完成形を表示する。演出中も下書き入力・明示送信を待たせない。
+
+公開先の説明文は撤去し、送信ボタンは「シッテムの箱を開く」とする。空白・文字数・オフライン・送信中・受付済みの送信制御、暗号化下書き保存、APIとDiscordの投稿先は変更しない。
+
+`DebateScreensUiTest`を任意に実行し、架空の入力で[ダーク](screenshots/debate-versus-dark.png)、[ライト](screenshots/debate-versus-light.png)、[320dp・文字2倍](screenshots/debate-versus-large-text.png)を確認する。実Discord投稿・実機受入・内部テスト配布の証拠ではなく、重い画面試験CIは追加しない。
+
+## Play内の更新案内
+
+- SnackbarのinverseSurfaceに合わせて、両操作のTextButtonへSnackbarDefaultsのactionContentColorを指定する。通常のprimaryを流用しない。[ダーク](screenshots/update-actions-dark.png)／[ライト](screenshots/update-actions-light.png)の実描画を確認し、有効な「更新」「あとで」の文字と背景のコントラスト4.5以上を回帰試験する。SDKの同意・保留・ダウンロード・再起動の制御は変更しない。
+- Google公式In-App UpdatesのFLEXIBLE方式を使用する。前景で更新を確認し、「更新／あとで」を表示する。更新を押した後だけPlayの同意画面を開き、バックグラウンドでダウンロードする。
+- 完了後の「再起動して更新」も明示操作だけで実行する。強制更新、独自APK配布、入力中の自動送信は行わない。Play未対応・オフライン時も保存済み記録を閲覧できる。
+- `PlayUpdateNoticeTest`は公式Fakeで接続境界を検証する。Compose操作を含むため`@ScreenTest`に分類し、通常CIの画面試験除外に従う。必要時はローカルまたは`android_screen_tests`を指定した手動CIで実行する。実配布の確認には、この機能を含む旧版と、その後のより大きい`versionCode`の内部テスト版が必要。旧版をPlayから取得して同じテスターアカウントを使い、ストアで更新する前にアプリ内の案内を確認する。
+- 「あとで」・取消、同意後の閲覧継続、準備完了後の明示再起動、下書き・ログインの保持を実機で確認する。Fake・Debug版の合格をPlay実接続成功とは扱わない。
+- 遅い同意結果は、SDKが既に通知した失敗を待機状態へ戻さず、明示再試行を妨げない。
+- 受信済みの失敗は要求版とともにSavedStateへ保持し、回転・画面再作成後も同じ版への明示再試行を維持する。SDKオブジェクトや応答本文は保存しない。
+- 明示操作では古い前景確認を標準Coroutineの取消で止め、操作中は復帰確認を重ねない。SDK通知より古い操作の応答・例外は状態へ反映せず、新しい再試行の操作制限も解除しない。
+- 確認応答のinstallStatusは更新進行中だけを読み、更新なしの未定義値から再起動を案内しない。開始・復帰した実際の版を取消対象とし、確認から同意までの新規公開や背景での版変更でも同じ版を再案内しない。背景中にPlay側で取り消されてlistenerが受信しなかった場合も、既に要求した版は再案内せず、新しい版は提示する。
+- 更新操作直前の確認結果も反映し、更新の撤回・FLEXIBLE不可なら古い案内を消す。SDKのlistenerはComposition破棄まで保持し、背景中の失敗も明示再試行できる。未開始の確認応答では、失敗案内を同じ要求版が利用可能な場合だけ維持し、次版公開・撤回・FLEXIBLE不可で古い失敗を解除する。問い合わせは前景のみで背景pollingは追加しない。プロセス破棄・画面再作成でイベントを受信できず同じUPDATE_AVAILABLE応答へ戻った場合は取消と失敗を区別できないため、同一版の再案内を抑止し、新規起動・新しい版で再提示する。未定義の状態から失敗原因を推測しない。
 
 ## C20：本人向け内部テスト
 
@@ -181,7 +274,7 @@ C16のログイン画面（API 36、未認証・実データなし）：
      -storetype PKCS12
    ```
 
-3. Play Consoleの「内部テスト」で本人のGoogleアカウントだけをテスターに追加する。提出済みの最大`versionCode`より大きい番号を選び、秘密値を対話入力して同じ端末で署名済みAABを作る。この手順で作るPKCS12では鍵パスワードに保管庫と同じ値を使う。パスワードをコマンド引数、`gradle.properties`、シェル履歴へ書かない。
+3. Play Consoleの「内部テスト」で本人のGoogleアカウントだけをテスターに追加する。提出済みの最大`versionCode`より大きい番号を選び、秘密値を対話入力して同じ端末で署名済みAABを作る。以下のビルドはリポジトリrootから実行する。この手順で作るPKCS12では鍵パスワードに保管庫と同じ値を使う。パスワードをコマンド引数、`gradle.properties`、シェル履歴へ書かない。
 
    ```bash
    # 保管庫のパスワードを入力してEnter（入力内容は表示されない）
@@ -189,18 +282,32 @@ C16のログイン画面（API 36、未認証・実データなし）：
    SHITTIM_ANDROID_UPLOAD_KEY_PASSWORD=$SHITTIM_ANDROID_UPLOAD_STORE_PASSWORD
    export SHITTIM_ANDROID_UPLOAD_KEYSTORE SHITTIM_ANDROID_UPLOAD_STORE_PASSWORD
    export SHITTIM_ANDROID_UPLOAD_KEY_PASSWORD
-   SHITTIM_ANDROID_UPLOAD_KEY_ALIAS=shittim-upload ./gradlew :app:bundleRelease \
+   SHITTIM_ANDROID_UPLOAD_KEY_ALIAS=shittim-upload \
+     uv run --frozen python -m tools.run_android_build -- :app:bundleRelease \
      -PshittimAndroidVersionCode=1 -PshittimAndroidVersionName=0.0.1
    unset SHITTIM_ANDROID_UPLOAD_STORE_PASSWORD SHITTIM_ANDROID_UPLOAD_KEY_PASSWORD
    ```
 
-   番号`1`と`0.0.1`は初回・未使用の場合の例。成果物は`app/build/outputs/bundle/release/app-release.aab`に作られる。Play Consoleの「内部テスト」→「リリースを作成」でこのAABを提出し、パッケージ名`dev.pitekusu.shittim.records`、版番号、配布対象が本人のみであることを確認して公開する。Playが配布用APKをアプリ署名鍵で署名するため、upload keyのSHA-256を`assetlinks.json`へ追加しない。
+   番号`1`と`0.0.1`は初回・未使用の場合の例。成果物は既定の成果物ディレクトリの`app/app-release.aab`に作られる。Play Consoleの「内部テスト」→「リリースを作成」でこのAABを提出し、パッケージ名`dev.pitekusu.shittim.records`、版番号、配布対象が本人のみであることを確認して公開する。Playが配布用APKをアプリ署名鍵で署名するため、upload keyのSHA-256を`assetlinks.json`へ追加しない。
 
 4. 本人の実機でテスター参加リンクからPlay版をインストールする。debug版や「内部アプリ共有」版で代用しない。Androidの設定で対象ドメインが「検証済み」か確認する。開発者向けADBが使える場合は、`adb shell pm get-app-links dev.pitekusu.shittim.records`の`shittim.pitekusu.dev: verified`でも確認できる。確認時に端末の既定アプリ設定を手動変更して検証成功を装わない。
 5. 実Discordログイン後に記録1件が表示されること、ログアウト後に記録リンクを開いて再ログインすると同じ記録へ戻ることを確認する。callback URLの一回限りコードやBearer tokenをスクリーンショット・ログへ残さない。
 6. 更新試験は同じupload keyで、より大きい`versionCode`のAABを内部テストへ提出し、Playから更新する。保存済みセッションと記録表示が壊れないことを確認する。失敗版を旧AABへダウングレードせず、新しい版番号の修正版で直す。
 
 記録する受入結果は版番号、内部テストの状態、App Links検証、ログイン・記録復帰・更新の成否だけにする。署名鍵・パスワード・token・private Discord ID・実質問を記録しない。鍵が未作成、Play配布未実施、または実機未確認ならC20の配布受入は未完了として扱う。
+
+## C38：内部テスト配布の接続
+
+- [r0adkll/upload-google-play](https://github.com/r0adkll/upload-google-play)（MIT）を配布Workflowの完全SHA付き`uses:`で固定する。アップロードとcommitはこのActionへ任せ、Gradle Play Publisherや独自Pythonの提出処理は使わない。既存のAGP・Kotlin・Materialと通常ビルドは維持し、アプリの実行時依存を追加しない。
+- 採用時に保守状況・ライセンス・ランタイム・WIF対応・依存advisoryを確認する。採用pinのbraces・qs・undiciには既知advisoryがあるが、固定AABパス・固定API引数・WebSocket未使用の経路では、その攻撃条件に該当する入力経路を確認できなかった。脆弱性ゼロとは扱わず、pin更新時に再確認する。
+- API認証はGitHub OIDCと[Workload Identity Federation](https://cloud.google.com/iam/docs/workload-identity-federation-with-deployment-pipelines#github-actions)による短寿命認証を使う。認証Actionの`credentials_file_path`を提出Actionの`serviceAccountJson`へ渡す。サービスアカウントの長期秘密鍵JSONや`serviceAccountJsonPlainText`は使わない。
+- Play側のサービスアカウント権限を本アプリのテストトラックに限定し、本番公開・掲載情報変更・財務権限を付けない。GitHub側のWIF条件はrepository・main・専用Environment・配布Workflowに限定する。外部設定が未完了なら配布受入は未完了とする。
+- upload keyと署名パスワードは引き続きC18のReleaseビルド専用。API用の短寿命認証はAABを署名せず、署名済みAABの提出にはupload keyを再読込する必要はない。
+- 正式な提出入口はC39の手動Workflow。`releaseFiles`へ**検証済みの署名付きAABを1個だけ**指定し、globや複数成果物を渡さない。提出段階で再ビルドせず、`packageName`・`tracks: internal`・`status: completed`をWorkflowで固定する。掲載情報・本番トラック・内部アプリ共有は変更しない。
+- 配布helperは公式Google SDKを使い、版番号の事前読取、秘密入力の準備、AAB検証、提出後の再取得、後片付けに限定する。全track・提出済みbundle／APKの最大番号検査、SHA-256／署名／package／versionCodeの検証を維持し、競合時の自動再番号付けやuploadの自動再送は行わない。
+- Actionは通常のcommitを行う。[Play commitの既定動作](https://developers.google.com/android-publisher/api-ref/rest/v3/edits/commit)は既存審査を取り消して変更を送信し得るため、起動前に他の審査が進行中でなく、未送信の掲載情報変更を意図せず送信しない状態をPlay Consoleで確認する。この運用確認を自動guardで代替したとは扱わない。
+
+接続試験は架空データでWorkflowの単一AAB・WIF入力・固定トラックとhelperの検証境界を確認する。Action内部の提出処理を独自に複製して試験せず、実署名・WIF・Play配布の受入とは区別する。
 
 ## C17の記録1件表示
 
@@ -227,6 +334,7 @@ C16のログイン画面（API 36、未認証・実データなし）：
 
 - 詳細APIから3人の初回意見と最終案を読み、人格の対応と必須本文を検証して表示する。投票・評価・親愛度は後続工程で扱う。
 - Markdownの構文解析とMaterial 3描画は`multiplatform-markdown-renderer`に任せる。外部リンクは絶対HTTPS URLだけを開き、Markdown画像のURLは自動取得しない。
+- 議題・回答・見出しなどの日本語は、共通Typographyの`LineBreak.Paragraph`＋`WordBreak.Phrase`と`ja-JP`で文節単位の折り返し・禁則処理を行う。全利用者のAndroid 16以降で使用でき、Android 16で表示を検証する。本文へ改行や不可視文字を挿入せず、画面幅・文字サイズに応じて描画する。互換上のAndroid 8〜12は標準の高品質な段落折り返しへ安全にフォールバックする。Markdownのコードブロックは等幅・横スクロールを維持し、`LineBreak.Simple`で別扱いにする。
 - 本文は既存の認証済み画面状態でのみ保持し、永続キャッシュ・ログ・テレメトリーへ追加しない。
 
 ## C24の投票・評価
@@ -237,8 +345,8 @@ C16のログイン画面（API 36、未認証・実データなし）：
 
 ## C25の親愛度・任意項目
 
-- 旧記録の`affection: null`は数値を作らず「親愛度データなし」と表示する。`unavailable`は質問評価を「未評価」、実増減を0として示す。
-- `applied`では3人それぞれの変更前・変更後、質問評価点、実増減を別々に表示する。上限・下限で質問評価点と実増減が異なる場合もAPIの値をそのまま使う。
+- 旧記録の`affection: null`は数値を作らず「親愛度データなし」と表示する。`unavailable`は評価不能の説明と実増減0を示す。
+- `applied`では3人それぞれの変更前・変更後と実増減を表示する。質問評価点は画面に表示しないが、上限・下限で実増減と異なる場合もAPIの値を検証する。
 - 勝利コメント、実行案、注意点は内容がある場合だけ表示する。欠損・重複・範囲外・数値の不整合を拒否し、親愛度は変更しない。
 
 ## C26の保存用秘密鍵保護
@@ -283,11 +391,19 @@ C16のログイン画面（API 36、未認証・実データなし）：
 
 ## C31の全記録同期
 
-- ログイン・復帰時に自動同期する。専用の同期メニュー・手動更新ボタンは設けず、同期中・失敗時だけ小さく状態を表示する。全索引ページをたどり、未保存・更新分だけを1件ずつ暗号化保存する。件数未確定のため推測した割合は表示しない。
+- ログイン・復帰時に自動同期する。一覧先頭で下方向へ引っ張ると同じ差分同期を手動で予約できる。専用の同期メニュー・手動更新ボタンは設けず、同期中・失敗時だけ小さく状態を表示する。全索引ページをたどり、未保存・更新分だけを1件ずつ暗号化保存する。件数未確定のため推測した割合は表示しない。
 - C31の初期実装は画面起点だったが、C32追加仕様でWorkManagerによるバックグラウンド自動同期へ変更した。詳細への移動・画面停止／再生成では同期を止めない。OSによる停止時は保存済み進捗から再開する。
 - 進捗は既存の暗号化Storeに別用途で保存し、Room schemaや既存本文の形式は変えない。ログアウト・別アカウントへの切替では進捗も消す。token・質問・プロフィールは進捗へ保存しない。
 - 再起動後もWorkManagerから未完了分を続行する。cursor期限切れは1回だけ先頭から列挙し直し、版が一致する保存済み詳細は再取得しない。通信／保存エラーやキャンセルでは完了扱いにしない。
 - 初回保存後は軽量な同期索引を照合し、新規・更新分だけ取得する。C32では全ページ成功後の不在候補を詳細APIで確認し、404の場合だけ削除する。保存済み詳細は開くたびに再取得しない。
+
+### 自動同期の待ち時間を抑える
+
+- コミット済み記録版は暗号化した同期進捗へまとめる。変更なしは一覧・詳細の存在を一括照合し、本文の復号や1件ごとの進捗書き込みをしない。旧キャッシュの版は一度だけ取り込む。
+- 中断した同期も先頭ページの最新記録から確認して、元のcursorへ戻る。先頭ページだけで削除を判定せず、全列挙後の認証済み404確認を維持する。
+- 本文・一覧を保存した時点で表示へ通知し、アイコンは全本文の照合後に取得する。画像待ち・画像再試行で完成した本文を隠したり再取得したりしない。
+- 最初の変更通知は即時、続く通知は最大500msで集約して最後も届ける。変更のないWorker状態通知で一覧を読み直さず、暗号文が一致する一覧・アイコンはアカウントに紐づくメモリで再利用する。変更・削除・改ざん・認可喪失は引き続き検出する。
+- 回帰試験は変更なしの書き込み回数、古い同期より先に最新記録が見えること、画像遅延と失敗後の本文保持、別Repositoryの更新・削除・改ざん、最後の通知と認可境界を確認する。暗号化方式・Room schema・公開API・15分の定期同期設定は変更しない。
 
 ## C32の保存済み表示と更新
 
@@ -312,12 +428,21 @@ API 36・架空データで確認した保存済み詳細パネル：[ライト]
 
 ### バックグラウンド自動同期と差分取得
 
-- ログイン・アプリ復帰後に即時同期を予約し、約15分間隔の定期同期を一意なWorkManagerジョブとして保持する。ネットワーク接続が必要で、省電力・Doze・強制停止等により実行は遅れる。サーバーpushによる瞬時反映ではない。一覧・保存済み詳細に手動同期操作は置かず、通常の閲覧を妨げない。
+- ログイン・アプリ復帰後に即時同期を予約し、約15分間隔の定期同期を一意なWorkManagerジョブとして保持する。ネットワーク接続が必要で、省電力・Doze・強制停止等により実行は遅れる。サーバーpushによる瞬時反映ではない。手動更新は一覧先頭の引っ張る操作だけにし、保存済み詳細では通常の閲覧を妨げない。
 - `GET /api/v1/records/sync-index`は50件ずつの軽量なID・記録版・アイコン版だけを返す。質問・依頼者名・回答は返さない。全索引を照合するため、古い日付で後から追加された記録や削除も検出できる。本文は未保存・更新版だけ取得し、同じ依頼者の同じ版のアイコンは共有して再取得しない。
 - 同期索引をまだ持たない旧キャッシュは、初回だけ本文を再確認して基準版を作る。その間も保存済み記録は読める。新APIをRecords Releaseで先に配信し、その後Androidを配布する。旧アプリの既存GET契約は維持する。
 - Workerは実行時にKeystoreからtokenを読み、サーバーの本人・期限を確認する。WorkManagerの入力・出力・進捗へtoken、質問、利用者IDを入れない。各保存境界で期限・削除意図・同じtoken・所有者を確認し、所有者を再活性化しない。失効確認時はオフライン認可もロックする。
 - 8分で区切り、途中進捗から再開する。通信失敗は指数backoffで最大3回再試行する。通常の画面停止では継続するが、ログアウト・切替では予約を止め、鍵・暗号文・アイコン・進捗を消す。
 - 実機確認：自動同期の完了後に機内モードで再起動し、アイコンと本文を確認。再接続後の新規記録追加と差分更新、画面を閉じた場合の継続、ログアウト後の非表示を確認する。
+
+### 一覧を引っ張って手動更新
+
+- 一覧を先頭まで戻し、下方向へ引っ張って離すと更新する。採用済みMaterial 3の`PullToRefreshBox`を使用し、途中の通常スクロールでは更新しない。
+- 既存の差分同期へ接続し、実行中のジョブを置き換えず重複予約を防ぐ。保存済みの一覧・本文と読位置を維持し、表示を空や初期読み込みへ戻さない。
+- 検索・絞り込み・メニュー・詳細表示中、画面非表示時、認可喪失後は無効。認可済みオフライン中は接続待ちで予約する。大きな丸表示は引っ張る操作のフィードバックだけとし、自動同期のRunningではブランド上に常駐させない。
+- 同期中は件数下の固定高領域に「最新の記録を確認中」と小さな進捗を併記する。通信を確認できない場合は「保存済みの記録を表示中（オフライン）」だけを表示し、WorkerがRunningでも通信中の進捗を重ねない。待機・完了では進捗を消し、読位置を動かさない。同期・保存・認可・予約の処理は変更しない。
+- 架空状態の画面：[ライト](screenshots/meaningful-sync-light.png)／[ダーク](screenshots/meaningful-sync-dark.png)／[文字2倍](screenshots/meaningful-sync-large-text.png)／[オフライン](screenshots/meaningful-sync-offline.png)。実通信・実機・Play配布の証拠ではない。
+- 確認：先頭での更新、途中スクロール、同期中の再操作、完了後の再操作、オフライン予約、認可喪失と保存済み表示の維持を架空データで試験する。Play配布・実機受入は別依頼で行う。
 
 ## C34：共通デザインシステム
 
@@ -356,7 +481,7 @@ API 36・架空データによる画面確認。実DiscordログインやPlay配
 
 ## C36：可変幅レイアウトと画面操作
 
-- Material 3 Adaptiveの標準一覧／詳細配置を利用。幅840dp以上・文字倍率1.5未満は左右2ペイン、それ以外は選択先を1ペインで表示する。詳細の本文幅は760dpまでとし、長文でも「一覧に戻る」を常時操作できる。
+- NavDisplayとMaterial 3 Adaptiveの標準ListDetailSceneStrategyで一覧／詳細を配置する。幅840dp以上・文字倍率1.5未満は左右2ペイン、それ以外は選択先を1ペインで表示する。詳細の本文幅は760dpまでとし、端末の戻る操作を使う。
 - リサイズや詳細往復で選択・検索条件・一覧スクロールを維持する。認可を失えば両ペインを直ちに取り除く。認証・API・同期・保存形式は変更しない。
 - 戻るgestureで標準ペイン遷移をプレビューし、確定時だけ一覧へ戻る。キャンセルでは詳細を開いたままにし、認可喪失や別記録への切替後に古いgestureを確定しない。通常の戻るボタンとアニメーション無効時も同じ選択・スクロールを維持する。
 - 日本語のpane名・見出し・表示中の選択状態をsemanticsへ設定し、装飾アイコンの代替イニシャルを重複して読ませない。文字拡大時は1列へ戻して折り返す。TalkBack実聴と実機・Play配布はエミュレーターのsemantics確認と区別する。
@@ -377,10 +502,103 @@ API 36・架空データ。標準のテスト用window／font scale overrideで�
 - ログイン前の常設説明文を削除。期限切れ・取消・失敗・ブラウザー不可の状態表示は残す。C35の短い完了通知は次の起動／ログイン演出PRで置き換える。
 - 架空データの画面試験でメニューの導線とログアウト操作、一覧・詳細のスクロール維持を確認する。実Webへの接続とブラウザーからの復帰は内部テスト版で確認する。
 
+## C39：GitHubからの内部テスト配布
+
+C38を先に取り込み、`.github/workflows/android-release.yml`を`main`から手動実行する。
+通常のCIやPRではPlay認証・署名・提出を行わない。Play掲載情報や本番トラックも変更しない。
+
+管理者がGoogle WIFを、固定リポジトリ・数値repository/owner ID・`main`・このWorkflow・
+`workflow_dispatch`・`android-internal` Environmentだけに限定する。
+既存Play用サービスアカウントに`roles/iam.workloadIdentityUser`を付け、Play Consoleでは
+対象アプリの読取・テストトラックへの配信だけを許可する。長期API秘密鍵をGitHubへ登録しない。
+
+Environmentはmain限定とし、次を安全に登録する。
+
+- Variables：`PLAY_WORKLOAD_IDENTITY_PROVIDER`、`PLAY_SERVICE_ACCOUNT`、
+  `ANDROID_UPLOAD_KEY_ALIAS`、`ANDROID_UPLOAD_CERT_SHA256`、`ANDROID_RELEASE_ENABLED`。
+- Secrets：`ANDROID_UPLOAD_KEYSTORE_BASE64`、`ANDROID_UPLOAD_STORE_PASSWORD`、
+  `ANDROID_FIREBASE_CLIENT_CONFIG`。API認証とAAB署名は別物として扱う。
+
+外部設定と読取確認が終わるまでは`ANDROID_RELEASE_ENABLED=false`を維持する。
+有効化後も、配布は別の明示的な手動実行で行う。
+固定SHAの最新main CI・Records CI・既存CodeQL成功を確認し、全トラック/bundle/APKの最大版番号より
+大きいAABを一度ビルドする。Release Lint、JDK署名、固定bundletoolのmanifest、upload証明書とhashを検証し、
+検証した同一AABだけを固定した提出Actionへ渡す。Actionがupload・internal track更新・commitを行い、helperのPlay再取得で版番号・hash・`completed`が一致したことを確認する。
+`minimum_version_code`は指定下限であり、通常はPlay読取の最大番号＋1を使う。失敗後の新しい実行では、
+Consoleで副作用を確認した前回試行番号＋1を下限に指定し、API未掲載の番号も再利用しない。
+以後の更新を不可能にするPlayの最終番号`2100000000`は、下限指定・自動採番のどちらでもビルド前に拒否する。
+署名検証はpinした公開証明書のUTC有効期間を確認し、その証明書だけの一時truststoreでJDKの厳格検証を行う。
+自己署名を理由にexit code 4全体を許可せず、期限切れ・未有効やその他の重大警告は拒否する。一時truststoreは回収する。
+`verification.json`は提出前のAAB検証、`receipt.json`はAction成功後の提出後照合の小さな記録とする。
+receiptの`status=submitted`・`verified=true`はinternal/completedと同一AABのhash照合成功を表す。
+trackの`completed`とreceiptは端末で更新可能な証拠ではない。審査・公開の状態をPlay Consoleで確認し、
+Play内部テスト版を実機で取得・更新できることを別途確認して配布受入とする。
+
+起動前にPlay Consoleで他の審査と未送信変更を確認し、実行中は同じアプリを編集しない。
+失敗・タイムアウト・取消・応答不明ではWorkflowの「再実行」は使わず、Play側の版番号・hash・internal trackとreceiptを確認する。
+副作用を把握してから新しい手動実行を判断し、自動再送・自動再番号付けは行わない。
+artifactは非機密の`verification.json`と`receipt.json`だけ7日保持し、鍵・資格情報・Firebase設定・edit ID・AAB・Gradleログは含めない。
+秘密入力と一時ログは`always()`で回収する。強制終了やreceipt保存失敗もupload／commit未実行の証拠とは扱わない。
+
+架空データの接続試験は実提出の受入ではない。最初のActionによるWIF提出は別の配布依頼で行う。
+
+詳しい外部設定と検証境界は[Androidアプリ設計](../../docs/29_Androidアプリ設計.md#c39内部テスト配布の自動化)を参照する。
+
+## C40：依存と配布ツールの更新検知
+
+Android専用の監視を増やさず、既存のDependabot・Dependency Graph・Release Tool Versionsを使用する。
+
+| 対象 | 更新を確認する仕組み | 固定値の正本 |
+|---|---|---|
+| Gradle Wrapper・プラグイン・ライブラリ | Dependabotの既存Gradle設定 | Wrapper・Version Catalog・Gradle設定 |
+| CI／配布のAction（upload-google-playを含む） | Dependabotの既存GitHub Actions設定 | Workflowの`uses:`（完全SHA） |
+| JDK・SDK Platform／Build Tools・bundletool | 既存Release Tool Versionsの単一Issue | `apps/records-android/.java-version`・アプリのGradle設定・`.github/tool-versions.json` |
+| 推移的依存の脆弱性 | 既存Dependency GraphへのGradle依存送信 | 実際に解決された依存。更新には親依存や制約の確認が必要 |
+
+Gradleは月曜09:15、Actionsは月曜09:00、固定ツールは水曜13:29（日本時間）の既存予約を維持する。
+Version Catalogの更新と同じライブラリを固定ツール側へ重複登録しない。
+Emulator・system image・SDK command-line toolsはこの固定ツール監視の対象ではない。
+
+検知は自動採用やPlay配布ではない。更新PRでは互換性、関連するビルド・Lint・試験、必須CIとCodeQLを確認する。
+Kotlin・Compose・Materialの既定版、Actionの完全SHA、配布ツールのchecksum／署名条件を無断で変更しない。
+固定ツールの取得失敗は未確認として残し、古い成功で更新Issueを閉じない。
+依存グラフへ送信された推移的依存に警告があっても、Dependabotによる修正PRの生成は保証されない。
+
+既存の検知設定とC38／C39の参照を確認した文書整理であり、依存更新・新Workflow・追加権限・Play提出は行わない。
+詳しい担当範囲は[Androidアプリ設計](../../docs/29_Androidアプリ設計.md#c40android依存の更新検知)を参照する。
+
+## Navigation 3：閲覧先の一本化（第1段階）
+
+- Navigation 3 runtimeの`NavKey`と`rememberNavBackStack`で、一覧とopaqueな記録IDを持つ詳細を管理する。Circuit／Metroは描画状態・イベント・依存接続に継続使用し、別のback stackを追加しない。
+- セッションモデルの現在の閲覧先を撤去する。検証済みApp Link・ログイン結果は一回限りの復帰先として受け渡し、有効なローカル閲覧許可の下で消費する。期限切れ中のrouteは非表示にし、明示ログアウトと確認済みアカウント切替で破棄する。
+- back stackの保存対象はroute識別子だけ。質問・回答・検索語・token・アカウント識別子をSavedStateへ入れない。詳細を開き直すとアロナの初回意見から開始し、同じ閲覧中の回転・同期では位置を維持する。
+- 第1段階では既存のAdaptive描画・約280msの戻りを維持し、描画の置換を第2段階へ分離した。未使用のUI依存や独自navigation wrapperは先行追加しない。
+- 関連試験で一覧／詳細往復、認可喪失、一回限りの復帰先、ログアウト・アカウント切替を確認する。外部復帰と状態寿命の横断確認は後述の第3段階を参照する。C41は指定によりスキップし、Playへの配布は別操作とする。
+
+詳細は[Androidアプリ設計のNav3移行](../../docs/29_Androidアプリ設計.md#navigation-3への段階的移行)を参照する。
+
+## Navigation 3：描画・Adaptive Scene（第2段階）
+
+- 一覧／詳細をNavDisplayのentryへ接続し、標準ListDetailSceneStrategyで1ペイン／2ペインを切り替える。内容幅840dp・文字倍率1.5の境界、hinge回避、一覧・本文の最大幅は維持する。
+- 各entryを既存の不透明なブランド背景で覆い、背景ごとスライドする。詳細の余白に退出中の一覧が透けないこと、往復の途中フレームと一覧の読位置を`Nav3SceneMotionUiTest`で確認する。試験内だけ標準UiAutomationでアニメーションを有効にし、終了時に元の設定へ戻すため、既定で演出を無効にする試験環境でも途中フレームを確認できる。
+- 予測型Backの進捗・取消と退出中のentry保持は標準処理へ任せる。NavigationBackHandlerをNavDisplayより前に置き、広幅はAdaptive Scene内部のBack処理を優先する。現在のrouteでnavigation event状態と広幅の描画scopeを切り替えて古いgestureを取り消し、狭幅のNavDisplayは維持して約280msの戻りスライドを保つ。独自PredictiveBackHandler・seekTo・取消時の復元は撤去し、確定時は認可確認済みの既存CloseRecordへ接続する。
+- entryProviderを同じアカウントの描画scopeでrememberし、contentとAdaptive metadataのidentityを維持する。予測型Backのpreview先と確定後の一覧が別の遷移先と扱われ、詳細が即時消える状態を防ぐ。表示内容は既存rememberUpdatedStateで更新し、認可喪失・アカウント切替では保持しない。
+- `Nav3SceneMotionUiTest`で通常の3ボタンBack、長文MarkdownからのBack、予測型の取消・確定を途中フレームで確認する。予測型の途中確定で詳細が即時消える回帰を防ぎ、読位置・選択・認可境界も維持する。これらの画面試験は任意のローカル確認とし、通常CIの重い画面試験を復活させない。
+- 詳細のSaveable状態は標準entry decoratorで管理する。decorated entry・SaveableStateHolder・scene状態は描画scopeのroute keyより外側に置き、同じentryのリサイズ・回転・同期では読み位置を維持する。独自の詳細UUID・手動removeStateは使わず、pop後の再訪は初回意見から開始する。一覧のPaging・検索・読位置はdetail entryから独立して保持する。
+- 認可喪失では退出中のentryも含め記録画面を直ちに外し、アカウント切替ではNavDisplayと旧entryを破棄する。検索語・本文・token・アカウント識別子をentryの保存状態へ追加しない。Sceneの自動focus移動を無効にし、検索画面から詳細へ進んだ後も一覧復帰時にキーボードやフォーカスを復活させない。
+- 境界幅、文字拡大、戻る確定・取消、プレビュー中の認可喪失・アカウント切替、詳細再訪・回転を関連試験で確認する。外部リンク・認証・オフライン復帰の横断確認は後述の第3段階を参照する。
+
+## Navigation 3：外部復帰・状態寿命（第3段階）
+
+- MainActivityの既存cold／warm起動と再作成時のリンク再演拒否、retained MobileSessionModelのpending復帰先を横断確認する。onNewIntentの新しい入力は同じcanonical App Link・通知binding検証へ接続済みで、Intentの再読込や独自Nav3 decoder・ResultBusを追加する必要はない。本体は第1・第2段階の実装を維持する。
+- 固定URI検証・一回限りのpending消費・Auth TabのActivity Resultを維持する。通知の旧binding拒否と認証取消・再試行・失効は既存の安全条件を使い、API・認証方式・通知設定・依存を変更しない。
+- `RecordAppLinkTest`でcold／warm起動・再作成・旧通知binding拒否を確認する。`Nav3ReturnFlowUiTest`は標準ActivityMonitorと架空データを使い、Webを開いて戻った後の詳細の人物・回答段階・読位置と一覧の条件・読位置・focus非復活を確認する。pending・オフライン認可・再訪／回転・検索からの復帰は既存の関連試験を利用する。
+- この工程では実機・実Discord認証・実FCM通知・Play配布を行わない。架空環境の画面・操作確認は、その受入を確認済みとする根拠にはしない。内部テスト版での主要操作確認は、別途配布後の受入として残す。
+
 ## 起動・ログインのブランド演出
 
 - Android標準SplashScreenから全画面のシッテム演出につなぐ。起動は約1秒、対話的ログインが確認・保存まで成功したときは約1.5秒。認可確認や保存済み記録の表示は演出と並行して進む。
-- ロゴ円弧を回転させ、ログイン前の画面でも約8秒で一周する。タップ・戻る操作で演出をスキップでき、アニメーション無効なら即時に本画面を表示する。回転や通常の画面復帰では再演しない。
+- ロゴ円弧を回転させ、ログイン前と記録一覧のヘッダーでも約8秒で一周する。タップ・戻る操作で演出をスキップでき、アニメーション無効なら即時に本画面を表示する。回転や通常の画面復帰では再演しない。
 - 取消・失敗時にはログイン成功演出を出さない。C35の完了Snackbarを置き換え、保存token・本文・利用者名を演出状態へ保持しない。
 - API 36の未認証・架空環境で確認した[ログイン画面](screenshots/login-refined.png)と[起動演出の短い録画](screenshots/brand-intro.mp4)。実認証や実機性能の証拠ではない。
 
@@ -389,19 +607,47 @@ API 36・架空データ。標準のテスト用window／font scale overrideで�
 - 既存WebPを同梱し、一覧の勝者・絞り込み・意見・詳細の勝者へ顔アイコンと名前を表示する。勝者は王冠で区別する。
 - 表示モデルにAPIの人格slotを残す。旧キャッシュは既知の人格名から補完し、不明なら汎用アイコンにする。暗号化保存の移行や全件再取得は不要。
 
+## 記録一覧のジャーナル
+
+- 日本時間の完了日で記録をまとめ、56dpの依頼者アイコン・大きな依頼者名・最大4行の議題を中心に表示する。勝者は下段の24dpの王冠付き顔と短い名称、時刻は補助情報とする。人格色のカード輪郭は維持し、全文は既存の詳細で読む。依頼者アイコン欠損時は大きな代替表示を使い、長い名前は2行まで表示する。
+- 上部の画面名と小さな横並びブランド以外の重複見出しを撤去する。日付見出しはPagingの表示用行で、件数には含めない。
+- 新しい議論は、右下の検索・フィルターの上にある独立した64dpの丸い「＋」から開く。上部バーには重複配置せず、末尾カードには両操作を避ける余白を設ける。認可済みの未読込・空一覧・オフラインでも下書きの入口を表示し、詳細・検索・シート・メニュー表示中は隠す。
+- ローカル先行表示と同一アカウントのPaging Flow・読位置を維持する。同期通知は同じ高さの状態領域へまとめ、カードを動かさない。
+- 公開API・保存形式・認可・同期・依存バージョンは変更しない。Play配布は別依頼で行う。
+
+独立した「＋」の配置プレビューは[ライト](screenshots/debate-floating-action-light.png)と[ダーク](screenshots/debate-floating-action-dark.png)を参照する。API 36の架空データで採取しており、実機受入・配布の証拠ではない。
+
+検索は右下の虫眼鏡からMaterialの全画面検索、依頼者・勝者・並べ替えはフィルターからBottom Sheetで開く。有効条件は解除できるChipで示し、条件変更時だけ結果の先頭へ移動する。閉じるだけでは条件と読位置を維持する。検索結果から詳細へ移る際は検索を閉じ、安定した記録keyから通常一覧へ読位置を渡す。戻ったときに検索・IME・focusを復活させない。検索語と入力状態はアカウントに紐づくメモリだけに置き、SavedStateには保存しない。
+
+依頼者は保存済みの全一覧メタ情報から候補を作り、Discordディスプレイネームと保存済みアイコンのChipで1人を選ぶ。「すべて」または有効条件Chipから解除でき、検索・勝者条件とはANDで即時に絞り込む。絞り込み中も候補を減らさず、オフラインでは画像の追加通信をしない。画像欠損は代替表示とする。既存APIには依頼者IDがないため保存された表示名の完全一致を使い、同名は同じ候補、改名前後は別候補として扱う。条件・候補は認可されたアカウントのメモリだけに保持し、API・暗号化保存形式・DBは変更しない。
+
+API 36の架空データで、日付境界・議題の4行上限・全人格と欠損アイコン、同期中の読位置、末尾カードと浮遊ツールの非重複、2ペインだけの選択強調を確認した。全画面検索・条件解除・即時絞り込み、詳細往復時の検索とfocusの非復活、認可喪失時の非表示、320dp・文字2倍の操作もinstrumentation testで確認している。Debug／ReleaseのビルドとLintは成功したが、Release署名は検証用証明書であり、実機受入・Play配布の証拠ではない。
+
+画面資料は[ライト](screenshots/journal-light.png)、[ダーク](screenshots/journal-dark.png)、[320dp・文字2倍](screenshots/journal-320dp-2x.png)、[広幅](screenshots/journal-wide.png)、[絞り込み](screenshots/journal-filter-sheet.png)、[条件選択後](screenshots/journal-filter-selected.png)、[全画面検索](screenshots/journal-fullscreen-search.png)と[一覧から詳細へ往復する短い録画](screenshots/journal-preview.mp4)を参照する。実質問・利用者情報は使用していない。
+
+任意の再採取では、`RecordJournalVisualTest`と`RecordSearchNavigationTest`へ`shittimCaptureJournal=true`を渡すと、対象アプリのcacheディレクトリへPNGを出力する。録画時は`RecordJournalVisualTest`へ`shittimRecordJournal=true`も渡し、`adb shell screenrecord`と併用する。録画用の待機・実時間フレーム送りは、これらの引数を指定した場合だけ行い、通常CIでは実行しない。
+
+## 議論詳細の4画面
+
+詳細は下部の意見・投票・結果・親愛度と左右スワイプで切り替える。6つの意見、投票、結果、3人の親愛度を1つの非ループHorizontalPagerでつなぐ。意見は回答を切り替えるたびに先頭へ戻し、同じ回答の同期・回転では読位置を維持する。新規・同じ記録の開き直しともアロナの初回意見から表示する。回転などの復元時は本文が揃ってからPagerと読位置を復元し、読み込み中の仮ページ数で選択を消費しない。選択中かつ停止しているページだけで演出を許可し、メニュー表示中・画面非表示中には停止する。標準のShortNavigationBar／HorizontalPagerを使用し、APIと保存形式は変更しない。
+
+議題はPager外へ固定し、最初から最大5行の省略付きプレビューと「全文」を表示する。全文シートは広く展開し、見出しと閉じる操作を固定してMarkdown本文だけをスクロールする。本文は選択・コピー可能。文字2倍の狭幅でも議題の末尾・閉じる操作と回答／下部切替へ到達できることを確認する。結果は王冠付きの勝者と結論を主役に、勝利コメントと件数付きの実行案・注意点を表示する。実行案・注意点はアイコン、件数バッジ、回転矢印と展開アニメーション付きのカードで開閉でき、本文を削らない。演出完了を閲覧条件にせず、戻る操作では先にシートを閉じる。
+
+意見ページは顔付きChipの1行目に人物名、2行目に初回意見／最終案を表示し、従来の人物Chipと同程度の大きさの1つのボタンへ統合する。選択中の人物を押すと段階を交互に切り替え、左右スワイプでも表示を同期する。各ボタンには人格色の輪郭と選択面を付け、狭幅・文字拡大では折り返す。アロナ初回→アロナ最終→プラナ初回→プラナ最終→安倍晋三AI初回→安倍晋三AI最終→投票の順に進み、投票から右スワイプすると安倍晋三AIの最終案へ戻る。アロナ初回の右側は標準Pagerの行き止まりで循環しない。旧記録は存在する人物の回答だけを対象にする。別の人物を押すとその人物の初回意見へ、回答の切替では本文の先頭へ戻る。非選択のChipは初回意見を表示する。選択した人物の96dpの顔アイコンを意見カード内へ表示する。選択欄は議題の後に固定し、本文だけが縦スクロールする。親愛度の人物選択も共通の四角い背景を付けず、人格色の丸いChipで区別する。詳細の「保存済みの記録」は表示せず、更新中・更新失敗の通知は維持する。長文の本文をSavedStateへ保存しない。
+
 ## 投票の表示
 
-- 3人の顔を三角形に置き、投票先へ曲線矢印を順に描く。得票数・勝者の王冠を併記し、顔を押すと投票理由と保存された5項目評価をBottom Sheetで開く。
+- 3人の顔を三角形に置き、投票先へ曲線矢印を順に描く。図が画面に完全に入ったら約1.8秒で描画し、画面内にある間は完成形を約0.9秒保って繰り返す。画面外・理由シート表示中・アニメーション無効時は完成形で静止する。得票数・勝者の王冠を併記し、顔を押すと投票理由と保存された5項目評価をBottom Sheetで開く。
 - 文字拡大・狭幅では顔付きの3行表示へ切り替える。旧記録に採点がなければ理由だけを表示し、勝者を再計算しない。
-- 演出済み状態は記録ID単位で保持し、スクロールや回転では再演しない。演出のために本文をSavedStateへ入れない。
+- 投票の矢印は表示中に繰り返すため、演出済み状態を保持しない。演出のために本文をSavedStateへ入れない。
 - 架空の循環投票による[関係図](screenshots/voting-graph.png)と[理由シート](screenshots/voting-detail.png)。
 
 ## 親愛度の表示
 
-- 3人の顔・名前と10個のハート、変更前後の正確な点数、実際の増減、質問評価を別々に示す。100点につきハート1個とし、端数は数字で確認できる。
-- 広幅は横3枚、スマートフォンや文字拡大時は縦3枚。画面内へ初めて入った際に数値とハートを約700msで動かし、記録単位で再演を抑える。アニメーション無効時は即時表示する。
-- 上限・下限により評価と実増減が異なっても保存値をそのまま表示する。増減0、未評価、親愛度のない旧記録に架空の値を補わない。
-- 架空の上限・減少・増減0を並べた[親愛度カード](screenshots/affection-cards.png)。
+- 3人の顔・名前と10個のハート、変更前後の正確な点数、実際の増減を示す。質問評価点はカードに出さない。100点につきハート1個とし、端数は数字で確認できる。
+- 詳細の親愛度タブは顔と実増減のChipまたは横スワイプで1人を選び、選択カードを大きく表示する。スワイプ順はアロナ→プラナ→安倍晋三AIで、最後の左側は行き止まり。結果から左スワイプでアロナ、親愛度アロナから右スワイプで結果へ戻る。直接タブを押した初期人物は従来どおり勝者とする。完全表示時に数値とハートを約1.1秒で動かす。人物切替、親愛度タブや記録の開き直しでは再生し、同じ表示中のスクロール・同期・回転では再演しない。画面内に収まりきらないカードとアニメーション無効時は最終値を即時表示し、一時的な小さい領域の計測だけで演出を消費しない。
+- 上限・下限により質問評価と実増減が異なっても、表示する実増減には保存値を使う。増減0、評価不能、親愛度のない旧記録に架空の値を補わない。
+- 架空の上限・減少・増減0の選択はinstrumentation testで確認する。新配置は[親愛度カード](screenshots/detail-affection-dark.png)を参照する。
 
 ## C16の認証画面
 
@@ -461,3 +707,48 @@ API 36・架空データ。標準のテスト用window／font scale overrideで�
 
 設計と実装範囲は[Androidアプリ設計](../../docs/29_Androidアプリ設計.md)を参照する。
 リファクタリングには指定の[Material Design 3 UI/UXスキル](https://github.com/skydashnet/material-design-3-ui-skill/tree/a7d28f28251b64740b74dd0046971f23fbe74758)を適用した。
+
+## 議論詳細の4画面
+
+- 下部の意見／投票／結果／親愛度で切り替える。6つの意見→投票→結果→3人の親愛度を横スワイプで読み、先頭と末尾は循環しない。意見の切替では本文先頭へ戻り、詳細を開き直すと同じ記録でもアロナ初回から始まる。詳細の状態はNavDisplayのentry単位で分離し、一覧の読位置は変えない。議題はPager外の共通領域へ固定し、タブ切替中も動かさない。議題は最大5行のプレビューと「全文」へ折りたたみ、固定見出し・閉じる操作付きのBottom Sheetで全文を読む。閉じると元の回答の読位置へ戻る。
+- 親愛度は顔と実増減のChipまたは横スワイプから1人を選ぶ。直接タブを押した初期人物は勝者とし、選択・人物別の読位置を同期や回転で保持する。スワイプはアロナ→プラナ→安倍晋三AIの順で、安倍晋三AIの先には進まない。人物切替と親愛度画面・記録の開き直しではアニメーションを再生する。
+- 投票画面にアイコンをタップすると投票理由・採点内訳を確認できる案内を表示する。採点のない旧記録では投票理由だけを案内する。投票理由の選択と人物別の読位置も保持し、Androidの戻る1回でシートを閉じる。旧記録の欠損情報を補完しない。
+- 投票図は完全表示時だけ描画1.8秒＋静止0.9秒を繰り返し、親愛度は完全表示時に約1.1秒で一度だけ動かす。非選択ページ・移動中・非表示・シート表示中は停止する。
+- API・認証・暗号化保存形式・差分同期・一覧の検索focus復帰抑止は変更しない。架空データによる画面確認と実機・Play配布は区別する。
+- Androidの戻りはNavDisplayの約280msのスライドと標準の退出entry保持を使い、退場中に本文を空欄へ差し替えない。通常の戻るボタンでは予測型ジェスチャーの縮小を適用せず、元の大きさのまま横スライドする。予測型の追従・取消は標準処理へ任せ、アニメーション無効時は即時に戻る。狭幅の一覧に選択色を残さず、広幅では2ペインの選択強調を維持する。認可喪失時の非表示、一覧の読位置と検索focus抑止も維持する。
+
+API 36・架空データで、[意見](screenshots/detail-opinions-light.png)、[投票](screenshots/detail-voting-light.png)、[結果](screenshots/detail-result-dark.png)、[開閉カード](screenshots/detail-result-expanded-dark.png)、[親愛度](screenshots/detail-affection-dark.png)、[320dp・文字2倍](screenshots/detail-large-text.png)を確認する。[前版の操作録画](screenshots/detail-pages.mp4)とは画面順と初期段階が異なる。
+プレビューは`RecordDetailVisualTest`に`shittimCaptureUi=true`を渡して再取得できる。録画時だけ`shittimRecordUi=true`も渡す。通常CIでは録画用の待機や実時間フレーム送りを行わない。
+
+戻りスライドの[途中](screenshots/adaptive-back-slide-middle.png)と[完了後](screenshots/adaptive-back-slide-complete.png)も架空データで確認する。`AdaptiveRecordsUiTest.threeButtonBackPopsOnceAndSlidesWithoutLeavingASelectedListCard`へ`shittimCaptureAdaptive=true`を渡して再取得できる。
+
+## 新しい議論の通知
+
+- 閲覧可能なすべての新しい議論がWebへ公開された後、FCMのdata-onlyメッセージを受信する。タイトルは「議論結果が投稿されました」、本文は依頼者のディスプレイネームと固定の案内を表示する。依頼者名は最大100文字の検証済み表示名だけをFCMへ送り、議題・本文・Discord IDは送信しない。改行・制御文字・不正な表示名は端末でも拒否し、名前をログ・永続キャッシュへ残さない。
+- アプリ側の初期設定はオン。Firebase設定があり、有効なログインが確認された初回だけAndroidの通知許可を要求する。拒否・取消後は起動や復帰ごとに再要求せず、拒否しても記録を閲覧できる。メニューの「新しい議論の通知」にあるSwitchでオン／オフを選び、明示したオフは再起動・再ログイン後も維持する。OSの許可不足は別の設定ボタンで案内し、OS設定で許可して戻れば自動登録する。
+- オフ・ログアウト・認可喪失では端末の通知を即時に消去し、遅延到着した旧bindingの通知を表示しない。OSの拒否はアプリ側のオン設定を書き換えない。ログアウトではbindingと登録情報を消去するが、通知の選択と権限要求済み状態は端末設定として維持する。
+- アプリ全体の通知許可に加えて「議論結果」チャンネルの拒否も確認し、拒否中はOS設定への案内を表示する。初回でチャンネルが未作成の状態は拒否扱いにしない。
+- 通知タップは既存の記録App Linkへ接続する。本文取得は既存の認証・認可に従う。通知到着後の保存は既存WorkManager差分同期へ任せ、通知前のネットワーク取得や常駐サービスは追加しない。
+- FCMの現行`register()`／Firebase Installation ID（FID）を使用し、旧`getToken()`は使わない。自サービスAPIの`token`項目にはFIDを渡す。SDK auto-initは常に無効とし、現行セッション・アプリ側オン・OS許可を確認したWorkerだけが手動登録する。通常の起動・復帰ではbindingを再生成せず、セッション・FIDの変更や明示的な再有効化で更新する。SDKの自動収集・通知代理表示・BigQuery出力は無効で、Analyticsは導入しない。
+- 通知許可やFCMは到着時刻を保証しない。通知が届かなくても起動時・定期同期で記録を取得できる。通知の再送重複は端末の最大128件のopaque IDで抑える。
+
+### Firebaseが未作成の場合
+
+設定がないビルドも従来どおり起動・ログイン・閲覧でき、メニューは「通知設定の準備中」と無効表示になる。OSの通知許可も要求しない。架空のプロジェクト設定を同梱しない。
+
+1. Firebase Consoleでプロジェクトを作成する。Google Analyticsの追加は不要。Androidアプリを`dev.pitekusu.shittim.records`で登録し、開発ビルドも使う場合は`.dev`付きの別Androidアプリを同じプロジェクトへ登録する。
+2. Android用の`google-services.json`をリポジトリ外へ保管する。これはクライアント用の設定で、サーバーの秘密鍵・サービスアカウントJSONを代わりに指定してはいけない。
+3. ビルド時だけ`SHITTIM_ANDROID_FIREBASE_CONFIG`へそのファイルを指定する。公式Google Services pluginがapplicationIdを検証してリソースを生成する。不一致・不存在・リポジトリ内の入力は拒否する。
+4. サーバー側のFCM送信用認証と機能有効化はAndroidの設定とは別に行う。Play配布用サービスアカウントを流用したり、FCM送信鍵をAPKへ入れたりしない。
+
+```bash
+# リポジトリrootから実行する
+SHITTIM_ANDROID_FIREBASE_CONFIG=/path/outside-repository/google-services.json \
+  uv run --frozen python -m tools.run_android_build -- :app:assembleDebug :app:lintDebug
+```
+
+[FCM公式Androidガイド](https://firebase.google.com/docs/cloud-messaging/android/get-started)、[data-only受信とWorkManager](https://firebase.google.com/docs/cloud-messaging/android/receive-messages)、[公式Google Services plugin](https://firebase.google.com/docs/android/google-services-plugin-and-file)に従う。SDKはVersion CatalogのFirebase BoMで固定し、Messaging以外のFirebase製品を先行追加しない。
+
+### 確認する操作
+
+設定なしは準備中表示・許可要求なし・既存閲覧を確認する。接続後は、初回ログイン→許可→新記録1件→通知タップ→対象の記録表示、拒否・取消→再起動や復帰で再要求しないこと、OS設定で許可→復帰時に自動登録することを確認する。メニューのオフはOS拒否中も選択でき、再起動・再ログイン後も保持する。オフ・オフラインログアウト→通知が出ないこと、同じイベントの再送→再通知しないこと、アカウント切替→以前のセッションの通知が出ないことも確認する。Firebase Consoleの通知キャンペーンはOSが自動表示するnotification payloadを送るため、このアプリのdata-only経路の検証には使用しない。実際のサーバー公開イベントで確認し、端末tokenをログや共有資料へ出さない。

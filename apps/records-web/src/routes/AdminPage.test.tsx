@@ -91,6 +91,9 @@ describe("AdminPage", () => {
                 { name: "momotalk_dlq_oldest_message_age_seconds", value: null },
                 { name: "momotalk_dlq_encrypted", value: false },
                 { name: "momotalk_dlq_retention_seconds", value: 1209600 },
+                { name: "mobile_push_visible_messages", value: 1 },
+                { name: "mobile_push_oldest_message_age_seconds", value: "12.000" },
+                { name: "mobile_push_dlq_visible_messages", value: 0 },
               ],
             },
           ],
@@ -100,7 +103,11 @@ describe("AdminPage", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderAdmin(false);
     const queues = within(await screen.findByRole("region", { name: "SQSキュー一覧" }));
-    expect(queues.getAllByRole("row")).toHaveLength(6);
+    expect(queues.getAllByRole("row")).toHaveLength(8);
+    expect(queues.getByRole("row", { name: /^Android通知\s*通知キュー/ })).toHaveAttribute(
+      "data-alert",
+      "false",
+    );
     const generation = queues.getByRole("row", { name: /^メモリアル\s*生成キュー/ });
     expect(generation).toHaveAttribute("data-alert", "false");
     expect(

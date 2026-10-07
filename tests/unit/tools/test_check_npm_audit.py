@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -35,13 +36,14 @@ def _run(
     )
 
 
-def test_complete_clean_report_passes() -> None:
+def test_complete_clean_report_passes(tmp_path: Path) -> None:
     result = _run(
         {
             "auditReportVersion": 2,
             "vulnerabilities": {},
             "metadata": {"vulnerabilities": {"total": 0}},
-        }
+        },
+        exceptions_path=_write_exceptions(tmp_path, []),
     )
 
     assert result.returncode == 0
@@ -127,6 +129,17 @@ def test_exception_severity_mismatch_fails_closed(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "exception severity moderate did not match high" in result.stderr
+
+
+def test_exception_expiring_today_fails_closed(tmp_path: Path) -> None:
+    expires = datetime.now(UTC).date().isoformat()
+    result = _run(
+        _vulnerable_report(),
+        exceptions_path=_write_exceptions(tmp_path, [_exception(expires=expires)]),
+    )
+
+    assert result.returncode == 1
+    assert f"exception expired on {expires}" in result.stderr
 
 
 def test_exception_unknown_field_fails_closed(tmp_path: Path) -> None:

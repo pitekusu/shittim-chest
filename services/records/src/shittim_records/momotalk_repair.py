@@ -1,4 +1,4 @@
-"""Operator-only, one-image recovery; never print private records or exception messages."""
+"""Operator-only image recovery with one moderation fallback; never print private inputs."""
 
 import argparse
 import json
@@ -22,7 +22,7 @@ def main() -> int:
     )
     parser.add_argument("--mood", required=True, choices=("happy", "unhappy"))
     parser.add_argument(
-        "--execute", action="store_true", help="allow one paid generation and image-state update"
+        "--execute", action="store_true", help="allow generation with one moderation fallback"
     )
     args = parser.parse_args()
     logging.basicConfig(level=logging.WARNING)
@@ -45,7 +45,7 @@ def main() -> int:
             print(json.dumps({"state": "not_executed", "candidate_count": len(candidates)}))
             return 2
         if not args.execute:
-            print(json.dumps({"state": "dry_run", "candidate_count": 1, "paid_attempts": 1}))
+            print(json.dumps({"state": "dry_run", "candidate_count": 1, "max_paid_attempts": 2}))
             return 0
         source = MomotalkInputSource(
             store.client, os.environ["ARCHIVE_TABLE_NAME"], store.table_name, reader, configuration

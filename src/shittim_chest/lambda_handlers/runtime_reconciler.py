@@ -32,7 +32,7 @@ from shittim_chest.application.runtime_reconciler import (
     RuntimeReconciler,
     RuntimeReconciliationReport,
 )
-from shittim_chest.application.scale_to_zero import RuntimeStatus
+from shittim_chest.application.scale_to_zero import RuntimeStatus, is_mobile_ingress_id
 from shittim_chest.config.models import StartupConfigurationError
 from shittim_chest.config.runtime_reconciler import (
     load_runtime_reconciler_settings,
@@ -207,6 +207,14 @@ def _parse_event(event: object) -> None:
     if not isinstance(event, Mapping) or any(not isinstance(key, str) for key in event):
         raise ValueError("runtime reconciler event shape is invalid")
     schema_version = event.get("schema_version")
+    if (
+        schema_version == 2
+        and isinstance(schema_version, int)
+        and set(event) == {"schema_version", "source", "request_id"}
+        and event.get("source") == "mobile"
+        and is_mobile_ingress_id(event.get("request_id"))
+    ):
+        return
     if schema_version != 1 or isinstance(schema_version, bool):
         raise ValueError("runtime reconciler event schema is invalid")
     if set(event) == {"schema_version", "trigger"}:

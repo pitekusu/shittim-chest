@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from enum import StrEnum, unique
+from uuid import UUID
 
 from shittim_chest.domain import AttemptId, DebateId
 
@@ -51,6 +52,31 @@ class IngressKind(StrEnum):
     NEW_DEBATE = "new_debate"
     RETRY = "retry"
     CANCEL = "cancel"
+
+
+@unique
+class IngressSource(StrEnum):
+    """Trusted server-side source, never selected by submitted question text."""
+
+    DISCORD = "discord"
+    MOBILE = "mobile"
+
+
+def mobile_ingress_id(owner_key: str, request_id: str) -> str:
+    """Bind a public client UUID to its private account and operation namespace."""
+
+    if re.fullmatch(r"[A-Za-z0-9_-]{43}", owner_key) is None:
+        raise ValueError("mobile owner key must be 43 base64url characters")
+    parsed = UUID(request_id)
+    if parsed.version != 4 or str(parsed) != request_id:
+        raise ValueError("mobile request ID must be a canonical UUIDv4")
+    return "m_" + hashlib.sha256(f"{owner_key}:{request_id}".encode()).hexdigest()
+
+
+def is_mobile_ingress_id(value: object) -> bool:
+    """Recognize the reserved, content-free internal mobile operation namespace."""
+
+    return isinstance(value, str) and re.fullmatch(r"m_[0-9a-f]{64}", value) is not None
 
 
 @unique
@@ -166,7 +192,7 @@ _ALLOWED_RUNTIME_TRANSITIONS: dict[RuntimeStatus, frozenset[RuntimeStatus]] = {
 
 @dataclass(frozen=True, slots=True, repr=False)
 class IngressRequest:
-    """One durable Discord interaction without its short-lived interaction token."""
+    """One durable ingress; legacy interaction_id is an internal operation key."""
 
     interaction_id: str
     operation_id: str
@@ -207,8 +233,29 @@ class IngressRequest:
     completed_at: datetime | None = None
     ttl: int | None = None
     schema_version: int = 1
+    source: IngressSource = IngressSource.DISCORD
+    owner_key: str | None = None
+    mobile_request_id: str | None = None
+    history_after_snowflake: str | None = None
 
     def __post_init__(self) -> None:
+        if self.source is IngressSource.MOBILE:
+            if self.owner_key is None or self.mobile_request_id is None:
+                raise ValueError("mobile ingress requires owner and public request ID")
+            expected = mobile_ingress_id(self.owner_key, self.mobile_request_id)
+            if self.interaction_id != expected or self.operation_id != expected:
+                raise ValueError("mobile ingress operation identity is inconsistent")
+            if self.kind is not IngressKind.NEW_DEBATE:
+                raise ValueError("mobile ingress only supports new debates")
+            if self.history_after_snowflake is not None:
+                _require_canonical_snowflake(
+                    self.history_after_snowflake, label="mobile history lower bound"
+                )
+        elif self.source is not IngressSource.DISCORD or any(
+            value is not None
+            for value in (self.owner_key, self.mobile_request_id, self.history_after_snowflake)
+        ):
+            raise ValueError("Discord ingress cannot contain mobile ownership")
         for label, value in (
             ("interaction ID", self.interaction_id),
             ("operation ID", self.operation_id),
@@ -310,6 +357,43 @@ class IngressRequest:
             raise ValueError("TTL must be a non-negative Unix timestamp")
         if self.schema_version != 1:
             raise ValueError("unsupported ingress schema version")
+
+    @classmethod
+    def mobile_debate(
+        cls,
+        *,
+        request_id: str,
+        owner_key: str,
+        application_id: str,
+        question: str,
+        requester_id: str,
+        requester_username: str,
+        requester_display_name: str,
+        guild_id: str,
+        channel_id: str,
+        created_at: datetime,
+    ) -> IngressRequest:
+        """Reuse debate admission without fabricating a Discord HTTP interaction."""
+
+        operation_id = mobile_ingress_id(owner_key, request_id)
+        return replace(
+            cls.new_debate(
+                interaction_id=operation_id,
+                operation_id=operation_id,
+                application_id=application_id,
+                question=question,
+                requester_id=requester_id,
+                requester_username=requester_username,
+                requester_display_name=requester_display_name,
+                guild_id=guild_id,
+                channel_id=channel_id,
+                command_name="shittim",
+                created_at=created_at,
+            ),
+            source=IngressSource.MOBILE,
+            owner_key=owner_key,
+            mobile_request_id=request_id,
+        )
 
     @classmethod
     def new_debate(
@@ -605,8 +689,24 @@ class IngressStatusPublication:
     incarnation: int = 0
     error_code: str | None = None
     schema_version: int = 3
+    history_after_snowflake: str | None = None
+
+    @property
+    def history_after_message_id(self) -> str:
+        """Discord scan bound is distinct from a mobile operation identity."""
+
+        return self.history_after_snowflake or self.canonical_interaction_id
 
     def __post_init__(self) -> None:
+        if (
+            is_mobile_ingress_id(self.canonical_interaction_id)
+            and self.history_after_snowflake is None
+        ):
+            raise ValueError("mobile status publication requires a Discord history lower bound")
+        if self.history_after_snowflake is not None:
+            _require_canonical_snowflake(
+                self.history_after_snowflake, label="status history lower bound"
+            )
         for label, value in (
             ("canonical interaction ID", self.canonical_interaction_id),
             ("request sort key", self.request_sort_key),
@@ -642,10 +742,10 @@ class IngressStatusPublication:
             if not self.history_reconciliation_required or self.status_message_id is not None:
                 raise ValueError("history checkpoint requires an unresolved status message scan")
             _require_canonical_snowflake(
-                self.canonical_interaction_id,
+                self.history_after_message_id,
                 label="history checkpoint interaction ID",
             )
-            interaction_id = int(self.canonical_interaction_id)
+            interaction_id = int(self.history_after_message_id)
             verified_head = int(self.history_checkpoint.history_verified_head_message_id)
             if verified_head <= interaction_id:
                 raise ValueError("history verified head must follow the interaction")
@@ -725,6 +825,7 @@ class IngressStatusPublication:
             created_at=request.created_at,
             updated_at=request.created_at,
             next_attempt_at=request.created_at,
+            history_after_snowflake=request.history_after_snowflake,
         )
 
 
@@ -738,6 +839,8 @@ class StatusPublicationWork:
     def __post_init__(self) -> None:
         if self.request.interaction_id != self.publication.canonical_interaction_id:
             raise ValueError("status publication belongs to another request")
+        if self.request.history_after_snowflake != self.publication.history_after_snowflake:
+            raise ValueError("status publication history bound is inconsistent")
         expected_sort_key = (
             "REQUEST#"
             f"{self.request.created_at.isoformat(timespec='microseconds').replace('+00:00', 'Z')}#"
@@ -778,6 +881,15 @@ class EnqueuedIngress:
     request: IngressRequest
     operation: IngressOperationResult
     created: bool
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class MobileIngressPage:
+    """Owned requests and a public-only continuation identity, not a table key."""
+
+    requests: tuple[IngressRequest, ...]
+    next_created_at: datetime | None = None
+    next_request_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True, repr=False)

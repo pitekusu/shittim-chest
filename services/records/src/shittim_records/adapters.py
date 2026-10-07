@@ -28,6 +28,7 @@ from shittim_chest.adapters.dynamodb.serializer import (
 from shittim_chest.application import DebateSnapshot
 
 from shittim_records.archive import ArchiveProjection, RecordsPresentationConfig
+from shittim_records.mobile_notifications import pending_mobile_notification
 from shittim_records.record_link_notifications import pending_record_link_notification
 
 MAX_DYNAMODB_ITEM_BYTES = 400 * 1024
@@ -202,6 +203,7 @@ class ArchiveRepository:
         projection: ArchiveProjection,
         *,
         notification_created_at: datetime | None = None,
+        mobile_notification_created_at: datetime | None = None,
     ) -> bool:
         marker_key = {
             "PK": f"RECORD#{projection.record_id}",
@@ -226,9 +228,20 @@ class ArchiveRepository:
                     ),
                 )
             )
-        transaction_items = (
-            marshaled_items if notification_item is None else (*marshaled_items, notification_item)
-        )
+        mobile_item = None
+        if mobile_notification_created_at is not None:
+            if self._notification_table_name is None:
+                raise ValueError("mobile notification table is not configured")
+            mobile_item = marshal_item(
+                cast(
+                    DynamoItem,
+                    pending_mobile_notification(
+                        record_id=projection.record_id, created_at=mobile_notification_created_at
+                    ),
+                )
+            )
+        outbox_items = tuple(item for item in (notification_item, mobile_item) if item is not None)
+        transaction_items = (*marshaled_items, *outbox_items)
         _validate_transaction(transaction_items)
         actions: list[TransactWriteItemTypeDef] = [
             {
@@ -240,12 +253,14 @@ class ArchiveRepository:
             }
             for item in marshaled_items
         ]
-        if notification_item is not None:
+        # Projection and its content-free outboxes must either all exist or none.
+        # Queuing alone cannot cover a crash after Archive publication.
+        for outbox_item in outbox_items:
             actions.append(
                 {
                     "Put": {
                         "TableName": cast(str, self._notification_table_name),
-                        "Item": notification_item,
+                        "Item": outbox_item,
                         "ConditionExpression": (
                             "attribute_not_exists(PK) AND attribute_not_exists(SK)"
                         ),

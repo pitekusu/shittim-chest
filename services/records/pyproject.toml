@@ -15,6 +15,7 @@ dependencies = [
     "regex>=2026.7.10,<2027",
     "pydantic>=2.13.4,<3",
     "shittim-chest",
+    "firebase-admin>=7.7.0,<8",
 ]
 
 [dependency-groups]

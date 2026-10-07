@@ -84,6 +84,32 @@ def test_load_tool_pins_rejects_duplicate_keys(tmp_path: Path) -> None:
         load_tool_pins(path)
 
 
+@pytest.mark.parametrize("prefix", ["", "v", "release-", None, []])
+def test_tool_tag_prefix_can_be_empty_but_not_arbitrary(tmp_path: Path, prefix: object) -> None:
+    path = tmp_path / "tools.json"
+    _write_config(
+        path,
+        {
+            "schema_version": 1,
+            "tools": {
+                "bundletool": {
+                    "repository": "google/bundletool",
+                    "version": "1.18.3",
+                    "tag_prefix": prefix,
+                    "archive_name": "bundletool-all-1.18.3.jar",
+                    "archive_sha256": "a" * 64,
+                }
+            },
+        },
+    )
+    if prefix in ("", "v"):
+        (pin,) = load_tool_pins(path)
+        assert pin.expected_tag == f"{prefix}1.18.3"
+    else:
+        with pytest.raises(ValueError, match="tag prefix"):
+            load_tool_pins(path)
+
+
 def test_report_distinguishes_current_and_outdated_versions() -> None:
     pins = (
         ToolPin("current", "owner/current", "1.2.3", "v", "current_1.2.3.tar.gz", "a" * 64),

@@ -179,7 +179,7 @@ class State:
     def save(self, room):
         self.room = Room.model_validate_json(room.model_dump_json())
 
-    def send(self, *args):
+    def send(self, *args, **_kwargs):
         self.jobs.append(args)
 
     def prepare(self, _snapshot, requester, room, questions, *, final):
@@ -316,8 +316,11 @@ def test_publication_gate_and_private_inputs_are_not_returned():
     boundary = cast(Any, state)
     collect_week(WEEK, boundary, boundary, boundary, boundary)
     service = MomotalkGenerationService(boundary, boundary, boundary, boundary)
-    for _ in range(10):
+    for _ in range(16):
         service.run(WEEK.week_id, ROOM_ID, now=START)
+        assert state.room is not None
+        if state.room.state == "ready":
+            break
     reader = MomotalkReadService(
         boundary,
         boundary,

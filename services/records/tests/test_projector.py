@@ -6,18 +6,72 @@ from typing import Any, cast
 
 import pytest
 from shittim_chest.adapters.dynamodb.serializer import DynamoItem
-from tests.factories import NOW
+from tests.factories import NOW, completed_snapshot, presentation
 
 from shittim_records.adapters import BackfillCheckpoint
-from shittim_records.archive import derive_requester_key
+from shittim_records.archive import derive_requester_key, project_completed_debate
 from shittim_records.projector import (
     AffectionProjectorService,
     BackfillService,
     ProjectionResult,
+    ProjectorService,
     project_affection_profile,
 )
 
 HMAC_KEY = b"records-test-key-that-is-longer-than-32-bytes"
+
+
+@pytest.mark.parametrize("live", [True, False])
+def test_mobile_queue_failure_keeps_published_archive_and_discord_independent(
+    monkeypatch, caplog, live
+) -> None:
+    snapshot = completed_snapshot()
+    projection = project_completed_debate(
+        snapshot,
+        identity_hmac_key=HMAC_KEY,
+        presentation=presentation(),
+        projected_at=NOW,
+    )
+    archive_calls = []
+    discord_calls = []
+    queue_calls = []
+
+    class Archive:
+        def put_projection(self, value, **kwargs):
+            archive_calls.append((value, kwargs))
+            return len(archive_calls) == 1
+
+    class Discord:
+        def publish(self, **kwargs):
+            discord_calls.append(kwargs)
+
+    class Queue:
+        def enqueue(self, record_id):
+            queue_calls.append(record_id)
+            raise RuntimeError("private provider request must not appear in logs")
+
+    projector = ProjectorService(
+        source=cast(Any, object()),
+        archive=cast(Any, Archive()),
+        configuration=cast(Any, object()),
+        record_link_notifications=cast(Any, Discord()) if live else None,
+        mobile_notifications=Queue() if live else None,
+    )
+    monkeypatch.setattr(
+        projector, "_prepare_partition", lambda *_args, **_kwargs: (projection, snapshot)
+    )
+
+    assert projector.project_partition("DEBATE#invented", now=NOW).created
+    assert not projector.project_partition("DEBATE#invented", now=NOW).created
+    assert all(
+        kwargs["mobile_notification_created_at"] == (NOW if live else None)
+        for _value, kwargs in archive_calls
+    )
+    assert queue_calls == ([projection.record_id] if live else [])
+    assert len(discord_calls) == (2 if live else 0)
+    assert "private provider request" not in caplog.text
+    if live:
+        assert "MOBILE_PUSH_ENQUEUE_FAILED" in caplog.text
 
 
 def legacy_affection_profile(

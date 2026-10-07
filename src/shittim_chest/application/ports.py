@@ -59,6 +59,10 @@ class RepositoryConflict(Exception):
     """Raised when a conditional repository operation loses its expected state."""
 
 
+class MobileIngressSessionInvalid(RepositoryConflict):
+    """The admission transaction found the mobile session expired or revoked."""
+
+
 @unique
 class RepositoryTransactionStage(StrEnum):
     """Content-free repository transaction stages safe for diagnostics."""

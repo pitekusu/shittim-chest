@@ -1,0 +1,146 @@
+name: Android Internal Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      minimum_version_code:
+        description: Minimum versionCode after inspecting any previous failed submission
+        type: string
+        default: "1"
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: android-internal-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.repository == 'pitekusu/shittim-chest' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 40
+    environment: android-internal
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out the immutable main workflow SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Select the fixed private runner state directory
+        run: printf 'STATE=%s/android-release\n' "${RUNNER_TEMP}" >> "${GITHUB_ENV}"
+      - name: Install pinned Python and uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.12.17"
+          python-version: "3.14.7"
+          enable-cache: false
+      - name: Require successful same-SHA main CI and CodeQL
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ENABLED: ${{ vars.ANDROID_RELEASE_ENABLED }}
+          WIF_PROVIDER: ${{ vars.PLAY_WORKLOAD_IDENTITY_PROVIDER }}
+          PLAY_ACCOUNT: ${{ vars.PLAY_SERVICE_ACCOUNT }}
+          CERTIFICATE: ${{ vars.ANDROID_UPLOAD_CERT_SHA256 }}
+        run: |
+          test "${RELEASE_ENABLED}" = true
+          test -n "${WIF_PROVIDER}" && test -n "${PLAY_ACCOUNT}" && test -n "${CERTIFICATE}"
+          test "${GITHUB_RUN_ATTEMPT}" = 1
+          uv sync --frozen --all-groups
+          uv run --frozen python tools/check_release_ci.py
+      - name: Install the pinned Android JDK
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version-file: apps/records-android/.java-version
+      - name: Validate the Wrapper without restoring build caches
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          cache-disabled: true
+      - name: Install the compile SDK and build tools
+        run: '"${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.1" "build-tools;36.0.0"'
+      - name: Prepare private upload signing and Firebase inputs
+        env:
+          UPLOAD_KEY_BASE64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}
+          UPLOAD_STORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_STORE_PASSWORD }}
+          UPLOAD_KEY_ALIAS: ${{ vars.ANDROID_UPLOAD_KEY_ALIAS }}
+          FIREBASE_CLIENT_CONFIG: ${{ secrets.ANDROID_FIREBASE_CLIENT_CONFIG }}
+        run: uv run --frozen python -m tools.android_release materialize --state "${STATE}"
+      - name: Authenticate only to inspect current Play versions
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.PLAY_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.PLAY_SERVICE_ACCOUNT }}
+          create_credentials_file: true
+          export_environment_variables: true
+      - name: Choose a version greater than all current tracks bundles and APKs
+        id: version
+        env:
+          MINIMUM_VERSION_CODE: ${{ inputs.minimum_version_code }}
+        run: uv run --frozen python -m tools.android_release preflight --state "${STATE}"
+      - name: Build and lint the signed Release once
+        env:
+          SHITTIM_ANDROID_UPLOAD_KEYSTORE: ${{ runner.temp }}/android-release/upload-key.p12
+          SHITTIM_ANDROID_UPLOAD_STORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_STORE_PASSWORD }}
+          SHITTIM_ANDROID_UPLOAD_KEY_ALIAS: ${{ vars.ANDROID_UPLOAD_KEY_ALIAS }}
+          SHITTIM_ANDROID_UPLOAD_KEY_PASSWORD: ${{ secrets.ANDROID_UPLOAD_STORE_PASSWORD }}
+          SHITTIM_ANDROID_FIREBASE_CONFIG: ${{ runner.temp }}/android-release/google-services.json
+          VERSION_CODE: ${{ steps.version.outputs.version_code }}
+        run: |
+          umask 077
+          if ! apps/records-android/gradlew -p apps/records-android --no-daemon \
+            :app:bundleRelease :app:lintRelease \
+            -PshittimAndroidVersionCode="${VERSION_CODE}" \
+            -PshittimAndroidVersionName="0.0.${VERSION_CODE}" > "${STATE}/gradle-build.log" 2>&1; then
+            echo "android_release_build_failed" >&2
+            exit 1
+          fi
+      - name: Download digest-pinned official bundletool
+        run: |
+          version=$(jq -r '.tools.bundletool.version' .github/tool-versions.json)
+          archive=$(jq -r '.tools.bundletool.archive_name' .github/tool-versions.json)
+          checksum=$(jq -r '.tools.bundletool.archive_sha256' .github/tool-versions.json)
+          curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
+            "https://github.com/google/bundletool/releases/download/${version}/${archive}" \
+            --output "${STATE}/bundletool.jar"
+          printf '%s  %s\n' "${checksum}" "${STATE}/bundletool.jar" | sha256sum --check --strict
+      - name: Verify signature certificate package version and immutable bundle digest
+        env:
+          ANDROID_UPLOAD_CERT_SHA256: ${{ vars.ANDROID_UPLOAD_CERT_SHA256 }}
+        run: uv run --frozen python -m tools.android_release verify --state "${STATE}" --bundletool "${STATE}/bundletool.jar"
+      - name: Renew federated credentials immediately before publishing
+        id: play-auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.PLAY_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.PLAY_SERVICE_ACCOUNT }}
+          create_credentials_file: true
+          export_environment_variables: true
+      - name: Upload the verified AAB to internal with the maintained Action
+        uses: r0adkll/upload-google-play@744d577ff543375f35f60408e13fb32c7caa90ce # master (v1.1.5 + dependency updates)
+        with:
+          serviceAccountJson: ${{ steps.play-auth.outputs.credentials_file_path }}
+          packageName: dev.pitekusu.shittim.records
+          releaseFiles: ${{ runner.temp }}/android-release/verified/app-release.aab
+          tracks: internal
+          status: completed
+          releaseName: "0.0.${{ steps.version.outputs.version_code }}"
+      - name: Read back the submitted internal track and bundle digest
+        run: uv run --frozen python -m tools.android_release readback --state "${STATE}"
+      - name: Retain only non-secret verification and submission receipt
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android-internal-receipt-${{ github.sha }}-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/android-release/verification.json
+            ${{ runner.temp }}/android-release/receipt.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Remove private signing Firebase and Gradle log files
+        if: always()
+        run: uv run --frozen python -m tools.android_release cleanup --state "${STATE}"

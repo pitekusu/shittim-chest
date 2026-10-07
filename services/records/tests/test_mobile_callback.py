@@ -80,13 +80,16 @@ def test_handoff_issues_a_bounded_private_grant_once_and_never_a_session() -> No
     assert stored.return_to == binding.return_to
     assert stored.guild_verified_at == NOW + timedelta(seconds=5)
     assert stored.display_name == "Guild Nickname"
+    assert stored.discord_user_id == USER_ID
+    assert stored.discord_username == "username"
     assert stored.requester_key == configuration().admin_requester_key
     assert stored.avatar_asset_key == f"requesters/{stored.requester_key}/avatar.webp"
     assert avatars.objects == {stored.avatar_asset_key: b"webp"}
     cookie = SimpleCookie(result.clear_oauth_cookie)[MOBILE_OAUTH_COOKIE_NAME]
     assert cookie.value == "" and cookie["max-age"] == "0"
     assert cookie["httponly"] and cookie["secure"] and cookie["samesite"] == "Lax"
-    for private in (USER_ID, arguments["code"], "private-access-token", "private-client-secret"):
+    assert USER_ID not in result.location + repr(result) + repr(stored)
+    for private in (arguments["code"], "private-access-token", "private-client-secret"):
         assert private not in result.location + stored.model_dump_json() + repr(result)
     assert raw_code not in stored.model_dump_json() + repr(result)
     assert stored.display_name not in repr(stored)

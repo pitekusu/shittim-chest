@@ -17,6 +17,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
@@ -104,6 +105,36 @@ class EncryptedRecordStoreTest {
     assertCacheFailure { store.save(account, "invalid/record", CachedRecordPart.LIST, byteArrayOf(1)) }
     assertNull(database.records().get(accountKey(), record, CachedRecordPart.LIST.code))
     assertNull(privateKeys.read(account))
+  }
+
+  @Test
+  fun nativeDraftAndFrozenReceiptUseTheExistingEncryptedPartWithoutChangingSchema() = runBlocking {
+    val plaintext = "PRIVATE_DRAFT_QUESTION and frozen request state".toByteArray()
+    store.save(account, "debate-workspace-v1", CachedRecordPart.DEBATE_WORKSPACE, plaintext)
+    assertArrayEquals(plaintext, store.load(account, "debate-workspace-v1", CachedRecordPart.DEBATE_WORKSPACE))
+    assertTrue(store.rows(account, CachedRecordPart.LIST).isEmpty())
+    database.close()
+    val files = app.getDatabasePath(databaseName).parentFile!!.listFiles()!!
+      .filter { it.name.startsWith(databaseName) && it.isFile }
+    files.forEach { assertFalse(it.readBytes().toString(Charsets.ISO_8859_1).contains("PRIVATE_DRAFT_QUESTION")) }
+    database = openDatabase()
+    store = EncryptedRecordStore(database, RecordDataKeyProtector(privateKeys))
+    assertArrayEquals(plaintext, store.load(account, "debate-workspace-v1", CachedRecordPart.DEBATE_WORKSPACE))
+    store.deleteAccount(account)
+    assertNull(store.load(account, "debate-workspace-v1", CachedRecordPart.DEBATE_WORKSPACE))
+  }
+
+  @Test
+  fun bulkCiphertextReadsAndDecryptionRemainScopedToTheAccountAndPart() = runBlocking {
+    val payload = "synthetic list".toByteArray()
+    store.save(account, record, CachedRecordPart.LIST, payload)
+    store.save(account, record, CachedRecordPart.DETAIL, "synthetic detail".toByteArray())
+    val rows = store.rows(account, CachedRecordPart.LIST)
+    assertEquals(listOf(record), rows.map { it.recordId })
+    assertEquals(emptyList<EncryptedRecordRow>(), store.rows("different_account", CachedRecordPart.LIST))
+    assertArrayEquals(payload, store.decryptRow(account, rows.single(), CachedRecordPart.LIST))
+    assertCacheFailure { store.decryptRow("different_account", rows.single(), CachedRecordPart.LIST) }
+    assertCacheFailure { store.decryptRow(account, rows.single(), CachedRecordPart.DETAIL) }
   }
 
   @Test

@@ -320,6 +320,7 @@ def test_dispatch_failure_retries_delivery_without_failing_saved_conversation(mo
             {
                 "body": json.dumps({"weekId": str(WEEK.week_id), "roomId": ROOM_ID}),
                 "messageId": "test-job",
+                "attributes": {"ApproximateReceiveCount": "3"},
             }
         ]
     }
@@ -327,6 +328,7 @@ def test_dispatch_failure_retries_delivery_without_failing_saved_conversation(mo
         "batchItemFailures": [{"itemIdentifier": "test-job"}]
     }
     generator.close.assert_called_once()
+    assert service.run.call_args.kwargs["receive_count"] == 3
     assert "momotalk_announcement_dispatch_failed" in caplog.text
     assert "synthetic-private-value" not in caplog.text
 

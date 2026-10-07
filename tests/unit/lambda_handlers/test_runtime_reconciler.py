@@ -195,6 +195,31 @@ def test_handler_rejects_invalid_events_before_reconciliation(event: object) -> 
     assert reconciler.calls == 0
 
 
+def test_mobile_v2_hint_runs_the_existing_reconciliation_without_a_fake_interaction() -> None:
+    reconciler = FakeReconciler()
+    RuntimeReconcilerLambda(reconciler=reconciler).handle(
+        {"schema_version": 2, "source": "mobile", "request_id": "m_" + "a" * 64}
+    )
+    assert reconciler.calls == 1
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        {"schema_version": 2, "source": "mobile", "request_id": "123"},
+        {"schema_version": 2, "source": "discord", "request_id": "m_" + "a" * 64},
+        {"schema_version": 2.0, "source": "mobile", "request_id": "m_" + "a" * 64},
+        {"schema_version": 2, "source": "mobile", "request_id": "m_" + "A" * 64},
+        {"schema_version": 2, "source": "mobile", "request_id": "m_" + "a" * 64, "token": "x"},
+    ],
+)
+def test_mobile_hint_rejects_unknown_fields_and_invalid_identity(event: object) -> None:
+    reconciler = FakeReconciler()
+    with pytest.raises(ValueError):
+        RuntimeReconcilerLambda(reconciler=reconciler).handle(event)
+    assert reconciler.calls == 0
+
+
 def test_lambda_entrypoint_logs_only_category_and_request_id(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,

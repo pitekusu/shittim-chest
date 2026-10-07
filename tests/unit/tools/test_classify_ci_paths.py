@@ -83,6 +83,9 @@ def test_records_changes_require_records_ci(path: str) -> None:
             ("apps/records-android/app/build.gradle.kts", ".github/dependabot.yml"),
             {"android", "core_tests"},
         ),
+        (("tools/run_android_build.py",), {"android", "core_tests"}),
+        (("tools/android_build.init.gradle.kts",), {"android", "core_tests"}),
+        (("tests/unit/tools/test_run_android_build.py",), {"android", "core_tests"}),
         (
             ("apps/records-android/app/build.gradle.kts", "services/records/main.py"),
             {"android", "records_python", "records_contract"},
@@ -119,7 +122,17 @@ def test_core_package_inputs_also_verify_the_records_consumer(path: str) -> None
 
 
 @pytest.mark.parametrize(
-    "paths", ((), ("unknown.txt",), (".github/workflows/ci.yml",), ("tools/check_ci_scope.py",))
+    "paths",
+    (
+        (),
+        ("unknown.txt",),
+        ("tools/unclassified_android_tool.py",),
+        ("tools/android_release.py",),
+        (".github/workflows/ci.yml",),
+        ("tools/check_ci_scope.py",),
+        ("tools/classify_ci_paths.py",),
+        ("tests/unit/tools/test_classify_ci_paths.py",),
+    ),
 )
 def test_empty_unknown_and_pipeline_changes_require_all_scopes(paths: tuple[str, ...]) -> None:
     assert all(classify_paths(paths).values())

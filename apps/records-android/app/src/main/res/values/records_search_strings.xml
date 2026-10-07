@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="record_query_text_chip">検索：%1$s</string>
+    <string name="record_query_remove_text">検索条件「%1$s」を解除</string>
+    <string name="record_query_remove_winner">勝者「%1$s」の絞り込みを解除</string>
+    <string name="record_query_remove_order">古い順を解除して新しい順に戻す</string>
+    <string name="record_filter_sheet_title">絞り込みと並べ替え</string>
+    <string name="record_filter_sheet_done">記録を表示</string>
+    <string name="record_search_clear_text">検索文字列を消去</string>
+</resources>

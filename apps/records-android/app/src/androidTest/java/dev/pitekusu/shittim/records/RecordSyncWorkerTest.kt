@@ -81,11 +81,14 @@ class RecordSyncWorkerTest {
               RecordCacheAccount(context, keys, database), lease::permits, activateOwner = false)
           })
     }
+    val generation = RecordSyncScheduler.cacheChanges.value
     val result = TestListenableWorkerBuilder<RecordSyncWorker>(context).setWorkerFactory(factory).build().doWork()
     assertTrue("worker_failure=${(result as? ListenableWorker.Result.Failure)?.outputData?.getString("failure")}",
       result is ListenableWorker.Result.Success)
     result as ListenableWorker.Result.Success
     assertEquals(1, calls)
+    assertEquals("An empty successful sync has no changed cache to reload",
+      generation, RecordSyncScheduler.cacheChanges.value)
     assertEquals(setOf("finishedAt"), result.outputData.keyValueMap.keys)
     assertEquals(token.cacheAuthorization?.accountId, store.read()?.cacheAuthorization?.accountId)
     assertEquals(token.cacheAuthorization?.expiresAt, store.read()?.cacheAuthorization?.expiresAt)

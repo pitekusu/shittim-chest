@@ -31,6 +31,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -73,7 +74,10 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
     }
   ShittimTheme(darkTheme) {
     ShittimBackdrop(modifier) {
-      val pagingItems = (state.records as? RecordListState.Ready)?.pages?.collectAsLazyPagingItems()
+      val pages = (state.records as? RecordListState.Ready)?.pages
+      // Keep both the source Flow and its UI-only Paging transform stable during sync.
+      val journal = remember(pages) { pages?.asRecordJournal() }
+      val pagingItems = journal?.collectAsLazyPagingItems()
       val refreshError = pagingItems?.loadState?.refresh as? LoadState.Error
       val appendError = pagingItems?.loadState?.append as? LoadState.Error
       LaunchedEffect(refreshError, appendError) {
@@ -86,16 +90,13 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
       var playedSections by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
       LaunchedEffect(state.canReadRecords) { if (!state.canReadRecords) menuOpen = false }
       Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
-        if (state.canReadRecords) RecordsAppBar { menuOpen = true }
+        if (state.canReadRecords) RecordsAppBar(onMenuClick = { menuOpen = true })
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
           val listScrollState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
-          val detailScrollState = rememberSaveable(state.selectedRecordId, saver = LazyListState.Saver) {
-            LazyListState()
-          }
           val transientScrollState = rememberLazyListState()
           if (state.canReadRecords) {
-            AdaptiveRecordsUi(state, pagingItems, listScrollState, detailScrollState,
-              Modifier.fillMaxSize(), playedSections.toSet()) { key ->
+            AdaptiveRecordsUi(state, pagingItems, listScrollState,
+              Modifier.fillMaxSize(), playedSections.toSet(), motionAllowed = !menuOpen) { key ->
                 if (key !in playedSections) playedSections = ArrayList(playedSections).apply { add(key) }
               }
           } else if (maxWidth >= 840.dp && LocalDensity.current.fontScale < 1.5f) {
@@ -118,6 +119,7 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
         }
       }
       if (menuOpen && state.canReadRecords) RecordsNavigationMenu(state, onDismiss = { menuOpen = false })
+      PlayUpdateNotice()
       BrandIntroOverlay(state.loginCompletion, state.session is SessionState.SignedIn,
         LocalStartupIntro.current)
     }
@@ -125,9 +127,9 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
 }
 
 @Composable
-internal fun BootstrapHeader(modifier: Modifier, compact: Boolean) {
+internal fun BootstrapHeader(modifier: Modifier, compact: Boolean, motionAllowed: Boolean = true) {
   val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
-  val ringRotation = if (!compact && lifecycle.isAtLeast(Lifecycle.State.STARTED) &&
+  val ringRotation = if (motionAllowed && lifecycle.isAtLeast(Lifecycle.State.STARTED) &&
     ValueAnimator.areAnimatorsEnabled()) {
     val spin = rememberInfiniteTransition(label = "brand ring")
     val degrees by spin.animateFloat(0f, 360f,
@@ -136,17 +138,19 @@ internal fun BootstrapHeader(modifier: Modifier, compact: Boolean) {
     degrees
   } else 0f
   Column(modifier, verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
-    ShittimEmblem(Modifier.size(if (compact) 40.dp else 72.dp), ringRotation)
-    Text(
-      stringResource(R.string.brand_title),
-      fontFamily = ShittimDisplayFont,
-      style = if (compact) MaterialTheme.typography.titleMedium else MaterialTheme.typography.headlineMedium,
-      color = MaterialTheme.colorScheme.primary,
-    )
-    Text(
+    Row(verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
+      ShittimEmblem(Modifier.size(if (compact) 44.dp else 72.dp), ringRotation)
+      Text(
+        stringResource(R.string.brand_title),
+        fontFamily = ShittimDisplayFont,
+        style = if (compact) MaterialTheme.typography.titleMedium else MaterialTheme.typography.headlineMedium,
+        color = MaterialTheme.colorScheme.primary,
+      )
+    }
+    if (!compact) Text(
       stringResource(R.string.app_name),
-      style = if (compact) MaterialTheme.typography.titleLargeEmphasized
-        else MaterialTheme.typography.headlineLargeEmphasized,
+      style = MaterialTheme.typography.headlineLargeEmphasized,
       color = MaterialTheme.colorScheme.onSurface,
       modifier = Modifier.semantics { heading() },
     )

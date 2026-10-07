@@ -23,6 +23,7 @@ from shittim_records.adapters import (
     StatisticsRepository,
 )
 from shittim_records.archive import ArchiveProjection, project_completed_debate
+from shittim_records.mobile_notifications import pending_mobile_notification
 
 HMAC_KEY = b"records-test-key-that-is-longer-than-32-bytes"
 
@@ -235,6 +236,32 @@ def test_archive_repository_creates_pending_link_receipt_in_same_transaction() -
         "attempted": False,
         "created_at": NOW.isoformat(timespec="microseconds").replace("+00:00", "Z"),
     }
+
+
+def test_mobile_push_outbox_is_atomic_live_only_and_duplicate_does_not_recreate() -> None:
+    client = FakeDynamoDb()
+    repository = ArchiveRepository(
+        cast(Any, client), "archive", notification_table_name="statistics"
+    )
+    value = cast(Any, projection())
+    assert repository.put_projection(value, mobile_notification_created_at=NOW)
+    actions = cast(list[dict[str, Any]], client.transactions[0]["TransactItems"])
+    assert len(actions) == 13
+    receipt = actions[-1]["Put"]
+    assert receipt["TableName"] == "statistics"
+    assert unmarshal_item(receipt["Item"]) == pending_mobile_notification(
+        record_id=value.record_id, created_at=NOW
+    )
+    client.marker = marshal_item({"source_fingerprint": value.source_fingerprint})
+    assert not repository.put_projection(value, mobile_notification_created_at=NOW)
+    assert len(client.transactions) == 1
+    # A historical/backfill call has neither outbox nor queue trigger.
+    backfill_client = FakeDynamoDb()
+    assert ArchiveRepository(cast(Any, backfill_client), "archive").put_projection(value)
+    assert all(
+        action["Put"]["TableName"] == "archive"
+        for action in backfill_client.transactions[0]["TransactItems"]
+    )
 
 
 def test_archive_repository_treats_same_marker_as_idempotent_noop() -> None:

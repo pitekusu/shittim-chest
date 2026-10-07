@@ -29,6 +29,9 @@ internal interface EncryptedRecordDao {
   @Query("SELECT * FROM encrypted_records WHERE account_key = :accountKey AND record_id = :recordId AND part = :part")
   suspend fun get(accountKey: String, recordId: String, part: String): EncryptedRecordRow?
 
+  @Query("SELECT * FROM encrypted_records WHERE account_key = :accountKey AND part = :part")
+  suspend fun rows(accountKey: String, part: String): List<EncryptedRecordRow>
+
   @Query("SELECT record_id FROM encrypted_records WHERE account_key = :accountKey AND part = :part")
   suspend fun recordIds(accountKey: String, part: String): List<String>
 
