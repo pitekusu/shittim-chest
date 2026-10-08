@@ -548,6 +548,72 @@ def test_records_ci_requires_the_web_gates(directory: Path) -> None:
         validate_notification_workflows(directory)
 
 
+def test_records_ci_cannot_bypass_package_build_checks(directory: Path) -> None:
+    _replace(directory / RECORDS_CI_WORKFLOW, "run: pnpm run build", "run: pnpm exec vp build", 1)
+
+    with pytest.raises(WorkflowPolicyError, match="frozen install and web gates"):
+        validate_notification_workflows(directory)
+
+
+def test_records_release_cannot_bypass_package_build_checks(directory: Path) -> None:
+    _replace(directory / RECORDS_RELEASE_WORKFLOW, "pnpm run build", "pnpm exec vp build", 1)
+
+    with pytest.raises(WorkflowPolicyError, match="web gates"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "before,after",
+    (
+        (
+            "if: ${{ failure() && steps.browser-tests.outcome == 'failure' }}",
+            "if: always()",
+        ),
+        ("retention-days: 7", "retention-days: 90"),
+        ("if-no-files-found: ignore", "if-no-files-found: error"),
+        (
+            "name: Preserve Records browser comparison images",
+            "name: Skip browser comparison images",
+        ),
+        (
+            "id: browser-tests\n        run: pnpm exec playwright test",
+            "id: browser-tests\n        continue-on-error: true\n"
+            "        run: pnpm exec playwright test",
+        ),
+    ),
+)
+def test_records_ci_requires_bounded_failure_image_evidence(
+    directory: Path, before: str, after: str
+) -> None:
+    _replace(directory / RECORDS_CI_WORKFLOW, before, after, 1)
+
+    with pytest.raises(WorkflowPolicyError, match="bounded browser comparison images"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    (
+        "apps/records-web/test-results/**/*",
+        "apps/records-web/test-results/**/*.png",
+        "apps/records-web/test-results/**/trace.zip",
+        "apps/records-web/test-results/**/*.webm",
+    ),
+)
+def test_records_ci_retains_only_playwright_comparison_pngs(
+    directory: Path, replacement: str
+) -> None:
+    _replace(
+        directory / RECORDS_CI_WORKFLOW,
+        "apps/records-web/test-results/**/*-actual.png",
+        replacement,
+        1,
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="only comparison PNGs"):
+        validate_notification_workflows(directory)
+
+
 @pytest.mark.parametrize("workflow", [RECORDS_CI_WORKFLOW, RECORDS_RELEASE_WORKFLOW])
 def test_records_web_setup_requires_the_reviewed_commit(directory: Path, workflow: str) -> None:
     _replace(

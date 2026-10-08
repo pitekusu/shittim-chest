@@ -1,5 +1,4 @@
 import {
-  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -9,6 +8,7 @@ import {
 } from "react";
 import { useLocation } from "react-router-dom";
 
+import { useOptionalRecordsArchive } from "./hooks/useRecordsArchive";
 import styles from "./styles/routeMotion.module.css";
 
 export type RouteMotionKind = "archive" | "detail" | "insights" | "admin" | "memorial" | "other";
@@ -40,32 +40,30 @@ function RouteScene({
   const contentReadyRef = useRef(!animate);
   const contentFinishedRef = useRef(!animate);
 
-  const settleWhenComplete = useCallback(() => {
-    if (sceneRef.current?.querySelector("[data-route-motion-ready]")) {
-      contentReadyRef.current = true;
-    }
-    if (sceneFinishedRef.current && contentReadyRef.current && contentFinishedRef.current) {
-      setMotion("settled");
-    }
-  }, [sceneRef]);
-
   useLayoutEffect(() => {
     if (!animate) return;
     const scene = sceneRef.current;
     if (!scene) return;
-
-    if (
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    ) {
-      sceneFinishedRef.current = true;
-      contentReadyRef.current = true;
-      contentFinishedRef.current = true;
-      motionStartedRef.current = true;
+    const preference = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let observer: MutationObserver | null = null;
+    let detached = false;
+    const detach = () => {
+      if (detached) return;
+      detached = true;
+      observer?.disconnect();
+      scene.removeEventListener("animationend", handleRouteAnimation);
+      scene.removeEventListener("animationcancel", handleRouteAnimation);
+      preference.removeEventListener("change", handlePreference);
+    };
+    const settle = () => {
       setMotion("settled");
-      return;
-    }
-
+      detach();
+    };
+    const settleWhenComplete = () => {
+      if (scene.querySelector("[data-route-motion-ready]")) contentReadyRef.current = true;
+      if (sceneFinishedRef.current && contentReadyRef.current && contentFinishedRef.current)
+        settle();
+    };
     const observeReadiness = () => {
       const ready = scene.querySelector("[data-route-motion-ready]");
       contentReadyRef.current = ready !== null;
@@ -74,28 +72,31 @@ function RouteScene({
         setMotion("active");
       }
       const terminal = scene.querySelector<HTMLElement>("[data-route-motion-terminal]");
-      if (ready && (!terminal || !terminal.classList.contains(styles.routeMotionItem))) {
+      if (ready && (!terminal || !terminal.classList.contains(styles.routeMotionItem)))
         contentFinishedRef.current = true;
-      }
       settleWhenComplete();
     };
-    observeReadiness();
-    const observer = new MutationObserver(observeReadiness);
-    observer.observe(scene, { attributes: true, childList: true, subtree: true });
-    const handleRouteAnimation = (event: Event) => {
+    function handleRouteAnimation(event: Event) {
       const target = event.target as HTMLElement;
       if (target === scene) sceneFinishedRef.current = true;
-      if (target.hasAttribute("data-route-motion-terminal")) {
-        contentFinishedRef.current = true;
-      }
+      if (target.hasAttribute("data-route-motion-terminal")) contentFinishedRef.current = true;
       settleWhenComplete();
-    };
+    }
+    function handlePreference() {
+      if (preference.matches) settle();
+    }
+    if (preference.matches) {
+      settle();
+      return;
+    }
+    observer = new MutationObserver(observeReadiness);
+    observer.observe(scene, { attributes: true, childList: true, subtree: true });
     scene.addEventListener("animationend", handleRouteAnimation);
-    return () => {
-      observer.disconnect();
-      scene.removeEventListener("animationend", handleRouteAnimation);
-    };
-  }, [animate, sceneRef, settleWhenComplete]);
+    scene.addEventListener("animationcancel", handleRouteAnimation);
+    preference.addEventListener("change", handlePreference);
+    observeReadiness();
+    return detach;
+  }, [animate, sceneRef]);
 
   return (
     <div
@@ -111,10 +112,14 @@ function RouteScene({
 
 export function BrandedRouteStage({ children }: PropsWithChildren) {
   const location = useLocation();
+  const archive = useOptionalRecordsArchive();
+  const archiveReturnTarget = archive?.returnTarget;
+  const clearArchiveReturnTarget = archive?.clearReturnTarget;
   const sceneRef = useRef<HTMLDivElement>(null);
   const previousPathnameRef = useRef(location.pathname);
   const hasNavigatedRef = useRef(false);
   const mountedRef = useRef(false);
+  const focusedPathnameRef = useRef(location.pathname);
 
   if (previousPathnameRef.current !== location.pathname) {
     previousPathnameRef.current = location.pathname;
@@ -126,25 +131,49 @@ export function BrandedRouteStage({ children }: PropsWithChildren) {
       mountedRef.current = true;
       return;
     }
+    const previousPathname = focusedPathnameRef.current;
+    focusedPathnameRef.current = location.pathname;
+    if (previousPathname === location.pathname) return;
 
     const scene = sceneRef.current;
     if (!scene) return;
 
-    const focusHeading = () => {
+    const returnTarget =
+      location.pathname === "/" &&
+      archiveReturnTarget != null &&
+      previousPathname === `/records/${archiveReturnTarget.recordId}`
+        ? archiveReturnTarget
+        : null;
+    const focusContent = () => {
+      if (returnTarget) {
+        // Cached cards can move or disappear during a refetch. Restore only after
+        // the archive's current retrieval has settled, even when a card is present.
+        if (!scene.querySelector("[data-archive-ready]")) return false;
+        const card = scene.querySelector<HTMLAnchorElement>(
+          `[data-record-id="${returnTarget.recordId}"]`,
+        );
+        if (card) {
+          window.scrollTo({ top: returnTarget.scrollY, behavior: "instant" });
+          card.focus({ preventScroll: true });
+          clearArchiveReturnTarget?.();
+          return true;
+        }
+        clearArchiveReturnTarget?.();
+      }
       const heading = scene.querySelector<HTMLElement>('h1[tabindex="-1"]');
       if (!heading) return false;
       heading.focus();
       return true;
     };
 
-    if (focusHeading()) return;
+    if (focusContent()) return;
 
     const observer = new MutationObserver(() => {
-      if (focusHeading()) observer.disconnect();
+      if (focusContent()) observer.disconnect();
     });
-    observer.observe(scene, { childList: true, subtree: true });
+    observer.observe(scene, { attributes: true, childList: true, subtree: true });
     return () => observer.disconnect();
-  }, [location.pathname]);
+  }, [location.pathname, archiveReturnTarget, clearArchiveReturnTarget]);
 
   return (
     <div

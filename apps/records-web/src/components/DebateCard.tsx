@@ -286,12 +286,14 @@ export function DebateCard({
   motionTerminal = false,
   appended = false,
   onAppendAnimationEnd,
+  onOpen,
 }: {
   readonly record: RecordListItem;
   readonly motionDelay?: number;
   readonly motionTerminal?: boolean;
   readonly appended?: boolean;
   readonly onAppendAnimationEnd?: (recordId: string) => void;
+  readonly onOpen?: (recordId: string) => void;
 }) {
   const linkRef = useRef<HTMLAnchorElement>(null);
   const winner = record.participants.find(
@@ -320,6 +322,18 @@ export function DebateCard({
         appended ? routeStyles.routeMotionAppend : ""
       }`}
       to={`/records/${record.recordId}`}
+      data-record-id={record.recordId}
+      onClick={(event) => {
+        if (
+          !event.metaKey &&
+          !event.ctrlKey &&
+          !event.shiftKey &&
+          !event.altKey &&
+          event.button === 0
+        ) {
+          onOpen?.(record.recordId);
+        }
+      }}
       aria-label={`「${record.questionPreview}」の記録を読む`}
       data-route-motion-terminal={motionTerminal ? "" : undefined}
       ref={linkRef}
@@ -356,6 +370,20 @@ export function DebateCard({
         </div>
         <span className={styles.cardAction} aria-hidden="true">
           記録を読む
+          <svg
+            viewBox="0 0 24 24"
+            width="16"
+            height="16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path d="M6 18 18 6M6 6h12v12" />
+          </svg>
         </span>
       </article>
     </Link>

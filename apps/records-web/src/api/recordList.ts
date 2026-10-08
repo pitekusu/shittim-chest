@@ -7,12 +7,15 @@ function isRecordListResponse(value: unknown): value is RecordListResponse {
   return recordListResponseValidator(value) && hasConsistentRecordInvariants(value);
 }
 
-export async function getRecords(filters: RecordListFilters): Promise<RecordListResponse> {
+export async function getRecords(
+  filters: RecordListFilters,
+  signal?: AbortSignal,
+): Promise<RecordListResponse> {
   const query = new URLSearchParams({ limit: "12" });
   for (const [key, value] of Object.entries(filters)) {
     if (value !== undefined && value !== "") {
       query.set(key, value);
     }
   }
-  return requestJson(`/api/v1/records?${query.toString()}`, isRecordListResponse);
+  return requestJson(`/api/v1/records?${query.toString()}`, isRecordListResponse, { signal });
 }

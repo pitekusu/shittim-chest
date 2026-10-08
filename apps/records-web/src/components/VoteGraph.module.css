@@ -164,14 +164,32 @@
     transform 180ms ease;
 }
 
-.voteNode:hover,
 .voteNode:focus-visible,
 .voteNode[data-highlighted="true"] {
   border-color: var(--vote-line-strong);
   box-shadow:
     0 0 0 6px rgb(88 217 232 / 17%),
     0 14px 34px rgb(45 119 148 / 15%);
-  transform: translate(-50%, -50%) scale(1.035);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .voteNode:hover {
+    border-color: var(--vote-line-strong);
+    box-shadow:
+      0 0 0 6px rgb(88 217 232 / 17%),
+      0 14px 34px rgb(45 119 148 / 15%);
+    transform: translate(-50%, -50%) scale(1.035);
+  }
+}
+
+.voteGraph:has(:focus-visible) .voteEdge,
+.voteGraph:has(:focus-visible) .edgeLine,
+.voteGraph:has(:focus-visible) .voteNode {
+  transition: none;
+}
+
+.voteGraph:has(:focus-visible) .voteNode {
+  transform: translate(-50%, -50%);
 }
 
 .voteTooltip {

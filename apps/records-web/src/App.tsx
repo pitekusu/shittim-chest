@@ -17,7 +17,9 @@ import { ErrorPanel } from "./components/ErrorPanel";
 import { Layout } from "./components/Layout";
 import { RouteChunkBoundary, RouteLoadingFallback } from "./components/RouteChunkBoundary";
 import { SESSION_QUERY_KEY } from "./hooks/useAuthenticationRecovery";
+import { RecordsArchiveProvider, useRecordsArchiveActions } from "./hooks/useRecordsArchive";
 import { LOGIN_TRANSITION_KEY } from "./lib/authTransition";
+import { clearProtectedQueries } from "./lib/protectedQueries";
 import { setPageMetadata } from "./lib/pageMetadata";
 import { BrandedRouteStage } from "./RouteMotion";
 import { LoginPage } from "./routes/LoginPage";
@@ -29,6 +31,7 @@ const RecordsHome = lazy(() => import("./routes/RecordsHome"));
 const RecordDetail = lazy(() => import("./routes/RecordDetail"));
 const RankingsPage = lazy(() => import("./routes/RankingsPage"));
 const AdminPage = lazy(() => import("./routes/AdminPage"));
+const AdminPromptsPage = lazy(() => import("./routes/AdminPromptsPage"));
 const MemorialPage = lazy(() => import("./routes/MemorialPage"));
 const MomotalkPage = lazy(() => import("./routes/MomotalkPage"));
 
@@ -56,11 +59,15 @@ function LoadingScreen(): React.JSX.Element {
 function AuthenticatedRoutes({
   session,
   onLogout,
+  logoutPending,
+  logoutError,
   theme,
   onThemeToggle,
 }: {
   readonly session: SessionResponse & { authenticated: true };
   readonly onLogout: () => void;
+  readonly logoutPending: boolean;
+  readonly logoutError: string | null;
   readonly theme: Theme;
   readonly onThemeToggle: () => void;
 }): React.JSX.Element {
@@ -88,6 +95,8 @@ function AuthenticatedRoutes({
       displayName={session.user.displayName}
       avatar={session.user.avatar}
       onLogout={onLogout}
+      logoutPending={logoutPending}
+      logoutError={logoutError}
       theme={theme}
       onThemeToggle={onThemeToggle}
     >
@@ -103,19 +112,13 @@ function AuthenticatedRoutes({
                 path="/memorial"
                 element={<MemorialPage csrfToken={session.csrfToken} requester={session.user} />}
               />
-              <Route
-                path="/admin"
-                element={
-                  <AdminPage isAdmin={session.isAdmin === true} csrfToken={session.csrfToken} />
-                }
-              />
+              <Route path="/admin" element={<AdminPage csrfToken={session.csrfToken} />} />
               <Route
                 path="/admin/prompts"
                 element={
-                  <AdminPage
+                  <AdminPromptsPage
                     isAdmin={session.isAdmin === true}
                     csrfToken={session.csrfToken}
-                    view="prompts"
                   />
                 }
               />
@@ -136,17 +139,29 @@ function ApplicationRoutes({
   readonly theme: Theme;
   readonly onThemeToggle: () => void;
 }): React.JSX.Element {
-  const session = useQuery({ queryKey: SESSION_QUERY_KEY, queryFn: getSession });
+  const client = useQueryClient();
+  const session = useQuery({
+    queryKey: SESSION_QUERY_KEY,
+    queryFn: ({ signal }) => getSession(signal),
+  });
+  const { reset: resetArchive } = useRecordsArchiveActions();
+  useEffect(() => {
+    if (session.data?.authenticated === false) {
+      clearProtectedQueries(client);
+      resetArchive();
+    }
+  }, [client, session.data?.authenticated, resetArchive]);
   const location = useLocation();
   useEffect(() => {
     if (!/^\/records\/[A-Za-z0-9_-]{43}$/.test(location.pathname)) setPageMetadata();
   }, [location.pathname]);
   const navigate = useNavigate();
-  const client = useQueryClient();
   const [showLogoutTransition, setShowLogoutTransition] = useState(false);
   const logoutMutation = useMutation({
     mutationFn: (csrfToken: string) => logout(csrfToken),
     onSuccess: () => {
+      clearProtectedQueries(client);
+      resetArchive();
       sessionStorage.removeItem(LOGIN_TRANSITION_KEY);
       setShowLogoutTransition(true);
     },
@@ -202,7 +217,15 @@ function ApplicationRoutes({
   return (
     <AuthenticatedRoutes
       session={authenticatedSession}
-      onLogout={() => logoutMutation.mutate(authenticatedSession.csrfToken)}
+      onLogout={() => {
+        if (!logoutMutation.isPending) logoutMutation.mutate(authenticatedSession.csrfToken);
+      }}
+      logoutPending={logoutMutation.isPending}
+      logoutError={
+        logoutMutation.isError
+          ? "ログアウトできませんでした。通信状態を確認して、もう一度お試しください。"
+          : null
+      }
       theme={theme}
       onThemeToggle={onThemeToggle}
     />
@@ -220,9 +243,11 @@ export function App(): React.JSX.Element {
 
   return (
     <QueryClientProvider client={client}>
-      <BrowserRouter>
-        <ApplicationRoutes theme={theme} onThemeToggle={toggleTheme} />
-      </BrowserRouter>
+      <RecordsArchiveProvider>
+        <BrowserRouter>
+          <ApplicationRoutes theme={theme} onThemeToggle={toggleTheme} />
+        </BrowserRouter>
+      </RecordsArchiveProvider>
     </QueryClientProvider>
   );
 }

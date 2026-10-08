@@ -3,21 +3,20 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 
 import { RecordsApiError } from "../api/http";
 import { getRecords } from "../api/recordList";
-import type { ParticipantSlot, SortOrder } from "../api/types";
+import type { ParticipantSlot } from "../api/types";
 import { AvatarSelect, type AvatarSelectOption } from "../components/AvatarSelect";
 import { DebateCard } from "../components/DebateCard";
 import { ErrorPanel } from "../components/ErrorPanel";
 import { useAuthenticationRecovery } from "../hooks/useAuthenticationRecovery";
+import { useRecordsArchive } from "../hooks/useRecordsArchive";
 import { routeMotionDelay } from "../lib/routePresentation";
 import commonStyles from "../styles/common.module.css";
 import styles from "../styles/home.module.css";
 import routeStyles from "../styles/routeMotion.module.css";
 
 export default function RecordsHome(): React.JSX.Element {
-  const [winner, setWinner] = useState<ParticipantSlot | "">("");
-  const [sort, setSort] = useState<SortOrder>("newest");
-  const [search, setSearch] = useState("");
-  const [requester, setRequester] = useState("");
+  const { filters, updateFilters, rememberRecord } = useRecordsArchive();
+  const { winner, sort, search, requester } = filters;
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const observedPageCountRef = useRef<number | undefined>(undefined);
   const [appendMotionIds, setAppendMotionIds] = useState<ReadonlySet<string>>(() => new Set());
@@ -28,12 +27,15 @@ export default function RecordsHome(): React.JSX.Element {
   const records = useInfiniteQuery({
     queryKey: ["records", winner, sort],
     initialPageParam: undefined as string | undefined,
-    queryFn: ({ pageParam }) =>
-      getRecords({
-        cursor: pageParam,
-        sort,
-        winner: winner || undefined,
-      }),
+    queryFn: ({ pageParam, signal }) =>
+      getRecords(
+        {
+          cursor: pageParam,
+          sort,
+          winner: winner || undefined,
+        },
+        signal,
+      ),
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
   });
   const { fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError } = records;
@@ -129,9 +131,9 @@ export default function RecordsHome(): React.JSX.Element {
 
   useEffect(() => {
     if (requester && !records.isPending && !requesterNames.includes(requester)) {
-      setRequester("");
+      updateFilters({ requester: "" });
     }
-  }, [records.isPending, requester, requesterNames]);
+  }, [records.isPending, requester, requesterNames, updateFilters]);
 
   const visibleRecords = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase("ja-JP");
@@ -182,7 +184,7 @@ export default function RecordsHome(): React.JSX.Element {
   const error = records.error instanceof RecordsApiError ? records.error : undefined;
 
   return (
-    <>
+    <div className={styles.archivePage}>
       <header
         className={`${commonStyles.pageHeader} ${routeStyles.routeMotionItem}`}
         data-route-motion-ready={records.isPending ? undefined : ""}
@@ -211,17 +213,23 @@ export default function RecordsHome(): React.JSX.Element {
           <input
             type="search"
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(event) => updateFilters({ search: event.target.value })}
             placeholder="質問文などを入力"
+            aria-describedby="archive-search-scope"
           />
         </label>
         <AvatarSelect
           label="依頼者"
           value={requester}
           options={requesterOptions}
-          onChange={setRequester}
+          onChange={(value) => updateFilters({ requester: value })}
         />
-        <AvatarSelect label="勝者" value={winner} options={winnerOptions} onChange={setWinner} />
+        <AvatarSelect
+          label="勝者"
+          value={winner}
+          options={winnerOptions}
+          onChange={(value) => updateFilters({ winner: value })}
+        />
         <fieldset className={styles.sortField}>
           <legend>並び順</legend>
           <div className={styles.sortSegment} data-sort={sort}>
@@ -232,12 +240,9 @@ export default function RecordsHome(): React.JSX.Element {
                 name="records-sort"
                 value="newest"
                 checked={sort === "newest"}
-                onChange={() => setSort("newest")}
+                onChange={() => updateFilters({ sort: "newest" })}
               />
-              <span lang="en" aria-hidden="true">
-                NEW
-              </span>
-              <span className={commonStyles.visuallyHidden}>新しい順</span>
+              <span>新しい順</span>
             </label>
             <label className={styles.sortOption}>
               <input
@@ -246,16 +251,33 @@ export default function RecordsHome(): React.JSX.Element {
                 name="records-sort"
                 value="oldest"
                 checked={sort === "oldest"}
-                onChange={() => setSort("oldest")}
+                onChange={() => updateFilters({ sort: "oldest" })}
               />
-              <span lang="en" aria-hidden="true">
-                OLD
-              </span>
-              <span className={commonStyles.visuallyHidden}>古い順</span>
+              <span>古い順</span>
             </label>
           </div>
         </fieldset>
       </section>
+      <div className={styles.archiveResults}>
+        <p id="archive-search-scope" className={styles.searchScope} aria-live="polite">
+          読み込み済み <strong>{loadedRecords.length}</strong> 件から検索
+          {localFiltersActive && (
+            <>
+              {" "}
+              · <strong>{visibleRecords.length}</strong> 件が一致
+            </>
+          )}
+        </p>
+        {(localFiltersActive || winner !== "") && (
+          <button
+            className={styles.clearFilters}
+            type="button"
+            onClick={() => updateFilters({ search: "", requester: "", winner: "" })}
+          >
+            絞り込みを解除
+          </button>
+        )}
+      </div>
       {records.isPending && (
         <p className={styles.loadingLine} aria-live="polite">
           記録を読み込んでいます。
@@ -273,10 +295,18 @@ export default function RecordsHome(): React.JSX.Element {
         <section className={commonStyles.emptyState}>
           <span aria-hidden="true">◇</span>
           <h2>該当する記録はありません</h2>
-          <p>条件を変更して、もう一度探してみてください。</p>
+          <p>
+            {records.hasNextPage
+              ? "読み込み済みの記録に一致しません。検索対象を追加するか、条件を変更してください。"
+              : "条件を変更して、もう一度探してみてください。"}
+          </p>
         </section>
       )}
-      <section className={styles.cardGrid} aria-label="完了した議論">
+      <section
+        className={styles.cardGrid}
+        aria-label="完了した議論"
+        data-archive-ready={!records.isPending && !records.isFetching ? "" : undefined}
+      >
         {visibleRecords.map((record, index) => (
           <DebateCard
             key={record.recordId}
@@ -285,6 +315,7 @@ export default function RecordsHome(): React.JSX.Element {
             motionTerminal={index === visibleRecords.length - 1}
             appended={appendMotionIds.has(record.recordId)}
             onAppendAnimationEnd={consumeAppendMotion}
+            onOpen={rememberRecord}
           />
         ))}
       </section>
@@ -326,6 +357,6 @@ export default function RecordsHome(): React.JSX.Element {
           )}
         </div>
       )}
-    </>
+    </div>
   );
 }

@@ -6,6 +6,7 @@ export interface GuardChunk {
   readonly imports: string[];
   readonly isEntry: boolean;
   readonly moduleIds: string[];
+  readonly css?: readonly string[];
 }
 
 const ROUTES = {
@@ -37,8 +38,11 @@ const ROUTES = {
   },
   AdminPage: {
     facade: "/src/routes/AdminPage.tsx",
+    ownedModules: [],
+  },
+  AdminPromptsPage: {
+    facade: "/src/routes/AdminPromptsPage.tsx",
     ownedModules: [
-      "/src/generated/admin-status-response-validator.mjs",
       "/src/generated/admin-prompts-response-validator.mjs",
       "/src/generated/admin-apply-response-validator.mjs",
       "/src/generated/admin-revisions-response-validator.mjs",
@@ -76,7 +80,7 @@ function findUniqueChunk(
   return matches[0];
 }
 
-function staticClosure(
+export function staticClosure(
   root: GuardChunk,
   chunksByFileName: ReadonlyMap<string, GuardChunk>,
 ): Set<string> {
@@ -114,21 +118,30 @@ export function assertCodeSplittingModuleOwnership(chunks: readonly GuardChunk[]
       `${moduleSuffix.replaceAll("/", "_")}_owner_count`,
     );
 
-  for (const [routeName, route] of Object.entries(ROUTES)) {
-    const routeClosure = routeClosures.get(routeName);
-    if (routeClosure === undefined) throw new Error("code_splitting_module_graph_route_missing");
-    for (const moduleSuffix of route.ownedModules) {
-      const owner = ownerOf(moduleSuffix);
-      if (initialClosure.has(owner.fileName) || !routeClosure.has(owner.fileName)) {
-        throw new Error(`code_splitting_module_graph_wrong_owner: ${moduleSuffix}`);
-      }
-      for (const [otherRouteName, otherClosure] of routeClosures) {
-        if (otherRouteName !== routeName && otherClosure.has(owner.fileName)) {
-          throw new Error(`code_splitting_module_graph_shared_route_module: ${moduleSuffix}`);
-        }
+  function assertOwners(moduleSuffix: string, allowedRoutes: readonly string[]): void {
+    const owner = ownerOf(moduleSuffix);
+    if (
+      initialClosure.has(owner.fileName) ||
+      allowedRoutes.some((route) => !routeClosures.get(route)?.has(owner.fileName))
+    ) {
+      throw new Error(`code_splitting_module_graph_wrong_owner: ${moduleSuffix}`);
+    }
+    for (const [otherRouteName, otherClosure] of routeClosures) {
+      if (!allowedRoutes.includes(otherRouteName) && otherClosure.has(owner.fileName)) {
+        throw new Error(`code_splitting_module_graph_shared_route_module: ${moduleSuffix}`);
       }
     }
   }
+
+  for (const [routeName, route] of Object.entries(ROUTES)) {
+    for (const moduleSuffix of route.ownedModules) assertOwners(moduleSuffix, [routeName]);
+  }
+  // Prompt publication checks service status. This read-only API is the only
+  // validator deliberately shared between the two independent admin routes.
+  assertOwners("/src/generated/admin-status-response-validator.mjs", [
+    "AdminPage",
+    "AdminPromptsPage",
+  ]);
 
   for (const moduleSuffix of INITIAL_MODULES) {
     const owner = ownerOf(moduleSuffix);
@@ -153,6 +166,32 @@ export function codeSplittingModuleOwnershipGuard(): Plugin {
           moduleIds: Object.keys(chunk.modules).map(normalizeModuleId),
         }));
       assertCodeSplittingModuleOwnership(chunks);
+      // Emit only public asset names, never build-machine paths or source text.
+      // The post-build byte gate follows this exact Rollup static import graph.
+      this.emitFile({
+        type: "asset",
+        fileName: "records-code-splitting.json",
+        source: JSON.stringify({
+          schemaVersion: 1,
+          chunks: chunks.map((chunk) => {
+            const output = bundle[chunk.fileName];
+            const metadata =
+              output !== undefined && "viteMetadata" in output
+                ? (output.viteMetadata as { importedCss?: Set<string> })
+                : undefined;
+            return {
+              fileName: chunk.fileName,
+              imports: chunk.imports,
+              css: [...(metadata?.importedCss ?? [])],
+              isEntry: chunk.isEntry,
+              route:
+                Object.entries(ROUTES).find(([, route]) =>
+                  normalizeModuleId(chunk.facadeModuleId ?? "").endsWith(route.facade),
+                )?.[0] ?? null,
+            };
+          }),
+        }),
+      });
     },
   };
 }

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-import { getAdminStatus, refreshAdminStatus } from "../api/admin";
+import { getAdminStatus, refreshAdminStatus } from "../api/adminStatus";
 import { RecordsApiError } from "../api/http";
 import type {
   AdminAlarmCode,
@@ -10,7 +10,7 @@ import type {
   AdminStatusResponse,
 } from "../api/types";
 import { useAuthenticationRecovery } from "../hooks/useAuthenticationRecovery";
-import AdminPromptManager from "../components/AdminPromptManager";
+import { AdminPanelState as PanelState } from "../components/AdminPanelState";
 import { formatCompletedDateTime } from "../lib/dateTime";
 import adminStyles from "../styles/admin.module.css";
 import commonStyles from "../styles/common.module.css";
@@ -237,9 +237,7 @@ const EXTERNAL_SOURCES = [
 ] as const;
 
 interface AdminPageProps {
-  readonly isAdmin: boolean;
   readonly csrfToken: string;
-  readonly view?: "status" | "prompts";
 }
 
 function newIdempotencyKey(): string {
@@ -527,36 +525,6 @@ function SystemSignalIcon(): React.JSX.Element {
   );
 }
 
-function PanelState({
-  busy = false,
-  title,
-  message,
-  onRetry,
-}: {
-  readonly busy?: boolean;
-  readonly title: string;
-  readonly message: string;
-  readonly onRetry?: () => void;
-}): React.JSX.Element {
-  return (
-    <div
-      className={adminStyles.panelState}
-      aria-busy={busy || undefined}
-      role={onRetry === undefined ? "status" : "alert"}
-    >
-      <div>
-        <strong>{title}</strong>
-        <span>{message}</span>
-        {onRetry !== undefined && (
-          <button className={commonStyles.secondaryButton} type="button" onClick={onRetry}>
-            もう一度試す
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function StatusLoadingState(): React.JSX.Element {
   const stages = ["実行基盤", "データ", "配信", "運用"] as const;
   return (
@@ -599,13 +567,22 @@ function StateBadge({ state }: { readonly state: AdminHealthState }): React.JSX.
 }
 
 function OverviewPanel({
+  csrfToken,
   status,
 }: {
-  readonly status: AdminStatusResponse | undefined;
+  readonly csrfToken: string;
+  readonly status: UseQueryResult<AdminStatusResponse>;
 }): React.JSX.Element {
-  const state = status?.overall.state ?? "unknown";
-  const activeAlarms = status?.overall.activeAlarms ?? [];
-  const alarmCount = (status?.overall.criticalAlarms ?? 0) + (status?.overall.warningAlarms ?? 0);
+  const client = useQueryClient();
+  const refresh = useMutation({
+    mutationFn: () => refreshAdminStatus(csrfToken, newIdempotencyKey()),
+    onSuccess: (response) => client.setQueryData(["admin", "status"], response),
+  });
+  useAuthenticationRecovery(refresh.error);
+  const data = status.data;
+  const state = data?.overall.state ?? "unknown";
+  const activeAlarms = data?.overall.activeAlarms ?? [];
+  const alarmCount = (data?.overall.criticalAlarms ?? 0) + (data?.overall.warningAlarms ?? 0);
   return (
     <section
       className={`${adminStyles.adminPanel} ${adminStyles.overviewPanel}`}
@@ -618,6 +595,30 @@ function OverviewPanel({
             OVERVIEW
           </p>
           <h2 id="overview-title">現在の状態</h2>
+        </div>
+        <div className={adminStyles.panelActions}>
+          <button
+            className={`${commonStyles.secondaryButton} ${adminStyles.refreshButton}`}
+            type="button"
+            disabled={refresh.isPending || status.isFetching}
+            data-busy={refresh.isPending || undefined}
+            onClick={() => refresh.mutate()}
+          >
+            <svg
+              aria-hidden="true"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M20 7v5h-5M20 12a8 8 0 1 0-2.3 5.7" />
+            </svg>
+            {refresh.isPending ? "更新しています" : "状態を更新"}
+          </button>
         </div>
       </header>
       <div className={adminStyles.overviewBody}>
@@ -638,7 +639,7 @@ function OverviewPanel({
               </span>
               警告アラーム
             </dt>
-            <dd>{status?.overall.warningAlarms ?? "—"}</dd>
+            <dd>{data?.overall.warningAlarms ?? "—"}</dd>
           </div>
           <div className={adminStyles.overviewStat} data-tone="critical">
             <dt>
@@ -647,27 +648,64 @@ function OverviewPanel({
               </span>
               重大アラーム
             </dt>
-            <dd>{status?.overall.criticalAlarms ?? "—"}</dd>
+            <dd>{data?.overall.criticalAlarms ?? "—"}</dd>
           </div>
           <div className={adminStyles.overviewStat} data-tone="time">
             <dt>
               <span className={adminStyles.overviewStatIcon} aria-hidden="true">
-                ◷
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                >
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="M12 6v6l4 2" />
+                </svg>
               </span>
-              状態取得日時
+              情報の鮮度
             </dt>
-            <dd>
-              {status ? (
-                <time dateTime={status.generatedAt}>
-                  {formatCompletedDateTime(status.generatedAt)}
+            <dd className={adminStyles.overviewFreshness}>
+              <span>
+                {data
+                  ? data.stale
+                    ? "期限超過"
+                    : data.overall.partial
+                      ? "一部未確認"
+                      : "最新"
+                  : "未確認"}
+              </span>
+              {data && (
+                <time dateTime={data.generatedAt}>
+                  {formatCompletedDateTime(data.generatedAt)} 取得
                 </time>
-              ) : (
-                "未確認"
               )}
             </dd>
           </div>
         </dl>
       </div>
+      {refresh.isPending && data && (
+        <output className={adminStyles.refreshProgress}>
+          <span aria-hidden="true" />
+          最新のAWS状態を確認しています。
+        </output>
+      )}
+      {refresh.isError && (
+        <PanelState
+          title="状態を更新できませんでした"
+          message={errorMessage(refresh.error, "直前に取得した状態を表示しています。")}
+        />
+      )}
+      {data && (data.stale || data.overall.partial) && (
+        <output className={adminStyles.statusNotice}>
+          {data.stale
+            ? "取得済み情報の有効期限を過ぎています。"
+            : "一部のサービスを確認できませんでした。取得できた状態だけを表示しています。"}
+        </output>
+      )}
       {activeAlarms.length > 0 && (
         <section className={adminStyles.activeAlarms} aria-labelledby="active-alarms-title">
           <header>
@@ -2079,18 +2117,10 @@ function ServiceCard({
 }
 
 function AwsStatusPanel({
-  csrfToken,
   status,
 }: {
-  readonly csrfToken: string;
   readonly status: UseQueryResult<AdminStatusResponse>;
 }): React.JSX.Element {
-  const client = useQueryClient();
-  const refresh = useMutation({
-    mutationFn: () => refreshAdminStatus(csrfToken, newIdempotencyKey()),
-    onSuccess: (response) => client.setQueryData(["admin", "status"], response),
-  });
-  useAuthenticationRecovery(refresh.error);
   const data = status.data;
   const translationMetrics =
     data?.sections
@@ -2121,25 +2151,7 @@ function AwsStatusPanel({
           </p>
           <h2 id="status-title">サービス状態</h2>
         </div>
-        <div className={adminStyles.panelActions}>
-          <button
-            className={`${commonStyles.secondaryButton} ${adminStyles.refreshButton}`}
-            type="button"
-            disabled={refresh.isPending || status.isFetching}
-            data-busy={refresh.isPending || undefined}
-            onClick={() => refresh.mutate()}
-          >
-            <span aria-hidden="true">↻</span>
-            {refresh.isPending ? "更新しています" : "状態を更新"}
-          </button>
-        </div>
       </header>
-      {refresh.isPending && data && (
-        <output className={adminStyles.refreshProgress}>
-          <span aria-hidden="true" />
-          最新のAWS状態を確認しています。
-        </output>
-      )}
       {status.isPending && !data && <StatusLoadingState />}
       {status.isError && !data && (
         <PanelState
@@ -2148,40 +2160,59 @@ function AwsStatusPanel({
           onRetry={() => void status.refetch()}
         />
       )}
-      {refresh.isError && (
-        <PanelState
-          title="状態を更新できませんでした"
-          message={errorMessage(refresh.error, "直前に取得した状態を表示しています。")}
-        />
-      )}
       {data && (
-        <>
-          {(data.stale || data.overall.partial) && (
-            <output className={adminStyles.statusNotice}>
-              {data.stale
-                ? "取得済み情報の有効期限を過ぎています。"
-                : "一部のサービスを確認できませんでした。取得できた状態だけを表示しています。"}
-            </output>
-          )}
-          <div className={adminStyles.statusGrid}>
-            {orderedSections.map((section) => (
-              <ServiceCard
-                key={section.service}
-                section={section}
-                translationMetrics={translationMetrics}
-                nextTaskImageTags={nextTaskImageTags}
-              />
-            ))}
-          </div>
-        </>
+        <div className={adminStyles.statusGrid}>
+          {orderedSections.map((section) => (
+            <ServiceCard
+              key={section.service}
+              section={section}
+              translationMetrics={translationMetrics}
+              nextTaskImageTags={nextTaskImageTags}
+            />
+          ))}
+        </div>
       )}
     </section>
   );
 }
 
 function AuthorizedAdminPage({ csrfToken }: { readonly csrfToken: string }): React.JSX.Element {
-  const status = useQuery({ queryKey: ["admin", "status"], queryFn: getAdminStatus });
+  const status = useQuery({
+    queryKey: ["admin", "status"],
+    queryFn: ({ signal }) => getAdminStatus(signal),
+  });
   useAuthenticationRecovery(status.error);
+  const [currentSection, setCurrentSection] = useState("admin-overview");
+
+  useEffect(() => {
+    let frame: number | null = null;
+    function updateCurrentSection(): void {
+      if (frame !== null) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        const navigation = document.querySelector<HTMLElement>("[data-admin-navigation]");
+        const readingEdge =
+          window.innerWidth < 1024 ? (navigation?.getBoundingClientRect().bottom ?? 0) + 20 : 100;
+        const sections = document.querySelectorAll<HTMLElement>(
+          "#admin-overview, #admin-status, [id^='admin-service-']",
+        );
+        let selected = "admin-overview";
+        for (const section of sections) {
+          if (section.getBoundingClientRect().top > readingEdge) break;
+          selected = section.id;
+        }
+        setCurrentSection(selected);
+      });
+    }
+    window.addEventListener("scroll", updateCurrentSection, { passive: true });
+    window.addEventListener("resize", updateCurrentSection);
+    return () => {
+      window.removeEventListener("scroll", updateCurrentSection);
+      window.removeEventListener("resize", updateCurrentSection);
+      if (frame !== null) window.cancelAnimationFrame(frame);
+    };
+  }, []);
+
   const serviceStates = new Map(
     status.data?.sections.map((section) => [section.service, section.state] as const) ?? [],
   );
@@ -2200,11 +2231,25 @@ function AuthorizedAdminPage({ csrfToken }: { readonly csrfToken: string }): Rea
         </h1>
       </header>
       <div className={adminStyles.adminWorkspace}>
-        <nav className={adminStyles.sectionNavigation} aria-label="管理画面内ナビゲーション">
-          <a className={adminStyles.sectionPrimaryLink} href="#admin-overview">
+        <nav
+          className={adminStyles.sectionNavigation}
+          aria-label="管理画面内ナビゲーション"
+          data-admin-navigation=""
+        >
+          <a
+            className={adminStyles.sectionPrimaryLink}
+            href="#admin-overview"
+            aria-current={currentSection === "admin-overview" ? "location" : undefined}
+            onClick={() => setCurrentSection("admin-overview")}
+          >
             概要
           </a>
-          <a className={adminStyles.sectionPrimaryLink} href="#admin-status">
+          <a
+            className={adminStyles.sectionPrimaryLink}
+            href="#admin-status"
+            aria-current={currentSection === "admin-status" ? "location" : undefined}
+            onClick={() => setCurrentSection("admin-status")}
+          >
             サービス
           </a>
           <div className={adminStyles.serviceAnchorList}>
@@ -2219,6 +2264,10 @@ function AuthorizedAdminPage({ csrfToken }: { readonly csrfToken: string }): Rea
                       ? undefined
                       : `${serviceName}（${HEALTH_LABELS[attentionState]}）`
                   }
+                  aria-current={
+                    currentSection === `admin-service-${service}` ? "location" : undefined
+                  }
+                  onClick={() => setCurrentSection(`admin-service-${service}`)}
                   data-state={attentionState ?? undefined}
                   href={`#admin-service-${service}`}
                   key={service}
@@ -2243,47 +2292,14 @@ function AuthorizedAdminPage({ csrfToken }: { readonly csrfToken: string }): Rea
           </div>
         </nav>
         <div className={adminStyles.adminContent}>
-          <OverviewPanel status={status.data} />
-          <AwsStatusPanel csrfToken={csrfToken} status={status} />
+          <OverviewPanel csrfToken={csrfToken} status={status} />
+          <AwsStatusPanel status={status} />
         </div>
       </div>
     </div>
   );
 }
 
-function AuthorizedPromptPage({
-  canWrite,
-  csrfToken,
-}: {
-  readonly canWrite: boolean;
-  readonly csrfToken: string;
-}): React.JSX.Element {
-  return (
-    <div className={adminStyles.adminPage} data-route-motion-ready="">
-      <header className={`${commonStyles.pageHeader} ${routeStyles.routeMotionItem}`}>
-        <p className={commonStyles.eyebrow} lang="en">
-          PROMPT MANAGEMENT
-        </p>
-        <h1
-          className={`${commonStyles.japaneseText} ${commonStyles.japaneseHeading}`}
-          tabIndex={-1}
-        >
-          プロンプト管理
-        </h1>
-      </header>
-      <AdminPromptManager canWrite={canWrite} csrfToken={csrfToken} />
-    </div>
-  );
-}
-
-export default function AdminPage({
-  isAdmin,
-  csrfToken,
-  view = "status",
-}: AdminPageProps): React.JSX.Element {
-  return view === "prompts" ? (
-    <AuthorizedPromptPage canWrite={isAdmin} csrfToken={csrfToken} />
-  ) : (
-    <AuthorizedAdminPage csrfToken={csrfToken} />
-  );
+export default function AdminPage({ csrfToken }: AdminPageProps): React.JSX.Element {
+  return <AuthorizedAdminPage csrfToken={csrfToken} />;
 }

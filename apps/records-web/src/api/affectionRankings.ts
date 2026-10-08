@@ -108,11 +108,15 @@ export function mergeAffectionRankingPages(
   return { ...first, rankings, nextCursor: last.nextCursor };
 }
 
-export async function getAffectionRankings(cursor?: string): Promise<AffectionRankingsResponse> {
+export async function getAffectionRankings(
+  cursor?: string,
+  signal?: AbortSignal,
+): Promise<AffectionRankingsResponse> {
   const query = new URLSearchParams({ limit: String(AFFECTION_RANKINGS_PAGE_LIMIT) });
   if (cursor !== undefined) query.set("cursor", cursor);
   return requestJson(
     `/api/v1/insights/affection-rankings?${query.toString()}`,
     isAffectionRankingsResponse,
+    { signal },
   );
 }

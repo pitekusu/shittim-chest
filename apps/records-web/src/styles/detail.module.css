@@ -10,13 +10,21 @@
   cursor: pointer;
 }
 
-.opinionCard,
-.detailSection {
+.opinionCard {
+  --opinion-accent: var(--records-cyan-500);
+  position: relative;
   border: 1px solid var(--records-panel-border);
   border-radius: var(--records-radius-card);
-  background: var(--records-surface);
-  box-shadow: var(--records-shadow-soft);
-  backdrop-filter: blur(18px);
+  background: var(--records-reading-surface);
+  box-shadow: var(--records-panel-shadow);
+}
+
+.opinionCard:nth-child(2) {
+  --opinion-accent: #f0a4c7;
+}
+
+.opinionCard:nth-child(3) {
+  --opinion-accent: #aaa5e7;
 }
 
 .recordMeta {
@@ -39,9 +47,11 @@
 }
 
 .recordDocument {
+  container-type: inline-size;
+  container-name: record;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 28px;
+  gap: 36px;
 }
 
 .recordDocument > * {
@@ -49,12 +59,143 @@
 }
 
 .recordHeader {
-  max-width: 1000px;
-  padding-bottom: 16px;
+  padding-bottom: 0;
+}
+
+.recordHero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 28px;
+}
+
+.recordHero h1 {
+  max-width: 28ic;
+  font-size: clamp(1.8rem, 3vw, 3.1rem);
+  line-height: 1.55;
+  letter-spacing: -0.025em;
+}
+
+.resultSummary {
+  position: relative;
+  display: grid;
+  align-content: start;
+  padding: 24px;
+  border: 1px solid var(--records-line-strong);
+  border-radius: 18px;
+  background: var(--records-decision-background);
+  box-shadow: var(--records-panel-shadow);
+}
+
+.opinionCard::before,
+.resultSummary::before,
+.decisionSection::before {
+  position: absolute;
+  top: 0;
+  right: 24px;
+  left: 24px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--records-panel-accent-line);
+  content: "";
+  opacity: 0.65;
+  pointer-events: none;
+}
+
+.resultSummary > div {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.resultSummary > div > span {
+  display: grid;
+  gap: 4px;
+}
+.resultSummary small {
+  color: var(--records-ink-600);
+  font-size: 0.75rem;
+}
+.resultSummary strong {
+  font-size: 1.12rem;
+}
+.resultSummary .resultVotes {
+  margin: 18px 0;
+  color: var(--records-ink-600);
+  font-size: 0.84rem;
+}
+.resultVotes small {
+  display: block;
+  margin-top: 8px;
+  color: var(--records-ink-600);
+  font-size: 0.82rem;
+}
+
+.resultVotes strong {
+  color: var(--records-ink-900);
+  font-size: 1.75rem;
+  font-variant-numeric: tabular-nums;
+}
+.resultSummary a {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid var(--records-line);
+  color: var(--records-link);
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.detailNavigation {
+  position: sticky;
+  z-index: 5;
+  top: 16px;
+  display: flex;
+  gap: 4px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 6px;
+  overflow-x: auto;
+  border: 1px solid var(--records-panel-border);
+  border-radius: 14px;
+  background: var(--records-menu-background);
+  box-shadow: var(--records-shadow-soft);
+  overscroll-behavior-inline: contain;
+}
+
+.detailNavigation a {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  padding: 10px 18px;
+  border-radius: 9px;
+  color: var(--records-ink-600);
+  font-size: 0.86rem;
+  font-weight: 700;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.detailNavigation a[aria-current="location"] {
+  background: var(--records-cyan-100);
+  color: var(--records-ink-900);
+}
+
+.detailNavigation a:active {
+  transform: scale(0.97);
+}
+
+.recordDocument h2[id] {
+  scroll-margin-top: 110px;
 }
 
 .backLink {
-  margin-bottom: 30px;
+  min-height: 44px;
+  margin-bottom: 20px;
   color: var(--records-ink-600);
 }
 
@@ -70,32 +211,44 @@
 }
 
 .detailSection {
-  padding: clamp(24px, 4vw, 44px);
+  min-width: 0;
+  padding: 0 0 36px;
+  border-bottom: 1px solid var(--records-line);
 }
 
 .detailSection > h2 {
+  position: relative;
   margin: 0 0 28px;
-  font-size: clamp(1.5rem, 3vw, 2.3rem);
+  font-size: clamp(1.3rem, 2vw, 1.8rem);
+}
+
+.detailSection > h2::after {
+  position: absolute;
+  bottom: -10px;
+  left: 0;
+  width: min(96px, 30%);
+  height: 2px;
+  border-radius: 999px;
+  background: var(--records-panel-accent-line);
+  content: "";
+  opacity: 0.65;
+  pointer-events: none;
 }
 
 .opinionGrid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-template-rows: repeat(3, auto);
-  column-gap: 18px;
+  grid-template-columns: 1fr;
+  gap: 20px;
 }
 
 .opinionCard {
-  display: grid;
-  grid-row: span 3;
-  grid-template-rows: subgrid;
+  display: block;
   overflow: hidden;
-  box-shadow: none;
 }
 
 .opinionCard > header,
 .opinionCard > div {
-  padding: 20px;
+  padding: 24px;
 }
 
 .opinionCard > header {
@@ -103,6 +256,17 @@
   align-items: center;
   gap: 13px;
   border-bottom: 1px solid var(--records-line);
+  background:
+    radial-gradient(
+      ellipse at 100% 0,
+      color-mix(in srgb, var(--opinion-accent) 16%, transparent),
+      transparent 72%
+    ),
+    var(--records-panel-background);
+}
+
+.opinionCard > div {
+  background: var(--records-reading-surface);
 }
 
 .opinionCard h3,
@@ -114,7 +278,7 @@
 .opinionCard h4 {
   margin-bottom: 10px;
   color: var(--records-ink-600);
-  font-size: 0.72rem;
+  font-size: 0.8rem;
   letter-spacing: 0.12em;
 }
 
@@ -127,7 +291,7 @@
 }
 
 .finalProposal {
-  background: var(--records-final-proposal);
+  box-shadow: inset 0 1px var(--records-line);
 }
 
 .voteList {
@@ -143,7 +307,8 @@
   padding: 18px;
   border: 1px solid var(--records-line);
   border-radius: 18px;
-  background: var(--records-control-background-soft);
+  background: var(--records-reading-surface);
+  box-shadow: inset 0 1px var(--records-line-strong);
 }
 
 .voteCard h3 {
@@ -206,8 +371,11 @@
 .affectionSection {
   position: relative;
   overflow: hidden;
-  background:
-    linear-gradient(135deg, rgb(88 217 232 / 7%), transparent 48%), var(--records-surface);
+  padding: 28px;
+  border: 1px solid var(--records-panel-border);
+  border-radius: var(--records-radius-card);
+  background: var(--records-panel-background);
+  box-shadow: var(--records-panel-shadow);
 }
 
 .affectionSection::after {
@@ -296,11 +464,13 @@
 .affectionCard {
   --affection-start: #58d9e8;
   --affection-end: #2498b5;
+  --affection-ink: color-mix(in srgb, var(--affection-end) 60%, var(--records-ink-900));
   min-width: 0;
   padding: 18px;
   border: 1px solid var(--records-panel-border-soft);
   border-radius: 18px;
-  background: var(--records-control-background-soft);
+  background: var(--records-reading-surface);
+  box-shadow: inset 0 1px var(--records-line-strong);
 }
 
 .participant-b {
@@ -330,7 +500,7 @@
 }
 
 .affectionCard header span strong {
-  color: var(--affection-end);
+  color: var(--affection-ink);
   font-variant-numeric: tabular-nums;
 }
 
@@ -379,12 +549,12 @@
 
 .affectionPositive {
   background: rgb(88 217 232 / 15%);
-  color: var(--affection-end);
+  color: var(--affection-ink);
 }
 
 .affectionNegative {
   background: rgb(240 164 199 / 16%);
-  color: #cf5f93;
+  color: var(--records-pink-ink);
 }
 
 .affectionNeutral {
@@ -425,7 +595,11 @@
 .decisionSection {
   position: relative;
   overflow: hidden;
+  padding: clamp(24px, 3vw, 36px);
+  border: 1px solid var(--records-panel-border);
+  border-radius: var(--records-radius-card);
   background: var(--records-decision-background);
+  box-shadow: var(--records-panel-shadow);
 }
 
 .winnerPanel {
@@ -470,7 +644,7 @@
   padding: 22px;
   border: 1px solid var(--records-line);
   border-radius: 18px;
-  background: var(--records-control-background-soft);
+  background: var(--records-reading-surface);
 }
 
 .decisionColumns h3 {
@@ -482,16 +656,28 @@
   padding-left: 1.25rem;
 }
 
-@media (max-width: 1199px) {
-  .opinionGrid {
-    grid-template-columns: 1fr;
-    grid-template-rows: none;
-    gap: 18px;
+@container record (min-width: 900px) {
+  .recordHero {
+    grid-template-columns: minmax(0, 1fr) 248px;
+    gap: 40px;
+    align-items: start;
   }
-
+  .opinionGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-rows: repeat(3, auto);
+    column-gap: 20px;
+    row-gap: 0;
+  }
   .opinionCard {
-    display: block;
-    grid-row: auto;
+    display: grid;
+    grid-row: span 3;
+    grid-template-rows: subgrid;
+  }
+}
+
+@container record (max-width: 899px) {
+  .resultSummary {
+    max-width: 420px;
   }
 
   .voteList {
@@ -512,7 +698,22 @@
     margin: 10px 0 0;
   }
   .detailSection {
-    border-radius: 20px;
+    padding-bottom: 28px;
+  }
+
+  .affectionSection,
+  .decisionSection {
+    padding: 22px;
+    border-radius: 18px;
+  }
+  .detailNavigation {
+    top: 12px;
+    width: 100%;
+  }
+  .detailNavigation a {
+    flex: 1 0 auto;
+    padding-inline: 12px;
+    font-size: 0.8rem;
   }
 
   .affectionHeader {
@@ -529,8 +730,30 @@
   }
 }
 
+@media (hover: hover) and (pointer: fine) {
+  .detailNavigation a:hover {
+    background: var(--records-control-background-soft);
+    color: var(--records-ink-900);
+  }
+  .resultSummary a:hover,
+  .backLink:hover {
+    color: var(--records-link);
+    text-decoration: underline;
+    text-underline-offset: 4px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .affectionHeart {
     transition: none;
+  }
+  .detailNavigation a:active {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .opinionCard > header {
+    background: var(--records-panel-background);
   }
 }

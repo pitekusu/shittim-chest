@@ -1,20 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
 
-import {
-  getMemorialMemory,
-  getMemorialState,
-  prepareMemorialUpload,
-  queueMemorialGeneration,
-  resetMemorial,
-  uploadMemorialSource,
-} from "../api/memorial";
+import { getMemorialMemory } from "../api/memorial";
 import { RecordsApiError } from "../api/http";
 import type {
   AvatarRef,
   MemorialMemoryResponse,
   MemorialStateResponse,
-  MemorialUploadResponse,
   ParticipantSlot,
   RequesterSummary,
 } from "../api/types";
@@ -22,14 +13,15 @@ import { Avatar } from "../components/Avatar";
 import { ErrorPanel } from "../components/ErrorPanel";
 import { MemorialEntryTransition } from "../components/MemorialEntryTransition";
 import { useAuthenticationRecovery } from "../hooks/useAuthenticationRecovery";
+import {
+  memorialActionMessage,
+  useMemorialController,
+  type LocalProgress,
+} from "../hooks/useMemorialController";
 import { formatCompletedDateTime } from "../lib/dateTime";
 import commonStyles from "../styles/common.module.css";
 import styles from "../styles/memorial.module.css";
 
-const ACCEPTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
-const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
-const GENERATE_CONFIRMATION = "GENERATE MEMORIAL";
-const RESET_CONFIRMATION = "RESET AFFECTION";
 const GENERATION_STEPS = ["画像確認", "生成受付", "思い出生成", "完成"] as const;
 
 const PARTICIPANT_PRESENTATION: Readonly<
@@ -70,39 +62,6 @@ const PARTICIPANT_PRESENTATION: Readonly<
   },
 };
 
-type LocalProgress = "idle" | "hashing" | "uploading" | "queueing";
-
-interface GenerationAttempt {
-  readonly file: File;
-  readonly cycle: number;
-  readonly prepareIdempotencyKey: string;
-  readonly generateIdempotencyKey: string;
-  readonly ticket: MemorialUploadResponse | null;
-  readonly uploaded: boolean;
-}
-
-function idempotencyKey(): string {
-  return `memorial-${crypto.randomUUID()}`;
-}
-
-function apiMessage(error: unknown): string {
-  if (!(error instanceof RecordsApiError)) {
-    return "処理を完了できませんでした。通信状態を確認して、もう一度お試しください。";
-  }
-  const known: Readonly<Record<string, string>> = {
-    MEMORIAL_STATE_CONFLICT: "別の操作で状態が更新されました。最新の状態を読み直しました。",
-    MEMORIAL_UPLOAD_REQUIRED:
-      "画像のアップロードを確認できませんでした。画像を選び直してください。",
-    MEMORIAL_UPLOAD_NOT_ALLOWED: "現在の状態では画像をアップロードできません。",
-    MEMORIAL_RECOVERY_REQUIRED: "生成済みデータを確認しています。少し待ってから再開してください。",
-    MEMORIAL_GENERATION_ATTEMPTS_EXHAUSTED:
-      "自動再試行の上限に達しました。管理者に復旧を依頼してください。",
-    MEMORIAL_QUEUE_UNAVAILABLE: "生成の受付が混み合っています。しばらくしてからお試しください。",
-    MEMORIAL_RESET_NOT_ALLOWED: "生成が完了するまで親愛度をリセットできません。",
-  };
-  return known[error.code] ?? error.message;
-}
-
 function memoryTabTarget(
   memories: MemorialStateResponse["memories"],
   currentCycle: number,
@@ -117,16 +76,6 @@ function memoryTabTarget(
   }
   if (key === "ArrowLeft" || key === "ArrowUp") {
     return memories[(currentIndex - 1 + memories.length) % memories.length]?.cycle ?? null;
-  }
-  return null;
-}
-
-function validateSelectedFile(file: File): string | null {
-  if (!ACCEPTED_IMAGE_TYPES.has(file.type)) {
-    return "JPEG、PNG、WebPのいずれかを選んでください。";
-  }
-  if (file.size < 1 || file.size > MAX_UPLOAD_BYTES) {
-    return "画像は10 MiB以下にしてください。";
   }
   return null;
 }
@@ -163,6 +112,41 @@ function SelectedImagePreview({ file }: { readonly file: File }): React.JSX.Elem
       alt="選択した画像のプレビュー"
       onError={() => setFailedFile(file)}
     />
+  );
+}
+
+function UnlockOrbit(): React.JSX.Element {
+  const orbitRef = useRef<HTMLDivElement>(null);
+  const [animating, setAnimating] = useState(false);
+  useEffect(() => {
+    const orbit = orbitRef.current;
+    if (orbit === null) return;
+    let inViewport = false;
+    const update = () => setAnimating(inViewport && document.visibilityState !== "hidden");
+    const observer =
+      typeof IntersectionObserver === "function"
+        ? new IntersectionObserver(([entry]) => {
+            inViewport = entry?.isIntersecting ?? false;
+            update();
+          })
+        : null;
+    if (observer) observer.observe(orbit);
+    else {
+      inViewport = true;
+      update();
+    }
+    document.addEventListener("visibilitychange", update);
+    return () => {
+      observer?.disconnect();
+      document.removeEventListener("visibilitychange", update);
+    };
+  }, []);
+  return (
+    <div ref={orbitRef} className={styles.heartOrbit} data-animating={animating} aria-hidden="true">
+      <span>♥</span>
+      <span>♥</span>
+      <span>♥</span>
+    </div>
   );
 }
 
@@ -259,18 +243,22 @@ function ConfirmationDialog({
   kind,
   participantName,
   completionFocusRef,
+  pointerInitiated,
+  confirmDisabled,
   onCancel,
   onConfirm,
 }: {
   readonly kind: "generate" | "reset";
   readonly participantName?: string;
   readonly completionFocusRef: React.RefObject<HTMLHeadingElement | null>;
+  readonly pointerInitiated: boolean;
+  readonly confirmDisabled: boolean;
   readonly onCancel: () => void;
   readonly onConfirm: () => void;
 }): React.JSX.Element {
   const generate = kind === "generate";
   const dialogRef = useRef<HTMLDialogElement>(null);
-  const primaryActionRef = useRef<HTMLButtonElement>(null);
+  const cancelActionRef = useRef<HTMLButtonElement>(null);
   const confirmedRef = useRef(false);
 
   useEffect(() => {
@@ -281,7 +269,7 @@ function ConfirmationDialog({
     if (element === null) return;
     if (typeof element.showModal === "function") element.showModal();
     else element.setAttribute("open", "");
-    primaryActionRef.current?.focus();
+    cancelActionRef.current?.focus();
     return () => {
       if (element.open && typeof element.close === "function") element.close();
       const triggerIsUsable =
@@ -299,6 +287,7 @@ function ConfirmationDialog({
       <dialog
         ref={dialogRef}
         className={styles.confirmationDialog}
+        data-pointer-initiated={pointerInitiated}
         aria-labelledby={`${kind}-dialog-title`}
         onCancel={(event) => {
           event.preventDefault();
@@ -306,7 +295,25 @@ function ConfirmationDialog({
         }}
       >
         <span className={styles.dialogIcon} aria-hidden="true">
-          {generate ? "✦" : "↺"}
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            {generate ? (
+              <path
+                fill="currentColor"
+                d="M12 1.5c1.8 6.2 4.3 8.7 10.5 10.5-6.2 1.8-8.7 4.3-10.5 10.5C10.2 16.3 7.7 13.8 1.5 12 7.7 10.2 10.2 7.7 12 1.5Z"
+              />
+            ) : (
+              <g
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M4.6 7.2A8 8 0 1 1 4 14" />
+                <path d="M4 3v5h5" />
+              </g>
+            )}
+          </svg>
         </span>
         <p className={commonStyles.eyebrow} lang="en">
           {generate ? "ONE-TIME GENERATION" : "RESET AFFECTION"}
@@ -330,13 +337,18 @@ function ConfirmationDialog({
           </ul>
         )}
         <div className={styles.dialogActions}>
-          <button className={commonStyles.secondaryButton} type="button" onClick={onCancel}>
+          <button
+            ref={cancelActionRef}
+            className={commonStyles.secondaryButton}
+            type="button"
+            onClick={onCancel}
+          >
             キャンセル
           </button>
           <button
-            ref={primaryActionRef}
             className={commonStyles.primaryButton}
             type="button"
+            disabled={confirmDisabled}
             onClick={() => {
               confirmedRef.current = true;
               onConfirm();
@@ -460,7 +472,7 @@ function MemoryArtwork({
           </svg>
           {downloading ? "保存を準備しています" : "画像を保存"}
         </button>
-        {downloadError !== null && <p role="alert">{apiMessage(downloadError)}</p>}
+        {downloadError !== null && <p role="alert">{memorialActionMessage(downloadError)}</p>}
       </div>
     </div>
   );
@@ -472,6 +484,7 @@ function MemoryGallery({
   onSelect,
   memory,
   memoryError,
+  memoryUpdatedAt,
   onRetryMemory,
 }: {
   readonly state: MemorialStateResponse;
@@ -479,6 +492,7 @@ function MemoryGallery({
   readonly onSelect: (cycle: number) => void;
   readonly memory: MemorialMemoryResponse | undefined;
   readonly memoryError: unknown;
+  readonly memoryUpdatedAt: number;
   readonly onRetryMemory: () => Promise<boolean>;
 }): React.JSX.Element | null {
   if (state.memories.length === 0) return null;
@@ -531,10 +545,10 @@ function MemoryGallery({
           );
         })}
       </div>
-      {memoryError ? (
+      {memoryError && !memory ? (
         <div {...tabPanelProps}>
           <div className={styles.memoryLoading} role="alert">
-            <p>{apiMessage(memoryError)}</p>
+            <p>{memorialActionMessage(memoryError)}</p>
             <button
               className={commonStyles.secondaryButton}
               type="button"
@@ -546,9 +560,21 @@ function MemoryGallery({
         </div>
       ) : memory ? (
         <div {...tabPanelProps}>
+          {memoryError != null && (
+            <div className={styles.refreshError} role="alert">
+              <p>{memorialActionMessage(memoryError)}</p>
+              <button
+                className={commonStyles.secondaryButton}
+                type="button"
+                onClick={() => void onRetryMemory()}
+              >
+                もう一度読み込む
+              </button>
+            </div>
+          )}
           <article className={styles.memoryDetail}>
             <MemoryArtwork
-              key={`${memory.cycle}:${memory.image.url}`}
+              key={`${memory.cycle}:${memory.image.url}:${memoryUpdatedAt}`}
               memory={memory}
               onRetryMemory={onRetryMemory}
             />
@@ -579,305 +605,39 @@ export default function MemorialPage({
   readonly csrfToken: string;
   readonly requester: RequesterSummary;
 }): React.JSX.Element {
-  const client = useQueryClient();
   const [entryPending, setEntryPending] = useState(true);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [fileError, setFileError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [dragging, setDragging] = useState(false);
-  const [dialog, setDialog] = useState<"generate" | "reset" | null>(null);
-  const [localProgress, setLocalProgress] = useState<LocalProgress>("idle");
-  const [selectedCycle, setSelectedCycle] = useState<number | null>(null);
-  const [generationAttempt, setGenerationAttempt] = useState<GenerationAttempt | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const pageHeadingRef = useRef<HTMLHeadingElement>(null);
-  const observedCycleRef = useRef<number | null>(null);
-  const observedUploadCapableRef = useRef<boolean | null>(null);
-  const generationEpochRef = useRef(0);
-  const queuedGenerationRef = useRef<{
-    readonly cycle: number;
-    readonly idempotencyKey: string;
-  } | null>(null);
-  const recoveryGenerationRef = useRef<{
-    readonly cycle: number;
-    readonly state: "unlocked" | "failed" | "queued";
-    readonly idempotencyKey: string;
-  } | null>(null);
-  const recoveryResetRef = useRef<{
-    readonly cycle: number;
-    readonly idempotencyKey: string;
-  } | null>(null);
-
-  const stateQuery = useQuery({
-    queryKey: ["memorial"],
-    queryFn: getMemorialState,
-    refetchInterval: (query) => {
-      const state = (query.state.data as MemorialStateResponse | undefined)?.state;
-      return state === "queued" || state === "generating" ? 3_000 : 30_000;
-    },
-  });
-  useAuthenticationRecovery(stateQuery.error);
-  useEffect(() => {
-    const recovery = recoveryGenerationRef.current;
-    const state = stateQuery.data;
-    if (recovery !== null && (state?.cycle !== recovery.cycle || state.state !== recovery.state)) {
-      recoveryGenerationRef.current = null;
-    }
-    if (
-      recoveryResetRef.current !== null &&
-      state !== undefined &&
-      state.cycle !== recoveryResetRef.current.cycle
-    ) {
-      recoveryResetRef.current = null;
-    }
-    if (state === undefined) return;
-    if (queuedGenerationRef.current?.cycle !== state.cycle) queuedGenerationRef.current = null;
-    const observedCycle = observedCycleRef.current;
-    if (observedCycle === null) {
-      observedCycleRef.current = state.cycle;
-      observedUploadCapableRef.current = state.state === "unlocked" || state.state === "failed";
-      return;
-    }
-    const cycleAdvanced = state.cycle > observedCycle;
-    const uploadCapable = state.state === "unlocked" || state.state === "failed";
-    const generationStateEnded =
-      state.cycle === observedCycle && observedUploadCapableRef.current === true && !uploadCapable;
-    if (cycleAdvanced || state.cycle === observedCycle) {
-      observedUploadCapableRef.current = uploadCapable;
-    }
-    if (!cycleAdvanced && !generationStateEnded) return;
-    if (cycleAdvanced) observedCycleRef.current = state.cycle;
-    generationEpochRef.current += 1;
-    if (fileInputRef.current !== null) fileInputRef.current.value = "";
-    setSelectedFile(null);
-    setGenerationAttempt(null);
-    setFileError(null);
-    setActionError(null);
-    setDragging(false);
-    setDialog(null);
-    setLocalProgress("idle");
-  }, [stateQuery.data]);
-
-  useEffect(() => {
-    const latest = stateQuery.data?.latestReadyCycle;
-    if (latest !== null && latest !== undefined) setSelectedCycle(latest);
-  }, [stateQuery.data?.latestReadyCycle]);
-
-  const selectedMemorySummary =
-    stateQuery.data?.memories.find((memory) => memory.cycle === selectedCycle) ?? null;
-  const memoryQuery = useQuery({
-    queryKey: [
-      "memorial",
-      "memory",
-      selectedMemorySummary?.cycle ?? null,
-      selectedMemorySummary?.participant ?? null,
-      selectedMemorySummary?.unlockedAt ?? null,
-      selectedMemorySummary?.generatedAt ?? null,
-    ],
-    queryFn: () => getMemorialMemory(selectedMemorySummary!),
-    enabled: selectedMemorySummary !== null,
-  });
-  useAuthenticationRecovery(memoryQuery.error);
-
-  const refreshAfterConflict = useCallback(
-    async (error: unknown) => {
-      if (error instanceof RecordsApiError && error.status === 409) {
-        await client.invalidateQueries({ queryKey: ["memorial"], exact: true });
-      }
-    },
-    [client],
-  );
-
-  const cancelStateRefresh = useCallback(
-    () => client.cancelQueries({ queryKey: ["memorial"], exact: true }),
-    [client],
-  );
-
-  const generation = useMutation({
-    mutationFn: async (attempt: GenerationAttempt) => {
-      const epoch = generationEpochRef.current;
-      const cycleIsCurrent = () => {
-        const cached = client.getQueryData<MemorialStateResponse>(["memorial"]);
-        return (
-          generationEpochRef.current === epoch &&
-          observedCycleRef.current === attempt.cycle &&
-          cached?.cycle === attempt.cycle &&
-          (cached.state === "unlocked" || cached.state === "failed")
-        );
-      };
-      if (!cycleIsCurrent()) return null;
-      setActionError(null);
-      let current = attempt;
-      if (current.ticket === null) {
-        setLocalProgress("hashing");
-        const ticket = await prepareMemorialUpload(
-          current.file,
-          current.cycle,
-          csrfToken,
-          current.prepareIdempotencyKey,
-        );
-        if (!cycleIsCurrent()) return null;
-        current = { ...current, ticket };
-        setGenerationAttempt(current);
-      }
-      if (!current.uploaded) {
-        if (current.ticket === null) throw new Error("Memorial upload ticket is unavailable");
-        setLocalProgress("uploading");
-        await uploadMemorialSource(current.ticket, current.file);
-        if (!cycleIsCurrent()) return null;
-        current = { ...current, uploaded: true };
-        setGenerationAttempt(current);
-      }
-      if (!cycleIsCurrent()) return null;
-      setLocalProgress("queueing");
-      queuedGenerationRef.current = {
-        cycle: current.cycle,
-        idempotencyKey: current.generateIdempotencyKey,
-      };
-      const next = await queueMemorialGeneration(
-        current.cycle,
-        GENERATE_CONFIRMATION,
-        csrfToken,
-        current.generateIdempotencyKey,
-      );
-      return cycleIsCurrent() ? next : null;
-    },
-    onSuccess: async (next, attempt) => {
-      if (next === null) return;
-      await cancelStateRefresh();
-      const cached = client.getQueryData<MemorialStateResponse>(["memorial"]);
-      if (
-        observedCycleRef.current !== attempt.cycle ||
-        cached?.cycle !== attempt.cycle ||
-        (cached.state !== "unlocked" && cached.state !== "failed")
-      ) {
-        return;
-      }
-      if (fileInputRef.current !== null) fileInputRef.current.value = "";
-      client.setQueryData(["memorial"], next);
-      setSelectedFile(null);
-      setGenerationAttempt(null);
-      setLocalProgress("idle");
-    },
-    onError: (error, attempt) => {
-      const cached = client.getQueryData<MemorialStateResponse>(["memorial"]);
-      if (
-        observedCycleRef.current !== attempt.cycle ||
-        cached?.cycle !== attempt.cycle ||
-        (cached.state !== "unlocked" && cached.state !== "failed")
-      ) {
-        return;
-      }
-      setLocalProgress("idle");
-      setActionError(apiMessage(error));
-      void refreshAfterConflict(error);
-    },
-  });
-
-  const retryGeneration = useMutation({
-    mutationFn: async ({
-      cycle,
-      state,
-    }: {
-      cycle: number;
-      state: "unlocked" | "failed" | "queued";
-    }) => {
-      const cached = client.getQueryData<MemorialStateResponse>(["memorial"]);
-      if (cached?.cycle !== cycle || cached.state !== state) return null;
-      let recovery = recoveryGenerationRef.current;
-      if (recovery === null || recovery.cycle !== cycle || recovery.state !== state) {
-        const queued = queuedGenerationRef.current;
-        recovery = {
-          cycle,
-          state,
-          idempotencyKey:
-            state === "queued" && queued?.cycle === cycle
-              ? queued.idempotencyKey
-              : idempotencyKey(),
-        };
-        recoveryGenerationRef.current = recovery;
-      }
-      queuedGenerationRef.current = { cycle, idempotencyKey: recovery.idempotencyKey };
-      return queueMemorialGeneration(
-        cycle,
-        GENERATE_CONFIRMATION,
-        csrfToken,
-        recovery.idempotencyKey,
-      );
-    },
-    onSuccess: async (next, request) => {
-      if (next === null) return;
-      await cancelStateRefresh();
-      const cached = client.getQueryData<MemorialStateResponse>(["memorial"]);
-      if (cached?.cycle !== request.cycle || cached.state !== request.state) return;
-      setActionError(null);
-      client.setQueryData(["memorial"], next);
-    },
-    onError: (error, request) => {
-      const cached = client.getQueryData<MemorialStateResponse>(["memorial"]);
-      if (cached?.cycle !== request.cycle || cached.state !== request.state) return;
-      setActionError(apiMessage(error));
-      void refreshAfterConflict(error);
-    },
-  });
-
-  const reset = useMutation({
-    mutationFn: async (request: { cycle: number; state: "ready" }) => {
-      const { cycle } = request;
-      const cached = client.getQueryData<MemorialStateResponse>(["memorial"]);
-      if (cached?.cycle !== cycle || cached.state !== "ready") return null;
-      let recovery = recoveryResetRef.current;
-      if (recovery === null || recovery.cycle !== cycle) {
-        recovery = { cycle, idempotencyKey: idempotencyKey() };
-        recoveryResetRef.current = recovery;
-      }
-      return resetMemorial(cycle, RESET_CONFIRMATION, csrfToken, recovery.idempotencyKey);
-    },
-    onSuccess: async (next) => {
-      if (next === null) return;
-      await cancelStateRefresh();
-      const cached = client.getQueryData<MemorialStateResponse>(["memorial"]);
-      if (cached !== undefined && cached.cycle > next.cycle) return;
-      setActionError(null);
-      if (fileInputRef.current !== null) fileInputRef.current.value = "";
-      setSelectedFile(null);
-      setGenerationAttempt(null);
-      if (cached === undefined || cached.cycle < next.cycle) {
-        client.setQueryData(["memorial"], next);
-      }
-      void client.invalidateQueries({ queryKey: ["affection-rankings"] });
-    },
-    onError: (error, request) => {
-      const cached = client.getQueryData<MemorialStateResponse>(["memorial"]);
-      if (cached?.cycle !== request.cycle || cached.state !== request.state) return;
-      setActionError(apiMessage(error));
-      void refreshAfterConflict(error);
-    },
-  });
-  useAuthenticationRecovery(generation.error);
-  useAuthenticationRecovery(retryGeneration.error);
-  useAuthenticationRecovery(reset.error);
-
-  const chooseFile = useCallback((file: File | undefined) => {
-    if (file === undefined) return;
-    const validation = validateSelectedFile(file);
-    setFileError(validation);
-    setSelectedFile(validation === null ? file : null);
-    setGenerationAttempt(null);
-    setActionError(null);
-  }, []);
-
+  const {
+    stateQuery,
+    memoryQuery,
+    selectedFile,
+    selectedFileLabel,
+    fileError,
+    actionError,
+    dragging,
+    setDragging,
+    dialog,
+    localProgress,
+    selectedCycle,
+    setSelectedCycle,
+    generationAttempt,
+    fileInputRef,
+    busy,
+    canSelectFile,
+    actionsBlocked,
+    chooseFile,
+    openConfirmation,
+    cancelConfirmation,
+    confirmGeneration,
+    confirmReset,
+    discardAttempt,
+    retryAttempt,
+    resumeGeneration,
+  } = useMemorialController(csrfToken);
   const state = stateQuery.data;
   const participant = state?.unlockedParticipant
     ? PARTICIPANT_PRESENTATION[state.unlockedParticipant]
     : null;
-  const actionPending = generation.isPending || retryGeneration.isPending || reset.isPending;
-  const busy = actionPending || state?.state === "queued" || state?.state === "generating";
-  const canSelectFile = state?.state === "unlocked" || state?.state === "failed";
-  const selectedFileLabel = useMemo(() => {
-    if (selectedFile === null) return "画像をドロップ、またはファイルを選択";
-    return `${selectedFile.name} · ${(selectedFile.size / 1024 / 1024).toFixed(1)} MiB`;
-  }, [selectedFile]);
 
   useEffect(() => {
     if (!entryPending) pageHeadingRef.current?.focus();
@@ -894,7 +654,7 @@ export default function MemorialPage({
       </section>
     );
   }
-  if (stateQuery.isError || state === undefined) {
+  if (state === undefined) {
     const error = stateQuery.error instanceof RecordsApiError ? stateQuery.error : undefined;
     return (
       <ErrorPanel
@@ -932,6 +692,23 @@ export default function MemorialPage({
           </span>
         </div>
       </header>
+      {stateQuery.isError && (
+        <div className={styles.refreshError} role="alert">
+          <div>
+            <strong>最新の状態を確認できませんでした</strong>
+            <p>{memorialActionMessage(stateQuery.error)}</p>
+            <p>状態を確認できるまで、生成と親愛度のリセットは利用できません。</p>
+          </div>
+          <button
+            className={commonStyles.secondaryButton}
+            type="button"
+            disabled={stateQuery.isFetching}
+            onClick={() => void stateQuery.refetch()}
+          >
+            {stateQuery.isFetching ? "状態を確認しています" : "最新の状態を確認"}
+          </button>
+        </div>
+      )}
 
       {state.state === "locked" ? (
         <section className={styles.lockedPanel} aria-labelledby="memorial-locked-title">
@@ -943,7 +720,10 @@ export default function MemorialPage({
             <p className={commonStyles.eyebrow} lang="en">
               ACCESS LOCKED
             </p>
-            <h2 id="memorial-locked-title">
+            <h2
+              id="memorial-locked-title"
+              className={`${commonStyles.japaneseText} ${commonStyles.japaneseHeading}`}
+            >
               {previouslyOpened
                 ? "次のメモリアルロビーはまだ開放されていません"
                 : "まだメモリアルロビーにはログインできません"}
@@ -972,7 +752,10 @@ export default function MemorialPage({
               <p className={commonStyles.eyebrow} lang="en">
                 AFFECTION MAX
               </p>
-              <h2 id="memorial-unlock-title">
+              <h2
+                id="memorial-unlock-title"
+                className={`${commonStyles.japaneseText} ${commonStyles.japaneseHeading}`}
+              >
                 {participant?.name}とのメモリアルロビーが解放されました
               </h2>
               {state.unlockedAt && (
@@ -984,11 +767,7 @@ export default function MemorialPage({
                 </p>
               )}
             </div>
-            <div className={styles.heartOrbit} aria-hidden="true">
-              <span>♥</span>
-              <span>♥</span>
-              <span>♥</span>
-            </div>
+            <UnlockOrbit />
             <span className={styles.cycleBadge}>{state.cycle}回目</span>
           </section>
 
@@ -1000,8 +779,8 @@ export default function MemorialPage({
               <button
                 className={commonStyles.secondaryButton}
                 type="button"
-                disabled={actionPending}
-                onClick={() => retryGeneration.mutate({ cycle: state.cycle, state: "queued" })}
+                disabled={actionsBlocked}
+                onClick={() => resumeGeneration("queued")}
               >
                 生成受付を再送
               </button>
@@ -1083,20 +862,15 @@ export default function MemorialPage({
                       className={commonStyles.secondaryButton}
                       type="button"
                       disabled={busy}
-                      onClick={() => {
-                        if (fileInputRef.current !== null) fileInputRef.current.value = "";
-                        setSelectedFile(null);
-                        setGenerationAttempt(null);
-                        setActionError(null);
-                      }}
+                      onClick={discardAttempt}
                     >
                       画像を選び直す
                     </button>
                     <button
                       className={commonStyles.primaryButton}
                       type="button"
-                      disabled={busy}
-                      onClick={() => generation.mutate(generationAttempt)}
+                      disabled={busy || actionsBlocked}
+                      onClick={retryAttempt}
                     >
                       {generationAttempt.uploaded
                         ? "生成受付を再試行"
@@ -1109,8 +883,8 @@ export default function MemorialPage({
                   <button
                     className={commonStyles.primaryButton}
                     type="button"
-                    disabled={selectedFile === null || busy || !canSelectFile}
-                    onClick={() => setDialog("generate")}
+                    disabled={selectedFile === null || busy || !canSelectFile || actionsBlocked}
+                    onClick={(event) => openConfirmation("generate", event.detail > 0)}
                   >
                     メモリアルロビーを開放
                   </button>
@@ -1123,10 +897,8 @@ export default function MemorialPage({
                   <button
                     className={`${commonStyles.secondaryButton} ${styles.retryButton}`}
                     type="button"
-                    disabled={busy}
-                    onClick={() =>
-                      retryGeneration.mutate({ cycle: state.cycle, state: "unlocked" })
-                    }
+                    disabled={busy || actionsBlocked}
+                    onClick={() => resumeGeneration("unlocked")}
                   >
                     準備済みの画像で生成を続ける
                   </button>
@@ -1135,8 +907,8 @@ export default function MemorialPage({
                 <button
                   className={`${commonStyles.secondaryButton} ${styles.retryButton}`}
                   type="button"
-                  disabled={busy}
-                  onClick={() => retryGeneration.mutate({ cycle: state.cycle, state: "failed" })}
+                  disabled={busy || actionsBlocked}
+                  onClick={() => resumeGeneration("failed")}
                 >
                   前回の生成を再開
                 </button>
@@ -1158,6 +930,7 @@ export default function MemorialPage({
         onSelect={setSelectedCycle}
         memory={memoryQuery.data}
         memoryError={memoryQuery.error}
+        memoryUpdatedAt={memoryQuery.dataUpdatedAt}
         onRetryMemory={async () => (await memoryQuery.refetch()).isSuccess}
       />
 
@@ -1173,46 +946,33 @@ export default function MemorialPage({
           <button
             className={commonStyles.secondaryButton}
             type="button"
-            disabled={busy || state.state !== "ready"}
-            onClick={() => setDialog("reset")}
+            disabled={busy || state.state !== "ready" || actionsBlocked}
+            onClick={(event) => openConfirmation("reset", event.detail > 0)}
           >
             親愛度をリセット
           </button>
         </section>
       )}
 
-      {dialog === "generate" && participant && selectedFile && (
+      {dialog?.kind === "generate" && participant && selectedFile && (
         <ConfirmationDialog
           kind="generate"
           participantName={participant.name}
           completionFocusRef={pageHeadingRef}
-          onCancel={() => setDialog(null)}
-          onConfirm={() => {
-            setDialog(null);
-            const attempt: GenerationAttempt = {
-              file: selectedFile,
-              cycle: state.cycle,
-              prepareIdempotencyKey: idempotencyKey(),
-              generateIdempotencyKey: idempotencyKey(),
-              ticket: null,
-              uploaded: false,
-            };
-            setGenerationAttempt(attempt);
-            generation.mutate(attempt);
-          }}
+          pointerInitiated={dialog.pointerInitiated}
+          confirmDisabled={actionsBlocked}
+          onCancel={cancelConfirmation}
+          onConfirm={confirmGeneration}
         />
       )}
-      {dialog === "reset" && state.state === "ready" && (
+      {dialog?.kind === "reset" && state.state === "ready" && (
         <ConfirmationDialog
           kind="reset"
           completionFocusRef={pageHeadingRef}
-          onCancel={() => setDialog(null)}
-          onConfirm={() => {
-            setDialog(null);
-            if (state.state === "ready" && !busy) {
-              reset.mutate({ cycle: state.cycle, state: state.state });
-            }
-          }}
+          pointerInitiated={dialog.pointerInitiated}
+          confirmDisabled={actionsBlocked}
+          onCancel={cancelConfirmation}
+          onConfirm={confirmReset}
         />
       )}
     </div>

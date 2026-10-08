@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import type { AdminPrompts, AdminStatusResponse } from "../api/types";
@@ -92,14 +92,17 @@ function installApi({
   mode = "managed",
   detailPrompts = { ...PROMPTS, moderator: "previous moderator" },
   applyConflict = false,
+  failedPromptReads = [],
 }: {
   readonly mode?: "legacy" | "managed";
   readonly detailPrompts?: AdminPrompts;
   readonly applyConflict?: boolean;
+  readonly failedPromptReads?: readonly number[];
 } = {}) {
   const requests: { path: string; init?: RequestInit }[] = [];
   let promptReads = 0;
   let applyCalls = 0;
+  let savedConfiguration: ReturnType<typeof currentPrompts> | null = null;
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -107,6 +110,21 @@ function installApi({
       requests.push({ path, init });
       if (path === "/api/v1/admin/prompts") {
         promptReads += 1;
+        if (failedPromptReads.includes(promptReads)) {
+          return Promise.resolve(
+            response(
+              {
+                error: {
+                  code: "INTERNAL_ERROR",
+                  message: "設定を取得できませんでした。",
+                  requestId: "request-id",
+                },
+              },
+              500,
+            ),
+          );
+        }
+        if (savedConfiguration !== null) return Promise.resolve(response(savedConfiguration));
         if (mode === "legacy") {
           return Promise.resolve(
             response({
@@ -158,11 +176,14 @@ function installApi({
             ),
           );
         }
+        const sent = requestBody(init) as { readonly prompts: AdminPrompts };
+        savedConfiguration = currentPrompts(`r${"4".repeat(26)}`, sent.prompts);
         return Promise.resolve(
           response({ schemaVersion: 1, revision: `r${"4".repeat(26)}`, state: "saved" }),
         );
       }
       if (path === "/api/v1/admin/prompts/rollback") {
+        savedConfiguration = currentPrompts(`r${"5".repeat(26)}`, detailPrompts);
         return Promise.resolve(
           response({ schemaVersion: 1, revision: `r${"5".repeat(26)}`, state: "saved" }),
         );
@@ -218,6 +239,29 @@ describe("AdminPromptManager", () => {
           path === "/api/v1/admin/prompts/apply" || path === "/api/v1/admin/prompts/rollback",
       ),
     ).toBe(false);
+  });
+
+  it("focuses the full-width comparison and returns focus to its history action", async () => {
+    const requests = installApi();
+    renderManager(false);
+    const trigger = await screen.findByRole("button", { name: "変更点を見る" });
+    trigger.focus();
+    fireEvent.click(trigger);
+
+    const comparison = await screen.findByRole("region", { name: "revisionを比較" });
+    expect(within(comparison).getByRole("heading", { name: "revisionを比較" })).toHaveFocus();
+    expect(trigger).toHaveAttribute("aria-pressed", "true");
+    expect(
+      within(screen.getByRole("region", { name: "変更履歴" })).queryByRole("region", {
+        name: "revisionを比較",
+      }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(within(comparison).getByRole("button", { name: "閉じる" }));
+    expect(trigger).toHaveFocus();
+    expect(trigger).toHaveAttribute("aria-pressed", "false");
+    expect(
+      requests.filter(({ path }) => path.endsWith(`/revisions/${PREVIOUS_REVISION}`)),
+    ).toHaveLength(1);
   });
 
   it("edits five keyboard tabs and requires exact confirmation for a normalized system change", async () => {
@@ -338,6 +382,129 @@ describe("AdminPromptManager", () => {
     );
     const second = requests.filter(({ path }) => path === "/api/v1/admin/prompts/apply")[1];
     expect(requestBody(second?.init)).toMatchObject({ baseRevision: LATEST_REVISION });
+  });
+
+  it("keeps a draft editable when a background prompt refresh fails", async () => {
+    installApi({ failedPromptReads: [2] });
+    const client = renderManager();
+    const textarea = await screen.findByLabelText("システムプロンプト");
+    fireEvent.change(textarea, { target: { value: "local draft" } });
+
+    await act(async () => client.refetchQueries({ queryKey: ["admin", "prompts"], exact: true }));
+
+    expect(await screen.findByText("設定を更新できませんでした")).toBeVisible();
+    expect(textarea).toBeVisible();
+    expect(textarea).toHaveValue("local draft");
+    fireEvent.change(textarea, { target: { value: "continued draft" } });
+    expect(textarea).toHaveValue("continued draft");
+  });
+
+  it("does not adopt cached data as the latest revision when conflict recovery fails", async () => {
+    const requests = installApi({ applyConflict: true, failedPromptReads: [2] });
+    renderManager();
+    const textarea = await screen.findByLabelText("システムプロンプト");
+    fireEvent.change(textarea, { target: { value: "local draft" } });
+    fireEvent.change(screen.getByLabelText(/変更用確認文字列/), {
+      target: { value: SYSTEM_CONFIRMATION },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "変更を反映" }));
+
+    expect(await screen.findByText("最新revisionを取得できませんでした")).toBeVisible();
+    expect(textarea).toHaveValue("local draft");
+    expect(
+      screen.queryByRole("button", { name: "最新revisionを基準にする" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "変更を反映" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "もう一度試す" }));
+    fireEvent.click(await screen.findByRole("button", { name: "最新revisionを基準にする" }));
+    expect(textarea).toHaveValue("local draft");
+    fireEvent.click(screen.getByRole("button", { name: "変更を反映" }));
+
+    await waitFor(() =>
+      expect(requests.filter(({ path }) => path === "/api/v1/admin/prompts/apply")).toHaveLength(2),
+    );
+    expect(
+      requestBody(requests.filter(({ path }) => path.endsWith("/apply"))[1]?.init),
+    ).toMatchObject({
+      baseRevision: LATEST_REVISION,
+    });
+  });
+
+  it("distinguishes a saved write from a failed refresh without repeating the POST", async () => {
+    const requests = installApi({ failedPromptReads: [2] });
+    renderManager();
+    const textarea = await screen.findByLabelText("システムプロンプト");
+    fireEvent.change(textarea, { target: { value: "saved draft" } });
+    fireEvent.change(screen.getByLabelText(/変更用確認文字列/), {
+      target: { value: SYSTEM_CONFIRMATION },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "変更を反映" }));
+
+    expect(await screen.findByText("保存した設定を再取得できませんでした")).toBeVisible();
+    expect(screen.getByText(/revision .* を保存しました。/)).toBeVisible();
+    expect(textarea).toHaveValue("saved draft");
+    expect(screen.getByRole("button", { name: "変更を反映" })).toBeDisabled();
+    // Editing while synchronization is unavailable must also survive a successful retry.
+    fireEvent.change(textarea, { target: { value: "next local draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "もう一度試す" }));
+    await waitFor(() =>
+      expect(screen.queryByText("保存した設定を再取得できませんでした")).not.toBeInTheDocument(),
+    );
+    expect(textarea).toHaveValue("next local draft");
+    expect(requests.filter(({ path }) => path === "/api/v1/admin/prompts/apply")).toHaveLength(1);
+    fireEvent.change(screen.getByLabelText(/変更用確認文字列/), {
+      target: { value: SYSTEM_CONFIRMATION },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "変更を反映" }));
+    await waitFor(() =>
+      expect(requests.filter(({ path }) => path === "/api/v1/admin/prompts/apply")).toHaveLength(2),
+    );
+    expect(
+      requestBody(requests.filter(({ path }) => path.endsWith("/apply"))[1]?.init),
+    ).toMatchObject({
+      baseRevision: `r${"4".repeat(26)}`,
+      prompts: { system: "next local draft" },
+    });
+  });
+
+  it("preserves edits made during a save and prevents a second in-flight write", async () => {
+    const requests = installApi();
+    const originalFetch = fetch;
+    let resolveSave!: () => void;
+    const saveGate = new Promise<void>((resolve) => {
+      resolveSave = resolve;
+    });
+    let writes = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        if (requestPath(input).endsWith("/apply")) {
+          writes += 1;
+          return saveGate.then(() => originalFetch(input, init));
+        }
+        return originalFetch(input, init);
+      }),
+    );
+    renderManager();
+    const textarea = await screen.findByLabelText("システムプロンプト");
+    fireEvent.change(textarea, { target: { value: "submitted draft" } });
+    fireEvent.change(screen.getByLabelText(/変更用確認文字列/), {
+      target: { value: SYSTEM_CONFIRMATION },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "変更を反映" }));
+    await waitFor(() => expect(writes).toBe(1));
+
+    fireEvent.change(textarea, { target: { value: "newer local draft" } });
+    expect(screen.getByRole("button", { name: "保存しています" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "保存しています" }));
+    await act(async () => resolveSave());
+
+    expect(await screen.findByText(/を保存しました/)).toBeVisible();
+    expect(textarea).toHaveValue("newer local draft");
+    expect(writes).toBe(1);
+    expect(requestBody(requests.find(({ path }) => path.endsWith("/apply"))?.init)).toMatchObject({
+      prompts: { system: "submitted draft" },
+    });
   });
 
   it("does not persist prompt bodies or idempotency identifiers in browser storage", async () => {

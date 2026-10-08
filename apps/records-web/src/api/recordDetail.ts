@@ -7,6 +7,11 @@ function isRecordDetailResponse(value: unknown): value is RecordDetailResponse {
   return recordDetailResponseValidator(value) && hasConsistentRecordInvariants(value);
 }
 
-export async function getRecord(recordId: string): Promise<RecordDetailResponse> {
-  return requestJson(`/api/v1/records/${encodeURIComponent(recordId)}`, isRecordDetailResponse);
+export async function getRecord(
+  recordId: string,
+  signal?: AbortSignal,
+): Promise<RecordDetailResponse> {
+  return requestJson(`/api/v1/records/${encodeURIComponent(recordId)}`, isRecordDetailResponse, {
+    signal,
+  });
 }

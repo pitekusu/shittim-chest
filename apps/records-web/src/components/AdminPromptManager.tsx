@@ -1,42 +1,23 @@
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState, type JSX } from "react";
+import { useEffect, useState, type JSX } from "react";
 
-import {
-  applyAdminPrompts,
-  getAdminPrompts,
-  getAdminRevision,
-  getAdminRevisions,
-  getAdminStatus,
-  rollbackAdminPrompts,
-} from "../api/admin";
 import { RecordsApiError } from "../api/http";
-import type {
-  AdminApplyRequest,
-  AdminPromptKey,
-  AdminPrompts,
-  AdminPromptsResponse,
-  AdminRevisionsResponse,
-  AdminRollbackRequest,
-} from "../api/types";
-import { useAuthenticationRecovery } from "../hooks/useAuthenticationRecovery";
+import type { AdminPromptKey } from "../api/types";
 import {
-  ADMIN_PROMPT_APPLICATION_LABELS,
-  deriveAdminPromptApplicationState,
-} from "../lib/adminPromptState";
+  PROMPT_KEYS,
+  PROMPT_LIMIT_BYTES,
+  SYSTEM_CONFIRMATION,
+  isRevisionConflict,
+  normalizePrompt,
+  promptBytes,
+  promptIsValid,
+  useAdminPromptEditor,
+} from "../hooks/useAdminPromptEditor";
+import { ADMIN_PROMPT_APPLICATION_LABELS } from "../lib/adminPromptState";
 import { formatCompletedDateTime } from "../lib/dateTime";
 import { lineDiff } from "../lib/lineDiff";
 import adminStyles from "../styles/admin.module.css";
 import commonStyles from "../styles/common.module.css";
-
-const PROMPT_LIMIT_BYTES = 3_500;
-const SYSTEM_CONFIRMATION = "APPLY SYSTEM PROMPT";
-const PROMPT_KEYS: readonly AdminPromptKey[] = [
-  "system",
-  "moderator",
-  "participantA",
-  "participantB",
-  "participantC",
-];
+import { AdminPanelState as PanelState } from "./AdminPanelState";
 
 const PROMPT_PRESENTATION: Readonly<
   Record<AdminPromptKey, { readonly label: string; readonly description: string }>
@@ -63,51 +44,6 @@ interface AdminPromptManagerProps {
   readonly csrfToken: string;
 }
 
-interface RetainedIdempotencyKey {
-  readonly payload: string;
-  readonly value: string;
-}
-
-function idempotencyKeyFor(
-  reference: { current: RetainedIdempotencyKey | null },
-  request: AdminApplyRequest | AdminRollbackRequest,
-): string {
-  const payload = JSON.stringify(request);
-  if (reference.current?.payload !== payload) {
-    reference.current = { payload, value: crypto.randomUUID() };
-  }
-  return reference.current.value;
-}
-
-function normalizePrompt(value: string): string {
-  return value.replaceAll("\r\n", "\n").replaceAll("\r", "\n").normalize("NFC");
-}
-
-function normalizePrompts(prompts: AdminPrompts): AdminPrompts {
-  return {
-    system: normalizePrompt(prompts.system),
-    moderator: normalizePrompt(prompts.moderator),
-    participantA: normalizePrompt(prompts.participantA),
-    participantB: normalizePrompt(prompts.participantB),
-    participantC: normalizePrompt(prompts.participantC),
-  };
-}
-
-function promptBytes(value: string): number {
-  return new TextEncoder().encode(normalizePrompt(value)).byteLength;
-}
-
-function promptIsValid(value: string): boolean {
-  const normalized = normalizePrompt(value);
-  return normalized.trim().length > 0 && promptBytes(normalized) <= PROMPT_LIMIT_BYTES;
-}
-
-function promptsEqual(left: AdminPrompts, right: AdminPrompts): boolean {
-  const normalizedLeft = normalizePrompts(left);
-  const normalizedRight = normalizePrompts(right);
-  return PROMPT_KEYS.every((key) => normalizedLeft[key] === normalizedRight[key]);
-}
-
 function promptTabTarget(current: AdminPromptKey, key: string): AdminPromptKey | null {
   const currentIndex = PROMPT_KEYS.indexOf(current);
   if (key === "Home") return PROMPT_KEYS[0] ?? null;
@@ -123,44 +59,6 @@ function promptTabTarget(current: AdminPromptKey, key: string): AdminPromptKey |
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof RecordsApiError ? error.message : fallback;
-}
-
-function isRevisionConflict(error: unknown): boolean {
-  return (
-    error instanceof RecordsApiError &&
-    error.status === 409 &&
-    error.code === "PROMPT_REVISION_CONFLICT"
-  );
-}
-
-function PanelState({
-  busy = false,
-  title,
-  message,
-  onRetry,
-}: {
-  readonly busy?: boolean;
-  readonly title: string;
-  readonly message: string;
-  readonly onRetry?: () => void;
-}): JSX.Element {
-  return (
-    <div
-      className={adminStyles.panelState}
-      aria-busy={busy || undefined}
-      role={onRetry === undefined ? "status" : "alert"}
-    >
-      <div>
-        <strong>{title}</strong>
-        <span>{message}</span>
-        {onRetry !== undefined && (
-          <button className={commonStyles.secondaryButton} type="button" onClick={onRetry}>
-            もう一度試す
-          </button>
-        )}
-      </div>
-    </div>
-  );
 }
 
 function SystemConfirmation({
@@ -194,6 +92,8 @@ function SystemConfirmation({
         {labelPrefix}確認文字列: <code>{SYSTEM_CONFIRMATION}</code>
         <input
           autoComplete="off"
+          autoCapitalize="none"
+          spellCheck={false}
           value={value}
           onChange={(event) => onChange(event.target.value)}
         />
@@ -257,174 +157,51 @@ export default function AdminPromptManager({
   canWrite,
   csrfToken,
 }: AdminPromptManagerProps): JSX.Element {
-  const queryClient = useQueryClient();
-  const prompts = useQuery({ queryKey: ["admin", "prompts"], queryFn: getAdminPrompts });
-  const status = useQuery({ queryKey: ["admin", "status"], queryFn: getAdminStatus });
-  const revisions = useInfiniteQuery<AdminRevisionsResponse>({
-    queryKey: ["admin", "prompt-revisions"],
-    queryFn: ({ pageParam }) => getAdminRevisions(pageParam as string | undefined),
-    initialPageParam: undefined,
-    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
-  });
   const [selectedPrompt, setSelectedPrompt] = useState<AdminPromptKey>("system");
-  const [baseSnapshot, setBaseSnapshot] = useState<AdminPromptsResponse | null>(null);
-  const [drafts, setDrafts] = useState<AdminPrompts | null>(null);
-  const [confirmation, setConfirmation] = useState("");
-  const [selectedRevision, setSelectedRevision] = useState<string | null>(null);
-  const [rollbackTarget, setRollbackTarget] = useState<string | null>(null);
-  const [rollbackConfirmation, setRollbackConfirmation] = useState("");
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [latestConflict, setLatestConflict] = useState<AdminPromptsResponse | null>(null);
-  const applyIdempotencyKeyRef = useRef<RetainedIdempotencyKey | null>(null);
-  const rollbackIdempotencyKeyRef = useRef<RetainedIdempotencyKey | null>(null);
-
-  const revision = useQuery({
-    queryKey: ["admin", "prompt-revision", selectedRevision],
-    queryFn: () => {
-      if (selectedRevision === null) throw new Error("admin_prompt_revision_unavailable");
-      return getAdminRevision(selectedRevision);
-    },
-    enabled: selectedRevision !== null,
-  });
-
-  useAuthenticationRecovery(prompts.error);
-  useAuthenticationRecovery(status.error);
-  useAuthenticationRecovery(revisions.error);
-  useAuthenticationRecovery(revision.error);
+  const {
+    prompts,
+    status,
+    revisions,
+    revision,
+    baseSnapshot,
+    drafts,
+    confirmation,
+    setConfirmation,
+    selectedRevision,
+    selectRevision,
+    rollbackTarget,
+    rollbackConfirmation,
+    setRollbackConfirmation,
+    successMessage,
+    latestConflict,
+    synchronization,
+    syncError,
+    syncPending,
+    retrySynchronization,
+    applyMutation,
+    rollbackMutation,
+    systemChanged,
+    invalidPrompts,
+    canApply,
+    canRollback,
+    rollbackSameContent,
+    rollbackSystemChanged,
+    isLegacyRegistration,
+    allRevisions,
+    selectedIsCurrent,
+    applicationState,
+    updateDraft,
+    adoptLatestRevision,
+    startRollback,
+    cancelRollback,
+    closeRevision,
+  } = useAdminPromptEditor(canWrite, csrfToken);
 
   useEffect(() => {
-    if (baseSnapshot !== null || prompts.data === undefined) return;
-    setBaseSnapshot(prompts.data);
-    setDrafts(prompts.data.prompts);
-  }, [baseSnapshot, prompts.data]);
-
-  async function loadLatestAfterConflict(): Promise<void> {
-    const latest = await prompts.refetch();
-    if (latest.data !== undefined) setLatestConflict(latest.data);
-  }
-
-  async function loadSavedRevision(message: string): Promise<void> {
-    setSelectedRevision(null);
-    setRollbackTarget(null);
-    setRollbackConfirmation("");
-    rollbackIdempotencyKeyRef.current = null;
-    queryClient.removeQueries({ queryKey: ["admin", "prompt-revision"] });
-    const latest = await prompts.refetch();
-    if (latest.data !== undefined) {
-      setBaseSnapshot(latest.data);
-      setDrafts(latest.data.prompts);
+    if (selectedRevision !== null) {
+      document.getElementById("prompt-revision-detail-title")?.focus();
     }
-    setLatestConflict(null);
-    setConfirmation("");
-    setSuccessMessage(message);
-    await queryClient.invalidateQueries({ queryKey: ["admin", "prompt-revisions"] });
-  }
-
-  const applyMutation = useMutation({
-    mutationFn: async () => {
-      if (baseSnapshot === null || drafts === null) {
-        throw new Error("admin_prompt_state_unavailable");
-      }
-      const normalizedDrafts = normalizePrompts(drafts);
-      const request: AdminApplyRequest = {
-        schemaVersion: 1,
-        baseRevision: baseSnapshot.activeRevision,
-        prompts: normalizedDrafts,
-        systemConfirmation:
-          normalizedDrafts.system === normalizePrompt(baseSnapshot.prompts.system)
-            ? null
-            : confirmation,
-      };
-      const response = await applyAdminPrompts(
-        request,
-        csrfToken,
-        idempotencyKeyFor(applyIdempotencyKeyRef, request),
-      );
-      return response;
-    },
-    onSuccess: async (response) => {
-      applyIdempotencyKeyRef.current = null;
-      await loadSavedRevision(`revision ${response.revision} を保存しました。`);
-    },
-    onError: async (error) => {
-      if (isRevisionConflict(error)) await loadLatestAfterConflict();
-    },
-  });
-  useAuthenticationRecovery(applyMutation.error);
-
-  const rollbackMutation = useMutation({
-    mutationFn: async () => {
-      if (
-        baseSnapshot === null ||
-        baseSnapshot.activeRevision === null ||
-        rollbackTarget === null
-      ) {
-        throw new Error("admin_prompt_revision_unavailable");
-      }
-      const request: AdminRollbackRequest = {
-        schemaVersion: 1,
-        baseRevision: baseSnapshot.activeRevision,
-        sourceRevision: rollbackTarget,
-        systemConfirmation: rollbackSystemChanged ? rollbackConfirmation : null,
-      };
-      return rollbackAdminPrompts(
-        request,
-        csrfToken,
-        idempotencyKeyFor(rollbackIdempotencyKeyRef, request),
-      );
-    },
-    onSuccess: async (response) => {
-      await loadSavedRevision(`revision ${response.revision} を復元版として保存しました。`);
-    },
-    onError: async (error) => {
-      if (isRevisionConflict(error)) await loadLatestAfterConflict();
-    },
-  });
-  useAuthenticationRecovery(rollbackMutation.error);
-
-  const normalizedDrafts = drafts === null ? null : normalizePrompts(drafts);
-  const systemChanged = Boolean(
-    baseSnapshot !== null &&
-    normalizedDrafts !== null &&
-    normalizePrompt(baseSnapshot.prompts.system) !== normalizedDrafts.system,
-  );
-  const dirty = Boolean(
-    baseSnapshot !== null && drafts !== null && !promptsEqual(baseSnapshot.prompts, drafts),
-  );
-  const invalidPrompts =
-    drafts === null ? PROMPT_KEYS : PROMPT_KEYS.filter((key) => !promptIsValid(drafts[key]));
-  const isLegacyRegistration = baseSnapshot?.mode === "legacy" && !dirty;
-  const canApply =
-    canWrite &&
-    baseSnapshot !== null &&
-    drafts !== null &&
-    invalidPrompts.length === 0 &&
-    (dirty || baseSnapshot.mode === "legacy") &&
-    (!systemChanged || confirmation === SYSTEM_CONFIRMATION) &&
-    !applyMutation.isPending;
-  const allRevisions = revisions.data?.pages.flatMap((page) => page.items) ?? [];
-  const selectedIsCurrent =
-    revision.data !== undefined && revision.data.revision === prompts.data?.activeRevision;
-  const rollbackSameContent = Boolean(
-    revision.data !== undefined &&
-    prompts.data !== undefined &&
-    promptsEqual(revision.data.prompts, prompts.data.prompts),
-  );
-  const rollbackSystemChanged = Boolean(
-    rollbackTarget !== null &&
-    revision.data?.revision === rollbackTarget &&
-    prompts.data !== undefined &&
-    normalizePrompt(prompts.data.prompts.system) !== normalizePrompt(revision.data.prompts.system),
-  );
-  const canRollback =
-    canWrite &&
-    rollbackTarget !== null &&
-    revision.data?.revision === rollbackTarget &&
-    baseSnapshot?.activeRevision != null &&
-    !rollbackSameContent &&
-    (!rollbackSystemChanged || rollbackConfirmation === SYSTEM_CONFIRMATION) &&
-    !rollbackMutation.isPending;
-  const applicationState = deriveAdminPromptApplicationState(prompts.data, status.data);
+  }, [selectedRevision]);
 
   return (
     <div className={adminStyles.promptWorkspace}>
@@ -473,7 +250,10 @@ export default function AdminPromptManager({
         )}
       </section>
 
-      <section className={adminStyles.adminPanel} aria-labelledby="prompt-editor-title">
+      <section
+        className={`${adminStyles.adminPanel} ${adminStyles.promptEditorPanel}`}
+        aria-labelledby="prompt-editor-title"
+      >
         <header className={adminStyles.panelHeader}>
           <div>
             <p className={adminStyles.panelEyebrow} lang="en">
@@ -494,14 +274,34 @@ export default function AdminPromptManager({
             message="設定本文はこの画面だけで扱います。"
           />
         )}
-        {prompts.isError && (
+        {prompts.isError && syncError === null && (
           <PanelState
-            title="プロンプトを読み込めませんでした"
+            title={
+              baseSnapshot === null
+                ? "プロンプトを読み込めませんでした"
+                : "設定を更新できませんでした"
+            }
             message={errorMessage(prompts.error, "通信状態を確認してください。")}
             onRetry={() => void prompts.refetch()}
           />
         )}
-        {!prompts.isPending && !prompts.isError && baseSnapshot !== null && drafts !== null && (
+        {syncError !== null && synchronization !== null && (
+          <PanelState
+            busy={syncPending}
+            title={
+              synchronization.kind === "saved"
+                ? "保存した設定を再取得できませんでした"
+                : "最新revisionを取得できませんでした"
+            }
+            message={
+              synchronization.kind === "saved"
+                ? "保存は完了しています。入力内容を保持したまま、最新の設定を再取得してください。"
+                : "入力内容と使用中のrevisionを保持しています。最新revisionの取得後に基準を更新できます。"
+            }
+            onRetry={retrySynchronization}
+          />
+        )}
+        {baseSnapshot !== null && drafts !== null && (
           <div className={adminStyles.promptEditorBody}>
             {canWrite && latestConflict !== null && (
               <div className={adminStyles.promptConflict} role="alert">
@@ -518,14 +318,7 @@ export default function AdminPromptManager({
                 <button
                   className={commonStyles.secondaryButton}
                   type="button"
-                  onClick={() => {
-                    setBaseSnapshot(latestConflict);
-                    setLatestConflict(null);
-                    applyIdempotencyKeyRef.current = null;
-                    rollbackIdempotencyKeyRef.current = null;
-                    applyMutation.reset();
-                    rollbackMutation.reset();
-                  }}
+                  onClick={adoptLatestRevision}
                 >
                   最新revisionを基準にする
                 </button>
@@ -582,13 +375,7 @@ export default function AdminPromptManager({
                 readOnly={!canWrite}
                 spellCheck={false}
                 value={drafts[selectedPrompt]}
-                onChange={(event) => {
-                  if (!canWrite) return;
-                  applyIdempotencyKeyRef.current = null;
-                  applyMutation.reset();
-                  setSuccessMessage(null);
-                  setDrafts({ ...drafts, [selectedPrompt]: event.target.value });
-                }}
+                onChange={(event) => updateDraft(selectedPrompt, event.target.value)}
               />
               {canWrite && systemChanged && (
                 <SystemConfirmation
@@ -698,8 +485,10 @@ export default function AdminPromptManager({
                       <>
                         <button
                           className={commonStyles.secondaryButton}
+                          id={`prompt-revision-trigger-${item.revision}`}
                           type="button"
-                          onClick={() => setSelectedRevision(item.revision)}
+                          aria-pressed={selectedRevision === item.revision}
+                          onClick={() => selectRevision(item.revision)}
                         >
                           変更点を見る
                         </button>
@@ -707,13 +496,7 @@ export default function AdminPromptManager({
                           <button
                             className={`${commonStyles.secondaryButton} ${adminStyles.promptHistoryCompactAction}`}
                             type="button"
-                            onClick={() => {
-                              rollbackIdempotencyKeyRef.current = null;
-                              rollbackMutation.reset();
-                              setSelectedRevision(item.revision);
-                              setRollbackTarget(item.revision);
-                              setRollbackConfirmation("");
-                            }}
+                            onClick={() => startRollback(item.revision)}
                           >
                             復元
                           </button>
@@ -736,142 +519,132 @@ export default function AdminPromptManager({
             {revisions.isFetchingNextPage ? "読み込んでいます" : "さらに履歴を読み込む"}
           </button>
         )}
-
-        {selectedRevision !== null && (
-          <section
-            className={adminStyles.promptRevisionDetail}
-            aria-labelledby="prompt-revision-detail-title"
-          >
-            <header>
-              <div>
-                <h3 id="prompt-revision-detail-title">revisionを比較</h3>
-                <p className={adminStyles.promptRevision}>{selectedRevision}</p>
+      </section>
+      {selectedRevision !== null && (
+        <section
+          className={`${adminStyles.adminPanel} ${adminStyles.promptRevisionDetail}`}
+          data-route-motion-terminal=""
+          aria-labelledby="prompt-revision-detail-title"
+        >
+          <header>
+            <div>
+              <h2 id="prompt-revision-detail-title" tabIndex={-1}>
+                revisionを比較
+              </h2>
+              <p className={adminStyles.promptRevision}>{selectedRevision}</p>
+            </div>
+            <button
+              className={commonStyles.secondaryButton}
+              type="button"
+              onClick={() => {
+                document.getElementById(`prompt-revision-trigger-${selectedRevision}`)?.focus();
+                closeRevision();
+              }}
+            >
+              閉じる
+            </button>
+          </header>
+          {revision.isPending && (
+            <PanelState
+              busy
+              title="revision本文を読み込んでいます"
+              message="選択した版だけを取得しています。"
+            />
+          )}
+          {revision.isError && (
+            <PanelState
+              title="revisionを読み込めませんでした"
+              message={errorMessage(revision.error, "通信状態を確認してください。")}
+              onRetry={() => void revision.refetch()}
+            />
+          )}
+          {revision.data !== undefined && prompts.data !== undefined && (
+            <>
+              <div className={adminStyles.promptRevisionCompare}>
+                {PROMPT_KEYS.map((key) => (
+                  <details
+                    key={key}
+                    open={key === "system"}
+                    data-changed={
+                      normalizePrompt(prompts.data.prompts[key]) !==
+                        normalizePrompt(revision.data.prompts[key]) || undefined
+                    }
+                  >
+                    <summary>{PROMPT_PRESENTATION[key].label}</summary>
+                    <PromptLineDiff
+                      before={revision.data.prompts[key]}
+                      after={prompts.data.prompts[key]}
+                    />
+                  </details>
+                ))}
               </div>
-              <button
-                className={commonStyles.secondaryButton}
-                type="button"
-                onClick={() => {
-                  setSelectedRevision(null);
-                  setRollbackTarget(null);
-                  setRollbackConfirmation("");
-                  rollbackIdempotencyKeyRef.current = null;
-                  rollbackMutation.reset();
-                }}
-              >
-                閉じる
-              </button>
-            </header>
-            {revision.isPending && (
-              <PanelState
-                busy
-                title="revision本文を読み込んでいます"
-                message="選択した版だけを取得しています。"
-              />
-            )}
-            {revision.isError && (
-              <PanelState
-                title="revisionを読み込めませんでした"
-                message={errorMessage(revision.error, "通信状態を確認してください。")}
-                onRetry={() => void revision.refetch()}
-              />
-            )}
-            {revision.data !== undefined && prompts.data !== undefined && (
-              <>
-                <div className={adminStyles.promptRevisionCompare}>
-                  {PROMPT_KEYS.map((key) => (
-                    <details
-                      key={key}
-                      open={key === "system"}
-                      data-changed={
-                        normalizePrompt(prompts.data.prompts[key]) !==
-                          normalizePrompt(revision.data.prompts[key]) || undefined
-                      }
-                    >
-                      <summary>{PROMPT_PRESENTATION[key].label}</summary>
-                      <PromptLineDiff
-                        before={revision.data.prompts[key]}
-                        after={prompts.data.prompts[key]}
-                      />
-                    </details>
-                  ))}
-                </div>
-                {canWrite && rollbackTarget === revision.data.revision && (
-                  <div className={adminStyles.promptRollbackConfirmation}>
-                    <h3>新しいrevisionとして復元します</h3>
-                    <p>
-                      選択した本文からimmutable
-                      revisionを新規作成します。過去のpointerへ直接戻す操作ではありません。
-                    </p>
-                    {rollbackSameContent && (
-                      <p role="alert">現在の内容と同一のため復元できません。</p>
-                    )}
-                    {rollbackSystemChanged && (
-                      <SystemConfirmation
-                        before={prompts.data.prompts.system}
-                        after={revision.data.prompts.system}
-                        value={rollbackConfirmation}
-                        onChange={setRollbackConfirmation}
-                        labelPrefix="復元用"
-                      />
-                    )}
-                    <div className={adminStyles.promptHistoryActions}>
-                      <button
-                        className={commonStyles.secondaryButton}
-                        type="button"
-                        onClick={() => {
-                          setRollbackTarget(null);
-                          setRollbackConfirmation("");
-                          rollbackIdempotencyKeyRef.current = null;
-                          rollbackMutation.reset();
-                        }}
-                      >
-                        キャンセル
-                      </button>
-                      <button
-                        className={commonStyles.primaryButton}
-                        type="button"
-                        disabled={!canRollback}
-                        onClick={() => rollbackMutation.mutate()}
-                      >
-                        {rollbackMutation.isPending ? "復元しています" : "新しい版として復元"}
-                      </button>
-                    </div>
-                    {rollbackMutation.isError && (
-                      <PanelState
-                        title={
-                          isRevisionConflict(rollbackMutation.error)
-                            ? "revisionが競合しました"
-                            : "復元できませんでした"
-                        }
-                        message={errorMessage(
-                          rollbackMutation.error,
-                          "選択内容を保持したまま、もう一度お試しください。",
-                        )}
-                      />
-                    )}
-                  </div>
-                )}
-                {canWrite &&
-                  !selectedIsCurrent &&
-                  rollbackTarget === null &&
-                  !rollbackSameContent && (
+              {canWrite && rollbackTarget === revision.data.revision && (
+                <div className={adminStyles.promptRollbackConfirmation}>
+                  <h3>新しいrevisionとして復元します</h3>
+                  <p>
+                    選択した本文からimmutable
+                    revisionを新規作成します。過去のpointerへ直接戻す操作ではありません。
+                  </p>
+                  {rollbackSameContent && (
+                    <p role="alert">現在の内容と同一のため復元できません。</p>
+                  )}
+                  {rollbackSystemChanged && (
+                    <SystemConfirmation
+                      before={prompts.data.prompts.system}
+                      after={revision.data.prompts.system}
+                      value={rollbackConfirmation}
+                      onChange={setRollbackConfirmation}
+                      labelPrefix="復元用"
+                    />
+                  )}
+                  <div className={adminStyles.promptHistoryActions}>
                     <button
                       className={commonStyles.secondaryButton}
                       type="button"
-                      onClick={() => {
-                        rollbackIdempotencyKeyRef.current = null;
-                        rollbackMutation.reset();
-                        setRollbackTarget(revision.data.revision);
-                      }}
+                      onClick={cancelRollback}
                     >
-                      このrevisionを復元
+                      キャンセル
                     </button>
+                    <button
+                      className={commonStyles.primaryButton}
+                      type="button"
+                      disabled={!canRollback}
+                      onClick={() => rollbackMutation.mutate()}
+                    >
+                      {rollbackMutation.isPending ? "復元しています" : "新しい版として復元"}
+                    </button>
+                  </div>
+                  {rollbackMutation.isError && (
+                    <PanelState
+                      title={
+                        isRevisionConflict(rollbackMutation.error)
+                          ? "revisionが競合しました"
+                          : "復元できませんでした"
+                      }
+                      message={errorMessage(
+                        rollbackMutation.error,
+                        "選択内容を保持したまま、もう一度お試しください。",
+                      )}
+                    />
                   )}
-              </>
-            )}
-          </section>
-        )}
-      </section>
+                </div>
+              )}
+              {canWrite &&
+                !selectedIsCurrent &&
+                rollbackTarget === null &&
+                !rollbackSameContent && (
+                  <button
+                    className={commonStyles.secondaryButton}
+                    type="button"
+                    onClick={() => startRollback(revision.data.revision)}
+                  >
+                    このrevisionを復元
+                  </button>
+                )}
+            </>
+          )}
+        </section>
+      )}
     </div>
   );
 }

@@ -55,7 +55,9 @@ export default validate;
 export function generateValidatorSources() {
   const schema = JSON.parse(readFileSync(schemaUrl, "utf8"));
   const ajv = new Ajv2020({
-    allErrors: true,
+    // Responses are accepted or rejected as a whole; the UI never consumes a
+    // per-field error list. Stop at the first error without weakening the schema.
+    allErrors: false,
     code: { esm: true, source: true },
     strict: true,
   });

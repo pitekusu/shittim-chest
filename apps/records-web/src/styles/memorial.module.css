@@ -3,7 +3,7 @@
   --memorial-pink: #f0a4c7;
   --memorial-lavender: #aaa5e7;
   display: grid;
-  gap: 22px;
+  gap: 24px;
 }
 
 .pageHeader {
@@ -23,6 +23,11 @@
   margin-bottom: 0;
   grid-column: 1;
   grid-row: 2;
+}
+
+/* The heading receives focus after entry and recovery; it is not a control. */
+.pageHeader > h1:focus {
+  outline: none;
 }
 
 .pageHeader > .requesterIdentity {
@@ -64,7 +69,7 @@
 
 .loadingPage {
   display: grid;
-  min-height: min(720px, calc(100vh - 148px));
+  min-height: min(540px, calc(100dvh - 148px));
   place-content: center;
   place-items: center;
   gap: 10px;
@@ -270,6 +275,7 @@
   border: 1px solid color-mix(in srgb, var(--memorial-persona) 42%, transparent);
   border-radius: 50%;
   animation: heart-orbit 12s linear infinite;
+  animation-play-state: paused;
 }
 
 .heartOrbit::before {
@@ -301,10 +307,14 @@
   font-size: 0.62rem;
 }
 
+.heartOrbit[data-animating="true"] {
+  animation-play-state: running;
+}
+
 .generationProgress {
   display: grid;
   gap: 16px;
-  padding: 23px 28px;
+  padding: 24px;
   border-color: var(--records-line-strong);
 }
 
@@ -373,20 +383,23 @@
 
 .progressTrack > span > span {
   display: block;
-  width: 0;
+  width: 100%;
   height: 100%;
   border-radius: inherit;
+  transform: scaleX(0);
+  transform-origin: left;
   background: linear-gradient(90deg, var(--records-cyan-500), var(--memorial-pink));
   box-shadow: 0 0 12px color-mix(in srgb, var(--records-cyan-500) 56%, transparent);
-  transition: width 500ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: transform 180ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 
 .progressTrack > span[data-complete="true"] > span {
-  width: 100%;
+  transform: scaleX(1);
 }
 
 .progressTrack > span[data-current="true"] > span {
   width: 34%;
+  transform: none;
   animation: memorial-progress-scan 1.45s ease-in-out infinite;
 }
 
@@ -487,10 +500,9 @@
   color: var(--records-ink-900);
   font: inherit;
   text-align: center;
-  transition:
-    border-color 160ms ease,
-    background 160ms ease,
-    box-shadow 160ms ease;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .dropZone:disabled {
@@ -498,8 +510,7 @@
   opacity: 0.52;
 }
 
-.dropZone:hover,
-.dropZone:focus-within,
+.dropZone:focus-visible,
 .dropZone[data-dragging="true"],
 .dropZone[data-selected="true"] {
   border-color: var(--records-cyan-500);
@@ -646,8 +657,9 @@
 
 .memoryDetail {
   display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(260px, 0.75fr);
-  gap: 25px;
+  grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr);
+  align-items: start;
+  gap: 24px;
 }
 
 .memoryDetail figure {
@@ -742,7 +754,8 @@
 }
 
 .memoryNarrative {
-  align-self: stretch;
+  align-self: start;
+  min-width: 0;
   padding: 23px;
   border: 1px solid var(--records-line);
   border-radius: 20px;
@@ -757,8 +770,11 @@
 .memoryNarrative > p:last-child {
   margin: 0;
   color: var(--records-ink-600);
-  font-size: 0.84rem;
-  line-height: 2;
+  font-size: 1rem;
+  line-height: 1.9;
+  overflow-wrap: anywhere;
+  user-select: text;
+  -webkit-user-select: text;
   white-space: pre-wrap;
 }
 
@@ -779,7 +795,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 28px;
-  padding: 25px 29px;
+  padding: 24px;
 }
 
 .resetPanel h2 {
@@ -805,7 +821,7 @@
 .confirmationDialog {
   display: grid;
   width: min(100%, 600px);
-  max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
   place-items: center;
   padding: clamp(26px, 5vw, 44px);
   overflow-y: auto;
@@ -820,6 +836,48 @@
   background: transparent;
 }
 
+.confirmationDialog[open][data-pointer-initiated="true"] {
+  transition:
+    opacity 250ms var(--records-ease-out),
+    transform 250ms var(--records-ease-out);
+}
+
+@starting-style {
+  .confirmationDialog[open][data-pointer-initiated="true"] {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+.refreshError {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  border: 1px solid var(--records-line-strong);
+  border-radius: var(--records-radius-control);
+  background: var(--records-surface-strong);
+  color: var(--records-ink-900);
+  font-size: 0.875rem;
+  line-height: 1.7;
+}
+
+.refreshError p {
+  margin: 0;
+}
+
+.refreshError button {
+  flex-shrink: 0;
+}
+
+@media (max-width: 767px) {
+  .refreshError {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
 .dialogIcon {
   display: grid;
   width: 66px;
@@ -831,6 +889,12 @@
   background: var(--records-cyan-100);
   color: var(--records-cyan-ink);
   font-size: 1.6rem;
+}
+
+.dialogIcon svg {
+  display: block;
+  width: 1em;
+  height: 1em;
 }
 
 .confirmationDialog h2 {
@@ -1116,6 +1180,7 @@
 
   .heartOrbit {
     display: none;
+    animation: none;
   }
 }
 
@@ -1208,9 +1273,24 @@
   }
 }
 
+@media (hover: hover) and (pointer: fine) {
+  .dropZone:hover:not(:disabled) {
+    border-color: var(--records-cyan-500);
+    background: var(--records-cyan-100);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .heartOrbit {
+    animation: none;
+  }
+
+  .confirmationDialog[open][data-pointer-initiated="true"] {
+    transition: none;
+    transform: none;
+  }
+
   .loadingSeal,
-  .heartOrbit,
   .progressPulse,
   .entryGeometry,
   .entrySeal,
@@ -1223,7 +1303,13 @@
 
   .progressTrack > span > span {
     animation: none;
-    transform: none;
     transition: none;
+  }
+
+  @starting-style {
+    .confirmationDialog[open][data-pointer-initiated="true"] {
+      opacity: 1;
+      transform: none;
+    }
   }
 }

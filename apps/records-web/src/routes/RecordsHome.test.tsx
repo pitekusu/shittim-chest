@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -9,6 +10,23 @@ import {
   response,
 } from "../test/recordsTestUtils";
 import RecordsHome from "./RecordsHome";
+import { useRecordsArchive } from "../hooks/useRecordsArchive";
+
+function ArchiveLifecycleHarness() {
+  const [showArchive, setShowArchive] = useState(true);
+  const { reset } = useRecordsArchive();
+  return (
+    <>
+      <button type="button" onClick={() => setShowArchive((value) => !value)}>
+        切り替える
+      </button>
+      <button type="button" onClick={reset}>
+        認証を破棄
+      </button>
+      {showArchive ? <RecordsHome /> : <p>別の画面</p>}
+    </>
+  );
+}
 
 function mockEndSentinel() {
   let notify: IntersectionObserverCallback | undefined;
@@ -66,6 +84,36 @@ afterEach(() => {
 });
 
 describe("RecordsHome", () => {
+  it("keeps filters through a route remount in memory and clears them with authentication", async () => {
+    mockApi();
+    const persist = vi.spyOn(Storage.prototype, "setItem");
+    renderRoute(<ArchiveLifecycleHarness />);
+    await screen.findByRole("article");
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "休日" } });
+    fireEvent.click(screen.getByRole("radio", { name: "古い順" }));
+    fireEvent.click(screen.getByRole("button", { name: "切り替える" }));
+    fireEvent.click(screen.getByRole("button", { name: "切り替える" }));
+    expect(screen.getByRole("searchbox")).toHaveValue("休日");
+    expect(screen.getByRole("radio", { name: "古い順" })).toBeChecked();
+    expect(persist).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "認証を破棄" }));
+    expect(screen.getByRole("searchbox")).toHaveValue("");
+    expect(screen.getByRole("radio", { name: "新しい順" })).toBeChecked();
+  });
+
+  it("explains the loaded search scope and clears filters without changing the selected order", async () => {
+    mockNextPage([]);
+    renderRoute(<RecordsHome />);
+    await screen.findByRole("article");
+    fireEvent.click(screen.getByRole("radio", { name: "古い順" }));
+    await screen.findByRole("article");
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "一致しない検索" } });
+    expect(screen.getByText(/読み込み済みの記録に一致しません/)).toBeVisible();
+    expect(screen.getByRole("searchbox")).toHaveAccessibleDescription(/読み込み済み 1 件から検索/);
+    fireEvent.click(screen.getByRole("button", { name: "絞り込みを解除" }));
+    expect(screen.getByRole("radio", { name: "古い順" })).toBeChecked();
+    expect(screen.getByRole("article")).toBeVisible();
+  });
   it("renders completed records without duration or Evidence", async () => {
     const requests = mockApi();
 
@@ -147,19 +195,20 @@ describe("RecordsHome", () => {
     renderRoute(<RecordsHome />);
 
     expect(await screen.findByText("別の依頼")).toBeVisible();
-    const requesterFilter = screen.getByRole("button", { name: "依頼者" });
+    const requesterFilter = screen.getByRole("combobox", { name: "依頼者" });
     fireEvent.click(requesterFilter);
     const requesterOption = within(screen.getByRole("listbox", { name: "依頼者" })).getByRole(
       "option",
       { name: "パワー系ウナギ" },
     );
     expect(requesterOption.firstElementChild).toHaveAttribute("aria-hidden", "true");
+    fireEvent.pointerDown(requesterOption, { pointerType: "mouse" });
     fireEvent.click(requesterOption);
 
     expect(screen.getByText("別の依頼")).toBeVisible();
     expect(screen.queryByText("休日の過ごし方を決める")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "勝者" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "勝者" }));
     const winnerOption = within(screen.getByRole("listbox", { name: "勝者" })).getByRole("option", {
       name: "アロナ",
     });

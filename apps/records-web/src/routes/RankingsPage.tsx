@@ -76,9 +76,7 @@ function RankingPanel({
 
   return (
     <section
-      className={`${rankingStyles.rankingPanel} ${routeStyles.routeMotionItem} ${
-        variant === "wins" ? rankingStyles.rankingPanelWins : rankingStyles.rankingPanelRequests
-      }`}
+      className={`${rankingStyles.rankingPanel} ${routeStyles.routeMotionItem}`}
       data-route-motion-terminal={motionTerminal ? "" : undefined}
       style={routeMotionDelay(motionDelay)}
       aria-labelledby={`${title}-title`}
@@ -137,48 +135,37 @@ function RankingPanel({
       )}
       {!pending && !error && entries && entries.length > 0 && (
         <>
-          {variant === "wins" && <WinPodium entries={entries} total={total} />}
-          <ol
-            className={`${rankingStyles.rankingList} ${
-              variant === "wins" ? rankingStyles.winRankingList : rankingStyles.requestRankingList
-            }`}
-          >
-            {entries.map((entry, index) => {
-              const share = total > 0 ? Math.round((entry.count / total) * 100) : 0;
-              const meterLabel =
-                variant === "requests"
-                  ? `${entry.displayName}: ${entry.count}回（上位合計の${share}%、最多${scaleMaximum}回との比較）`
-                  : `${entry.displayName}: ${entry.count}回（最多${scaleMaximum}回との比較）`;
-              return (
-                <li
-                  className={entry.rank <= 3 ? rankingStyles[`rankingTop${entry.rank}`] : undefined}
-                  key={`${entry.rank}-${entry.displayName}-${index}`}
-                  value={entry.rank}
-                >
-                  <span className={rankingStyles.rankingPosition}>
-                    <span aria-hidden="true">{entry.rank}</span>
-                    <span className={commonStyles.visuallyHidden}>{entry.rank}位</span>
-                  </span>
-                  {variant === "requests" ? (
-                    <RankingShareAvatar entry={entry} total={total} />
-                  ) : (
-                    <Avatar avatar={entry.avatar} />
-                  )}
-                  <span className={rankingStyles.rankingName}>{entry.displayName}</span>
-                  <span className={rankingStyles.rankingCount}>
-                    <strong>{entry.count}</strong>回
-                  </span>
-                  <meter
-                    aria-label={meterLabel}
-                    className={rankingStyles.rankingBar}
-                    max={scaleMaximum}
-                    min={0}
-                    value={entry.count}
-                  />
-                </li>
-              );
-            })}
-          </ol>
+          <RankingPodium entries={entries} total={total} title={title} />
+          {entries.some((entry) => entry.rank > 3) && (
+            <ol className={rankingStyles.rankingList} aria-label={`${title}の4位以下`}>
+              {entries
+                .filter((entry) => entry.rank > 3)
+                .map((entry, index) => {
+                  const share = total > 0 ? Math.round((entry.count / total) * 100) : 0;
+                  return (
+                    <li key={`${entry.rank}-${entry.displayName}-${index}`} value={entry.rank}>
+                      <span className={rankingStyles.rankingPosition}>
+                        <span aria-hidden="true">{entry.rank}</span>
+                        <span className={commonStyles.visuallyHidden}>{entry.rank}位</span>
+                      </span>
+                      <RankingShareAvatar entry={entry} total={total} />
+                      <span className={rankingStyles.rankingName}>{entry.displayName}</span>
+                      <span className={rankingStyles.rankingCount}>
+                        <strong>{entry.count}</strong>回
+                        <span className={commonStyles.visuallyHidden}>（上位合計の{share}%）</span>
+                      </span>
+                      <meter
+                        aria-hidden="true"
+                        className={rankingStyles.rankingBar}
+                        max={scaleMaximum}
+                        min={0}
+                        value={entry.count}
+                      />
+                    </li>
+                  );
+                })}
+            </ol>
+          )}
         </>
       )}
     </section>
@@ -189,7 +176,7 @@ function RankingEmblem({ variant }: { readonly variant: "wins" | "requests" }) {
   return (
     <span
       className={`${rankingStyles.rankingEmblem} ${
-        variant === "wins" ? rankingStyles.rankingEmblemWins : rankingStyles.rankingEmblemRequests
+        variant === "requests" ? rankingStyles.rankingEmblemRequests : ""
       }`}
       aria-hidden="true"
     >
@@ -209,55 +196,56 @@ function RankingEmblem({ variant }: { readonly variant: "wins" | "requests" }) {
   );
 }
 
-function WinPodium({
+function RankingPodium({
   entries,
   total,
+  title,
 }: {
   readonly entries: readonly RankingEntry[];
   readonly total: number;
+  readonly title: string;
 }) {
-  const topThree = entries.slice(0, 3);
-  if (topThree.length !== 3) return null;
-
-  const hasUniquePodium = topThree.every((entry, index) => entry.rank === index + 1);
-  const placedEntries = hasUniquePodium
-    ? [
-        { entry: topThree[1]!, placement: "second" },
-        { entry: topThree[0]!, placement: "first" },
-        { entry: topThree[2]!, placement: "third" },
-      ]
-    : topThree.map((entry) => ({ entry, placement: "shared" as const }));
+  const podiumEntries = entries.filter((entry) => entry.rank <= 3);
+  const distinctRanks =
+    new Set(podiumEntries.map((entry) => entry.rank)).size === podiumEntries.length;
+  if (podiumEntries.length === 0) return null;
 
   return (
-    <div
-      className={`${rankingStyles.winPodium} ${
-        !hasUniquePodium ? rankingStyles.winPodiumShared : ""
-      }`}
-      data-podium-layout={hasUniquePodium ? "ranked" : "shared"}
-      aria-hidden="true"
+    <ol
+      className={rankingStyles.podium}
+      data-podium-layout={distinctRanks ? "ranked" : "shared"}
+      aria-label={`${title}の表彰台`}
+      style={
+        distinctRanks
+          ? undefined
+          : {
+              gridTemplateColumns: `repeat(${Math.min(3, podiumEntries.length)}, minmax(0, 1fr))`,
+            }
+      }
     >
-      {placedEntries.map(({ entry, placement }, index) => {
+      {podiumEntries.map((entry, index) => {
         const share = total > 0 ? Math.round((entry.count / total) * 100) : 0;
         return (
-          <div
-            className={`${rankingStyles.podiumEntry} ${rankingStyles[`podium-${placement}`]} ${
-              entry.rank <= 3 ? rankingStyles[`podiumRank${entry.rank}`] : ""
-            }`}
+          <li
             key={`${entry.rank}-${entry.displayName}-${index}`}
+            value={entry.rank}
+            data-podium-rank={entry.rank}
+            className={`${rankingStyles.podiumEntry} ${rankingStyles[`podiumRank${entry.rank}`]}`}
           >
             <span className={rankingStyles.podiumBadge}>{entry.rank}位</span>
-            <span className={rankingStyles.podiumAvatarRing}>
+            <span className={rankingStyles.podiumAvatarRing} aria-hidden="true">
               <Avatar avatar={entry.avatar} />
             </span>
             <strong className={rankingStyles.podiumName}>{entry.displayName}</strong>
             <span className={rankingStyles.podiumScore}>
-              <strong>{entry.count}</strong>回 <small>{share}%</small>
+              <strong>{entry.count}</strong>回
             </span>
-            <span className={rankingStyles.podiumBase} />
-          </div>
+            <span className={rankingStyles.podiumShare}>{share}%</span>
+            <span className={rankingStyles.podiumBase} aria-hidden="true" />
+          </li>
         );
       })}
-    </div>
+    </ol>
   );
 }
 
@@ -285,7 +273,7 @@ function RankingShareAvatar({
 }
 
 const AFFECTION_VARIANTS: Readonly<Record<ParticipantSlot, string>> = {
-  "participant-a": rankingStyles.affectionCyan,
+  "participant-a": "",
   "participant-b": rankingStyles.affectionPink,
   "participant-c": rankingStyles.affectionLavender,
 };
@@ -313,17 +301,15 @@ function AffectionRankings({
 }: {
   readonly query: UseInfiniteQueryResult<AffectionRankingsResponse>;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const initialError = query.data === undefined ? query.error : null;
-  const paginationError = query.data === undefined ? null : query.error;
+  const paginationError = query.isFetchNextPageError ? query.error : null;
+  const refreshError = query.data !== undefined && !query.isFetchNextPageError ? query.error : null;
+  const hasLowerEntries =
+    query.data?.rankings.some((ranking) => ranking.entries.some((entry) => entry.rank > 3)) ??
+    false;
   const apiError = initialError instanceof RecordsApiError ? initialError : undefined;
   const preparing = apiError?.status === 503 && apiError.code === "INSIGHTS_UNAVAILABLE";
-  const retryPagination = () => {
-    if (query.isFetchNextPageError) {
-      void query.fetchNextPage();
-    } else {
-      void query.refetch();
-    }
-  };
 
   return (
     <section
@@ -376,21 +362,54 @@ function AffectionRankings({
       )}
       {query.data && (
         <>
-          <div className={rankingStyles.affectionRankingsGrid}>
+          {refreshError && (
+            <div className={rankingStyles.affectionRefreshError} role="alert">
+              <span>
+                {refreshError instanceof RecordsApiError
+                  ? refreshError.message
+                  : "親愛度ランキングを更新できませんでした。"}
+              </span>
+              <button
+                className={commonStyles.secondaryButton}
+                type="button"
+                onClick={() => void query.refetch()}
+              >
+                もう一度試す
+              </button>
+            </div>
+          )}
+          <div id="affection-rankings-content" className={rankingStyles.affectionRankingsGrid}>
             {query.data.rankings.map((ranking) => (
               <AffectionRankingCard
                 key={ranking.participant}
                 ranking={ranking}
                 maxScore={query.data.maxScore}
+                expanded={expanded}
               />
             ))}
           </div>
-          {(query.hasNextPage || paginationError) && (
+          {(expanded || hasLowerEntries || query.hasNextPage) && (
+            <div className={rankingStyles.affectionDisclosure}>
+              <button
+                className={commonStyles.secondaryButton}
+                type="button"
+                aria-expanded={expanded}
+                aria-controls="affection-rankings-content"
+                onClick={() => setExpanded((current) => !current)}
+              >
+                {expanded ? "3位までに戻す" : "4位以下を表示"}
+              </button>
+            </div>
+          )}
+          {expanded && (query.hasNextPage || paginationError) && (
             <div
               className={rankingStyles.affectionLoadMore}
               aria-live="polite"
               aria-busy={query.isFetchingNextPage}
             >
+              {!hasLowerEntries && !paginationError && (
+                <p>続きを読み込むと、まだ表示されていない順位を確認できます。</p>
+              )}
               {paginationError && (
                 <span role="alert">
                   {paginationError instanceof RecordsApiError
@@ -403,7 +422,7 @@ function AffectionRankings({
                 type="button"
                 disabled={query.isFetchingNextPage}
                 aria-label="親愛度ランキングの続きを読み込む"
-                onClick={paginationError ? retryPagination : () => void query.fetchNextPage()}
+                onClick={() => void query.fetchNextPage()}
               >
                 {query.isFetchingNextPage
                   ? "続きを読み込んでいます"
@@ -422,11 +441,16 @@ function AffectionRankings({
 function AffectionRankingCard({
   ranking,
   maxScore,
+  expanded,
 }: {
   readonly ranking: ParticipantAffectionRanking;
   readonly maxScore: number;
+  readonly expanded: boolean;
 }) {
   const titleId = `affection-${ranking.participant}-title`;
+  const visibleEntries = expanded
+    ? ranking.entries
+    : ranking.entries.filter((entry) => entry.rank <= 3);
   return (
     <section
       className={`${rankingStyles.affectionRankingCard} ${AFFECTION_VARIANTS[ranking.participant]}`}
@@ -441,11 +465,11 @@ function AffectionRankingCard({
         />
         <h3 id={titleId}>{ranking.displayName}</h3>
       </header>
-      {ranking.entries.length === 0 ? (
+      {visibleEntries.length === 0 ? (
         <p className={rankingStyles.affectionEmpty}>まだ集計対象がありません。</p>
       ) : (
         <ol className={rankingStyles.affectionRankingList}>
-          {ranking.entries.map((entry, index) => (
+          {visibleEntries.map((entry, index) => (
             <li key={`${entry.rank}-${entry.displayName}-${index}`} value={entry.rank}>
               <span className={rankingStyles.affectionRank}>
                 <span aria-hidden="true">{entry.rank}</span>
@@ -673,17 +697,20 @@ function formatCalendarDate(value: string): string {
 
 export default function RankingsPage() {
   const [period, setPeriod] = useState<CostPeriod>("week");
-  const rankings = useQuery({ queryKey: ["rankings"], queryFn: getRankings });
+  const rankings = useQuery({
+    queryKey: ["rankings"],
+    queryFn: ({ signal }) => getRankings(signal),
+  });
   const affectionRankings = useInfiniteQuery({
     queryKey: ["affection-rankings"],
     initialPageParam: undefined as string | undefined,
-    queryFn: ({ pageParam }) => getAffectionRankings(pageParam),
+    queryFn: ({ pageParam, signal }) => getAffectionRankings(pageParam, signal),
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     select: (data) => mergeAffectionRankingPages(data.pages, data.pageParams),
   });
   const costs = useQuery({
     queryKey: ["costs", period],
-    queryFn: () => getCosts(period),
+    queryFn: ({ signal }) => getCosts(period, signal),
   });
   useAuthenticationRecovery(rankings.error);
   useAuthenticationRecovery(affectionRankings.error);
@@ -715,7 +742,7 @@ export default function RankingsPage() {
         <RankingPanel
           variant="wins"
           title="勝利回数ランキング"
-          description="3人の参加者が勝者に選ばれた回数と、全勝利に占める割合です。"
+          description="3人が勝者に選ばれた回数と、全勝利に占める割合です。"
           entries={rankings.data?.wins}
           pending={rankings.isPending}
           error={rankings.error}
@@ -725,7 +752,7 @@ export default function RankingsPage() {
         <RankingPanel
           variant="requests"
           title="依頼回数ランキング"
-          description="議論を依頼した回数の上位10人です。リングは表示中の上位合計に占める割合です。"
+          description="依頼回数の上位10人です。割合は表示中の合計に対する値です。"
           entries={rankings.data?.requests}
           pending={rankings.isPending}
           error={rankings.error}

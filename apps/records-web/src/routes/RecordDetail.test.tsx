@@ -1,4 +1,4 @@
-import { cleanup, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { RECORD_ID, mockApi, recordDetail, renderRoute } from "../test/recordsTestUtils";
@@ -11,6 +11,23 @@ afterEach(() => {
 });
 
 describe("RecordDetail", () => {
+  it("keeps a result summary and keyboard destinations for every visible detail section", () => {
+    renderRoute(<RecordDocument record={recordDetail()} />);
+    const summary = screen.getByRole("complementary", { name: "議論の結果" });
+    expect(within(summary).getByText("アロナ")).toBeVisible();
+    const navigation = screen.getByRole("navigation", { name: "議論内ナビゲーション" });
+    expect(within(navigation).queryByRole("link", { name: "親愛度" })).not.toBeInTheDocument();
+    const votes = screen.getByRole("heading", { name: "投票" });
+    const scroll = vi.fn<() => void>();
+    Object.defineProperty(votes, "scrollIntoView", { configurable: true, value: scroll });
+    fireEvent.click(within(navigation).getByRole("link", { name: "投票" }));
+    expect(votes).toHaveFocus();
+    expect(scroll).toHaveBeenCalledWith({ behavior: "instant", block: "start" });
+    expect(within(navigation).getByRole("link", { name: "投票" })).toHaveAttribute(
+      "aria-current",
+      "location",
+    );
+  });
   it("sets individual OGP for SPA detail and restores common metadata on leaving", () => {
     const detail = {
       ...recordDetail(),

@@ -1,7 +1,8 @@
 .appShell {
   position: relative;
+  isolation: isolate;
   display: grid;
-  min-height: 100vh;
+  min-height: 100dvh;
   grid-template-columns: 248px minmax(0, 1fr);
   background: var(--records-page-background);
   color: var(--records-ink-900);
@@ -14,9 +15,9 @@
   position: sticky;
   top: 0;
   display: flex;
-  height: 100vh;
+  height: 100dvh;
   flex-direction: column;
-  padding: 28px 22px;
+  padding: 28px 20px;
   border-right: 1px solid var(--records-line);
   background: var(--records-sidebar-background);
   backdrop-filter: blur(22px);
@@ -29,7 +30,7 @@
   display: flex;
   align-items: center;
   gap: 16px;
-  margin-bottom: 42px;
+  margin-bottom: var(--records-space-8);
   color: var(--records-ink-900);
   font-weight: 800;
   line-height: 1.35;
@@ -46,7 +47,7 @@
 .sidebarNavigation,
 .primaryNavigation {
   display: grid;
-  gap: 8px;
+  gap: var(--records-space-2);
 }
 
 .navLink,
@@ -57,7 +58,8 @@
   isolation: isolate;
   min-height: 48px;
   overflow: hidden;
-  padding: 0 18px 0 27px;
+  gap: 12px;
+  padding: 0 14px;
   border-radius: 16px;
   color: var(--records-ink-600);
   font-weight: 700;
@@ -117,10 +119,7 @@
     opacity 170ms ease,
     transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-
-.sidebarNavigation .navLink:hover,
 .sidebarNavigation .navLink:focus-visible,
-.sidebarNavigation .navActive:hover,
 .sidebarNavigation .navActive:focus-visible {
   background: var(--records-control-background-soft);
   box-shadow:
@@ -129,24 +128,48 @@
   color: var(--records-ink-900);
 }
 
-.sidebarNavigation .navLink:hover::before,
+@media (hover: hover) and (pointer: fine) {
+  .sidebarNavigation .navLink:hover,
+  .sidebarNavigation .navActive:hover {
+    background: var(--records-control-background-soft);
+    box-shadow:
+      inset 0 0 0 1px var(--records-line-strong),
+      inset 0 0 24px var(--records-line);
+    color: var(--records-ink-900);
+  }
+}
+
 .sidebarNavigation .navLink:focus-visible::before,
-.sidebarNavigation .navActive:hover::before,
 .sidebarNavigation .navActive:focus-visible::before {
   opacity: 0.68;
   transform: scale(1);
 }
 
-.sidebarNavigation .navLink:hover::after,
+@media (hover: hover) and (pointer: fine) {
+  .sidebarNavigation .navLink:hover::before,
+  .sidebarNavigation .navActive:hover::before {
+    opacity: 0.68;
+    transform: scale(1);
+  }
+}
+
 .sidebarNavigation .navLink:focus-visible::after,
-.sidebarNavigation .navActive:hover::after,
 .sidebarNavigation .navActive:focus-visible::after {
   opacity: 0.62;
   transform: translateY(-50%) scale(1);
 }
 
+@media (hover: hover) and (pointer: fine) {
+  .sidebarNavigation .navLink:hover::after,
+  .sidebarNavigation .navActive:hover::after {
+    opacity: 0.62;
+    transform: translateY(-50%) scale(1);
+  }
+}
+
 .navActive {
-  background: var(--records-cyan-100);
+  background: var(--records-panel-background);
+  box-shadow: inset 3px 0 0 var(--records-cyan-500);
   color: var(--records-ink-900);
 }
 
@@ -159,14 +182,14 @@
 .systemAccessLabel {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--records-space-2);
   margin: 0 5px;
   color: var(--records-ink-600);
   font-family: var(--records-font-display);
   font-size: 0.56rem;
   font-weight: 400;
   letter-spacing: 0.16em;
-  opacity: 0.74;
+  opacity: 1;
   white-space: nowrap;
 }
 
@@ -218,18 +241,21 @@
     background 160ms ease,
     border-color 160ms ease;
 }
-
-.themeSwitch:hover,
 .themeSwitch:focus-visible {
   border-color: var(--records-line-strong);
   background: var(--records-control-background-soft);
 }
 
+@media (hover: hover) and (pointer: fine) {
+  .themeSwitch:hover {
+    border-color: var(--records-line-strong);
+    background: var(--records-control-background-soft);
+  }
+}
+
 .themeSwitchLabel {
-  font-family: var(--records-font-display);
-  font-size: 0.62rem;
-  font-weight: 400;
-  letter-spacing: 0.1em;
+  font-size: 0.82rem;
+  font-weight: 700;
 }
 
 .themeSwitchTrack {
@@ -359,27 +385,31 @@
   padding: 5px 12px;
   border: 1px solid var(--records-line);
   background: var(--records-control-background-quiet);
-  font-family: var(--records-font-display);
-  font-size: 0.65rem;
-  font-weight: 400;
-  letter-spacing: 0.12em;
+  font-size: 0.82rem;
+  font-weight: 700;
   transition:
     border-color 140ms ease,
     background 140ms ease,
     color 140ms ease;
 }
-
-.account > button:hover,
 .account > button:focus-visible {
   border-color: var(--records-line-strong);
   background: var(--records-cyan-100);
   color: var(--records-ink-900);
 }
 
+@media (hover: hover) and (pointer: fine) {
+  .account > button:hover {
+    border-color: var(--records-line-strong);
+    background: var(--records-cyan-100);
+    color: var(--records-ink-900);
+  }
+}
+
 .mainContent {
-  width: min(100%, 1440px);
+  width: min(100%, 1600px);
   margin: 0 auto;
-  padding: clamp(30px, 5vw, 74px);
+  padding: 36px clamp(24px, 2.5vw, 40px) 64px;
   outline: none;
 }
 
@@ -387,111 +417,211 @@
   display: none;
 }
 
+.navigationIcon {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.65;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.mobileHeader {
+  display: none;
+}
+
 @media (max-width: 767px) {
   .appShell {
     display: block;
-    padding-bottom: 128px;
+    padding-bottom: calc(5.5rem + env(safe-area-inset-bottom, 0px));
   }
   .sidebar {
     display: none;
   }
   .mainContent {
-    padding: 26px 16px 44px;
+    padding: 24px var(--records-space-4) 36px;
+  }
+  .mobileHeader {
+    position: relative;
+    z-index: 30;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: calc(12px + env(safe-area-inset-top, 0px)) 16px 12px;
+    border-bottom: 1px solid var(--records-line);
+    background: var(--records-sidebar-background);
+  }
+  .mobileBrand {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    color: var(--records-ink-900);
+    text-decoration: none;
+  }
+  .mobileBrand > :last-child {
+    font-size: 0.68rem;
+    line-height: 1.45;
+  }
+  .mobileBrand > :first-child {
+    width: 34px;
+    height: 34px;
+    flex-basis: 34px;
+  }
+  .accountMenu {
+    position: relative;
+    flex: 0 0 auto;
+    margin-left: auto;
+  }
+  .accountMenu summary {
+    display: flex;
+    min-width: 66px;
+    min-height: 44px;
+    align-items: center;
+    justify-content: center;
+    gap: var(--records-space-2);
+    padding: 4px 8px;
+    border: 1px solid var(--records-line-strong);
+    border-radius: 14px;
+    background: var(--records-control-background);
+    list-style: none;
+    cursor: pointer;
+  }
+  .accountMenu summary::-webkit-details-marker {
+    display: none;
+  }
+  .accountMenu summary > :first-child {
+    width: 28px;
+    height: 28px;
+    border-width: 2px;
+  }
+  .accountMenu summary > :last-child {
+    font-size: 1.25rem;
+    font-weight: 800;
+  }
+  .accountMenuPanel {
+    position: absolute;
+    top: calc(100% + 10px);
+    right: 0;
+    display: grid;
+    width: min(280px, calc(100vw - 32px));
+    gap: 12px;
+    padding: 16px;
+    border: 1px solid var(--records-line-strong);
+    border-radius: 20px;
+    background: var(--records-menu-background);
+    box-shadow: var(--records-shadow);
+  }
+  .accountMenuName {
+    margin: 0;
+    font-weight: 800;
+    overflow-wrap: anywhere;
+  }
+  .accountMenuPanel nav {
+    display: grid;
+    gap: var(--records-space-1);
+  }
+  .accountMenuPanel nav a {
+    display: flex;
+    min-height: 44px;
+    align-items: center;
+    padding: 8px 10px;
+    border-radius: 10px;
+    color: var(--records-ink-900);
+    font-size: 0.875rem;
+    text-decoration: none;
+  }
+  .accountMenuPanel nav a:focus-visible {
+    background: var(--records-cyan-100);
   }
   .mobileNav {
     position: fixed;
-    z-index: 10;
+    z-index: 20;
     right: 12px;
-    bottom: 10px;
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
     left: 12px;
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 5px;
-    padding: 7px;
-    border: 1px solid var(--records-panel-border-soft);
-    border-radius: 18px;
-    background: var(--records-sidebar-background);
-    box-shadow: var(--records-shadow);
-    backdrop-filter: blur(20px);
+    gap: var(--records-space-1);
+    padding: 6px;
+    border: 1px solid var(--records-line-strong);
+    border-radius: 20px;
+    background: var(--records-menu-background);
+    box-shadow: var(--records-shadow-soft);
   }
   .mobileNav .navLink,
   .mobileNav .navActive {
+    display: flex;
+    min-height: 56px;
+    flex-direction: column;
     justify-content: center;
-    padding-inline: 3px;
+    gap: var(--records-space-1);
+    padding: 6px 2px;
     font-size: 0.7rem;
-    white-space: nowrap;
-  }
-  .mobileNav .mobileAdminLink {
-    padding-inline: 2px;
-    font-size: 0.62rem;
     line-height: 1.25;
-    white-space: normal;
-  }
-  .mobileNav .mobileMemorialLink {
-    padding-inline: 1px;
-    font-size: 0.58rem;
-    line-height: 1.2;
-    white-space: normal;
-  }
-  .mobileNav .themeSwitchCompact {
-    width: 100%;
-    min-width: 0;
-  }
-  .mobileLogout {
-    min-height: 48px;
-    min-width: 0;
-    padding: 0 3px;
-    border: 1px solid var(--records-line);
+    white-space: nowrap;
     border-radius: 14px;
-    background: var(--records-control-background-quiet);
-    color: var(--records-ink-600);
-    cursor: pointer;
-    font-family: var(--records-font-display);
-    font-size: 0.55rem;
-    font-weight: 400;
-    letter-spacing: 0.1em;
   }
-  .mobileLogout:hover,
-  .mobileLogout:focus-visible {
-    background: var(--records-pink-100);
-    color: var(--records-ink-900);
+  .mobileNav .navigationIcon {
+    width: 20px;
+    height: 20px;
   }
-}
-
-@media (max-width: 377px) {
-  .appShell {
-    padding-bottom: 128px;
-  }
-
-  .mobileNav {
-    right: 6px;
-    left: 6px;
-    gap: 3px;
-    padding: 5px;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
-  .mobileNav .navLink,
-  .mobileNav .navActive {
-    font-size: 0.62rem;
-  }
-
-  .mobileNav .mobileAdminLink {
-    font-size: 0.56rem;
-  }
-
-  .mobileNav .mobileMemorialLink {
-    font-size: 0.56rem;
+  .mobileNav a > span {
+    min-width: 0;
+    white-space: normal;
+    text-align: center;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .navLink,
   .navActive,
+  .themeSwitch,
+  .themeSwitchThumb,
   .sidebarNavigation .navLink::before,
   .sidebarNavigation .navActive::before,
   .sidebarNavigation .navLink::after,
   .sidebarNavigation .navActive::after {
     transition: none;
+  }
+}
+
+.logoutError {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+  padding: 16px;
+  border: 1px solid var(--records-pink-ink);
+  border-radius: var(--records-radius-control);
+  background: var(--records-pink-100);
+  color: var(--records-ink-900);
+}
+.logoutError p {
+  margin: 0;
+  flex: 1 1 240px;
+}
+.accountMenu[data-pointer-entry="true"] .accountMenuPanel {
+  opacity: 1;
+  transform: scale(1);
+  transform-origin: top right;
+  transition:
+    opacity var(--records-popup-enter-duration) var(--records-ease-out),
+    transform var(--records-popup-enter-duration) var(--records-ease-out);
+  @starting-style {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .accountMenu .accountMenuPanel {
+    transition: none;
+    transform: none;
   }
 }

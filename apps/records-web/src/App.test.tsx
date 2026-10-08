@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { focusManager } from "@tanstack/react-query";
+import { focusManager, QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { App } from "./App";
@@ -232,7 +232,7 @@ describe("App shell", () => {
       "THE SHITTIM",
       "CHEST ARCHIVE",
     ]);
-    expect(screen.getByRole("link", { name: "AUTHENTICATE" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Discordでログイン" })).toHaveAttribute(
       "href",
       "/api/v1/auth/discord/start?returnTo=%2F",
     );
@@ -254,7 +254,7 @@ describe("App shell", () => {
 
       render(<App />);
 
-      expect(await screen.findByRole("link", { name: "AUTHENTICATE" })).toHaveAttribute(
+      expect(await screen.findByRole("link", { name: "Discordでログイン" })).toHaveAttribute(
         "href",
         `/api/v1/auth/discord/start?returnTo=${encodeURIComponent(path)}`,
       );
@@ -269,7 +269,7 @@ describe("App shell", () => {
     await screen.findByRole("heading", { name: "議論の記録" });
     const staleAt = Date.now() + 31_000;
     vi.spyOn(Date, "now").mockReturnValue(staleAt);
-    fireEvent.click(screen.getAllByRole("button", { name: "LOGOFF" })[0]!);
+    fireEvent.click(screen.getAllByRole("button", { name: "ログアウト" })[0]!);
 
     expect(await screen.findByText("GOODBYE, SENSEI.")).toBeVisible();
     expect(screen.getByLabelText("ログオフしました")).toBeVisible();
@@ -336,5 +336,111 @@ describe("App shell", () => {
 
     expect(await screen.findByRole("heading", { name: "The Shittim Chest Archive" })).toBeVisible();
     expect(sessionRequests).toBe(2);
+  });
+
+  it("keeps the archive after a failed logout and retries without duplicate pending writes", async () => {
+    mockFixedMedia(true);
+    mockApi();
+    const originalFetch = fetch;
+    const logoutRequests: (RequestInit | undefined)[] = [];
+    let completeFirstLogout!: () => void;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const path =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (path !== "/api/v1/logout") return originalFetch(input, init);
+        logoutRequests.push(init);
+        if (logoutRequests.length > 1) return originalFetch(input, init);
+        return new Promise<Response>((resolve) => {
+          completeFirstLogout = () =>
+            resolve(
+              response(
+                {
+                  error: {
+                    code: "INTERNAL_ERROR",
+                    message: "ログアウトできませんでした。",
+                    requestId: "request-id",
+                  },
+                },
+                500,
+              ),
+            );
+        });
+      }),
+    );
+    render(<App />);
+    await screen.findByRole("heading", { name: "議論の記録" });
+    const search = screen.getByRole("searchbox");
+    fireEvent.change(search, { target: { value: "休日" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "ログアウト" })[0]!);
+
+    await waitFor(() => expect(logoutRequests).toHaveLength(1));
+    const pending = screen.getAllByRole("button", { name: "ログアウト中…" });
+    expect(pending.every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
+    for (const button of pending) fireEvent.click(button);
+    expect(logoutRequests).toHaveLength(1);
+    expect(new Headers(logoutRequests[0]?.headers).get("X-CSRF-Token")).toBe("csrf-token");
+    await act(async () => completeFirstLogout());
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("ログアウトできませんでした");
+    expect(screen.getByRole("heading", { name: "議論の記録" })).toBeVisible();
+    expect(search).toHaveValue("休日");
+    expect(screen.queryByText("GOODBYE, SENSEI.")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "もう一度ログアウト" }));
+
+    expect(await screen.findByRole("heading", { name: "The Shittim Chest Archive" })).toBeVisible();
+    expect(logoutRequests).toHaveLength(2);
+    expect(sessionStorage).toHaveLength(0);
+  });
+
+  it("discards private caches when a tab return refresh reports an anonymous session directly", async () => {
+    const requests = mockApi();
+    const originalFetch = fetch;
+    let sessionReads = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const path =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (path !== "/api/v1/session?contract=admin-v1") return originalFetch(input, init);
+        sessionReads += 1;
+        if (sessionReads === 1) return originalFetch(input, init);
+        return Promise.resolve(
+          response({
+            schemaVersion: 1,
+            authenticated: false,
+            isAdmin: false,
+            user: null,
+            csrfToken: null,
+          }),
+        );
+      }),
+    );
+    // Capture the real app client through its public cache API, without replacing its behavior.
+    const cacheLookup = vi.spyOn(QueryClient.prototype, "getQueryCache");
+    render(<App />);
+    await screen.findByRole("heading", { name: "議論の記録" });
+    const client = cacheLookup.mock.contexts.find((value) => value instanceof QueryClient);
+    if (!(client instanceof QueryClient)) throw new Error("App query client was not created");
+    client.setQueryData(["costs", "week"], { fixture: "private costs" });
+    client.setQueryData(["admin", "prompts"], { fixture: "private configuration" });
+    expect(client.getQueryCache().findAll({ queryKey: ["records"] })).toHaveLength(1);
+    const search = screen.getByRole("searchbox");
+    fireEvent.change(search, { target: { value: "local-only query" } });
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 31_000);
+
+    act(() => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+    });
+
+    expect(await screen.findByRole("heading", { name: "The Shittim Chest Archive" })).toBeVisible();
+    expect(sessionReads).toBe(2);
+    expect(client.getQueryData(["costs", "week"])).toBeUndefined();
+    expect(client.getQueryData(["admin", "prompts"])).toBeUndefined();
+    expect(client.getQueryCache().findAll({ queryKey: ["records"] })).toHaveLength(0);
+    expect(client.getQueryData(["records-session"])).toMatchObject({ authenticated: false });
+    expect(requests).not.toContain("/api/v1/logout");
   });
 });

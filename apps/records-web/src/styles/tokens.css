@@ -1,26 +1,4 @@
-@font-face {
-  font-family: "LINE Seed JP";
-  src: url("../assets/fonts/LINESeedJP-Regular.woff2") format("woff2");
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "LINE Seed JP";
-  src: url("../assets/fonts/LINESeedJP-Bold.woff2") format("woff2");
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "LINE Seed JP";
-  src: url("../assets/fonts/LINESeedJP-ExtraBold.woff2") format("woff2");
-  font-style: normal;
-  font-weight: 800;
-  font-display: swap;
-}
+@import "./fonts.generated.css";
 
 @font-face {
   font-family: "Delogy";
@@ -42,16 +20,45 @@
   --records-pink-100: #fde8f1;
   --records-lavender-100: #eeecff;
   --records-ink-900: #17324d;
-  --records-ink-600: #587087;
+  --records-ink-600: #506b81;
   --records-surface: rgb(255 255 255 / 76%);
   --records-surface-strong: rgb(255 255 255 / 92%);
+  --records-reading-surface: #fcfeff;
+  --records-panel-background:
+    radial-gradient(ellipse at 3% 0%, rgb(88 217 232 / 16%), transparent 52%),
+    radial-gradient(ellipse at 100% 6%, rgb(240 164 199 / 13%), transparent 44%),
+    linear-gradient(
+      135deg,
+      rgb(255 255 255 / 98%),
+      rgb(244 251 255 / 96%) 64%,
+      rgb(246 243 255 / 94%)
+    );
+  --records-panel-accent-line: linear-gradient(90deg, #58d9e8, #f0a4c7 58%, #aaa5e7);
+  --records-panel-shadow: 0 16px 42px rgb(45 119 148 / 10%), inset 0 1px 0 rgb(255 255 255 / 80%);
+  --records-header-glow:
+    radial-gradient(ellipse at 15% 48%, rgb(88 217 232 / 18%), transparent 62%),
+    radial-gradient(ellipse at 88% 22%, rgb(240 164 199 / 12%), transparent 60%);
   --records-line: rgb(63 180 205 / 24%);
   --records-line-strong: rgb(63 180 205 / 44%);
   --records-shadow: 0 18px 50px rgb(45 119 148 / 14%);
   --records-shadow-soft: 0 12px 34px rgb(45 119 148 / 9%);
-  --records-radius-card: 24px;
+  --records-radius-card: 20px;
+  --records-radius-control: 12px;
+  --records-space-1: 4px;
+  --records-space-2: 8px;
+  --records-space-3: 12px;
+  --records-space-4: 16px;
+  --records-space-6: 24px;
+  --records-space-8: 32px;
+  --records-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --records-press-duration: 120ms;
+  --records-popup-enter-duration: 180ms;
+  --records-popup-exit-duration: 120ms;
   --records-font-display: "Delogy", "LINE Seed JP", "Hiragino Sans", "Yu Gothic UI", sans-serif;
-  --records-page-background: linear-gradient(145deg, #f5fbff, #edfaff 54%, #fff7fb);
+  --records-page-background:
+    radial-gradient(ellipse at 8% 6%, rgb(88 217 232 / 16%), transparent 38%),
+    radial-gradient(ellipse at 94% 32%, rgb(240 164 199 / 12%), transparent 34%),
+    linear-gradient(145deg, #f5fbff, #edfaff 54%, #f9f3ff);
   --records-login-background:
     radial-gradient(circle at 15% 12%, #fff, transparent 28%),
     linear-gradient(145deg, #f5fbff, #dff8fb);
@@ -66,8 +73,8 @@
   --records-brand-fill: rgb(255 255 255 / 44%);
   --records-avatar-border: #fff;
   --records-on-accent: #092d45;
-  --records-link: #207e99;
-  --records-cyan-ink: #278ca5;
+  --records-link: #216e87;
+  --records-cyan-ink: #216e87;
   --records-pink-ink: #72415b;
   --records-tie-ink: #7d4462;
   --records-ranking-panel-background:
@@ -97,6 +104,7 @@
   --records-vote-node: rgb(255 255 255 / 94%);
   --records-vote-node-ring: rgb(255 255 255 / 58%);
   --records-vote-tooltip: rgb(255 255 255 / 96%);
+  --records-focus: var(--records-link);
   --records-theme-border: var(--records-line);
   --records-theme-row: rgb(255 255 255 / 44%);
   --records-theme-track: rgb(181 216 225 / 72%);
@@ -115,6 +123,16 @@
   --records-ink-600: #a8c5d4;
   --records-surface: rgb(11 31 47 / 78%);
   --records-surface-strong: rgb(18 44 64 / 94%);
+  --records-reading-surface: #10283a;
+  --records-panel-background:
+    radial-gradient(ellipse at 3% 0%, rgb(66 199 219 / 15%), transparent 52%),
+    radial-gradient(ellipse at 100% 6%, rgb(170 110 160 / 13%), transparent 44%),
+    linear-gradient(135deg, #153247, #0e2739 64%, #20283e);
+  --records-panel-accent-line: linear-gradient(90deg, #62dbea, #f0a4c7 58%, #aaa5e7);
+  --records-panel-shadow: 0 18px 46px rgb(0 7 14 / 30%), inset 0 1px 0 rgb(138 232 243 / 10%);
+  --records-header-glow:
+    radial-gradient(ellipse at 15% 48%, rgb(66 199 219 / 15%), transparent 62%),
+    radial-gradient(ellipse at 88% 22%, rgb(170 110 160 / 13%), transparent 60%);
   --records-line: rgb(104 222 235 / 26%);
   --records-line-strong: rgb(104 222 235 / 50%);
   --records-shadow: 0 18px 54px rgb(0 7 14 / 42%);
@@ -189,7 +207,7 @@ html {
 body {
   margin: 0;
   min-width: 320px;
-  min-height: 100vh;
+  min-height: 100dvh;
   background: var(--records-ice-50);
   color: var(--records-ink-900);
 }
@@ -205,8 +223,27 @@ input,
 select {
   font: inherit;
 }
+button,
+select,
+summary {
+  touch-action: manipulation;
+}
+button,
+summary {
+  user-select: none;
+}
+input,
+textarea,
+select {
+  font-size: 1rem;
+}
+button,
+summary {
+  -webkit-tap-highlight-color: transparent;
+}
+
 :focus-visible {
-  outline: 3px solid var(--records-cyan-500);
+  outline: 3px solid var(--records-focus);
   outline-offset: 3px;
 }
 ::selection {
@@ -217,5 +254,58 @@ select {
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  :root,
+  :root[data-theme="dark"] {
+    --records-panel-background: var(--records-surface-strong);
+    --records-reading-surface: var(--records-surface-strong);
+    --records-panel-accent-line: var(--records-line-strong);
+    --records-panel-shadow: none;
+    --records-header-glow: none;
+    --records-ranking-panel-background: var(--records-surface-strong);
+    --records-decision-background: var(--records-surface-strong);
+    --records-final-proposal: var(--records-cyan-100);
+    --records-theme-row: var(--records-surface-strong);
+    --records-vote-node: var(--records-surface-strong);
+    --records-vote-tooltip: var(--records-surface-strong);
+    --records-ranking-position: var(--records-surface-strong);
+    --records-ranking-total: var(--records-surface-strong);
+    --records-ranking-avatar-surface: var(--records-surface-strong);
+    --records-ranking-label-surface: var(--records-surface-strong);
+  }
+
+  :root {
+    --records-surface: #fff;
+    --records-surface-strong: #fff;
+    --records-sidebar-background: #fff;
+    --records-control-background: #fff;
+    --records-control-background-soft: #fff;
+    --records-control-background-quiet: #fff;
+    --records-menu-background: #fff;
+    --records-line: #506b81;
+    --records-line-strong: #216e87;
+    --records-panel-border: #506b81;
+    --records-panel-border-soft: #506b81;
+  }
+  :root[data-theme="dark"] {
+    --records-surface: #0b1f2f;
+    --records-surface-strong: #122c40;
+    --records-sidebar-background: #081b2a;
+    --records-control-background: #122c40;
+    --records-control-background-soft: #132e42;
+    --records-control-background-quiet: #122c40;
+    --records-menu-background: #0c2131;
+    --records-line: #a8c5d4;
+    --records-line-strong: #76deed;
+    --records-panel-border: #a8c5d4;
+    --records-panel-border-soft: #a8c5d4;
+  }
+  *,
+  *::before,
+  *::after {
+    backdrop-filter: none !important;
   }
 }

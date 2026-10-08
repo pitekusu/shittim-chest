@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-10-04
+updated: 2026-10-08
 ---
 
 # GitHub・CI-CD詳細設計
@@ -98,6 +98,12 @@ GitHub-hosted runnerはUbuntu 26.04に固定する。x64は`ubuntu-26.04`、
 | records-infra | Records固有スタックのテンプレート生成 |
 | records-gate | 必須チェックとしてRecords全体の結果を集約 |
 
+Records WebのビルドはCI・Records Releaseとも、Webプロジェクト内で`pnpm run build`を実行する。
+フォント原本・分割WOFF2・生成CSSのchecksum、Vite+ build、遅延ルートの所有境界と初期static import closureのgzip上限を一括して検証し、直接`vp build`だけを実行して前後の検証を省かない。
+
+Records CIのPlaywrightが失敗した場合だけ、`test-results`内の`*-actual.png`・`*-expected.png`・`*-diff.png`を固定したupload-artifact Actionで7日保持する。
+trace・動画・HTML report・他の添付画像はアップロードしない。比較画像がない失敗では保存を省くが、元のブラウザー試験の失敗は成功に置き換えない。
+
 ルートのロックファイル監査、TypeScript、Recordsを含む全インフラのVitestは同じSHAの`cdk`へ集約する。
 `records-infra`では共通検証を繰り返さない。
 対象外PRでも`records-gate`は明示的な対象外の成功結果を返す。
@@ -113,7 +119,11 @@ Android追加後のJava/Kotlin解析は未完了であり、Kotlin 2.4.20へのC
 ブランチ保護のチェック名は実際のジョブ名に合わせ、失敗を隠すための再実行はしない。
 
 管理画面の縦長な全体スクリーンショットは撮影・比較に最大15秒を認め、
-サービス別撮影を含む該当テスト全体は60秒とする。画像差分の許容値と再試行回数は増やさない。
+サービス別撮影を含む管理画面単独のテスト全体は60秒とする。
+複数ルートを画面幅ごとに順に開き、axeで共通画面枠と本文を確認する横断テストだけは全体120秒とする。
+画像比較用Chromiumは`--font-render-hinting=none`でhintingを固定する。アプリの描画設定は変えず、改行・寸法を含めた画像レビュー後に基準画像を採用し、比較許容差は広げない。
+画像基準の正はCIのUbuntu 26.04上の固定Playwright/Chromiumとする。異なるLinuxのFreeType/fontconfigでは文字輪郭に差が出るため、基準画像はCIの比較artifactを寸法・改行・図形と合わせてレビューして採用する。ローカルの機能検証と別OSでのpixel完全一致は区別する。
+画像差分の許容値と再試行回数は増やさない。
 
 ### CodeQLの既存3言語の移行とAndroid追加
 
@@ -354,6 +364,10 @@ Grypeのデータベースは取得済みキャッシュがある場合も毎回
 libc6・libsqlite3-0に対する反映待ち4件が解消した。生スキャンで対象4件の不在と、
 署名付きVEX適用後の高・重大の残存0件を確認し、期限付き例外を削除した。
 旧イメージへの例外を新しいイメージへ付け替えず、例外なしでリスク判定を継続する。
+
+2026年10月8日、`CVE-2026-77214`に対応する同系列のDHI Python 3.14.8／Debian 13へbuilder・runtimeのダイジェストを更新する。
+ARM64の実SBOMでbackport済み`libexpat1 2.8.3-1~deb13u1+dhi5`を照合し、当該イメージの署名検証済みVEXと既存Grypeゲートで解消を確認する。
+リスク受容ファイルは空を維持し、Python・OS系列・公開APIの契約を継承する。
 
 `fault-test`イメージと強制停止・復旧訓練は手動のRuntime検証に限定する。
 通常PR/`main`では本番イメージの基本検証を行い、訓練用イメージを本番リスク承認の対象へ含めない。
