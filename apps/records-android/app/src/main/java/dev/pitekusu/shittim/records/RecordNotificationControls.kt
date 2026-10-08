@@ -71,6 +71,7 @@ internal fun RecordNotificationControls() {
   val generation by RecordNotifications.changes.collectAsState()
   val status = remember(generation) { RecordNotifications.status(context) }
   val enabled = remember(generation) { RecordNotificationSettings(context).optedIn }
+  val diagnostic = remember(generation) { RecordNotificationSettings(context) }
   LifecycleResumeEffect(Unit) {
     RecordNotifications.changed()
     onPauseOrDispose { }
@@ -111,9 +112,17 @@ internal fun RecordNotificationControls() {
         Text(stringResource(R.string.notification_open_settings))
       }
     } else if (status == RecordNotificationStatus.FAILED) {
-      TextButton(onClick = { RecordNotificationRegistration.schedule(context, replace = true) }) {
+      TextButton(onClick = { RecordNotifications.retryRegistration(context) }) {
         Text(stringResource(R.string.session_retry))
       }
+    }
+    if (status == RecordNotificationStatus.FAILED || status == RecordNotificationStatus.REGISTERING) {
+      val stage = diagnostic.failureStage
+      val category = diagnostic.failureCategory
+      if (stage != null && category != null) Text(stringResource(R.string.notification_diagnostic,
+        stringResource(stage.label), stringResource(category.label), diagnostic.failureAttempt),
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = 12.dp).testTag("record-notification-diagnostic"))
     }
     Text(stringResource(R.string.notification_privacy), style = MaterialTheme.typography.bodySmall,
       color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
