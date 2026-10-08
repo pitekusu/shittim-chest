@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-type AffectionReasonKind = Literal["available", "null", "blank", "too_long"]
+type AffectionReasonKind = Literal["available", "null", "blank", "too_long", "prompt_disclosure"]
 
 
 @dataclass(frozen=True, slots=True)

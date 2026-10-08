@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from time import monotonic
 from typing import Literal, TypeVar
+from unicodedata import normalize
 
 import httpx2
 from openai import (
@@ -211,8 +213,21 @@ class OpenAIResponsesService:
             input_text=affection_scoring_input(question),
             settings=self.config.affection,
         )
-        reason, _kind = _sanitize_affection_reason(output.reason)
+        reason, _kind = _sanitize_affection_reason(
+            output.reason, protected_prompts=self._affection_protected_prompts()
+        )
         return AffectionQuestionEvaluation(output.score, reason)
+
+    def _affection_protected_prompts(self) -> tuple[str, ...]:
+        """Protect every persona and scoring instruction without publishing their content."""
+
+        prompts = [
+            affection_scoring_instructions(""),
+            *(profile.system_prompt for profile in self.profiles.values.values()),
+        ]
+        if self.system_prompt is not None:
+            prompts.append(self.system_prompt)
+        return tuple(prompts)
 
     async def form_preferences(
         self,
@@ -549,7 +564,9 @@ class OpenAIResponsesService:
         reason_status: Literal["available", "unavailable"] | None = None
         reason_kind: AffectionReasonKind | None = None
         if isinstance(parsed, AffectionScoreOutputV2):
-            _reason, reason_kind = _sanitize_affection_reason(parsed.reason)
+            _reason, reason_kind = _sanitize_affection_reason(
+                parsed.reason, protected_prompts=self._affection_protected_prompts()
+            )
             reason_status = "available" if reason_kind == "available" else "unavailable"
         self.recorder.record_usage(
             OpenAIUsageRecord(
@@ -606,7 +623,9 @@ class OpenAIResponsesService:
         )
 
 
-def _sanitize_affection_reason(reason: str | None) -> tuple[str | None, AffectionReasonKind]:
+def _sanitize_affection_reason(
+    reason: str | None, *, protected_prompts: Iterable[str]
+) -> tuple[str | None, AffectionReasonKind]:
     if reason is None:
         return None, "null"
     reason = reason.strip()
@@ -614,7 +633,29 @@ def _sanitize_affection_reason(reason: str | None) -> tuple[str | None, Affectio
         return None, "blank"
     if len(reason) > MAX_AFFECTION_REASON_LENGTH:
         return None, "too_long"
+    normalized_reason = _normalize_prompt_copy(reason)
+    # Whole short prompts are distinctive at 16 characters; partial quotations need 32
+    # contiguous characters so names and ordinary persona-style sentiments stay usable.
+    passages = {
+        normalized_reason[index : index + 32] for index in range(len(normalized_reason) - 31)
+    }
+    for prompt in protected_prompts:
+        normalized_prompt = _normalize_prompt_copy(prompt)
+        if len(normalized_prompt) >= 16 and normalized_prompt in normalized_reason:
+            return None, "prompt_disclosure"
+        if any(
+            normalized_prompt[index : index + 32] in passages
+            for index in range(len(normalized_prompt) - 31)
+        ):
+            return None, "prompt_disclosure"
     return reason, "available"
+
+
+def _normalize_prompt_copy(text: str) -> str:
+    # Ignore Unicode formatting, punctuation, spacing, and width/case differences.
+    return "".join(
+        character for character in normalize("NFKC", text).casefold() if character.isalnum()
+    )
 
 
 def _extract_parsed[OutputT: BaseModel](response: Response, schema: type[OutputT]) -> OutputT:

@@ -137,6 +137,7 @@ def test_content_free_telemetry_emits_only_explicit_metadata(
         ("unavailable", "null"),
         ("unavailable", "blank"),
         ("unavailable", "too_long"),
+        ("unavailable", "prompt_disclosure"),
     ],
 )
 def test_affection_reaction_outcome_is_content_free_success_metadata(
