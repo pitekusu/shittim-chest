@@ -33,6 +33,11 @@ internal class RecordNotificationSettings(context: Context) {
   val registeredAt: Instant? get() = date("registered")
   val expiresAt: Instant? get() = date("expires")
   val failed: Boolean get() = preferences.getBoolean("failed", false)
+  val failureStage: NotificationRegistrationStage? get() = NotificationRegistrationStage.entries
+    .firstOrNull { it.name == preferences.getString("failureStage", null) }
+  val failureCategory: NotificationRegistrationFailure? get() = NotificationRegistrationFailure.entries
+    .firstOrNull { it.name == preferences.getString("failureCategory", null) }
+  val failureAttempt: Int get() = preferences.getInt("failureAttempt", 1).coerceIn(1, 4)
   val permissionDenied: Boolean get() = preferences.getBoolean("permissionDenied", false)
   val permissionRequested: Boolean get() = preferences.getBoolean("permissionRequested", false) || permissionDenied
 
@@ -65,7 +70,7 @@ internal class RecordNotificationSettings(context: Context) {
   }
 
   fun clearRegistration() {
-    check(preferences.edit().remove("registered").remove("expires").putBoolean("failed", false).commit())
+    check(clearFailure(preferences.edit()).remove("registered").remove("expires").commit())
     RecordNotifications.changed()
   }
 
@@ -77,7 +82,15 @@ internal class RecordNotificationSettings(context: Context) {
 
   private fun clearBinding(editor: android.content.SharedPreferences.Editor) = editor
     .remove("binding").remove("session").remove("fcm").remove("registered").remove("expires")
-    .remove("seen").remove("failed")
+    .remove("seen").let(::clearFailure)
+
+  private fun clearFailure(editor: android.content.SharedPreferences.Editor) = editor
+    .remove("failureStage").remove("failureCategory").remove("failureAttempt").remove("failed")
+
+  fun retryRegistration() {
+    check(clearFailure(preferences.edit()).commit())
+    RecordNotifications.changed()
+  }
 
   fun bindingFor(session: String, fcmToken: String): String {
     val fingerprint = notificationSessionFingerprint(session)
@@ -85,22 +98,24 @@ internal class RecordNotificationSettings(context: Context) {
     if (binding != null && sessionFingerprint == fingerprint &&
       preferences.getString("fcm", null) == fcmFingerprint) return binding!!
     val next = Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32).also(SecureRandom()::nextBytes))
-    check(preferences.edit().putString("binding", next).putString("session", fingerprint)
+    check(clearFailure(preferences.edit()).putString("binding", next).putString("session", fingerprint)
       .putString("fcm", fcmFingerprint).remove("registered").remove("expires").remove("seen")
-      .putBoolean("failed", false).commit())
+      .commit())
     RecordNotifications.changed()
     return next
   }
 
   fun registered(bindingId: String, at: Instant, expires: Instant) {
     if (!optedIn || binding != bindingId) return
-    check(preferences.edit().putLong("registered", registeredAt?.epochSecond ?: at.epochSecond)
-      .putLong("expires", expires.epochSecond).putBoolean("failed", false).commit())
+    check(clearFailure(preferences.edit()).putLong("registered", registeredAt?.epochSecond ?: at.epochSecond)
+      .putLong("expires", expires.epochSecond).commit())
     RecordNotifications.changed()
   }
 
-  fun failure() {
-    check(preferences.edit().putBoolean("failed", true).commit())
+  fun failure(stage: NotificationRegistrationStage, category: NotificationRegistrationFailure,
+    attempt: Int, terminal: Boolean) {
+    check(preferences.edit().putBoolean("failed", terminal).putString("failureStage", stage.name)
+      .putString("failureCategory", category.name).putInt("failureAttempt", attempt.coerceIn(1, 4)).commit())
     RecordNotifications.changed()
   }
 
@@ -157,6 +172,11 @@ internal object RecordNotifications {
   fun enable(context: Context) = synchronized(lock) {
     if (!configured(context)) return@synchronized
     RecordNotificationSettings(context).optIn()
+    RecordNotificationRegistration.schedule(context, replace = true)
+  }
+
+  fun retryRegistration(context: Context) = synchronized(lock) {
+    RecordNotificationSettings(context).retryRegistration()
     RecordNotificationRegistration.schedule(context, replace = true)
   }
 
