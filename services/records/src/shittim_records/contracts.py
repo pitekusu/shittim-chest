@@ -347,9 +347,7 @@ class AffectionParticipantView(PublicModel):
                         "properties": {"questionScore": {"type": "null"}},
                         "required": ["questionScore"],
                     },
-                    "then": {
-                        "properties": {"reasonStatus": {"not": {"const": "available"}}}
-                    },
+                    "then": {"properties": {"reasonStatus": {"not": {"const": "available"}}}},
                 },
             ]
         }
