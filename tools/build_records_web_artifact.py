@@ -35,6 +35,9 @@ def build_artifact(source: Path, output: Path) -> None:
             relative = PurePosixPath(path.relative_to(source).as_posix())
             if relative.is_absolute() or ".." in relative.parts:
                 raise ValueError("Records Web artifact path is unsafe")
+            # The code-splitting guard consumes this build report; the SPA never does.
+            if relative.as_posix() == "records-code-splitting.json":
+                continue
             info = zipfile.ZipInfo(relative.as_posix(), _FIXED_TIMESTAMP)
             info.compress_type = zipfile.ZIP_DEFLATED
             info.create_system = 3

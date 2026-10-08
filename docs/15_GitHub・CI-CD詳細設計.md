@@ -434,6 +434,8 @@ CDKを介さず変更セットを直接実行するため、CDKメタデータ�
 `ROLLBACK_COMPLETE`は受理せず、初回作成失敗の後始末は[運用手順](17_運用保守・監視・障害対応設計.md)に従う。
 
 Webは配信直前にZIPの署名/ハッシュと固定SyftによるSBOMハッシュを再検証する。
+CI用の`records-code-splitting.json`はbuild出力に保持してJS予算・ルート分割を検証し、公開用ZIPからだけ除外する。
+公開ZIPの最上位は`index.html`だけとし、`assets/`と`.well-known/assetlinks.json`の配信、他の余分なファイルを拒否する既存のguardを維持する。
 ハッシュ付きアセットを先に配置し、`index.html`を最後に更新して`/index.html`だけを無効化する。
 過去のハッシュ付きアセットは即削除しない。公開後のスモークが失敗した場合は、直前のバージョン付き
 `index.html`を戻して再無効化する。回復はLambdaエイリアス、S3オブジェクトバージョン、

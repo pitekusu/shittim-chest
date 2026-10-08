@@ -17,6 +17,8 @@ def test_artifact_is_deterministic_and_path_safe(tmp_path: Path) -> None:
     (source / "index.html").write_text("<main>Records</main>\n", encoding="utf-8")
     (source / "assets" / "app.js").write_text("export {};\n", encoding="utf-8")
     (source / ".well-known" / "assetlinks.json").write_text("[]\n", encoding="utf-8")
+    report = source / "records-code-splitting.json"
+    report.write_text('{"modules": []}\n', encoding="utf-8")
     first = tmp_path / "first.zip"
     second = tmp_path / "second.zip"
 
@@ -31,6 +33,7 @@ def test_artifact_is_deterministic_and_path_safe(tmp_path: Path) -> None:
         assert all(item.date_time == (1980, 1, 1, 0, 0, 0) for item in archive.infolist())
         assert archive.read("index.html") == b"<main>Records</main>\n"
         assert archive.read(".well-known/assetlinks.json") == b"[]\n"
+    assert report.read_text(encoding="utf-8") == '{"modules": []}\n'
 
 
 def test_artifact_rejects_missing_entrypoint(tmp_path: Path) -> None:
@@ -41,11 +44,12 @@ def test_artifact_rejects_missing_entrypoint(tmp_path: Path) -> None:
         build_artifact(source, tmp_path / "records.zip")
 
 
-def test_artifact_rejects_symlink(tmp_path: Path) -> None:
+@pytest.mark.parametrize("name", ["linked", "records-code-splitting.json"])
+def test_artifact_rejects_symlink(tmp_path: Path, name: str) -> None:
     source = tmp_path / "dist"
     source.mkdir()
     (source / "index.html").write_text("ok", encoding="utf-8")
-    (source / "linked").symlink_to(source / "index.html")
+    (source / name).symlink_to(source / "index.html")
 
     with pytest.raises(ValueError, match="regular files"):
         build_artifact(source, tmp_path / "records.zip")
