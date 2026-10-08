@@ -1,6 +1,7 @@
 package dev.pitekusu.shittim.records
 
 import android.content.Context
+import android.Manifest
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.work.Configuration
@@ -15,6 +16,14 @@ import androidx.work.testing.SynchronousExecutor
 import androidx.work.testing.WorkManagerTestInitHelper
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
+import dev.pitekusu.shittim.records.auth.CacheAuthorization
+import dev.pitekusu.shittim.records.auth.KeystoreTokenStore
+import dev.pitekusu.shittim.records.auth.StoredToken
+import dev.pitekusu.shittim.records.auth.MobileAuthClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.respond
+import io.ktor.http.headersOf
+import java.time.Instant
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
@@ -28,6 +37,18 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class RecordNotificationRegistrationTest {
+  private fun authorize(context: Context) {
+    val now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
+    InstrumentationRegistry.getInstrumentation().uiAutomation.grantRuntimePermission(
+      context.packageName, Manifest.permission.POST_NOTIFICATIONS)
+    val store = KeystoreTokenStore(context)
+    store.clear()
+    store.completeLogout()
+    store.save(StoredToken("t".repeat(43), now.plusSeconds(3600),
+      CacheAuthorization("a".repeat(43), now.minusSeconds(60), now.plusSeconds(3600))))
+    RecordNotifications.locallyRevoked = false
+  }
+
   @Test fun callbackKeepsRunningRegistrationAndForegroundRefreshWaitsItsCompletion() {
     val context = InstrumentationRegistry.getInstrumentation().targetContext
     val originalManager = WorkManager.getInstance(context) as WorkManagerImpl
@@ -57,6 +78,7 @@ class RecordNotificationRegistrationTest {
     var manager: WorkManager? = null
     val settings = RecordNotificationSettings(context)
     try {
+      authorize(context)
       settings.optIn()
       settings.bindingFor("t".repeat(43), "old-fid")
       WorkManagerTestInitHelper.initializeTestWorkManager(context, Configuration.Builder()
@@ -101,8 +123,71 @@ class RecordNotificationRegistrationTest {
       } finally {
         WorkManagerImpl.setDelegate(originalManager)
         settings.revoke()
+        KeystoreTokenStore(context).clear()
         firebase.delete()
       }
+    }
+  }
+
+  @Test fun lateFirstRegistrationRecoversAfterFailedWorkAndDoesNotLoopAfterBindingIsSaved() {
+    val context = InstrumentationRegistry.getInstrumentation().targetContext
+    val original = WorkManager.getInstance(context) as WorkManagerImpl
+    val firebase = FirebaseApp.initializeApp(context, FirebaseOptions.Builder()
+      .setApplicationId("1:000000000000:android:0123456789abcdef012345")
+      .setProjectId("synthetic-record-late").setApiKey("synthetic-not-a-real-key").build(), "record-late-test")
+    val starts = AtomicInteger()
+    val factory = object : WorkerFactory() {
+      override fun createWorker(appContext: Context, workerClassName: String, parameters: WorkerParameters): ListenableWorker =
+        object : CoroutineWorker(appContext, parameters) {
+          override suspend fun doWork(): Result {
+            if (starts.getAndIncrement() == 0) return Result.failure()
+            return registerRecordNotifications(context, 0,
+              client = { MobileAuthClient(MockEngine {
+                respond("""{"schemaVersion":1,"expiresAt":"${Instant.now().plusSeconds(300)}"}""",
+                  headers = headersOf("Content-Type", "application/json"))
+              }) }, installation = {
+                RecordNotificationRegistration.onRegistered(context, "late-fid")
+                "late-fid"
+              })
+          }
+        }
+    }
+    try {
+      authorize(context)
+      val settings = RecordNotificationSettings(context)
+      settings.optIn()
+      settings.failure(NotificationRegistrationStage.FIREBASE, NotificationRegistrationFailure.NETWORK, 4, terminal = true)
+      WorkManagerTestInitHelper.initializeTestWorkManager(context, Configuration.Builder()
+        .setExecutor(SynchronousExecutor()).setWorkerFactory(factory).build())
+      val manager = WorkManager.getInstance(context)
+      val driver = checkNotNull(WorkManagerTestInitHelper.getTestDriver(context))
+      fun requests() = manager.getWorkInfosForUniqueWork("records-notification-registration-v1").get(10, TimeUnit.SECONDS)
+      RecordNotificationRegistration.schedule(context)
+      val failed = requests().single()
+      driver.setAllConstraintsMet(failed.id)
+      runBlocking { withTimeout(10_000) { manager.getWorkInfoByIdFlow(failed.id).first { it?.state == WorkInfo.State.FAILED } } }
+      assertEquals(null, settings.binding)
+      RecordNotificationRegistration.onRegistered(context, "late-fid")
+      val recovery = requests().single { !it.state.isFinished }
+      assertEquals(WorkInfo.State.ENQUEUED, recovery.state)
+      driver.setAllConstraintsMet(recovery.id)
+      runBlocking { withTimeout(10_000) { manager.getWorkInfoByIdFlow(recovery.id).first { it?.state == WorkInfo.State.SUCCEEDED } } }
+      assertFalse(settings.failed)
+      checkNotNull(settings.binding)
+      val count = requests().size
+      RecordNotificationRegistration.onRegistered(context, "late-fid")
+      assertEquals(count, requests().size)
+      val pending = requests().single { !it.state.isFinished }
+      driver.setAllConstraintsMet(pending.id)
+      runBlocking { withTimeout(10_000) { manager.getWorkInfoByIdFlow(pending.id).first { it?.state == WorkInfo.State.SUCCEEDED } } }
+      assertEquals(count, requests().size)
+    } finally {
+      WorkManager.getInstance(context).cancelAllWork().result.get(10, TimeUnit.SECONDS)
+      WorkManagerTestInitHelper.closeWorkDatabase()
+      WorkManagerImpl.setDelegate(original)
+      RecordNotificationSettings(context).revoke()
+      KeystoreTokenStore(context).clear()
+      firebase.delete()
     }
   }
 }

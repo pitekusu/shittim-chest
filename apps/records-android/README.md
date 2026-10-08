@@ -732,6 +732,7 @@ API 36・架空データで、[意見](screenshots/detail-opinions-light.png)、
 - FCMの現行`register()`／Firebase Installation ID（FID）を使用し、旧`getToken()`は使わない。自サービスAPIの`token`項目にはFIDを渡す。SDK auto-initは常に無効とし、現行セッション・アプリ側オン・OS許可を確認したWorkerだけが手動登録する。通常の起動・復帰ではbindingを再生成せず、セッション・FIDの変更や明示的な再有効化で更新する。SDKの自動収集・通知代理表示・BigQuery出力は無効で、Analyticsは導入しない。
 - 登録APIの期限が端末側で保守的に短くした期限より長くても、正常応答を失敗扱いにしない。端末の登録期限はサーバー応答・保存セッション・保存済み閲覧認可の最短値に制限し、既存の期限を延長しない。期限切れ応答は拒否する。
 - 登録失敗時はメニューへ固定の処理段階・失敗分類・試行番号だけを表示する。同じ分類だけを`RecordNotifications`のログへ出し、例外本文・stack trace・API本文・token・FID・binding・利用者情報は保存しない。SDKの待機は標準Coroutineで30秒に制限し、通信等の一時障害だけを既存WorkManagerで最大3回再試行する。応答形式・期限・保存・設定の不備はその場で失敗とし、同じ処理を数分繰り返さない。成功・明示再試行・OFFからON・ログアウトで古い診断を消去し、古いbindingの遅延失敗は新しい登録へ反映しない。
+- Firebaseの公式`BAD_CONFIG`も設定不備として即時に停止し、`UNAVAILABLE`・`TOO_MANY_REQUESTS`だけを一時障害として扱う。Coroutineの待機終了後もSDKのTaskは完了する場合があるため、遅延した登録成功callbackは現在の保存済み認可・通知許可を再確認し、初回またはGoogleへの登録失敗中なら既存Workの後へ再確認を予約する。保存済みbindingと同じFIDの正常callbackでは再予約せず、自己キャンセルや登録ループを作らない。
 - 通知許可やFCMは到着時刻を保証しない。通知が届かなくても起動時・定期同期で記録を取得できる。通知の再送重複は端末の最大128件のopaque IDで抑える。
 
 ### Firebaseが未作成の場合

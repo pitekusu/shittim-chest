@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.work.ListenableWorker
+import com.google.firebase.installations.FirebaseInstallationsException
 import dev.pitekusu.shittim.records.auth.CacheAuthorization
 import dev.pitekusu.shittim.records.auth.KeystoreTokenStore
 import dev.pitekusu.shittim.records.auth.MobileAuthClient
@@ -131,5 +132,22 @@ class RecordNotificationWorkerTest {
       fail("expected cancellation")
     } catch (_: CancellationException) { }
     assertNull(settings.failureCategory)
+  }
+
+  @Test fun firebaseStatusDeterminesTerminalConfigurationOrTransientRetry() = runBlocking {
+    for ((status, category) in listOf(
+      FirebaseInstallationsException.Status.BAD_CONFIG to NotificationRegistrationFailure.CONFIGURATION,
+      FirebaseInstallationsException.Status.UNAVAILABLE to NotificationRegistrationFailure.UNAVAILABLE,
+      FirebaseInstallationsException.Status.TOO_MANY_REQUESTS to NotificationRegistrationFailure.THROTTLED,
+    )) {
+      settings.retryRegistration()
+      val result = registerRecordNotifications(context, 0, installation = {
+        throw FirebaseInstallationsException("synthetic-private-$bearer", status)
+      }, clock = { now })
+      assertEquals(if (category.retryable) ListenableWorker.Result.retry() else ListenableWorker.Result.failure(), result)
+      assertEquals(category, settings.failureCategory)
+      assertEquals(!category.retryable, settings.failed)
+      assertFalse(preferences.all.toString().contains("synthetic-private"))
+    }
   }
 }

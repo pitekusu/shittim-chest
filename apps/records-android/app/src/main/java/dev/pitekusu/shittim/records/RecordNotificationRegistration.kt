@@ -30,14 +30,27 @@ import kotlinx.coroutines.withTimeoutOrNull
 internal object RecordNotificationRegistration {
   private const val WORK = "records-notification-registration-v1"
   fun onRegistered(context: Context, installationId: String) {
-    // register() itself emits this callback before the worker saves the new fingerprint.
-    // KEEP lets that running worker finish; replacing it would cancel its own registration.
-    val changed = synchronized(RecordNotifications.lock) {
-      val settings = RecordNotificationSettings(context)
-      settings.optedIn && settings.binding != null && settings.deliveryFingerprint !=
-        notificationSessionFingerprint(installationId)
+    val afterCurrent = synchronized(RecordNotifications.lock) {
+      try {
+        val settings = RecordNotificationSettings(context)
+        val store = KeystoreTokenStore(context)
+        val token = if (store.isLogoutPending()) null else store.read()
+        val now = Instant.now()
+        if (RecordNotifications.locallyRevoked || !settings.optedIn || !RecordNotifications.permitted(context) ||
+          token == null || token.expiresAt <= now || token.cacheAuthorization?.permits(now) != true ||
+          (settings.binding != null && settings.sessionFingerprint != notificationSessionFingerprint(token.accessToken))) {
+          null
+        } else {
+          // Cancelling an await does not cancel the Google Task. Its late success must
+          // reconcile a first/timed-out registration, even if the last work failed.
+          val reconcile = settings.binding == null || settings.failureStage == NotificationRegistrationStage.FIREBASE
+          if (reconcile || settings.deliveryFingerprint != notificationSessionFingerprint(installationId)) reconcile else null
+        }
+      } catch (_: Exception) { null }
     }
-    if (changed) schedule(context)
+    // A normal first callback can enqueue one follow-up. Once the binding is saved,
+    // matching callbacks enqueue nothing; KEEP still preserves a running FID refresh.
+    if (afterCurrent != null) schedule(context, afterCurrent = afterCurrent)
   }
 
   fun schedule(context: Context, replace: Boolean = false, afterCurrent: Boolean = false) {

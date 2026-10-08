@@ -1,5 +1,6 @@
 package dev.pitekusu.shittim.records
 
+import com.google.firebase.installations.FirebaseInstallationsException
 import dev.pitekusu.shittim.records.auth.MobileAuthException
 import dev.pitekusu.shittim.records.auth.MobileAuthFailure
 import dev.pitekusu.shittim.records.auth.TokenStorageException
@@ -38,6 +39,11 @@ internal fun notificationRegistrationFailure(stage: NotificationRegistrationStag
       else -> NotificationRegistrationFailure.RESPONSE
     }
     error is TokenStorageException -> NotificationRegistrationFailure.STORAGE
+    error is FirebaseInstallationsException -> when (error.status) {
+      FirebaseInstallationsException.Status.BAD_CONFIG -> NotificationRegistrationFailure.CONFIGURATION
+      FirebaseInstallationsException.Status.UNAVAILABLE -> NotificationRegistrationFailure.UNAVAILABLE
+      FirebaseInstallationsException.Status.TOO_MANY_REQUESTS -> NotificationRegistrationFailure.THROTTLED
+    }
     error is IOException -> NotificationRegistrationFailure.NETWORK
     stage == NotificationRegistrationStage.EXPIRY -> NotificationRegistrationFailure.EXPIRY
     stage == NotificationRegistrationStage.SAVE -> NotificationRegistrationFailure.STORAGE
