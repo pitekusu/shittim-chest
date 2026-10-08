@@ -51,6 +51,7 @@ from shittim_chest.application.ports import (
 )
 from shittim_chest.domain import (
     PARTICIPANTS,
+    AffectionReasonStatus,
     DebatePhase,
     DebateState,
     EvidenceBundle,
@@ -530,6 +531,36 @@ async def test_affection_scores_are_all_applied_before_persona_responses(
     assert openai.response_affection_scores.count((ParticipantSlot.PARTICIPANT_A, 535)) == 2
     assert openai.response_affection_scores.count((ParticipantSlot.PARTICIPANT_B, 457)) == 3
     assert openai.response_affection_scores.count((ParticipantSlot.PARTICIPANT_C, 600)) == 2
+    assert all(
+        item.reason_status is AffectionReasonStatus.AVAILABLE and item.reason is not None
+        for item in completed.affection_assessment.participants
+    )
+
+
+@pytest.mark.asyncio
+async def test_one_unavailable_affection_reason_does_not_discard_valid_scores(
+    dependencies: Dependencies,
+) -> None:
+    app = make_application(dependencies)
+    openai, repository = dependencies[5:7]
+    openai.affection_scores = dict(zip(PARTICIPANTS, (35, -43, 100), strict=True))
+    openai.affection_reasons[ParticipantSlot.PARTICIPANT_B] = None
+    accepted = await accept_bound_debate(app)
+
+    await app.run_debate(accepted.debate_id)
+
+    completed = repository.current[accepted.debate_id]
+    assessment = completed.affection_assessment
+    assert assessment is not None
+    assert assessment.status.value == "applied"
+    assert tuple(item.after for item in assessment.participants) == (535, 457, 600)
+    assert tuple(item.reason_status for item in assessment.participants) == (
+        AffectionReasonStatus.AVAILABLE,
+        AffectionReasonStatus.UNAVAILABLE,
+        AffectionReasonStatus.AVAILABLE,
+    )
+    assert assessment.participants[1].reason is None
+    assert openai.affection_calls == list(PARTICIPANTS)
 
 
 @pytest.mark.asyncio
@@ -565,6 +596,10 @@ async def test_one_affection_provider_failure_discards_all_scores_and_continues(
     )
     assert set(openai.affection_calls) == set(PARTICIPANTS)
     assert {score for _, score in openai.response_affection_scores} == {500}
+    assert all(
+        item.reason_status is AffectionReasonStatus.UNAVAILABLE and item.reason is None
+        for item in completed.affection_assessment.participants
+    )
 
 
 @pytest.mark.asyncio
@@ -1583,6 +1618,11 @@ async def test_retry_reuses_partial_final_proposals_and_generates_only_the_missi
         ParticipantSlot.PARTICIPANT_C,
     }
     del openai.proposal_errors[ParticipantSlot.PARTICIPANT_A]
+    assert failed.affection_assessment is not None
+    original_assessment = failed.affection_assessment
+    original_profile = repository.affection_profiles[failed.requester_id]
+    openai.affection_scores = dict.fromkeys(PARTICIPANTS, -100)
+    openai.affection_reasons = dict.fromkeys(PARTICIPANTS, "changed reaction after retry")
 
     await app.retry_debate(
         RetryDebateCommand(accepted.debate_id, "requester", "retry-partial-proposals")
@@ -1607,6 +1647,9 @@ async def test_retry_reuses_partial_final_proposals_and_generates_only_the_missi
     assert openai.proposal_calls.count(ParticipantSlot.PARTICIPANT_A) == 2
     assert openai.proposal_calls.count(ParticipantSlot.PARTICIPANT_B) == 1
     assert openai.proposal_calls.count(ParticipantSlot.PARTICIPANT_C) == 1
+    assert completed.affection_assessment == original_assessment
+    assert repository.affection_profiles[failed.requester_id] == original_profile
+    assert openai.affection_calls == list(PARTICIPANTS)
 
 
 @pytest.mark.asyncio

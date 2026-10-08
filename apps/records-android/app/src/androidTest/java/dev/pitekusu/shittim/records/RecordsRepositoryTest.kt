@@ -73,7 +73,7 @@ class RecordsRepositoryTest {
 
   @Test fun onlineListAndDetailSurviveRepositoryReopen() = runBlocking {
     repository(MockEngine { request ->
-      val body = if (request.url.encodedPath.endsWith("/$recordId")) detail() else list()
+      val body = if (request.url.encodedPath.endsWith("/$recordId")) detailWithReasons(recordId) else list()
       respond(body, headers = headersOf(HttpHeaders.ContentType, "application/json"))
     }).use { online ->
       assertEquals("架空の議題", online.recentRecords(token, accountId, null).items.single().questionPreview)
@@ -83,12 +83,46 @@ class RecordsRepositoryTest {
     val marker = "架空の議題".toByteArray().toString(Charsets.ISO_8859_1)
     app.getDatabasePath(databaseName).parentFile!!.listFiles()!!
       .filter { it.name.startsWith(databaseName) && it.isFile }
-      .forEach { file -> assertFalse(file.readBytes().toString(Charsets.ISO_8859_1).contains(marker)) }
+      .forEach { file ->
+        val contents = file.readBytes().toString(Charsets.ISO_8859_1)
+        assertFalse(contents.contains(marker))
+        assertFalse(contents.contains("架空の率直な感想".toByteArray().toString(Charsets.ISO_8859_1)))
+      }
     repository(MockEngine { error("unexpected_network_request") }).use { reopened ->
       assertEquals("架空の議題", reopened.cachedListEntry(accountId, recordId)?.questionPreview)
       assertEquals("participant-a", reopened.cachedListEntry(accountId, recordId)?.winnerSlot)
       assertEquals("アロナ", reopened.cachedRecord(accountId, recordId)?.winnerName)
       assertEquals("架空の結論", reopened.cachedRecord(accountId, recordId)?.decision)
+      val changes = reopened.cachedRecord(accountId, recordId)!!.affection!!.changes
+      assertEquals("架空の率直な感想", changes[0].reason)
+      assertEquals(RecordAffectionReasonStatus.AVAILABLE, changes[0].reasonStatus)
+      assertEquals(RecordAffectionReasonStatus.UNAVAILABLE, changes[1].reasonStatus)
+      assertEquals(-20, changes[1].appliedDelta)
+      assertEquals(RecordAffectionReasonStatus.NOT_RECORDED, changes[2].reasonStatus)
+    }
+  }
+
+  @Test fun olderEncryptedDetailWithoutReasonFieldsRemainsReadableOffline() = runBlocking {
+    repository(MockEngine { respond(detail(), headers = headersOf(HttpHeaders.ContentType, "application/json")) })
+      .use { it.record(token, accountId, recordId) }
+    val legacy = """{"schemaVersion":1,"preview":{"question":"架空の議題","decision":"架空の結論",
+      "winnerName":"アロナ","affection":{"status":"APPLIED","changes":[
+        {"participantName":"アロナ","before":500,"questionScore":10,"appliedDelta":10,"after":510},
+        {"participantName":"プラナ","before":500,"questionScore":-20,"appliedDelta":-20,"after":480},
+        {"participantName":"安倍晋三AI","before":500,"questionScore":0,"appliedDelta":0,"after":500}]}}}"""
+      .toByteArray()
+    val database = Room.databaseBuilder<EncryptedRecordsDatabase>(app, databaseName)
+      .setDriver(AndroidSQLiteDriver()).build()
+    try {
+      RecordCacheAccount.lock.withLock {
+        EncryptedRecordStore(database, RecordDataKeyProtector(privateKeys))
+          .save(accountId, recordId, CachedRecordPart.DETAIL, legacy)
+      }
+    } finally { legacy.fill(0); database.close() }
+    repository(MockEngine { error("offline_must_not_request_network") }).use { records ->
+      val changes = records.cachedRecord(accountId, recordId)!!.affection!!.changes
+      assertEquals(listOf(10, -20, 0), changes.map { it.appliedDelta })
+      assertTrue(changes.all { it.reason == null && it.reasonStatus == null })
     }
   }
 
@@ -282,6 +316,76 @@ class RecordsRepositoryTest {
     }
   }
 
+  @Test fun reasonContractUpgradeRestartsEveryLegacyIndexPageAndResumesWithoutRefetching() = runBlocking {
+    val ids = listOf("a".repeat(43), "b".repeat(43), "c".repeat(43))
+    val references = ids.map { RecordSyncReference(it, "z".repeat(43), "i".repeat(43)) }
+    for (wasComplete in listOf(false, true)) {
+      repository(MockEngine { request ->
+        respond(detailWithReasons(request.url.encodedPath.substringAfterLast('/'), legacy = true),
+          headers = headersOf(HttpHeaders.ContentType, "application/json"))
+      }).use { records ->
+        for (reference in references) {
+          records.record(token, accountId, reference.recordId)
+          records.saveRevision(accountId, reference)
+        }
+        records.saveSyncCheckpoint(accountId, if (wasComplete) {
+          RecordSyncCheckpoint(complete = true, pageLoaded = true, indexBased = true,
+            committedRevisions = references.associate { it.recordId to it.revision }, removalCandidates = emptySet())
+        } else {
+          RecordSyncCheckpoint(cursor = "tail.signature", pageLoaded = true, indexBased = true,
+            pendingIds = listOf(ids[2]), pendingReferences = listOf(references[2]),
+            committedRevisions = references.take(2).associate { it.recordId to it.revision },
+            pendingAvatars = setOf(ids[1]), needsAvatarPrune = true, removalCandidates = emptySet())
+        })
+      }
+      var failMiddle = true
+      val calls = mutableListOf<String>()
+      fun engine() = MockEngine { request ->
+        val id = request.url.encodedPath.substringAfterLast('/')
+        val cursor = request.url.parameters["cursor"]
+        calls += if (id == "sync-index") "index:${cursor ?: "head"}" else id
+        if (id == ids[1] && failMiddle) throw IOException("synthetic_failure")
+        val body = if (id != "sync-index") {
+          assertEquals("affection-reasons-v1", request.url.parameters["contract"])
+          detailWithReasons(id)
+        } else when (cursor) {
+          null -> index(listOf(ids[0]), "middle.signature")
+          "middle.signature" -> index(listOf(ids[1]), "tail.signature")
+          "tail.signature" -> index(listOf(ids[2]))
+          else -> error("unexpected_cursor")
+        }
+        respond(body, headers = headersOf(HttpHeaders.ContentType, "application/json"))
+      }
+      repository(engine()).use { records ->
+        try { records.synchronize(token, accountId); fail("upgrade remains resumable on failure") }
+        catch (error: RecordReadException) { assertEquals(RecordReadFailure.UNAVAILABLE, error.failure) }
+        assertEquals(listOf("index:head", ids[0], "index:middle.signature", ids[1]), calls)
+        val checkpoint = records.syncCheckpoint(accountId)!!
+        assertEquals(1, checkpoint.readContractVersion)
+        assertEquals(setOf(ids[0]), checkpoint.committedRevisions.keys)
+        if (!wasComplete) {
+          assertTrue(ids[1] in checkpoint.pendingAvatars)
+          assertTrue(checkpoint.needsAvatarPrune)
+        }
+        assertNull(records.cachedRecord(accountId, ids[1])!!.affection!!.changes.first().reasonStatus)
+        assertEquals(-20, records.cachedRecord(accountId, ids[1])!!.affection!!.changes[1].appliedDelta)
+      }
+      failMiddle = false
+      calls.clear()
+      repository(engine()).use { records ->
+        records.synchronize(token, accountId)
+        assertEquals(listOf("index:head", ids[1], "index:tail.signature", ids[2]), calls)
+        assertTrue(records.syncCheckpoint(accountId)!!.complete)
+        assertEquals(1, records.syncCheckpoint(accountId)!!.readContractVersion)
+        for (id in ids) assertEquals("架空の率直な感想",
+          records.cachedRecord(accountId, id)!!.affection!!.changes.first().reason)
+        calls.clear()
+        records.synchronize(token, accountId)
+        assertEquals(listOf("index:head", "index:middle.signature", "index:tail.signature"), calls)
+      }
+    }
+  }
+
   @Test fun deltaFetchesOnlyNewOrChangedResultsAndPersistsSharedIconsOffline() = runBlocking {
     val a = "a".repeat(43)
     val b = "b".repeat(43)
@@ -348,8 +452,9 @@ class RecordsRepositoryTest {
       // Detail already exists, so the restart will enumerate it but must not request it again.
       repository(MockEngine { respond(detail(), headers = headersOf(HttpHeaders.ContentType, "application/json")) })
         .use { it.record(token, accountId, recordId) }
-      records.saveRevision(accountId, RecordSyncReference(recordId, "z".repeat(43), "i".repeat(43)))
-      records.saveSyncCheckpoint(accountId, RecordSyncCheckpoint(cursor = "old.signature", removalCandidates = emptySet(), indexBased = true))
+      records.saveSyncCheckpoint(accountId, RecordSyncCheckpoint(readContractVersion = 1,
+        cursor = "old.signature", removalCandidates = emptySet(), indexBased = true,
+        committedRevisions = mapOf(recordId to "z".repeat(43))))
       try { records.synchronize(token, accountId); fail("a second invalid cursor must stop sync") }
       catch (error: RecordReadException) { assertEquals(RecordReadFailure.CURSOR_INVALID, error.failure) }
       assertEquals(listOf("first", "old.signature", "first", "new.signature"), calls)
@@ -751,4 +856,16 @@ class RecordsRepositoryTest {
       {"participant":"participant-c","count":0}],"tieBreakApplied":false},
     "finalDecision":{"winner":"participant-a","decision":"架空の結論","actions":[],"caveats":[]},
     "affection":null}"""
+
+  private fun detailWithReasons(id: String, legacy: Boolean = false): String {
+    val reasons = if (legacy) listOf("", "", "") else listOf(
+      ",\"reason\":\"架空の率直な感想\",\"reasonStatus\":\"available\"",
+      ",\"reason\":null,\"reasonStatus\":\"unavailable\"",
+      ",\"reason\":null,\"reasonStatus\":\"not_recorded\"")
+    return detail(id).replace("\"affection\":null", """"affection":{"status":"applied",
+      "rubricVersion":"v1","participants":[
+      {"participant":"participant-a","before":500,"questionScore":10,"appliedDelta":10,"after":510${reasons[0]}},
+      {"participant":"participant-b","before":500,"questionScore":-20,"appliedDelta":-20,"after":480${reasons[1]}},
+      {"participant":"participant-c","before":500,"questionScore":0,"appliedDelta":0,"after":500${reasons[2]}}]}""")
+  }
 }

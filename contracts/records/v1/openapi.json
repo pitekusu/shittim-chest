@@ -1085,6 +1085,58 @@
       },
       "AffectionParticipantView": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "else": {
+              "properties": {
+                "reason": {
+                  "type": "null"
+                }
+              }
+            },
+            "if": {
+              "properties": {
+                "reasonStatus": {
+                  "const": "available"
+                }
+              },
+              "required": [
+                "reasonStatus"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "questionScore": {
+                  "type": "null"
+                }
+              },
+              "required": [
+                "questionScore"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reasonStatus": {
+                  "not": {
+                    "const": "available"
+                  }
+                }
+              }
+            }
+          }
+        ],
         "properties": {
           "after": {
             "maximum": 1000,
@@ -1125,6 +1177,31 @@
               }
             ],
             "title": "Questionscore"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "minLength": 1,
+                "pattern": "\\S",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Reason"
+          },
+          "reasonStatus": {
+            "default": "not_recorded",
+            "enum": [
+              "available",
+              "unavailable",
+              "not_recorded"
+            ],
+            "title": "Reasonstatus",
+            "type": "string"
           }
         },
         "required": [
@@ -7420,6 +7497,7 @@
     },
     "/api/v1/records/{recordId}": {
       "get": {
+        "description": "contract=affection-reasons-v1 includes question assessment reasons; omitting it preserves the legacy affection participant fields.",
         "operationId": "getRecord",
         "parameters": [
           {
@@ -7428,6 +7506,17 @@
             "required": true,
             "schema": {
               "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "contract",
+            "required": false,
+            "schema": {
+              "enum": [
+                "affection-reasons-v1"
+              ],
               "type": "string"
             }
           }

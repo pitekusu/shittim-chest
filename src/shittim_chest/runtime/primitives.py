@@ -94,6 +94,8 @@ class ContentFreeTelemetry:
             ("prior_failure_reason", record.prior_failure_reason),
             ("prior_incomplete_reason", record.prior_incomplete_reason),
             ("prior_response_id", record.prior_response_id),
+            ("affection_reason_status", record.affection_reason_status),
+            ("affection_reason_kind", record.affection_reason_kind),
         ):
             if value is not None:
                 fields[name] = value

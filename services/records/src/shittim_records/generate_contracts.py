@@ -538,8 +538,17 @@ def build_openapi() -> dict[str, Any]:
                                 "type": "string",
                                 "pattern": "^[A-Za-z0-9_-]{43}$",
                             },
-                        }
+                        },
+                        _parameter(
+                            "contract",
+                            "query",
+                            {"type": "string", "enum": ["affection-reasons-v1"]},
+                        ),
                     ],
+                    "description": (
+                        "contract=affection-reasons-v1 includes question assessment reasons; "
+                        "omitting it preserves the legacy affection participant fields."
+                    ),
                     "responses": {
                         "200": _response("RecordDetailResponse", "One completed debate"),
                         **error_responses,

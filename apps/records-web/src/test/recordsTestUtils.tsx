@@ -250,7 +250,7 @@ export function mockApi(
         return Promise.resolve(new Response(null, { status: 204 }));
       }
       if (path.startsWith("/api/v1/records?")) return Promise.resolve(response(listResponse()));
-      if (path === `/api/v1/records/${RECORD_ID}`) {
+      if (path === `/api/v1/records/${RECORD_ID}?contract=affection-reasons-v1`) {
         return Promise.resolve(response(recordDetail()));
       }
       if (path === "/api/v1/insights/rankings") {

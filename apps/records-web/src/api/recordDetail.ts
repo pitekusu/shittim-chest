@@ -11,7 +11,9 @@ export async function getRecord(
   recordId: string,
   signal?: AbortSignal,
 ): Promise<RecordDetailResponse> {
-  return requestJson(`/api/v1/records/${encodeURIComponent(recordId)}`, isRecordDetailResponse, {
-    signal,
-  });
+  return requestJson(
+    `/api/v1/records/${encodeURIComponent(recordId)}?contract=affection-reasons-v1`,
+    isRecordDetailResponse,
+    { signal },
+  );
 }

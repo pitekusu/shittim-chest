@@ -57,6 +57,7 @@ from shittim_chest.domain import (
     AffectionAssessment,
     AffectionAssessmentStatus,
     AffectionProfile,
+    AffectionReasonStatus,
     AttemptId,
     Candidate,
     CandidatePlan,
@@ -1974,6 +1975,11 @@ def _serialize_affection_assessment(
                 "question_score": item.question_score,
                 "applied_delta": item.applied_delta,
                 "after": item.after,
+                **(
+                    {"reason": item.reason, "reason_status": item.reason_status.value}
+                    if item.reason_status is not AffectionReasonStatus.NOT_RECORDED
+                    else {}
+                ),
             }
             for item in value.participants
         ],
@@ -1991,6 +1997,8 @@ def _deserialize_affection_assessment(item: DynamoItem) -> AffectionAssessment:
     for raw in raw_participants:
         if not isinstance(raw, dict):
             raise PersistenceFormatError("affection participant must be a map")
+        if ("reason" in raw) != ("reason_status" in raw):
+            raise PersistenceFormatError("affection reason and status must be stored together")
         question_score = raw.get("question_score")
         if question_score is not None and (
             isinstance(question_score, bool) or not isinstance(question_score, int)
@@ -2003,6 +2011,10 @@ def _deserialize_affection_assessment(item: DynamoItem) -> AffectionAssessment:
                 question_score=question_score,
                 applied_delta=_integer(raw, "applied_delta"),
                 after=_integer(raw, "after"),
+                reason=None if raw.get("reason") is None else _text(raw, "reason"),
+                reason_status=AffectionReasonStatus(_text(raw, "reason_status"))
+                if "reason_status" in raw
+                else AffectionReasonStatus.NOT_RECORDED,
             )
         )
     return AffectionAssessment(

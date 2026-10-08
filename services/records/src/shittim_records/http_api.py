@@ -205,6 +205,7 @@ class ReadHttpController:
     def handle(self, event: Mapping[str, Any], *, now: datetime) -> dict[str, Any]:
         request = parse_request(event)
         try:
+            include_affection_reasons = False
             raw_token = _read_bearer_token(
                 event.get("headers") or {}, has_cookies=bool(event.get("cookies"))
             )
@@ -253,6 +254,13 @@ class ReadHttpController:
                     cursor=_optional_single(query, "cursor"), now=now
                 )
             elif request.route_key == "GET /api/v1/records/{recordId}":
+                query = _query(request.raw_query)
+                if not set(query).issubset({"contract"}):
+                    raise ReadFailure("REQUEST_INVALID", 400)
+                contract = _optional_single(query, "contract")
+                if contract not in {None, "affection-reasons-v1"}:
+                    raise ReadFailure("REQUEST_INVALID", 400)
+                include_affection_reasons = contract == "affection-reasons-v1"
                 result = self._records.get_record(
                     record_id=request.path_parameters.get("recordId", ""),
                     now=now,
@@ -283,6 +291,14 @@ class ReadHttpController:
             else:
                 return error_response(404, "ROUTE_NOT_FOUND", request.request_id)
             payload = result.model_dump(by_alias=True, mode="json")
+            if (
+                request.route_key == "GET /api/v1/records/{recordId}"
+                and not include_affection_reasons
+                and payload.get("affection") is not None
+            ):
+                for participant in payload["affection"]["participants"]:
+                    participant.pop("reason", None)
+                    participant.pop("reasonStatus", None)
             if request.route_key == "GET /api/v1/insights/affection-rankings":
                 _omit_zero_reset_counts(payload)
             return json_response(200, payload)

@@ -9,6 +9,7 @@ import pytest
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from shittim_records.contracts import (
+    AffectionParticipantView,
     AffectionRankingsResponse,
     AvatarRef,
     CostsResponse,
@@ -538,6 +539,58 @@ def test_record_detail_affection_requires_all_three_consistent_changes() -> None
     invalid["affection"] = invalid_affection
     with pytest.raises(ValidationError, match="applied_delta"):
         RecordDetailResponse.model_validate(invalid)
+
+
+@pytest.mark.parametrize(
+    ("reason", "status", "score", "valid"),
+    (
+        ("質問の具体的な工夫に、私は好感を持ちました。", "available", 35, True),
+        ("\U0002000b" * 500, "available", 35, True),
+        (None, "unavailable", 35, True),
+        (None, "not_recorded", 35, True),
+        (None, "unavailable", None, True),
+        (None, "available", 35, False),
+        ("感想", "unavailable", 35, False),
+        ("感想", "not_recorded", 35, False),
+        ("感想", "available", None, False),
+        (" \n\t　", "available", 35, False),
+        ("\U0002000b" * 501, "available", 35, False),
+    ),
+)
+def test_affection_reasons_require_valid_text_and_consistent_status(
+    reason: str | None, status: str, score: int | None, valid: bool
+) -> None:
+    payload = {
+        "participant": "participant-a",
+        "before": 500,
+        "questionScore": score,
+        "appliedDelta": 0,
+        "after": 500,
+        "reason": reason,
+        "reasonStatus": status,
+    }
+    if valid:
+        result = AffectionParticipantView.model_validate(payload)
+        assert result.reason == reason
+        if reason is not None:
+            assert reason not in repr(result)
+    else:
+        with pytest.raises(ValidationError):
+            AffectionParticipantView.model_validate(payload)
+
+
+def test_legacy_affection_participant_defaults_to_not_recorded_reason() -> None:
+    result = AffectionParticipantView.model_validate(
+        {
+            "participant": "participant-a",
+            "before": 500,
+            "questionScore": 35,
+            "appliedDelta": 35,
+            "after": 535,
+        }
+    )
+    assert result.reason is None
+    assert result.reason_status == "not_recorded"
 
 
 def test_record_result_requires_complete_consistent_vote_counts() -> None:

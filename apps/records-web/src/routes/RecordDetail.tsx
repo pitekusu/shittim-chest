@@ -348,6 +348,32 @@ export function RecordDocument({
                     requesterName={record.requester.displayName}
                     score={change.after}
                   />
+                  {record.affection?.status === "applied" && (
+                    <>
+                      {change.questionScore !== null &&
+                        change.questionScore !== change.appliedDelta && (
+                          <p
+                            className={`${detailStyles.affectionLimitNote} ${JAPANESE_PROSE_CLASS}`}
+                          >
+                            {change.questionScore > 0
+                              ? `上限のため、増加は${change.appliedDelta}点になりました。`
+                              : `下限のため、減少は${Math.abs(change.appliedDelta)}点になりました。`}
+                          </p>
+                        )}
+                      <div className={detailStyles.affectionReason}>
+                        <h4 className={JAPANESE_HEADING_CLASS}>率直な感想</h4>
+                        <p className={JAPANESE_PROSE_CLASS}>
+                          {change.reasonStatus === "available"
+                            ? change.reason
+                            : change.reasonStatus === "unavailable"
+                              ? "感想を取得できませんでした。"
+                              : change.reasonStatus === "not_recorded"
+                                ? "この記録には感想が保存されていません。"
+                                : "感想は未取得です。オンラインで更新すると確認できます。"}
+                        </p>
+                      </div>
+                    </>
+                  )}
                 </article>
               );
             })}

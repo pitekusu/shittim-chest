@@ -1084,6 +1084,58 @@
     },
     "AffectionParticipantView": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "reason": {
+                "type": "null"
+              }
+            }
+          },
+          "if": {
+            "properties": {
+              "reasonStatus": {
+                "const": "available"
+              }
+            },
+            "required": [
+              "reasonStatus"
+            ]
+          },
+          "then": {
+            "properties": {
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "questionScore": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "questionScore"
+            ]
+          },
+          "then": {
+            "properties": {
+              "reasonStatus": {
+                "not": {
+                  "const": "available"
+                }
+              }
+            }
+          }
+        }
+      ],
       "properties": {
         "after": {
           "maximum": 1000,
@@ -1124,6 +1176,31 @@
             }
           ],
           "title": "Questionscore"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        },
+        "reasonStatus": {
+          "default": "not_recorded",
+          "enum": [
+            "available",
+            "unavailable",
+            "not_recorded"
+          ],
+          "title": "Reasonstatus",
+          "type": "string"
         }
       },
       "required": [

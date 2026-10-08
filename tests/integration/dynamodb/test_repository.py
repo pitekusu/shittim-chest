@@ -65,6 +65,7 @@ from shittim_chest.application.ports import (
     RepositoryTransactionStage,
 )
 from shittim_chest.domain import (
+    AffectionReasonStatus,
     AttemptId,
     Candidate,
     CandidatePlan,
@@ -2258,16 +2259,19 @@ async def test_affection_settlement_is_atomic_idempotent_and_reapplies_after_pro
         lease_owner="worker-1",
     )
     first = await begin_affection_scoring(repository, first, at=NOW + timedelta(microseconds=1))
+    first_reasons = ("最初の質問が嬉しいです。", None, "私は親しみを感じました。")
 
     settled, replay = await asyncio.gather(
         repository.settle_affection(
             expected=first,
             scores=(10, -20, 100),
+            reasons=first_reasons,
             at=NOW + timedelta(microseconds=2),
         ),
         repository.settle_affection(
             expected=first,
             scores=(10, -20, 100),
+            reasons=first_reasons,
             at=NOW + timedelta(microseconds=2),
         ),
     )
@@ -2280,6 +2284,18 @@ async def test_affection_settlement_is_atomic_idempotent_and_reapplies_after_pro
         480,
         600,
     )
+    assert tuple(item.reason for item in settled.affection_assessment.participants) == first_reasons
+    assert (
+        settled.affection_assessment.participants[1].reason_status
+        is AffectionReasonStatus.UNAVAILABLE
+    )
+    replay_with_different_output = await repository.settle_affection(
+        expected=first,
+        scores=(-100, -100, -100),
+        reasons=("changed", "changed", "changed"),
+        at=NOW + timedelta(microseconds=3),
+    )
+    assert replay_with_different_output == settled
     profile_key = {
         "PK": affection_profile_partition(settled.requester_id),
         "SK": "PROFILE",
@@ -2315,16 +2331,28 @@ async def test_affection_settlement_is_atomic_idempotent_and_reapplies_after_pro
         repository.settle_affection(
             expected=second,
             scores=(20, 20, -100),
+            reasons=("second-a", "second-b", "second-c"),
             at=NOW + timedelta(seconds=30),
         ),
         repository.settle_affection(
             expected=third,
             scores=(30, -10, 50),
+            reasons=("third-a", None, "third-c"),
             at=NOW + timedelta(seconds=31),
         ),
     )
     assert second.affection_assessment is not None
     assert third.affection_assessment is not None
+    assert tuple(item.reason for item in second.affection_assessment.participants) == (
+        "second-a",
+        "second-b",
+        "second-c",
+    )
+    assert tuple(item.reason for item in third.affection_assessment.participants) == (
+        "third-a",
+        None,
+        "third-c",
+    )
     assert tuple(item.question_score for item in second.affection_assessment.participants) == (
         20,
         20,

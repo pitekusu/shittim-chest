@@ -128,6 +128,9 @@ const detailWithAffection = {
         questionScore: 30,
         appliedDelta: 30,
         after: 562,
+        reason:
+          "先生がみんなの価値観を聞こうとしてくれたのが、私はうれしかったです。休日を一緒に楽しめるように、丁寧に考えたいと思いました。",
+        reasonStatus: "available",
       },
       {
         participant: "participant-b",
@@ -135,6 +138,9 @@ const detailWithAffection = {
         questionScore: 30,
         appliedDelta: 30,
         after: 518,
+        reason:
+          "私は、映画とゲームのどちらにも良さがあると感じました。みんなの好みを確かめてから決めようとする姿勢に、安心しました。",
+        reasonStatus: "available",
       },
       {
         participant: "participant-c",
@@ -142,6 +148,9 @@ const detailWithAffection = {
         questionScore: 15,
         appliedDelta: 15,
         after: 495,
+        reason:
+          "私は、異なる価値観を聞きながら休日の過ごし方を決める姿勢を好ましく感じました。無理なく楽しめる選択を、共に考えたいですね。",
+        reasonStatus: "available",
       },
     ],
   },
@@ -859,7 +868,7 @@ async function mockAuthenticatedApi(
       },
     }),
   );
-  await page.route(`**/api/v1/records/${RECORD_ID}`, (route) =>
+  await page.route(`**/api/v1/records/${RECORD_ID}?contract=affection-reasons-v1`, (route) =>
     route.fulfill({ json: recordDetail }),
   );
   await page.route("**/api/v1/insights/rankings", (route) => route.fulfill({ json: rankings }));
@@ -1073,11 +1082,56 @@ test("record detail identifies the requester and uses affection hearts", async (
   await expect(aronaHearts.locator('[data-filled="true"]')).toHaveCount(5);
   await expect(plannaHearts.locator('[data-filled="true"]')).toHaveCount(5);
   await expect(abeHearts.locator('[data-filled="true"]')).toHaveCount(4);
+  await expect(affection.getByRole("heading", { name: "率直な感想" })).toHaveCount(3);
+  for (const change of detailWithAffection.affection.participants) {
+    const card = affection.getByRole("article").filter({
+      has: page.getByRole("heading", {
+        name: participants.find((person) => person.slot === change.participant)!.displayName,
+        exact: true,
+      }),
+    });
+    await expect(card.getByText(change.reason)).toBeVisible();
+  }
 
   await expect(affection).toHaveScreenshot("records-detail-affection.png", {
     animations: "disabled",
     maxDiffPixels: 30,
   });
+  const accessibility = await new AxeBuilder({ page }).analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
+test("affection reactions remain readable with large text and dark theme", async ({
+  page,
+}, testInfo) => {
+  if (testInfo.project.name === "mobile-chromium") {
+    await page.setViewportSize({ width: 320, height: 720 });
+  }
+  const reason =
+    "私は、この質問を受けて、あなたと一緒に考える時間を大切にしたいと感じました。".repeat(5) +
+    "\n感想の最後まで読めます。";
+  const record = {
+    ...detailWithAffection,
+    affection: {
+      ...detailWithAffection.affection,
+      participants: detailWithAffection.affection.participants.map((change) => ({
+        ...change,
+        reason,
+      })),
+    },
+  };
+  await page.emulateMedia({ colorScheme: "dark", reducedMotion: "reduce" });
+  await mockAuthenticatedApi(page, record);
+  await page.goto(`/records/${RECORD_ID}`);
+  await page.addStyleTag({ content: "html { font-size: 200%; }" });
+  const affection = page.getByRole("region", { name: "親愛度の変化" });
+  const feelings = affection.getByText(reason);
+  await expect(feelings).toHaveCount(3);
+  await feelings.last().scrollIntoViewIfNeeded();
+  await expect(feelings.last()).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
 });

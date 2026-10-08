@@ -217,8 +217,9 @@ class DynamoDbDebateRepository:
         expected: DebateSnapshot,
         scores: tuple[int, int, int] | None,
         at: datetime,
+        reasons: tuple[str | None, str | None, str | None] | None = None,
     ) -> DebateSnapshot:
-        return await asyncio.to_thread(self._settle_affection, expected, scores, at)
+        return await asyncio.to_thread(self._settle_affection, expected, scores, at, reasons)
 
     async def replace(
         self,
@@ -601,6 +602,7 @@ class DynamoDbDebateRepository:
         expected: DebateSnapshot,
         scores: tuple[int, int, int] | None,
         at: datetime,
+        reasons: tuple[str | None, str | None, str | None] | None = None,
     ) -> DebateSnapshot:
         """Atomically settle one score set, profile CAS, and the next debate phase."""
 
@@ -661,6 +663,7 @@ class DynamoDbDebateRepository:
             updated_profile, assessment = assess_affection(
                 profile,
                 scores=scores,
+                reasons=reasons,
                 assessed_at=at,
                 debate_id=current.state.debate_id,
                 operation_seed=str(current.state.attempt_id),

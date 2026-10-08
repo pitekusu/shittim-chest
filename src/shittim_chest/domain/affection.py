@@ -18,6 +18,7 @@ MIN_AFFECTION_SCORE: Final = 0
 MAX_AFFECTION_SCORE: Final = 1_000
 MIN_QUESTION_SCORE: Final = -100
 MAX_QUESTION_SCORE: Final = 100
+MAX_AFFECTION_REASON_LENGTH: Final = 500
 OPAQUE_REQUESTER_KEY_PATTERN: Final = r"[A-Za-z0-9_-]{43}"
 
 
@@ -29,6 +30,33 @@ class AffectionAssessmentStatus(StrEnum):
     UNAVAILABLE = "unavailable"
 
 
+@unique
+class AffectionReasonStatus(StrEnum):
+    """Whether a public reaction was saved, failed, or predates reaction recording."""
+
+    AVAILABLE = "available"
+    UNAVAILABLE = "unavailable"
+    NOT_RECORDED = "not_recorded"
+
+
+@dataclass(frozen=True, slots=True)
+class AffectionQuestionEvaluation:
+    """One validated question score and its independently available public reaction."""
+
+    score: int
+    reason: str | None
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.score, bool)
+            or not isinstance(self.score, int)
+            or not MIN_QUESTION_SCORE <= self.score <= MAX_QUESTION_SCORE
+        ):
+            raise ValueError("question score must be between -100 and 100")
+        if self.reason is not None:
+            _require_affection_reason(self.reason)
+
+
 @dataclass(frozen=True, slots=True)
 class ParticipantAffection:
     """One participant's before/after values for one debate."""
@@ -38,6 +66,8 @@ class ParticipantAffection:
     question_score: int | None
     applied_delta: int
     after: int
+    reason: str | None = None
+    reason_status: AffectionReasonStatus = AffectionReasonStatus.NOT_RECORDED
 
     def __post_init__(self) -> None:
         for label, value in (("before", self.before), ("after", self.after)):
@@ -54,6 +84,14 @@ class ParticipantAffection:
             raise ValueError("applied affection delta must be between -100 and 100")
         if self.after - self.before != self.applied_delta:
             raise ValueError("applied affection delta must equal the effective score change")
+        if not isinstance(self.reason_status, AffectionReasonStatus):
+            raise ValueError("affection reason status must be a supported status")
+        if self.reason_status is AffectionReasonStatus.AVAILABLE:
+            if self.reason is None or self.question_score is None:
+                raise ValueError("available affection reason requires text and a question score")
+            _require_affection_reason(self.reason)
+        elif self.reason is not None:
+            raise ValueError("unavailable or unrecorded affection reason must not contain text")
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +233,7 @@ def assess_affection(
     *,
     scores: tuple[int, int, int] | None,
     assessed_at: datetime,
+    reasons: tuple[str | None, str | None, str | None] | None = None,
     debate_id: DebateId | None = None,
     operation_seed: str | None = None,
     allow_existing_max_unlock: bool = False,
@@ -206,9 +245,27 @@ def assess_affection(
         for score in scores
     ):
         raise ValueError("question scores must be between -100 and 100")
+    if reasons is not None:
+        if len(reasons) != len(PARTICIPANTS):
+            raise ValueError("affection reasons must contain the three fixed participants")
+        for reason in reasons:
+            if reason is not None:
+                _require_affection_reason(reason)
+    reason_values = reasons if reasons is not None else (None, None, None)
     if scores is None:
+        if any(reason is not None for reason in reason_values):
+            raise ValueError("unavailable affection assessment must not expose partial reasons")
         entries = tuple(
-            ParticipantAffection(participant, before, None, 0, before)
+            ParticipantAffection(
+                participant,
+                before,
+                None,
+                0,
+                before,
+                reason_status=AffectionReasonStatus.UNAVAILABLE
+                if reasons is not None
+                else AffectionReasonStatus.NOT_RECORDED,
+            )
             for participant, before in zip(PARTICIPANTS, profile.scores, strict=True)
         )
         return profile, AffectionAssessment(
@@ -220,8 +277,8 @@ def assess_affection(
 
     entries: list[ParticipantAffection] = []
     updated_scores: list[int] = []
-    for participant, before, question_score in zip(
-        PARTICIPANTS, profile.scores, scores, strict=True
+    for participant, before, question_score, reason in zip(
+        PARTICIPANTS, profile.scores, scores, reason_values, strict=True
     ):
         after = min(MAX_AFFECTION_SCORE, max(MIN_AFFECTION_SCORE, before + question_score))
         updated_scores.append(after)
@@ -232,6 +289,12 @@ def assess_affection(
                 question_score=question_score,
                 applied_delta=after - before,
                 after=after,
+                reason=reason,
+                reason_status=AffectionReasonStatus.NOT_RECORDED
+                if reasons is None
+                else AffectionReasonStatus.AVAILABLE
+                if reason is not None
+                else AffectionReasonStatus.UNAVAILABLE,
             )
         )
     memorial_unlock = profile.memorial_unlock
@@ -291,6 +354,11 @@ def _select_memorial_candidate(
     stable_identity = ",".join(item.participant.value for item in finalists)
     digest = hashlib.sha256(f"{operation_seed}:{stable_identity}".encode()).digest()
     return finalists[int.from_bytes(digest, "big") % len(finalists)]
+
+
+def _require_affection_reason(value: str) -> None:
+    if not isinstance(value, str) or not value.strip() or len(value) > MAX_AFFECTION_REASON_LENGTH:
+        raise ValueError("affection reason must contain between 1 and 500 characters")
 
 
 def _require_utc(value: datetime, *, label: str) -> None:

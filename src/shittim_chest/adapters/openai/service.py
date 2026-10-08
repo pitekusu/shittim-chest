@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field, replace
 from time import monotonic
-from typing import TypeVar
+from typing import Literal, TypeVar
 
 import httpx2
 from openai import (
@@ -40,6 +40,7 @@ from shittim_chest.adapters.openai.errors import (
 )
 from shittim_chest.adapters.openai.limiter import OpenAIRequestLimiter
 from shittim_chest.adapters.openai.observability import (
+    AffectionReasonKind,
     NullOpenAIUsageRecorder,
     OpenAIFailureRecord,
     OpenAIUsageRecord,
@@ -62,7 +63,7 @@ from shittim_chest.adapters.openai.prompts import (
     winner_decision_instructions,
 )
 from shittim_chest.adapters.openai.schemas import (
-    AffectionScoreOutputV1,
+    AffectionScoreOutputV2,
     CandidatePlanOutputV1,
     DecisionOutputV1,
     FinalProposalOutputV1,
@@ -73,6 +74,8 @@ from shittim_chest.adapters.openai.schemas import (
 from shittim_chest.application.generation_policy import ReasoningMode
 from shittim_chest.domain import (
     DEFAULT_AFFECTION_SCORE,
+    MAX_AFFECTION_REASON_LENGTH,
+    AffectionQuestionEvaluation,
     Candidate,
     CandidatePlan,
     EvidenceBundle,
@@ -196,19 +199,20 @@ class OpenAIResponsesService:
         *,
         participant: ParticipantSlot,
         question: str,
-    ) -> int:
-        """Score one untrusted question independently in one participant persona."""
+    ) -> AffectionQuestionEvaluation:
+        """Score one question and validate its public reaction independently."""
 
         output = await self._parse(
             operation="affection_score",
-            schema=AffectionScoreOutputV1,
+            schema=AffectionScoreOutputV2,
             instructions=affection_scoring_instructions(
                 self.profiles.for_participant(participant).system_prompt,
             ),
             input_text=affection_scoring_input(question),
             settings=self.config.affection,
         )
-        return output.score
+        reason, _kind = _sanitize_affection_reason(output.reason)
+        return AffectionQuestionEvaluation(output.score, reason)
 
     async def form_preferences(
         self,
@@ -531,7 +535,7 @@ class OpenAIResponsesService:
                 settings=settings,
             )
             raise status_error from error
-        self._record_usage(operation, response, started)
+        self._record_usage(operation, response, started, parsed)
         return parsed
 
     def _record_usage(
@@ -539,8 +543,14 @@ class OpenAIResponsesService:
         operation: str,
         response: Response,
         started: float,
+        parsed: BaseModel,
     ) -> None:
         usage = response.usage
+        reason_status: Literal["available", "unavailable"] | None = None
+        reason_kind: AffectionReasonKind | None = None
+        if isinstance(parsed, AffectionScoreOutputV2):
+            _reason, reason_kind = _sanitize_affection_reason(parsed.reason)
+            reason_status = "available" if reason_kind == "available" else "unavailable"
         self.recorder.record_usage(
             OpenAIUsageRecord(
                 operation=operation,
@@ -557,6 +567,8 @@ class OpenAIResponsesService:
                 reasoning_tokens=(
                     usage.output_tokens_details.reasoning_tokens if usage is not None else 0
                 ),
+                affection_reason_status=reason_status,
+                affection_reason_kind=reason_kind,
             )
         )
 
@@ -592,6 +604,17 @@ class OpenAIResponsesService:
                 ),
             )
         )
+
+
+def _sanitize_affection_reason(reason: str | None) -> tuple[str | None, AffectionReasonKind]:
+    if reason is None:
+        return None, "null"
+    reason = reason.strip()
+    if not reason:
+        return None, "blank"
+    if len(reason) > MAX_AFFECTION_REASON_LENGTH:
+        return None, "too_long"
+    return reason, "available"
 
 
 def _extract_parsed[OutputT: BaseModel](response: Response, schema: type[OutputT]) -> OutputT:

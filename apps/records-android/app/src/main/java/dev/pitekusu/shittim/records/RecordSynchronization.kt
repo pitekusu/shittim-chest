@@ -15,8 +15,18 @@ internal suspend fun RecordsRepository.synchronize(token: String, accountId: Str
   onSaved: suspend () -> Unit = {}): Unit = recordSyncLock.withLock {
   val stored = syncCheckpoint(accountId)
   var progress = stored?.takeUnless { it.complete }
-    ?: RecordSyncCheckpoint(committedRevisions = stored?.committedRevisions.orEmpty())
+    ?: RecordSyncCheckpoint(committedRevisions = stored?.committedRevisions.orEmpty(),
+      readContractVersion = stored?.readContractVersion ?: 0,
+      pendingAvatars = stored?.pendingAvatars.orEmpty(), needsAvatarPrune = stored?.needsAvatarPrune ?: false)
   val completeIds = cachedCompleteRecordIds(accountId).toMutableSet()
+  // Older clients saved a projection without reasons under the same server revision.
+  // Restart every index page once; retain readable bodies and pending icon work.
+  if (progress.readContractVersion != 1) {
+    progress = progress.copy(readContractVersion = 1, cursor = null, pendingIds = emptyList(),
+      pendingReferences = emptyList(), pageLoaded = false, cursorHashes = emptySet(), complete = false,
+      committedRevisions = emptyMap(), removalCandidates = cachedRecordIds(accountId), indexBased = true)
+    saveSyncCheckpoint(accountId, progress)
+  }
   // C31 checkpoints cannot prove which earlier pages were seen: restart, never guess deletions.
   if (progress.removalCandidates == null || !progress.indexBased) {
     progress = progress.copy(cursor = null, pendingIds = emptyList(), pendingReferences = emptyList(),
@@ -28,14 +38,10 @@ internal suspend fun RecordsRepository.synchronize(token: String, accountId: Str
   suspend fun consume(reference: RecordSyncReference) {
     currentCoroutineContext().ensureActive()
     val id = reference.recordId
-    // Legacy revisions are imported once. Existence is a SQL check, not a full
-    // body decryption; actual reads still authenticate the encrypted payload.
-    val revision = progress.committedRevisions[id] ?: if (id in completeIds) cachedRevision(accountId, id) else null
-    if (revision == reference.revision && id in completeIds) {
-      if (id !in progress.committedRevisions) {
-        progress = progress.copy(committedRevisions = progress.committedRevisions + (id to reference.revision))
-      }
-    } else {
+    // Only this contract's manifest proves the detail projection was fetched.
+    // Unversioned legacy revisions cannot establish that reasons were requested.
+    val revision = progress.committedRevisions[id]
+    if (revision != reference.revision || id !in completeIds) {
       try {
         val previousAvatar = cachedListEntry(accountId, id)?.requesterAvatar
         val result = record(token, accountId, id, reference.avatarRevision)

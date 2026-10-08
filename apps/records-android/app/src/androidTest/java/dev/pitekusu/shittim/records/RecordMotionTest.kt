@@ -58,8 +58,10 @@ class RecordMotionTest {
   fun affectionWaitsForItsOwnCardAndThenPlaysOnlyOnce() {
     val played = mutableStateOf(emptySet<String>())
     val calls = AtomicInteger()
+    val reason = "一緒に考えられてうれしく感じました。\n".repeat(20)
     val affection = RecordAffection(RecordAffectionStatus.APPLIED, listOf(
-      RecordAffectionChange("アロナ", 500, 10, 10, 510)))
+      RecordAffectionChange("アロナ", 500, 10, 10, 510, reason = reason,
+        reasonStatus = RecordAffectionReasonStatus.AVAILABLE)))
     compose.activityRule.scenario.onActivity { activity ->
       activity.setContent { ShittimTheme(false) {
         Column(Modifier.height(300.dp).verticalScroll(rememberScrollState())) {
@@ -82,6 +84,7 @@ class RecordMotionTest {
       assertFalse(played.value.isEmpty())
       assertEquals(1, calls.get())
     }
+    compose.onNodeWithText(reason).assertExists()
   }
 
   @Test

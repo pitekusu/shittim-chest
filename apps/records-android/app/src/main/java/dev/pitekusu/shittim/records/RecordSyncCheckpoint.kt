@@ -7,6 +7,7 @@ import kotlinx.serialization.Serializable
 @Serializable
 internal data class RecordSyncCheckpoint(
   val schemaVersion: Int = 1,
+  val readContractVersion: Int = 0,
   val cursor: String? = null,
   val pendingIds: List<String> = emptyList(),
   val pageLoaded: Boolean = false,
@@ -21,7 +22,8 @@ internal data class RecordSyncCheckpoint(
   val needsAvatarPrune: Boolean = false,
 ) {
   fun validate() {
-    check(schemaVersion == 1 && (cursor == null || validRecordCursor(cursor)))
+    check(schemaVersion == 1 && readContractVersion in 0..1 &&
+      (cursor == null || validRecordCursor(cursor)))
     check(pendingIds.size <= (if (indexBased) 50 else 12) && pendingIds.distinct().size == pendingIds.size &&
       pendingIds.all(mobileOpaqueValue::matches) && cursorHashes.all(mobileOpaqueValue::matches))
     check(pageLoaded || pendingIds.isEmpty())

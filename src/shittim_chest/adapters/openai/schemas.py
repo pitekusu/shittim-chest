@@ -41,10 +41,11 @@ class OpinionOutputV1(StrictOutput):
     proposal: str = Field(min_length=1, max_length=1_600)
 
 
-class AffectionScoreOutputV1(StrictOutput):
-    """One code-bounded question score with no persisted rationale."""
+class AffectionScoreOutputV2(StrictOutput):
+    """A code-bounded score; reaction length is checked independently of the score."""
 
     score: int = Field(ge=-100, le=100)
+    reason: str | None
 
 
 class FinalProposalOutputV1(StrictOutput):

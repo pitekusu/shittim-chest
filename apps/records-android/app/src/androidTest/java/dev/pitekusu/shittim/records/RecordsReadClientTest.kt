@@ -69,7 +69,8 @@ class RecordsReadClientTest {
       assertEquals(null, result.preview.victoryMessage)
       assertTrue(result.preview.actions.isEmpty())
     }
-    assertEquals(listOf("/api/v1/records?limit=1&sort=newest", "/api/v1/records/$id"), paths)
+    assertEquals(listOf("/api/v1/records?limit=1&sort=newest",
+      "/api/v1/records/$id?contract=affection-reasons-v1"), paths)
   }
 
   @Test
@@ -163,6 +164,57 @@ class RecordsReadClientTest {
       assertEquals(50, first.questionScore)
       assertEquals(5, first.appliedDelta)
       assertEquals(1000, first.after)
+      assertEquals(null, first.reason)
+      assertEquals(null, first.reasonStatus)
+    }
+  }
+
+  @Test
+  fun affectionReasonsKeepScoresWhenOnlyFeelingsAreUnavailableAndUseUnicodeLimits() = runBlocking {
+    for (reason in listOf("具体的な感想", "😀".repeat(500))) {
+      RecordsReadClient(MockEngine { request ->
+        assertEquals("affection-reasons-v1", request.url.parameters["contract"])
+        respond(detail(id).replace("\"affection\":null",
+          "\"affection\":${affectionWithReasons(reason)}"), headers = jsonHeader)
+      }).use { client ->
+        val changes = (client.firstRecord(token, "/records/$id") as RecordReadResult.Found)
+          .preview.affection!!.changes
+        assertEquals(listOf("participant-a", "participant-b", "participant-c"),
+          changes.map { it.participantSlot })
+        assertEquals(reason, changes[0].reason)
+        assertEquals(RecordAffectionReasonStatus.AVAILABLE, changes[0].reasonStatus)
+        assertEquals(RecordAffectionReasonStatus.UNAVAILABLE, changes[1].reasonStatus)
+        assertEquals(-20, changes[1].questionScore)
+        assertEquals(-20, changes[1].appliedDelta)
+        assertEquals(480, changes[1].after)
+        assertEquals(null, changes[1].reason)
+        assertEquals(RecordAffectionReasonStatus.NOT_RECORDED, changes[2].reasonStatus)
+        assertEquals(0, changes[2].appliedDelta)
+      }
+    }
+  }
+
+  @Test
+  fun inconsistentAffectionReasonsAreRejectedBeforeDisplayOrCache() = runBlocking {
+    for (affection in listOf(
+      affectionWithReasons(" "),
+      affectionWithReasons("😀".repeat(501)),
+      affectionWithReasons().replaceFirst("\"reasonStatus\":\"available\"",
+        "\"reasonStatus\":\"unavailable\""),
+      affectionWithReasons().replaceFirst("\"reasonStatus\":\"available\"",
+        "\"reasonStatus\":\"not_recorded\""),
+      affectionWithReasons().replaceFirst("\"reasonStatus\":\"available\"",
+        "\"reasonStatus\":\"unknown\""),
+      affectionWithReasons().replaceFirst("\"reasonStatus\":\"available\"", "\"reasonStatus\":null"),
+      affectionWithReasons().replaceFirst("\"reason\":\"具体的な感想\"", "\"reason\":null"),
+      unavailableAffection().replaceFirst("\"after\":995",
+        "\"after\":995,\"reasonStatus\":\"available\",\"reason\":\"具体的な感想\""),
+    )) {
+      RecordsReadClient(MockEngine {
+        respond(detail(id).replace("\"affection\":null", "\"affection\":$affection"), headers = jsonHeader)
+      }).use { client ->
+        assertFailure(RecordReadFailure.INVALID_RESPONSE) { client.firstRecord(token, "/records/$id") }
+      }
     }
   }
 
@@ -375,6 +427,11 @@ class RecordsReadClientTest {
       {"participant":"participant-a","before":995,"questionScore":null,"appliedDelta":0,"after":995},
       {"participant":"participant-b","before":500,"questionScore":null,"appliedDelta":0,"after":500},
       {"participant":"participant-c","before":100,"questionScore":null,"appliedDelta":0,"after":100}]}"""
+
+  private fun affectionWithReasons(reason: String = "具体的な感想"): String = appliedAffection()
+    .replace("\"after\":1000}", "\"after\":1000,\"reasonStatus\":\"available\",\"reason\":\"$reason\"}")
+    .replace("\"after\":480}", "\"after\":480,\"reasonStatus\":\"unavailable\",\"reason\":null}")
+    .replace("\"after\":100}", "\"after\":100,\"reasonStatus\":\"not_recorded\",\"reason\":null}")
 
   private fun vote(voter: String, candidate: String, modern: Boolean): String {
     val assessments = if (modern) {

@@ -137,6 +137,8 @@ export interface ParticipantAffectionChange {
   readonly questionScore: number | null;
   readonly appliedDelta: number;
   readonly after: number;
+  readonly reason?: string | null;
+  readonly reasonStatus?: "available" | "unavailable" | "not_recorded";
 }
 
 export interface DebateAffection {

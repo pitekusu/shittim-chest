@@ -103,6 +103,9 @@ internal enum class VoteDecisionMethod { MAJORITY, COMPOSITE_SCORE, TIE_LOTTERY 
 internal enum class RecordAffectionStatus { APPLIED, UNAVAILABLE }
 
 @Serializable
+internal enum class RecordAffectionReasonStatus { AVAILABLE, UNAVAILABLE, NOT_RECORDED }
+
+@Serializable
 internal class RecordAffection(
   val status: RecordAffectionStatus,
   val changes: List<RecordAffectionChange>,
@@ -116,6 +119,8 @@ internal class RecordAffectionChange(
   val appliedDelta: Int,
   val after: Int,
   val participantSlot: String? = null,
+  val reason: String? = null,
+  val reasonStatus: RecordAffectionReasonStatus? = null,
 )
 
 internal sealed interface RecordReadResult {
@@ -189,7 +194,8 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
       }
       requested
     }
-    val detail: RecordDetail = read("/api/v1/records/$recordId", accessToken)
+    val detail: RecordDetail = read("/api/v1/records/$recordId", accessToken,
+      contract = "affection-reasons-v1")
     if (detail.schemaVersion != 2 || detail.recordId != recordId ||
       detail.question.isBlank() || detail.finalDecision.decision.isBlank() ||
       detail.result.winner != detail.finalDecision.winner ||
@@ -307,8 +313,25 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     val names = detail.participants.associate { it.slot to it.displayName }
     return RecordAffection(status, detail.participants.map { participant ->
       val change = affection.participants.first { it.participant == participant.slot }
+      val reasonStatus = when (change.reasonStatus) {
+        "available" -> RecordAffectionReasonStatus.AVAILABLE
+        "unavailable" -> RecordAffectionReasonStatus.UNAVAILABLE
+        "not_recorded" -> RecordAffectionReasonStatus.NOT_RECORDED
+        null -> null
+        else -> throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+      }
+      if (reasonStatus == RecordAffectionReasonStatus.AVAILABLE) {
+        val reason = change.reason
+        if (status != RecordAffectionStatus.APPLIED || reason == null || reason.isBlank() ||
+          reason.codePointCount(0, reason.length) > 500) {
+          throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+        }
+      } else if (change.reason != null) {
+        throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+      }
       RecordAffectionChange(names.getValue(participant.slot), change.before,
-        change.questionScore, change.appliedDelta, change.after, participant.slot)
+        change.questionScore, change.appliedDelta, change.after, participant.slot,
+        change.reason, reasonStatus)
     })
   }
 
@@ -438,12 +461,13 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
   } catch (_: Exception) { false }
 
   private suspend inline fun <reified T> read(
-    path: String, accessToken: String, cursor: String? = null,
+    path: String, accessToken: String, cursor: String? = null, contract: String? = null,
   ): T {
     try {
       val response = client.get("$RECORDS_ORIGIN$path") {
         bearerAuth(accessToken)
         if (cursor != null) parameter("cursor", cursor)
+        if (contract != null) parameter("contract", contract)
         header(HttpHeaders.CacheControl, "no-store")
         accept(ContentType.Application.Json)
       }
@@ -565,6 +589,8 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     val questionScore: Int?,
     val appliedDelta: Int,
     val after: Int,
+    val reason: String? = null,
+    val reasonStatus: String? = null,
   )
 
   private companion object {
