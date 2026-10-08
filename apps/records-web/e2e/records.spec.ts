@@ -1313,6 +1313,7 @@ test("manual theme survives reload and logoff while the mobile switch stays usab
 test("logoff shows the goodbye transition before returning to login", async ({ page }) => {
   await mockAuthenticatedApi(page);
   await page.goto("/");
+  await expect(page.getByRole("heading", { name: "議論の記録", exact: true })).toBeVisible();
 
   if (await page.getByLabel("アカウントメニュー", { exact: true }).isVisible()) {
     await page.getByLabel("アカウントメニュー", { exact: true }).click();
