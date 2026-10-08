@@ -129,18 +129,25 @@ class RecordNotificationRegistrationTest {
     }
   }
 
-  @Test fun lateFirstRegistrationRecoversAfterFailedWorkAndDoesNotLoopAfterBindingIsSaved() {
+  @Test fun lateSuccessBeforeFailingWorkReturnsWaitsForTerminalAndDoesNotLoop() {
     val context = InstrumentationRegistry.getInstrumentation().targetContext
     val original = WorkManager.getInstance(context) as WorkManagerImpl
     val firebase = FirebaseApp.initializeApp(context, FirebaseOptions.Builder()
       .setApplicationId("1:000000000000:android:0123456789abcdef012345")
       .setProjectId("synthetic-record-late").setApiKey("synthetic-not-a-real-key").build(), "record-late-test")
     val starts = AtomicInteger()
+    val started = CompletableDeferred<Unit>()
+    val fail = CompletableDeferred<Unit>()
     val factory = object : WorkerFactory() {
       override fun createWorker(appContext: Context, workerClassName: String, parameters: WorkerParameters): ListenableWorker =
-        object : CoroutineWorker(appContext, parameters) {
+        if (workerClassName == RecordNotificationRecoveryWorker::class.java.name) RecordNotificationRecoveryWorker(appContext, parameters)
+        else object : CoroutineWorker(appContext, parameters) {
           override suspend fun doWork(): Result {
-            if (starts.getAndIncrement() == 0) return Result.failure()
+            if (starts.getAndIncrement() == 0) {
+              started.complete(Unit)
+              fail.await()
+              return Result.failure()
+            }
             return registerRecordNotifications(context, 0,
               client = { MobileAuthClient(MockEngine {
                 respond("""{"schemaVersion":1,"expiresAt":"${Instant.now().plusSeconds(300)}"}""",
@@ -165,23 +172,33 @@ class RecordNotificationRegistrationTest {
       RecordNotificationRegistration.schedule(context)
       val failed = requests().single()
       driver.setAllConstraintsMet(failed.id)
-      runBlocking { withTimeout(10_000) { manager.getWorkInfoByIdFlow(failed.id).first { it?.state == WorkInfo.State.FAILED } } }
+      runBlocking { withTimeout(10_000) { started.await() } }
+      assertEquals(WorkInfo.State.RUNNING, manager.getWorkInfoById(failed.id).get()?.state)
       assertEquals(null, settings.binding)
       RecordNotificationRegistration.onRegistered(context, "late-fid")
-      val recovery = requests().single { !it.state.isFinished }
+      val waiting = manager.getWorkInfosForUniqueWork(RecordNotificationRegistration.RECOVERY_WORK).get(10, TimeUnit.SECONDS).single()
+      runBlocking { withTimeout(10_000) { manager.getWorkInfoByIdFlow(waiting.id).first { it?.state == WorkInfo.State.RUNNING } } }
+      assertEquals(1, requests().size) // No dependent that would inherit the imminent failure.
+      fail.complete(Unit)
+      runBlocking { withTimeout(10_000) { manager.getWorkInfoByIdFlow(failed.id).first { it?.state == WorkInfo.State.FAILED } } }
+      val recovery = runBlocking { withTimeout(10_000) {
+        manager.getWorkInfosForUniqueWorkFlow("records-notification-registration-v1")
+          .first { work -> work.any { it.id != failed.id && it.state == WorkInfo.State.ENQUEUED } }
+          .single { it.id != failed.id && !it.state.isFinished }
+      } }
       assertEquals(WorkInfo.State.ENQUEUED, recovery.state)
       driver.setAllConstraintsMet(recovery.id)
       runBlocking { withTimeout(10_000) { manager.getWorkInfoByIdFlow(recovery.id).first { it?.state == WorkInfo.State.SUCCEEDED } } }
       assertFalse(settings.failed)
       checkNotNull(settings.binding)
+      runBlocking { withTimeout(10_000) {
+        manager.getWorkInfosForUniqueWorkFlow(RecordNotificationRegistration.RECOVERY_WORK).first { work -> work.all { it.state.isFinished } }
+      } }
       val count = requests().size
       RecordNotificationRegistration.onRegistered(context, "late-fid")
       assertEquals(count, requests().size)
-      val pending = requests().single { !it.state.isFinished }
-      driver.setAllConstraintsMet(pending.id)
-      runBlocking { withTimeout(10_000) { manager.getWorkInfoByIdFlow(pending.id).first { it?.state == WorkInfo.State.SUCCEEDED } } }
-      assertEquals(count, requests().size)
     } finally {
+      fail.complete(Unit)
       WorkManager.getInstance(context).cancelAllWork().result.get(10, TimeUnit.SECONDS)
       WorkManagerTestInitHelper.closeWorkDatabase()
       WorkManagerImpl.setDelegate(original)

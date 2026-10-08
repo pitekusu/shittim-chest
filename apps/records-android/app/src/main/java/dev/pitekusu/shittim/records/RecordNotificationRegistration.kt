@@ -23,12 +23,14 @@ import java.time.Instant
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 internal object RecordNotificationRegistration {
   private const val WORK = "records-notification-registration-v1"
+  internal const val RECOVERY_WORK = "records-notification-recovery-v1"
   fun onRegistered(context: Context, installationId: String) {
     val afterCurrent = synchronized(RecordNotifications.lock) {
       try {
@@ -48,9 +50,12 @@ internal object RecordNotificationRegistration {
         }
       } catch (_: Exception) { null }
     }
-    // A normal first callback can enqueue one follow-up. Once the binding is saved,
-    // matching callbacks enqueue nothing; KEEP still preserves a running FID refresh.
-    if (afterCurrent != null) schedule(context, afterCurrent = afterCurrent)
+    if (afterCurrent == true) {
+      // APPEND would inherit an imminent failure. This independent, durable work
+      // observes the existing chain's terminal state before enqueuing reconciliation.
+      WorkManager.getInstance(context).enqueueUniqueWork(RECOVERY_WORK, ExistingWorkPolicy.KEEP,
+        OneTimeWorkRequestBuilder<RecordNotificationRecoveryWorker>().build())
+    } else if (afterCurrent == false) schedule(context)
   }
 
   fun schedule(context: Context, replace: Boolean = false, afterCurrent: Boolean = false) {
@@ -65,7 +70,38 @@ internal object RecordNotificationRegistration {
         .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
         .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build())
   }
-  fun cancel(context: Context) { WorkManager.getInstance(context).cancelUniqueWork(WORK) }
+  fun cancel(context: Context) {
+    WorkManager.getInstance(context).also {
+      it.cancelUniqueWork(WORK)
+      it.cancelUniqueWork(RECOVERY_WORK)
+    }
+  }
+
+  internal suspend fun recover(context: Context) {
+    WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(WORK).first { work -> work.all { it.state.isFinished } }
+    val needed = synchronized(RecordNotifications.lock) {
+      val settings = RecordNotificationSettings(context)
+      val store = KeystoreTokenStore(context)
+      val token = if (store.isLogoutPending()) null else store.read()
+      val now = Instant.now()
+      !RecordNotifications.locallyRevoked && settings.optedIn && RecordNotifications.permitted(context) &&
+        token != null && token.expiresAt > now && token.cacheAuthorization?.permits(now) == true &&
+        ((settings.binding == null && settings.failureStage == null) || settings.failureStage == NotificationRegistrationStage.FIREBASE)
+    }
+    if (needed) schedule(context)
+  }
+}
+
+/** WorkManager owns persistence and observation; no token or FID is stored in WorkData. */
+internal class RecordNotificationRecoveryWorker(context: Context, parameters: WorkerParameters) :
+  CoroutineWorker(context, parameters) {
+  override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+    try {
+      RecordNotificationRegistration.recover(applicationContext)
+      Result.success()
+    } catch (error: CancellationException) { throw error }
+    catch (_: Exception) { Result.failure() }
+  }
 }
 
 /** Reads credentials only while running; WorkData never contains tokens, bindings or record text. */
