@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
@@ -6,6 +7,8 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { BrandedRouteStage, routeMotionKind } from "./RouteMotion";
 import { RecordsArchiveProvider, useRecordsArchive } from "./hooks/useRecordsArchive";
 import styles from "./styles/routeMotion.module.css";
+import RecordsHome from "./routes/RecordsHome";
+import { RECORD_ID, listResponse, response } from "./test/recordsTestUtils";
 
 afterEach(() => {
   cleanup();
@@ -51,6 +54,30 @@ function ArchiveFocusHarness({ missing = false }: { readonly missing?: boolean }
               </section>
             }
           />
+          <Route
+            path="/records/:recordId"
+            element={
+              <section data-route-motion-ready="">
+                <h1 tabIndex={-1}>議論詳細</h1>
+              </section>
+            }
+          />
+        </Routes>
+      </BrandedRouteStage>
+    </>
+  );
+}
+
+function CachedArchiveFocusHarness() {
+  const navigate = useNavigate();
+  return (
+    <>
+      <button type="button" onClick={() => navigate("/")}>
+        return archive
+      </button>
+      <BrandedRouteStage>
+        <Routes>
+          <Route path="/" element={<RecordsHome />} />
           <Route
             path="/records/:recordId"
             element={
@@ -159,6 +186,67 @@ describe("routeMotionKind", () => {
 });
 
 describe("BrandedRouteStage", () => {
+  it("waits for a cached archive to refresh before restoring a record removed by that refresh", async () => {
+    const cached = listResponse();
+    const record = cached.items[0]!;
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },
+    });
+    const queryKey = ["records", "", "newest"];
+    client.setQueryData(queryKey, { pages: [cached], pageParams: [undefined] });
+    let completeRefresh!: (value: Response) => void;
+    const refreshed = new Promise<Response>((resolve) => {
+      completeRefresh = resolve;
+    });
+    const fetchMock = vi.fn<typeof fetch>().mockReturnValue(refreshed);
+    vi.stubGlobal("fetch", fetchMock);
+    const scroll = vi.spyOn(window, "scrollTo").mockImplementation(() => undefined);
+    render(
+      <QueryClientProvider client={client}>
+        <RecordsArchiveProvider>
+          <MemoryRouter>
+            <CachedArchiveFocusHarness />
+          </MemoryRouter>
+        </RecordsArchiveProvider>
+      </QueryClientProvider>,
+    );
+
+    const recordLabel = `「${record.questionPreview}」の記録を読む`;
+    fireEvent.click(await screen.findByRole("link", { name: recordLabel }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "議論詳細" })).toHaveFocus());
+    await act(async () => {
+      await client.invalidateQueries({ queryKey, refetchType: "none" });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "return archive" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const cachedCard = screen.getByRole("link", { name: recordLabel });
+    expect(cachedCard).toBeVisible();
+    expect(cachedCard).not.toHaveFocus();
+    expect(scroll).not.toHaveBeenCalled();
+
+    await act(async () => {
+      completeRefresh(
+        response({
+          ...cached,
+          items: [
+            {
+              ...record,
+              recordId: "s".repeat(RECORD_ID.length),
+              questionPreview: "更新後に追加された記録",
+            },
+          ],
+        }),
+      );
+      await refreshed;
+    });
+    await waitFor(() => expect(screen.getByRole("heading", { name: "議論の記録" })).toHaveFocus());
+    expect(cachedCard).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "「更新後に追加された記録」の記録を読む" }),
+    ).toBeVisible();
+    expect(scroll).not.toHaveBeenCalled();
+  });
+
   it("disconnects motion observation and listeners as soon as a route settles", () => {
     const disconnect = vi.spyOn(MutationObserver.prototype, "disconnect");
     const { container } = render(

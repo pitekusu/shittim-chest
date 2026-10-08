@@ -146,6 +146,9 @@ export function BrandedRouteStage({ children }: PropsWithChildren) {
         : null;
     const focusContent = () => {
       if (returnTarget) {
+        // Cached cards can move or disappear during a refetch. Restore only after
+        // the archive's current retrieval has settled, even when a card is present.
+        if (!scene.querySelector("[data-archive-ready]")) return false;
         const card = scene.querySelector<HTMLAnchorElement>(
           `[data-record-id="${returnTarget.recordId}"]`,
         );
@@ -155,9 +158,6 @@ export function BrandedRouteStage({ children }: PropsWithChildren) {
           clearArchiveReturnTarget?.();
           return true;
         }
-        // Refetching can temporarily remove a card. Wait for the archive to settle
-        // before treating a deleted or newly filtered record as unavailable.
-        if (!scene.querySelector("[data-archive-ready]")) return false;
         clearArchiveReturnTarget?.();
       }
       const heading = scene.querySelector<HTMLElement>('h1[tabindex="-1"]');
