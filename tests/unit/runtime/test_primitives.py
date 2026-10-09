@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import logging
 import random
+from typing import Literal
 
 import pytest
 
 from shittim_chest.adapters.openai import OpenAIFailureRecord, OpenAIUsageRecord
+from shittim_chest.adapters.openai.observability import AffectionReasonKind
 from shittim_chest.application.models import MetricEvent
 from shittim_chest.domain import DebateId, FinalProposal, ParticipantSlot
 from shittim_chest.runtime import ContentFreeTelemetry, SecureCandidateOrderer
@@ -126,3 +128,64 @@ def test_content_free_telemetry_emits_only_explicit_metadata(
     encoded = json.dumps(payloads)
     assert "question" not in encoded
     assert "prompt" not in encoded
+
+
+@pytest.mark.parametrize(
+    ("status", "kind"),
+    [
+        ("available", "available"),
+        ("unavailable", "null"),
+        ("unavailable", "blank"),
+        ("unavailable", "too_long"),
+        ("unavailable", "prompt_disclosure"),
+    ],
+)
+def test_affection_reaction_outcome_is_content_free_success_metadata(
+    status: Literal["available", "unavailable"],
+    kind: AffectionReasonKind,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    logger = logging.getLogger("test-affection-reaction-telemetry")
+    subject = ContentFreeTelemetry(logger=logger, environment="production")
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        subject.record_usage(
+            OpenAIUsageRecord(
+                operation="affection_score",
+                response_id="response-placeholder",
+                model="model-placeholder",
+                policy_id="luna_standard",
+                reasoning_mode="standard",
+                latency_ms=12,
+                input_tokens=10,
+                output_tokens=5,
+                cached_input_tokens=0,
+                reasoning_tokens=1,
+                affection_reason_status=status,
+                affection_reason_kind=kind,
+            )
+        )
+
+    assert len(caplog.records) == 1
+    payload = json.loads(caplog.records[0].message)
+    assert payload["event"] == "openai_request_completed"
+    assert payload["affection_reason_status"] == status
+    assert payload["affection_reason_kind"] == kind
+    assert set(payload) == {
+        "timestamp",
+        "severity",
+        "service",
+        "event",
+        "environment",
+        "operation",
+        "response_id",
+        "model",
+        "policy_id",
+        "reasoning_mode",
+        "latency_ms",
+        "input_tokens",
+        "output_tokens",
+        "cached_input_tokens",
+        "reasoning_tokens",
+        "affection_reason_status",
+        "affection_reason_kind",
+    }

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
+
+type AffectionReasonKind = Literal["available", "null", "blank", "too_long", "prompt_disclosure"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +36,8 @@ class OpenAIUsageRecord:
     prior_failure_reason: str | None = None
     prior_incomplete_reason: str | None = None
     prior_response_id: str | None = None
+    affection_reason_status: Literal["available", "unavailable"] | None = None
+    affection_reason_kind: AffectionReasonKind | None = None
 
 
 @dataclass(frozen=True, slots=True)

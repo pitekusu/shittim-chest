@@ -110,6 +110,9 @@ describe("RecordDetail", () => {
             questionScore: 35,
             appliedDelta: 35,
             after: 625,
+            reason:
+              "私は、みんなの好みを丁寧に聞く姿勢がうれしかったです。<b>一緒に</b>考えたいと思いました。",
+            reasonStatus: "available" as const,
           },
           {
             participant: "participant-b" as const,
@@ -117,6 +120,8 @@ describe("RecordDetail", () => {
             questionScore: -43,
             appliedDelta: -43,
             after: 55,
+            reason: null,
+            reasonStatus: "unavailable" as const,
           },
           {
             participant: "participant-c" as const,
@@ -124,6 +129,8 @@ describe("RecordDetail", () => {
             questionScore: 50,
             appliedDelta: 13,
             after: 1000,
+            reason: null,
+            reasonStatus: "not_recorded" as const,
           },
         ],
       },
@@ -139,6 +146,12 @@ describe("RecordDetail", () => {
     expect(within(section).getByLabelText("実増減 +35点")).toBeVisible();
     expect(within(section).getByLabelText("実増減 -43点")).toBeVisible();
     expect(within(section).getByLabelText("実増減 +13点")).toBeVisible();
+    const cards = within(section).getAllByRole("article");
+    expect(within(cards[0]!).getByText(detail.affection.participants[0]!.reason!)).toBeVisible();
+    expect(cards[0]!.querySelector("b")).toBeNull();
+    expect(within(cards[1]!).getByText("感想を取得できませんでした。")).toBeVisible();
+    expect(within(cards[2]!).getByText("この記録には感想が保存されていません。")).toBeVisible();
+    expect(within(cards[2]!).getByText("上限のため、増加は13点になりました。")).toBeVisible();
     expect(within(section).queryAllByRole("meter")).toHaveLength(0);
     const sixHearts = within(section).getByRole("figure", {
       name: "アロナから依頼者への親愛度 625点（1000点満点、ハート10個中6個）",
@@ -172,5 +185,70 @@ describe("RecordDetail", () => {
     expect(
       screen.getByText("質問の評価を完了できなかったため、親愛度は変更されませんでした。"),
     ).toBeVisible();
+    expect(screen.queryByRole("heading", { name: /から一言$/ })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    {
+      before: 1000,
+      questionScore: 40,
+      appliedDelta: 0,
+      after: 1000,
+      note: "上限のため、増加は0点になりました。",
+    },
+    {
+      before: 3,
+      questionScore: -40,
+      appliedDelta: -3,
+      after: 0,
+      note: "下限のため、減少は3点になりました。",
+    },
+    {
+      before: 0,
+      questionScore: -40,
+      appliedDelta: 0,
+      after: 0,
+      note: "下限のため、減少は0点になりました。",
+    },
+  ])("explains the saved clamp without changing the candid reaction ($before)", (values) => {
+    const reason = "私は、この質問を丁寧に考えたいと感じました。率直な気持ちを伝えます。";
+    const detail = {
+      ...recordDetail(),
+      affection: {
+        status: "applied" as const,
+        rubricVersion: "affection-rubric-v1",
+        participants: ["participant-a", "participant-b", "participant-c"].map((participant) => ({
+          participant: participant as "participant-a" | "participant-b" | "participant-c",
+          ...values,
+          reason,
+          reasonStatus: "available" as const,
+        })),
+      },
+    };
+    renderRoute(<RecordDocument record={detail} />);
+    expect(screen.getAllByText(reason)).toHaveLength(3);
+    expect(screen.getAllByText(values.note)).toHaveLength(3);
+  });
+
+  it("distinguishes a legacy response from confirmed unrecorded feelings", () => {
+    const detail = {
+      ...recordDetail(),
+      affection: {
+        status: "applied" as const,
+        rubricVersion: "affection-rubric-v1",
+        participants: ["participant-a", "participant-b", "participant-c"].map((participant) => ({
+          participant: participant as "participant-a" | "participant-b" | "participant-c",
+          before: 500,
+          questionScore: 0,
+          appliedDelta: 0,
+          after: 500,
+        })),
+      },
+    };
+    renderRoute(<RecordDocument record={detail} />);
+    expect(
+      screen.getAllByText("感想は未取得です。オンラインで更新すると確認できます。"),
+    ).toHaveLength(3);
+    expect(screen.queryByText("この記録には感想が保存されていません。")).not.toBeInTheDocument();
   });
 });

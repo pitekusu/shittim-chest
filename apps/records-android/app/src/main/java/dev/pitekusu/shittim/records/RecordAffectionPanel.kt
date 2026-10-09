@@ -32,8 +32,11 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -97,6 +100,37 @@ internal fun RecordAffectionPanel(affection: RecordAffection?, motionKey: String
   key(cardKey, selectedIndex) {
     AffectionCard(change, cardKey, playedSections, animationsEnabled, motionActive, minimumVisibleTop, onSectionSeen,
       Modifier.testTag("affection-card-$selectedIndex"))
+    if (affection.status == RecordAffectionStatus.APPLIED) {
+      val boundaryMessage = when {
+        change.questionScore != null && change.questionScore > change.appliedDelta && change.after == 1000 ->
+          stringResource(R.string.record_affection_upper_limit, change.appliedDelta)
+        change.questionScore != null && change.questionScore < change.appliedDelta && change.after == 0 ->
+          stringResource(R.string.record_affection_lower_limit, -change.appliedDelta)
+        else -> null
+      }
+      if (boundaryMessage != null) Text(boundaryMessage,
+        color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.testTag("affection-limit"))
+      // Keep full text outside the score's visibility gate: long feelings must not
+      // prevent the compact card from animating when it fits in the viewport.
+      Column(Modifier.fillMaxWidth().padding(top = ShittimSpacing.Small),
+        verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Small)) {
+        Text(stringResource(R.string.record_affection_reason, change.participantName),
+          style = MaterialTheme.typography.titleSmall,
+          modifier = Modifier.semantics { heading() })
+        val reason = when (change.reasonStatus) {
+          RecordAffectionReasonStatus.AVAILABLE -> change.reason.orEmpty()
+          RecordAffectionReasonStatus.UNAVAILABLE -> stringResource(R.string.record_affection_reason_unavailable)
+          RecordAffectionReasonStatus.NOT_RECORDED -> stringResource(R.string.record_affection_reason_not_recorded)
+          null -> stringResource(R.string.record_affection_reason_pending)
+        }
+        SelectionContainer {
+          Text(reason, style = MaterialTheme.typography.bodyLarge,
+            color = if (change.reasonStatus == RecordAffectionReasonStatus.AVAILABLE)
+              MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth().testTag("affection-reason"))
+        }
+      }
+    }
   }
 }
 

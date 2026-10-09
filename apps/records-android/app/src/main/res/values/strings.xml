@@ -142,6 +142,12 @@
     <string name="record_affection_unavailable">質問の評価を完了できなかったため、親愛度は変更されませんでした。</string>
     <string name="record_affection_transition">親愛度：%1$d → %2$d</string>
     <string name="record_affection_applied_delta">実増減：%1$s点</string>
+    <string name="record_affection_reason">%1$sから一言</string>
+    <string name="record_affection_reason_unavailable">感想を取得できませんでした。</string>
+    <string name="record_affection_reason_not_recorded">この記録には感想が保存されていません。</string>
+    <string name="record_affection_reason_pending">感想は未取得です。オンラインで更新すると確認できます。</string>
+    <string name="record_affection_upper_limit">上限のため、増加は%1$d点になりました。</string>
+    <string name="record_affection_lower_limit">下限のため、減少は%1$d点になりました。</string>
     <string name="session_logout">ログアウト</string>
     <string name="menu_open">メニューを開く</string>
     <string name="menu_web">Webで開く</string>

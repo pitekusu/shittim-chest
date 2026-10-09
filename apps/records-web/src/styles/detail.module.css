@@ -571,6 +571,32 @@
   gap: 5px;
 }
 
+.affectionLimitNote {
+  margin: 12px 0 0;
+  color: var(--records-ink-600);
+  font-size: 0.88rem;
+}
+
+.affectionReason {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--records-panel-border-soft);
+}
+
+.affectionReason h4 {
+  margin: 0 0 8px;
+  color: var(--records-ink-900);
+  font-size: 0.9rem;
+}
+
+.affectionReason p {
+  margin: 0;
+  color: var(--records-ink-900);
+  line-height: 1.85;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .affectionHeart {
   display: block;
   width: 100%;

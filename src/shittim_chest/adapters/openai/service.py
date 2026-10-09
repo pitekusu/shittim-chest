@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from time import monotonic
-from typing import TypeVar
+from typing import Literal, TypeVar
+from unicodedata import category, normalize
 
 import httpx2
 from openai import (
@@ -40,6 +42,7 @@ from shittim_chest.adapters.openai.errors import (
 )
 from shittim_chest.adapters.openai.limiter import OpenAIRequestLimiter
 from shittim_chest.adapters.openai.observability import (
+    AffectionReasonKind,
     NullOpenAIUsageRecorder,
     OpenAIFailureRecord,
     OpenAIUsageRecord,
@@ -62,7 +65,7 @@ from shittim_chest.adapters.openai.prompts import (
     winner_decision_instructions,
 )
 from shittim_chest.adapters.openai.schemas import (
-    AffectionScoreOutputV1,
+    AffectionScoreOutputV2,
     CandidatePlanOutputV1,
     DecisionOutputV1,
     FinalProposalOutputV1,
@@ -73,6 +76,8 @@ from shittim_chest.adapters.openai.schemas import (
 from shittim_chest.application.generation_policy import ReasoningMode
 from shittim_chest.domain import (
     DEFAULT_AFFECTION_SCORE,
+    MAX_AFFECTION_REASON_LENGTH,
+    AffectionQuestionEvaluation,
     Candidate,
     CandidatePlan,
     EvidenceBundle,
@@ -196,19 +201,33 @@ class OpenAIResponsesService:
         *,
         participant: ParticipantSlot,
         question: str,
-    ) -> int:
-        """Score one untrusted question independently in one participant persona."""
+    ) -> AffectionQuestionEvaluation:
+        """Score one question and validate its public reaction independently."""
 
         output = await self._parse(
             operation="affection_score",
-            schema=AffectionScoreOutputV1,
+            schema=AffectionScoreOutputV2,
             instructions=affection_scoring_instructions(
                 self.profiles.for_participant(participant).system_prompt,
             ),
             input_text=affection_scoring_input(question),
             settings=self.config.affection,
         )
-        return output.score
+        reason, _kind = _sanitize_affection_reason(
+            output.reason, protected_prompts=self._affection_protected_prompts()
+        )
+        return AffectionQuestionEvaluation(output.score, reason)
+
+    def _affection_protected_prompts(self) -> tuple[str, ...]:
+        """Protect every persona and scoring instruction without publishing their content."""
+
+        prompts = [
+            affection_scoring_instructions(""),
+            *(profile.system_prompt for profile in self.profiles.values.values()),
+        ]
+        if self.system_prompt is not None:
+            prompts.append(self.system_prompt)
+        return tuple(prompts)
 
     async def form_preferences(
         self,
@@ -531,7 +550,7 @@ class OpenAIResponsesService:
                 settings=settings,
             )
             raise status_error from error
-        self._record_usage(operation, response, started)
+        self._record_usage(operation, response, started, parsed)
         return parsed
 
     def _record_usage(
@@ -539,8 +558,16 @@ class OpenAIResponsesService:
         operation: str,
         response: Response,
         started: float,
+        parsed: BaseModel,
     ) -> None:
         usage = response.usage
+        reason_status: Literal["available", "unavailable"] | None = None
+        reason_kind: AffectionReasonKind | None = None
+        if isinstance(parsed, AffectionScoreOutputV2):
+            _reason, reason_kind = _sanitize_affection_reason(
+                parsed.reason, protected_prompts=self._affection_protected_prompts()
+            )
+            reason_status = "available" if reason_kind == "available" else "unavailable"
         self.recorder.record_usage(
             OpenAIUsageRecord(
                 operation=operation,
@@ -557,6 +584,8 @@ class OpenAIResponsesService:
                 reasoning_tokens=(
                     usage.output_tokens_details.reasoning_tokens if usage is not None else 0
                 ),
+                affection_reason_status=reason_status,
+                affection_reason_kind=reason_kind,
             )
         )
 
@@ -592,6 +621,55 @@ class OpenAIResponsesService:
                 ),
             )
         )
+
+
+def _sanitize_affection_reason(
+    reason: str | None, *, protected_prompts: Iterable[str]
+) -> tuple[str | None, AffectionReasonKind]:
+    if reason is None:
+        return None, "null"
+    reason = reason.strip()
+    if not reason:
+        return None, "blank"
+    if len(reason) > MAX_AFFECTION_REASON_LENGTH:
+        return None, "too_long"
+    normalized_reason = _normalize_prompt_copy(reason)
+    symbolic_reason = _normalize_prompt_copy(reason, preserve_symbols=True)
+    folded_reason = normalize("NFKC", reason).casefold()
+    # Reject complete protected prompts at every length. Partial quotations need 32
+    # contiguous characters so common phrases inside longer personas stay usable.
+    passages = {
+        normalized_reason[index : index + 32] for index in range(len(normalized_reason) - 31)
+    }
+    for prompt in protected_prompts:
+        folded_prompt = normalize("NFKC", prompt).casefold().strip()
+        if folded_prompt and folded_prompt in folded_reason:
+            return None, "prompt_disclosure"
+        normalized_prompt = _normalize_prompt_copy(prompt)
+        if normalized_prompt:
+            if normalized_prompt in normalized_reason:
+                return None, "prompt_disclosure"
+        else:
+            # Punctuation-only configurations are valid and must not become an empty match.
+            symbolic_prompt = _normalize_prompt_copy(prompt, preserve_symbols=True)
+            if symbolic_prompt and symbolic_prompt in symbolic_reason:
+                return None, "prompt_disclosure"
+        if any(
+            normalized_prompt[index : index + 32] in passages
+            for index in range(len(normalized_prompt) - 31)
+        ):
+            return None, "prompt_disclosure"
+    return reason, "available"
+
+
+def _normalize_prompt_copy(text: str, *, preserve_symbols: bool = False) -> str:
+    # Ignore formatting, spacing, marks, and width/case differences. Retain punctuation
+    # and symbols only when protecting a configuration with no letters or numbers.
+    return "".join(
+        character
+        for character in normalize("NFKC", text).casefold()
+        if character.isalnum() or (preserve_symbols and category(character)[0] in {"P", "S"})
+    )
 
 
 def _extract_parsed[OutputT: BaseModel](response: Response, schema: type[OutputT]) -> OutputT:

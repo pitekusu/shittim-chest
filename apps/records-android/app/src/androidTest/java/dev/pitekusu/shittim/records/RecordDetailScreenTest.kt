@@ -38,6 +38,7 @@ import dev.pitekusu.shittim.records.ui.ShittimTheme
 import org.junit.Rule
 import org.junit.Assert.assertTrue
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import androidx.compose.ui.text.TextLayoutResult
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -294,7 +295,8 @@ class RecordDetailScreenTest {
     val names = listOf("アロナ", "プラナ", "安倍晋三AI")
     val affection = RecordAffection(RecordAffectionStatus.APPLIED, names.mapIndexed { index, name ->
       RecordAffectionChange(name, 500 + index * 100, 10, 10, 510 + index * 100,
-        listOf("participant-a", "participant-b", "participant-c")[index])
+        listOf("participant-a", "participant-b", "participant-c")[index],
+        reason = "${name}の率直な感想です。", reasonStatus = RecordAffectionReasonStatus.AVAILABLE)
     })
     val state = RecordPreviewState.Ready(RecordPreview("架空の議題", "架空の結論", "プラナ",
       affection = affection, winnerSlot = "participant-b"))
@@ -306,6 +308,8 @@ class RecordDetailScreenTest {
       compose.onNodeWithTag("detail-section-Affection").assertIsSelected()
       compose.onNodeWithTag("affection-person-$index").assertIsSelected()
       compose.onNodeWithText("親愛度：${500 + index * 100} → ${510 + index * 100}").assertExists()
+      compose.onNodeWithText("${names[index]}から一言").assertExists()
+      compose.onNodeWithText("${names[index]}の率直な感想です。").assertExists()
     }
     fun swipe(forward: Boolean) {
       compose.onNodeWithTag("detail-pager").performTouchInput {
@@ -332,5 +336,93 @@ class RecordDetailScreenTest {
     }
     swipe(forward = false)
     compose.onNodeWithTag("detail-section-Result").assertIsSelected()
+  }
+
+  @Test fun fullAffectionReasonRemainsPlainTextReadableAtNarrowWidthAndDoubleText() {
+    val reason = "先生と一緒に考えられてうれしいです。😀\n".repeat(15) +
+      "<b>最後まで読める感想です。</b>"
+    val affection = RecordAffection(RecordAffectionStatus.APPLIED, listOf(
+      RecordAffectionChange("アロナ", 995, 50, 5, 1000, "participant-a", reason,
+        RecordAffectionReasonStatus.AVAILABLE),
+      RecordAffectionChange("プラナ", 5, -50, -5, 0, "participant-b", "少し寂しく感じました。",
+        RecordAffectionReasonStatus.AVAILABLE),
+      RecordAffectionChange("安倍晋三AI", 500, 0, 0, 500, "participant-c", "率直な感想は変わりません。",
+        RecordAffectionReasonStatus.AVAILABLE)))
+    compose.activityRule.scenario.onActivity { it.setContent {
+      DeviceConfigurationOverride(DeviceConfigurationOverride.WindowSize(DpSize(320.dp, 640.dp)) then
+        DeviceConfigurationOverride.FontScale(2f)) {
+        ShittimTheme(true) { RecordDetailScreen(RecordPreviewState.Ready(
+          RecordPreview("架空の議題", "結論", "アロナ", affection = affection)),
+          "large-affection-reason", {}, motionAllowed = false) }
+      }
+    } }
+    compose.onNodeWithTag("detail-section-Affection").performClick()
+    // Pager prefetch keeps the next person's Text composed; match this full reason.
+    val selectedReason = compose.onNodeWithText(reason, useUnmergedTree = true)
+    selectedReason.performScrollTo()
+    val layouts = mutableListOf<TextLayoutResult>()
+    selectedReason.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+    val layout = layouts.single()
+    assertEquals(reason, layout.layoutInput.text.text)
+    assertFalse(layout.hasVisualOverflow)
+    for (line in 0 until layout.lineCount) assertFalse(layout.isLineEllipsized(line))
+    compose.onNodeWithTag("record-detail-content").performSemanticsAction(SemanticsActions.ScrollBy) {
+      it(0f, 100_000f)
+    }
+    val scroll = compose.onNodeWithTag("record-detail-content").fetchSemanticsNode()
+      .config[SemanticsProperties.VerticalScrollAxisRange]
+    assertTrue(scroll.maxValue() > 0f)
+    assertEquals(scroll.maxValue(), scroll.value(), 1f)
+    val viewport = compose.onNodeWithTag("record-detail-content").fetchSemanticsNode().boundsInRoot
+    val origin = selectedReason.fetchSemanticsNode().positionInRoot
+    val lastGlyph = layout.getBoundingBox(reason.lastIndex)
+    assertTrue("The final character must be fully visible after scrolling",
+      origin.y + lastGlyph.top >= viewport.top - 1f &&
+        origin.y + lastGlyph.bottom <= viewport.bottom + 1f &&
+        origin.x + lastGlyph.left >= viewport.left - 1f &&
+        origin.x + lastGlyph.right <= viewport.right + 1f)
+    compose.onNodeWithText("上限のため、増加は5点になりました。").assertExists()
+    compose.onNodeWithTag("affection-person-1").performClick()
+    compose.onNodeWithText("少し寂しく感じました。").performScrollTo().assertIsDisplayed()
+    compose.onNodeWithText("下限のため、減少は5点になりました。").assertExists()
+    compose.onNodeWithTag("affection-person-0").performClick()
+    val restored = compose.onNodeWithTag("record-detail-content").fetchSemanticsNode()
+      .config[SemanticsProperties.VerticalScrollAxisRange]
+    assertEquals(restored.maxValue(), restored.value(), 1f)
+    compose.onNodeWithTag("detail-section-Affection").assertIsDisplayed()
+  }
+
+  @Test fun reasonFailureLegacyAndOldCacheKeepScoresAndScoringFailureTakesPriority() {
+    val names = listOf("アロナ", "プラナ", "安倍晋三AI")
+    val state = mutableStateOf<RecordPreviewState>(RecordPreviewState.Ready(RecordPreview(
+      "架空の議題", "結論", "アロナ", affection = RecordAffection(RecordAffectionStatus.APPLIED,
+        names.mapIndexed { index, name -> RecordAffectionChange(name, 500, -10, -10, 490,
+          "participant-${('a'.code + index).toChar()}", reasonStatus = when (index) {
+            0 -> RecordAffectionReasonStatus.UNAVAILABLE
+            1 -> RecordAffectionReasonStatus.NOT_RECORDED
+            else -> null
+          }) }))))
+    compose.activityRule.scenario.onActivity { it.setContent {
+      ShittimTheme(false) { RecordDetailScreen(state.value, "reason-states", {}, motionAllowed = false) }
+    } }
+    compose.onNodeWithTag("detail-section-Affection").performClick()
+    val messages = listOf("感想を取得できませんでした。", "この記録には感想が保存されていません。",
+      "感想は未取得です。オンラインで更新すると確認できます。")
+    for (index in names.indices) {
+      compose.onNodeWithTag("affection-person-$index").performClick()
+      compose.onNodeWithText(messages[index]).performScrollTo().assertIsDisplayed()
+      compose.onNodeWithText("親愛度：500 → 490").assertExists()
+    }
+    compose.runOnIdle {
+      state.value = RecordPreviewState.Ready(RecordPreview("架空の議題", "結論", "アロナ",
+        affection = RecordAffection(RecordAffectionStatus.UNAVAILABLE, names.mapIndexed { index, name ->
+          RecordAffectionChange(name, 500, null, 0, 500, "participant-${('a'.code + index).toChar()}",
+            reasonStatus = RecordAffectionReasonStatus.UNAVAILABLE)
+        })))
+    }
+    compose.onNodeWithText("質問の評価を完了できなかったため、親愛度は変更されませんでした。")
+      .performScrollTo().assertIsDisplayed()
+    compose.onNodeWithTag("affection-reason").assertDoesNotExist()
+    compose.onNodeWithText("親愛度：500 → 500").assertExists()
   }
 }

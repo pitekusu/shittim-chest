@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import pytest
+from tests.test_read_api import affection_records
 
 from shittim_records.auth import (
     CSRF_COOKIE_NAME,
@@ -436,6 +437,72 @@ def test_rankings_route_requires_authentication_and_rejects_query_parameters() -
         "count": 3,
     }
     assert invalid["statusCode"] == 400
+
+
+@pytest.mark.parametrize("contract", (False, True))
+def test_record_detail_negotiates_affection_reasons_without_changing_legacy_response(
+    contract: bool,
+) -> None:
+    records, reader = affection_records()
+    controller = ReadHttpController(
+        store=cast(Any, FakeSessionStore(session())),
+        session_key=SESSION_KEY,
+        records=records,
+    )
+    response = controller.handle(
+        event(
+            "GET /api/v1/records/{recordId}",
+            query="contract=affection-reasons-v1" if contract else "",
+            cookies=[f"{SESSION_COOKIE_NAME}=session-token"],
+            path={"recordId": reader.record_id},
+        ),
+        now=NOW,
+    )
+    assert response["statusCode"] == 200
+    assert response["headers"]["Cache-Control"] == "private, no-store"
+    payload = json.loads(response["body"])
+    assert payload["schemaVersion"] == 2
+    participants = payload["affection"]["participants"]
+    if contract:
+        assert participants[0]["reason"] == "\U0002000b" * 500
+        assert [item["reasonStatus"] for item in participants] == [
+            "available",
+            "unavailable",
+            "not_recorded",
+        ]
+        assert participants[1]["reason"] is None and participants[2]["reason"] is None
+    else:
+        assert all("reason" not in item and "reasonStatus" not in item for item in participants)
+    assert "requesterKey" not in response["body"]
+    assert "discord-user-id" not in response["body"]
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        "contract=unknown",
+        "contract=",
+        "contract=affection-reasons-v1&contract=affection-reasons-v1",
+        "unexpected=value",
+    ),
+)
+def test_record_detail_rejects_unknown_or_duplicate_contract_before_loading(query: str) -> None:
+    controller = ReadHttpController(
+        store=cast(Any, FakeSessionStore(session())),
+        session_key=SESSION_KEY,
+        records=cast(Any, FakeRecords()),
+    )
+    response = controller.handle(
+        event(
+            "GET /api/v1/records/{recordId}",
+            query=query,
+            cookies=[f"{SESSION_COOKIE_NAME}=session-token"],
+            path={"recordId": "r" * 43},
+        ),
+        now=NOW,
+    )
+    assert response["statusCode"] == 400
+    assert json.loads(response["body"])["error"]["code"] == "REQUEST_INVALID"
 
 
 def test_affection_rankings_route_is_authenticated_no_store_and_has_no_internal_key() -> None:

@@ -12,6 +12,8 @@ from shittim_chest.domain import (
     AffectionAssessment,
     AffectionAssessmentStatus,
     AffectionProfile,
+    AffectionQuestionEvaluation,
+    AffectionReasonStatus,
     DebateId,
     MemorialUnlock,
     ParticipantAffection,
@@ -68,6 +70,87 @@ def test_complete_scores_apply_in_fixed_order_and_report_effective_clamped_delta
     assert assessment.memorial_unlock.participant is ParticipantSlot.PARTICIPANT_A
     assert assessment.memorial_unlock.retroactive is False
     assert updated.memorial_unlock == assessment.memorial_unlock
+
+
+def test_question_reactions_follow_scores_without_changing_clamping_or_legacy_behavior() -> None:
+    scores = (100, -100, 0)
+    source = profile(scores=(950, 55, 500))
+    debate_id = DebateId.new()
+    updated, assessment = assess_affection(
+        source,
+        scores=scores,
+        reasons=("あなたの具体的な問いかけが嬉しいです。", None, "私はいつも通りに感じました。"),
+        assessed_at=NOW,
+        debate_id=debate_id,
+        operation_seed="reaction-test",
+    )
+    legacy_profile, legacy = assess_affection(
+        source,
+        scores=scores,
+        assessed_at=NOW,
+        debate_id=debate_id,
+        operation_seed="reaction-test",
+    )
+
+    assert updated == legacy_profile
+    assert tuple(item.applied_delta for item in assessment.participants) == (50, -55, 0)
+    assert tuple(item.reason_status for item in assessment.participants) == (
+        AffectionReasonStatus.AVAILABLE,
+        AffectionReasonStatus.UNAVAILABLE,
+        AffectionReasonStatus.AVAILABLE,
+    )
+    assert all(
+        item.reason_status is AffectionReasonStatus.NOT_RECORDED for item in legacy.participants
+    )
+
+
+def test_unavailable_new_assessment_discards_partial_reactions_and_marks_the_failure() -> None:
+    unchanged, assessment = assess_affection(
+        profile(), scores=None, reasons=(None, None, None), assessed_at=NOW
+    )
+    assert unchanged == profile()
+    assert all(
+        item.reason is None and item.reason_status is AffectionReasonStatus.UNAVAILABLE
+        for item in assessment.participants
+    )
+    with pytest.raises(ValueError, match="partial reasons"):
+        assess_affection(
+            profile(), scores=None, reasons=("公開の感想", None, None), assessed_at=NOW
+        )
+
+
+@pytest.mark.parametrize("reason", ["", " \t ", "感" * 501])
+def test_domain_rejects_invalid_saved_reaction(reason: str) -> None:
+    with pytest.raises(ValueError, match="affection reason"):
+        AffectionQuestionEvaluation(35, reason)
+
+
+@pytest.mark.parametrize(
+    ("status", "reason", "question_score"),
+    [
+        (AffectionReasonStatus.AVAILABLE, None, 0),
+        (AffectionReasonStatus.AVAILABLE, "公開の感想", None),
+        (AffectionReasonStatus.UNAVAILABLE, "公開の感想", 0),
+        (AffectionReasonStatus.NOT_RECORDED, "公開の感想", 0),
+    ],
+)
+def test_saved_reaction_status_requires_consistent_text_and_score(
+    status: AffectionReasonStatus, reason: str | None, question_score: int | None
+) -> None:
+    with pytest.raises(ValueError, match="affection reason"):
+        ParticipantAffection(
+            ParticipantSlot.PARTICIPANT_A,
+            500,
+            question_score,
+            0,
+            500,
+            reason=reason,
+            reason_status=status,
+        )
+
+
+def test_question_reaction_accepts_the_500_unicode_codepoint_boundary() -> None:
+    assert AffectionQuestionEvaluation(0, "感" * 500).reason == "感" * 500
 
 
 def test_unavailable_assessment_changes_nobody_and_retains_profile_version() -> None:

@@ -12,6 +12,7 @@ from shittim_chest.domain import (
     AFFECTION_RULES_VERSION,
     AffectionAssessment,
     AffectionAssessmentStatus,
+    AffectionReasonStatus,
     ParticipantAffection,
     ParticipantSlot,
 )
@@ -609,6 +610,82 @@ def test_detail_maps_archive_v2_affection_and_historical_v1_remains_null() -> No
 
     assert current.affection is not None
     assert current.affection.participants[2].applied_delta == 10
+    assert all(item.reason is None for item in current.affection.participants)
+    assert all(item.reason_status == "not_recorded" for item in current.affection.participants)
+
+
+def affection_records() -> tuple[RecordsReadService, FakeReader]:
+    records, reader = service()
+    assessment = AffectionAssessment(
+        status=AffectionAssessmentStatus.APPLIED,
+        rules_version=AFFECTION_RULES_VERSION,
+        participants=(
+            ParticipantAffection(
+                ParticipantSlot.PARTICIPANT_A,
+                500,
+                25,
+                25,
+                525,
+                reason="\U0002000b" * 500,
+                reason_status=AffectionReasonStatus.AVAILABLE,
+            ),
+            ParticipantAffection(
+                ParticipantSlot.PARTICIPANT_B,
+                500,
+                -10,
+                -10,
+                490,
+                reason_status=AffectionReasonStatus.UNAVAILABLE,
+            ),
+            ParticipantAffection(ParticipantSlot.PARTICIPANT_C, 990, 50, 10, 1000),
+        ),
+        assessed_at=NOW,
+    )
+    projection = project_completed_debate(
+        replace(completed_snapshot(), affection_assessment=assessment),
+        identity_hmac_key=HMAC_KEY,
+        presentation=presentation(),
+        projected_at=NOW,
+    )
+    reader.items = projection.items
+    reader.record_id = projection.record_id
+    reader.meta = next(item for item in reader.items if item["SK"] == "META")
+    return records, reader
+
+
+def test_detail_maps_affection_reasons_by_participant_and_preserves_legacy_state() -> None:
+    records, reader = affection_records()
+    current = records.get_record(record_id=reader.record_id, now=NOW)
+    assert current.affection is not None
+    assert tuple(item.reason_status for item in current.affection.participants) == (
+        "available",
+        "unavailable",
+        "not_recorded",
+    )
+    assert current.affection.participants[0].reason == "\U0002000b" * 500
+    assert current.affection.participants[1].reason is None
+    assert current.affection.participants[2].reason is None
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda item: item.pop("reason"),
+        lambda item: item.pop("reason_status"),
+        lambda item: item.update(reason_status="unavailable"),
+        lambda item: item.update(reason_status="unknown"),
+        lambda item: item.update(reason="\U0002000b" * 501),
+        lambda item: item.update(reason=" \n　"),
+        lambda item: item.update(reason=None),
+        lambda item: item.update(internal_note="private"),
+    ),
+)
+def test_detail_rejects_corrupt_archived_affection_reasons(mutation: Any) -> None:
+    records, reader = affection_records()
+    affection = cast(dict[str, Any], reader.meta["affection"])
+    mutation(affection["participants"][0])
+    with pytest.raises(ReadFailure, match="ARCHIVE_UNAVAILABLE"):
+        records.get_record(record_id=reader.record_id, now=NOW)
 
 
 @pytest.mark.parametrize(

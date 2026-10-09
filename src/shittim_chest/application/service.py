@@ -65,6 +65,7 @@ from shittim_chest.application.scale_to_zero import IngressClaimFence, IngressKi
 from shittim_chest.domain import (
     DEFAULT_AFFECTION_SCORE,
     PARTICIPANTS,
+    AffectionQuestionEvaluation,
     AttemptId,
     CandidatePlan,
     DebateId,
@@ -789,17 +790,22 @@ class DebateApplication:
                 task.cancel()
             raise
         scores: tuple[int, int, int] | None
+        reasons: tuple[str | None, str | None, str | None]
         if any(isinstance(result, BaseException) for result in results):
             scores = None
+            reasons = (None, None, None)
         else:
-            scores = (
-                cast(int, results[0]),
-                cast(int, results[1]),
-                cast(int, results[2]),
+            evaluations = (
+                cast(AffectionQuestionEvaluation, results[0]),
+                cast(AffectionQuestionEvaluation, results[1]),
+                cast(AffectionQuestionEvaluation, results[2]),
             )
+            scores = (evaluations[0].score, evaluations[1].score, evaluations[2].score)
+            reasons = (evaluations[0].reason, evaluations[1].reason, evaluations[2].reason)
         await self._repository.settle_affection(
             expected=snapshot,
             scores=scores,
+            reasons=reasons,
             at=self._clock.now(),
         )
 

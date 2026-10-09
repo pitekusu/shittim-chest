@@ -23,6 +23,7 @@ from shittim_chest.application.ports import RepositoryConflict
 from shittim_chest.application.scale_to_zero import IngressClaimFence
 from shittim_chest.domain import (
     AffectionProfile,
+    AffectionQuestionEvaluation,
     AttemptId,
     Candidate,
     CandidatePlan,
@@ -187,6 +188,7 @@ class FakeOpenAI:
         self.decision_calls: list[ParticipantSlot] = []
         self.affection_calls: list[ParticipantSlot] = []
         self.affection_scores: dict[ParticipantSlot, int] = {}
+        self.affection_reasons: dict[ParticipantSlot, str | None] = {}
         self.affection_errors: dict[ParticipantSlot, BaseException] = {}
         self.response_affection_scores: list[tuple[ParticipantSlot, int]] = []
         self.evidence_calls: list[EvidenceBundle] = []
@@ -232,13 +234,16 @@ class FakeOpenAI:
         *,
         participant: ParticipantSlot,
         question: str,
-    ) -> int:
+    ) -> AffectionQuestionEvaluation:
         del question
         self.affection_calls.append(participant)
         error = self.affection_errors.get(participant)
         if error is not None:
             raise error
-        return self.affection_scores.get(participant, 0)
+        return AffectionQuestionEvaluation(
+            self.affection_scores.get(participant, 0),
+            self.affection_reasons.get(participant, f"public reaction for {participant.value}"),
+        )
 
     async def generate_initial_opinion(
         self,
@@ -430,6 +435,7 @@ class FakeRepository:
         expected: DebateSnapshot,
         scores: tuple[int, int, int] | None,
         at: datetime,
+        reasons: tuple[str | None, str | None, str | None] | None = None,
     ) -> DebateSnapshot:
         current = self.current.get(expected.state.debate_id)
         if current is None or not _same_snapshot_version(current, expected):
@@ -447,6 +453,7 @@ class FakeRepository:
         updated_profile, assessment = assess_affection(
             profile,
             scores=scores,
+            reasons=reasons,
             assessed_at=at,
             debate_id=expected.state.debate_id,
             operation_seed=str(expected.state.attempt_id),

@@ -21,6 +21,7 @@ from shittim_chest.adapters.dynamodb.serializer import (
 from shittim_chest.application import DebateSnapshot
 from shittim_chest.domain import (
     PARTICIPANTS,
+    AffectionReasonStatus,
     DebateId,
     DebatePhase,
     ParticipantSlot,
@@ -185,6 +186,11 @@ def project_completed_debate(
                         "question_score": entry.question_score,
                         "applied_delta": entry.applied_delta,
                         "after": entry.after,
+                        **(
+                            {"reason": entry.reason, "reason_status": entry.reason_status.value}
+                            if entry.reason_status is not AffectionReasonStatus.NOT_RECORDED
+                            else {}
+                        ),
                     }
                     for entry in assessment.participants
                 ],

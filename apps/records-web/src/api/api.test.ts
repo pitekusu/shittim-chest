@@ -226,6 +226,61 @@ describe("Records API endpoint validation", () => {
     });
   });
 
+  it("negotiates affection reasons while accepting a legacy detail response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(response(recordDetail()))),
+    );
+    await expect(getRecord(RECORD_ID)).resolves.toEqual(recordDetail());
+    expect(fetch).toHaveBeenCalledWith(
+      `/api/v1/records/${RECORD_ID}?contract=affection-reasons-v1`,
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
+  it.each([
+    { reason: "😀".repeat(500), reasonStatus: "available", accepted: true },
+    { reason: "😀".repeat(501), reasonStatus: "available", accepted: false },
+    { reason: "  \n", reasonStatus: "available", accepted: false },
+    { reason: null, reasonStatus: "available", accepted: false },
+    { reason: "取得した感想", reasonStatus: "unavailable", accepted: false },
+    { reason: null, reasonStatus: "unavailable", accepted: true },
+    { reason: null, reasonStatus: "not_recorded", accepted: true },
+  ])(
+    "validates affection reason text and status ($reasonStatus, $accepted)",
+    async ({ reason, reasonStatus, accepted }) => {
+      const detail = {
+        ...recordDetail(),
+        affection: {
+          status: "applied",
+          rubricVersion: "affection-rubric-v1",
+          participants: ["participant-a", "participant-b", "participant-c"].map((participant) => ({
+            participant,
+            before: 500,
+            questionScore: 0,
+            appliedDelta: 0,
+            after: 500,
+            reason,
+            reasonStatus,
+          })),
+        },
+      };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() => Promise.resolve(response(detail))),
+      );
+      const result = await getRecord(RECORD_ID).then(
+        (value) => ({ accepted: true, value }),
+        (error: { code: string }) => ({ accepted: false, code: error.code }),
+      );
+      expect(result).toEqual(
+        accepted
+          ? { accepted: true, value: detail }
+          : { accepted: false, code: "INVALID_API_RESPONSE" },
+      );
+    },
+  );
+
   it("rejects three participant entries when a slot is duplicated and another is missing", async () => {
     const detail = recordDetail();
     vi.stubGlobal(

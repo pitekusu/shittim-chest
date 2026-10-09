@@ -39,6 +39,7 @@ from shittim_chest.application.scale_to_zero import (
     StatusPublicationWork,
 )
 from shittim_chest.domain import (
+    AffectionQuestionEvaluation,
     AttemptId,
     Candidate,
     CandidatePlan,
@@ -741,7 +742,7 @@ class OpenAIService(Protocol):
         *,
         participant: ParticipantSlot,
         question: str,
-    ) -> int: ...
+    ) -> AffectionQuestionEvaluation: ...
 
     async def form_preferences(
         self,
@@ -834,6 +835,7 @@ class DebateRepository(Protocol):
         expected: DebateSnapshot,
         scores: tuple[int, int, int] | None,
         at: datetime,
+        reasons: tuple[str | None, str | None, str | None] | None = None,
     ) -> DebateSnapshot: ...
 
     async def replace(

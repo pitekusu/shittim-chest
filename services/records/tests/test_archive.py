@@ -12,6 +12,7 @@ from shittim_chest.domain import (
     AFFECTION_RULES_VERSION,
     AffectionAssessment,
     AffectionAssessmentStatus,
+    AffectionReasonStatus,
     AttemptId,
     Candidate,
     CandidatePlan,
@@ -258,6 +259,61 @@ def test_v8_affection_replay_preserves_pre_pr1_fingerprint_and_marker_schema() -
         source_schema_version=9,
     )
     assert current_v9.source_fingerprint != replay.source_fingerprint
+
+
+def test_affection_projection_preserves_reason_states_without_changing_legacy_fingerprint() -> None:
+    source = completed_snapshot()
+    legacy = AffectionAssessment(
+        status=AffectionAssessmentStatus.APPLIED,
+        rules_version=AFFECTION_RULES_VERSION,
+        participants=tuple(ParticipantAffection(slot, 500, 0, 0, 500) for slot in ParticipantSlot),
+        assessed_at=NOW,
+    )
+    reasons = replace(
+        legacy,
+        participants=(
+            replace(
+                legacy.participants[0],
+                reason="質問の工夫がうれしいです。",
+                reason_status=AffectionReasonStatus.AVAILABLE,
+            ),
+            replace(legacy.participants[1], reason_status=AffectionReasonStatus.UNAVAILABLE),
+            legacy.participants[2],
+        ),
+    )
+    baseline = project_completed_debate(
+        replace(source, affection_assessment=legacy),
+        identity_hmac_key=HMAC_KEY,
+        presentation=presentation(),
+        projected_at=NOW,
+    )
+    projection = project_completed_debate(
+        replace(source, affection_assessment=reasons),
+        identity_hmac_key=HMAC_KEY,
+        presentation=presentation(),
+        projected_at=NOW,
+    )
+    replay = project_completed_debate(
+        replace(source, affection_assessment=reasons),
+        identity_hmac_key=HMAC_KEY,
+        presentation=presentation(),
+        projected_at=NOW,
+    )
+    meta = next(item for item in projection.items if item["SK"] == "META")
+    affection = meta["affection"]
+    assert isinstance(affection, dict)
+    participants = affection["participants"]
+    assert isinstance(participants, list)
+    assert isinstance(participants[0], dict)
+    assert isinstance(participants[1], dict)
+    assert isinstance(participants[2], dict)
+    assert participants[0]["reason"] == "質問の工夫がうれしいです。"
+    assert participants[0]["reason_status"] == "available"
+    assert participants[1]["reason"] is None
+    assert participants[1]["reason_status"] == "unavailable"
+    assert "reason" not in participants[2] and "reason_status" not in participants[2]
+    assert projection.source_fingerprint != baseline.source_fingerprint
+    assert replay.source_fingerprint == projection.source_fingerprint
 
 
 @pytest.mark.parametrize(

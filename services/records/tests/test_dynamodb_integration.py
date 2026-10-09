@@ -8,6 +8,7 @@ import time
 import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, cast
@@ -61,6 +62,85 @@ from shittim_records.projector import project_affection_profile
 from shittim_records.ranking_adapters import DynamoRankingSnapshotStore, DynamoRankingSource
 from shittim_records.rankings import RankingService
 from shittim_records.read_adapters import DynamoRecordsReader
+from shittim_records.read_api import CursorCodec, RecordsReadService
+
+
+@pytest.mark.parametrize("reasons_recorded", (False, True))
+def test_affection_reason_archive_roundtrip_and_replay_do_not_backfill_legacy_record(
+    dynamodb_client: DynamoDBClient,
+    table_names: tuple[str, str, str],
+    reasons_recorded: bool,
+) -> None:
+    from shittim_chest.domain import (
+        AFFECTION_RULES_VERSION,
+        AffectionAssessment,
+        AffectionAssessmentStatus,
+        AffectionReasonStatus,
+        ParticipantAffection,
+    )
+
+    session_table, archive_table, statistics_table = table_names
+    assessment = AffectionAssessment(
+        status=AffectionAssessmentStatus.APPLIED,
+        rules_version=AFFECTION_RULES_VERSION,
+        participants=tuple(
+            ParticipantAffection(
+                slot,
+                500,
+                0,
+                0,
+                500,
+                reason="質問の工夫に好感を持ちました。"
+                if reasons_recorded and slot is ParticipantSlot.PARTICIPANT_A
+                else None,
+                reason_status=AffectionReasonStatus.AVAILABLE
+                if reasons_recorded and slot is ParticipantSlot.PARTICIPANT_A
+                else AffectionReasonStatus.UNAVAILABLE
+                if reasons_recorded
+                else AffectionReasonStatus.NOT_RECORDED,
+            )
+            for slot in ParticipantSlot
+        ),
+        assessed_at=NOW,
+    )
+    projection = project_completed_debate(
+        replace(completed_snapshot(), affection_assessment=assessment),
+        identity_hmac_key=b"records-test-key-that-is-longer-than-32-bytes",
+        presentation=presentation(),
+        projected_at=NOW,
+    )
+    repository = ArchiveRepository(dynamodb_client, archive_table)
+    assert repository.put_projection(projection)
+    reader = DynamoRecordsReader(
+        dynamodb_client,
+        cast(Any, _NoopS3()),
+        archive_table_name=archive_table,
+        statistics_table_name=statistics_table,
+        session_table_name=session_table,
+        media_bucket_name="media",
+    )
+    stored_before = reader.load_record(record_id=projection.record_id)
+    assert not repository.put_projection(projection)
+    assert reader.load_record(record_id=projection.record_id) == stored_before
+    meta = next(item for item in stored_before if item["SK"] == "META")
+    affection = meta["affection"]
+    assert isinstance(affection, dict)
+    entries = affection["participants"]
+    assert isinstance(entries, list)
+    assert all(
+        isinstance(item, dict) and ("reason" in item) == reasons_recorded for item in entries
+    )
+    detail = RecordsReadService(reader=reader, cursor_codec=CursorCodec(b"s" * 32)).get_record(
+        record_id=projection.record_id, now=NOW
+    )
+    assert detail.affection is not None
+    assert detail.affection.participants[0].reason == assessment.participants[0].reason
+    assert all(
+        entry.reason_status == original.reason_status.value
+        for entry, original in zip(
+            detail.affection.participants, assessment.participants, strict=True
+        )
+    )
 
 
 @pytest.mark.parametrize("condition", ["live", "revoked", "expired", "changed"])

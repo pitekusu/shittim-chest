@@ -43,6 +43,7 @@ from shittim_chest.application import (
 from shittim_chest.domain import (
     PARTICIPANTS,
     AffectionProfile,
+    AffectionReasonStatus,
     AttemptId,
     DebateId,
     DebatePhase,
@@ -522,6 +523,13 @@ def test_affection_assessment_and_private_profile_round_trip_without_reason_text
     assert item["SK"] == "AFFECTION"
     assert item["schema_version"] == CURRENT_SCHEMA_VERSION
     assert "reason" not in item
+    raw_participants = item["participants"]
+    assert isinstance(raw_participants, list)
+    assert all(
+        "reason" not in entry and "reason_status" not in entry
+        for entry in raw_participants
+        if isinstance(entry, dict)
+    )
     assert deserialize_snapshot(items).affection_assessment == assessment
 
     profile_item = serialize_affection_profile(updated_profile)
@@ -533,6 +541,82 @@ def test_affection_assessment_and_private_profile_round_trip_without_reason_text
     assert deserialize_affection_profile(profile_item) == updated_profile
     with pytest.raises(PersistenceFormatError, match="partition"):
         deserialize_affection_profile({**profile_item, "PK": "AFFECTION#REQUESTER#wrong"})
+
+
+def test_affection_public_reactions_round_trip_without_entering_the_current_profile() -> None:
+    source = snapshot()
+    profile = AffectionProfile.initial(
+        requester_key=REQUESTER_KEY,
+        requester_username=source.requester_username,
+        requester_display_name=source.requester_display_name,
+        at=NOW,
+    )
+    updated_profile, assessment = assess_affection(
+        profile,
+        scores=(35, -43, 0),
+        reasons=("具体的な質問をもらえて嬉しいです。", None, "特別な変化は感じませんでした。"),
+        assessed_at=NOW + timedelta(seconds=7),
+    )
+    items = serialize_snapshot(replace(source, affection_assessment=assessment))
+    item = next(value for value in items if value["record_type"] == "affection_assessment")
+    assert deserialize_snapshot(items).affection_assessment == assessment
+    assert assessment.participants[1].reason_status is AffectionReasonStatus.UNAVAILABLE
+    assert "reason" not in serialize_affection_profile(updated_profile)
+    assert "reason_status" not in serialize_affection_profile(updated_profile)
+
+    raw = item["participants"]
+    assert isinstance(raw, list)
+    first = raw[0]
+    assert isinstance(first, dict)
+    assert first["reason"] == assessment.participants[0].reason
+    first["reason_status"] = "unavailable"
+    with pytest.raises(ValueError, match="affection reason"):
+        deserialize_snapshot(items)
+
+
+def test_new_unavailable_affection_reactions_round_trip_with_explicit_failure_state() -> None:
+    source = snapshot()
+    profile = AffectionProfile.initial(
+        requester_key=REQUESTER_KEY,
+        requester_username=source.requester_username,
+        requester_display_name=source.requester_display_name,
+        at=NOW,
+    )
+    _, assessment = assess_affection(
+        profile,
+        scores=None,
+        reasons=(None, None, None),
+        assessed_at=NOW + timedelta(seconds=7),
+    )
+    items = serialize_snapshot(replace(source, affection_assessment=assessment))
+    assert deserialize_snapshot(items).affection_assessment == assessment
+    assert all(
+        entry.reason_status is AffectionReasonStatus.UNAVAILABLE and entry.reason is None
+        for entry in assessment.participants
+    )
+
+
+@pytest.mark.parametrize("missing_field", ["reason", "reason_status"])
+def test_affection_reaction_requires_both_persistence_fields(missing_field: str) -> None:
+    source = snapshot()
+    profile = AffectionProfile.initial(
+        requester_key=REQUESTER_KEY,
+        requester_username=source.requester_username,
+        requester_display_name=source.requester_display_name,
+        at=NOW,
+    )
+    _, assessment = assess_affection(
+        profile, scores=(0, 0, 0), reasons=(None, None, None), assessed_at=NOW
+    )
+    items = serialize_snapshot(replace(source, affection_assessment=assessment))
+    item = next(value for value in items if value["record_type"] == "affection_assessment")
+    raw = item["participants"]
+    assert isinstance(raw, list)
+    first = raw[0]
+    assert isinstance(first, dict)
+    del first[missing_field]
+    with pytest.raises(PersistenceFormatError, match="reason and status must be stored together"):
+        deserialize_snapshot(items)
 
 
 def test_v8_affection_profile_requires_an_opaque_key_and_defaults_memorial_state() -> None:

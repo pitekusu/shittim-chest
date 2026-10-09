@@ -823,6 +823,13 @@ class RecordsReadService:
         participants = raw.get("participants")
         if not isinstance(participants, list):
             raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+        legacy_fields = {"participant", "before", "question_score", "applied_delta", "after"}
+        if any(
+            not isinstance(item, dict)
+            or set(item) not in (legacy_fields, legacy_fields | {"reason", "reason_status"})
+            for item in participants
+        ):
+            raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
         return {
             "status": raw.get("status"),
             "rubricVersion": raw.get("rubric_version"),
@@ -833,6 +840,8 @@ class RecordsReadService:
                     "questionScore": item.get("question_score"),
                     "appliedDelta": item.get("applied_delta"),
                     "after": item.get("after"),
+                    "reason": item.get("reason"),
+                    "reasonStatus": item.get("reason_status", "not_recorded"),
                 }
                 for item in participants
                 if isinstance(item, dict)

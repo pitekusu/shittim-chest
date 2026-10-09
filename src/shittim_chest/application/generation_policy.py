@@ -64,7 +64,7 @@ def _policy(
         policy_id=policy_id,
         model=model,
         reasoning_mode=reasoning_mode,
-        affection=PhaseBudget(ReasoningEffort.MEDIUM, 512),
+        affection=PhaseBudget(ReasoningEffort.MEDIUM, 1_536),
         initial_opinion=PhaseBudget(ReasoningEffort.HIGH, 2_400),
         final_proposal=PhaseBudget(ReasoningEffort.HIGH, 4_000),
         vote=PhaseBudget(ReasoningEffort.MEDIUM, 800),

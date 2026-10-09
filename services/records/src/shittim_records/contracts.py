@@ -328,11 +328,40 @@ class FinalDecisionView(PublicModel):
 
 
 class AffectionParticipantView(PublicModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {"reasonStatus": {"const": "available"}},
+                        "required": ["reasonStatus"],
+                    },
+                    "then": {
+                        "required": ["reason"],
+                        "properties": {"reason": {"type": "string"}},
+                    },
+                    "else": {"properties": {"reason": {"type": "null"}}},
+                },
+                {
+                    "if": {
+                        "properties": {"questionScore": {"type": "null"}},
+                        "required": ["questionScore"],
+                    },
+                    "then": {"properties": {"reasonStatus": {"not": {"const": "available"}}}},
+                },
+            ]
+        }
+    )
+
     participant: ParticipantSlot
     before: Annotated[int, Field(ge=0, le=1000)]
     question_score: Annotated[int, Field(ge=-100, le=100)] | None
     applied_delta: Annotated[int, Field(ge=-100, le=100)]
     after: Annotated[int, Field(ge=0, le=1000)]
+    reason: Annotated[str, Field(min_length=1, max_length=500, pattern=r"\S")] | None = Field(
+        default=None, repr=False
+    )
+    reason_status: Literal["available", "unavailable", "not_recorded"] = "not_recorded"
 
     @model_validator(mode="after")
     def require_consistent_change(self) -> AffectionParticipantView:
@@ -340,6 +369,12 @@ class AffectionParticipantView(PublicModel):
             raise ValueError("applied_delta must match before and after")
         if self.question_score is None and self.applied_delta != 0:
             raise ValueError("an unavailable score cannot change affection")
+        if (self.reason_status == "available") != (self.reason is not None):
+            raise ValueError(
+                "available reason status requires a reason and other statuses forbid it"
+            )
+        if self.question_score is None and self.reason_status == "available":
+            raise ValueError("an unavailable score cannot expose a reason")
         return self
 
 
