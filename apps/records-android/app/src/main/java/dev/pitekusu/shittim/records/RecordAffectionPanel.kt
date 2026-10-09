@@ -114,7 +114,8 @@ internal fun RecordAffectionPanel(affection: RecordAffection?, motionKey: String
       // prevent the compact card from animating when it fits in the viewport.
       Column(Modifier.fillMaxWidth().padding(top = ShittimSpacing.Small),
         verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Small)) {
-        Text(stringResource(R.string.record_affection_reason), style = MaterialTheme.typography.titleSmall,
+        Text(stringResource(R.string.record_affection_reason, change.participantName),
+          style = MaterialTheme.typography.titleSmall,
           modifier = Modifier.semantics { heading() })
         val reason = when (change.reasonStatus) {
           RecordAffectionReasonStatus.AVAILABLE -> change.reason.orEmpty()

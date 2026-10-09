@@ -185,7 +185,7 @@ describe("RecordDetail", () => {
     expect(
       screen.getByText("質問の評価を完了できなかったため、親愛度は変更されませんでした。"),
     ).toBeVisible();
-    expect(screen.queryByRole("heading", { name: "率直な感想" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /から一言$/ })).not.toBeInTheDocument();
   });
 
   it.each([

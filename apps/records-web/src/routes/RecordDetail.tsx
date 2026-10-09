@@ -361,7 +361,7 @@ export function RecordDocument({
                           </p>
                         )}
                       <div className={detailStyles.affectionReason}>
-                        <h4 className={JAPANESE_HEADING_CLASS}>率直な感想</h4>
+                        <h4 className={JAPANESE_HEADING_CLASS}>{person.displayName}から一言</h4>
                         <p className={JAPANESE_PROSE_CLASS}>
                           {change.reasonStatus === "available"
                             ? change.reason

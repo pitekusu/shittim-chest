@@ -308,6 +308,7 @@ class RecordDetailScreenTest {
       compose.onNodeWithTag("detail-section-Affection").assertIsSelected()
       compose.onNodeWithTag("affection-person-$index").assertIsSelected()
       compose.onNodeWithText("親愛度：${500 + index * 100} → ${510 + index * 100}").assertExists()
+      compose.onNodeWithText("${names[index]}から一言").assertExists()
       compose.onNodeWithText("${names[index]}の率直な感想です。").assertExists()
     }
     fun swipe(forward: Boolean) {

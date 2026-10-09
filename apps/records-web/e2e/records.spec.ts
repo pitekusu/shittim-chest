@@ -1082,14 +1082,15 @@ test("record detail identifies the requester and uses affection hearts", async (
   await expect(aronaHearts.locator('[data-filled="true"]')).toHaveCount(5);
   await expect(plannaHearts.locator('[data-filled="true"]')).toHaveCount(5);
   await expect(abeHearts.locator('[data-filled="true"]')).toHaveCount(4);
-  await expect(affection.getByRole("heading", { name: "率直な感想" })).toHaveCount(3);
   for (const change of detailWithAffection.affection.participants) {
+    const person = participants.find((item) => item.slot === change.participant)!;
     const card = affection.getByRole("article").filter({
       has: page.getByRole("heading", {
-        name: participants.find((person) => person.slot === change.participant)!.displayName,
+        name: person.displayName,
         exact: true,
       }),
     });
+    await expect(card.getByRole("heading", { name: `${person.displayName}から一言` })).toBeVisible();
     await expect(card.getByText(change.reason)).toBeVisible();
   }
 
