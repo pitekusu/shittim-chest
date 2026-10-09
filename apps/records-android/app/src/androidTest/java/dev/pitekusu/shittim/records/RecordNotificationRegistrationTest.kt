@@ -27,6 +27,7 @@ import java.time.Instant
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -137,11 +138,21 @@ class RecordNotificationRegistrationTest {
       .setProjectId("synthetic-record-late").setApiKey("synthetic-not-a-real-key").build(), "record-late-test")
     val starts = AtomicInteger()
     val started = CompletableDeferred<Unit>()
+    val recoveryStarted = CompletableDeferred<Unit>()
     val fail = CompletableDeferred<Unit>()
     val factory = object : WorkerFactory() {
-      override fun createWorker(appContext: Context, workerClassName: String, parameters: WorkerParameters): ListenableWorker =
-        if (workerClassName == RecordNotificationRecoveryWorker::class.java.name) RecordNotificationRecoveryWorker(appContext, parameters)
-        else object : CoroutineWorker(appContext, parameters) {
+      override fun createWorker(appContext: Context, workerClassName: String, parameters: WorkerParameters): ListenableWorker {
+        if (workerClassName == RecordNotificationRecoveryWorker::class.java.name) {
+          return object : CoroutineWorker(appContext, parameters) {
+            override suspend fun doWork(): Result {
+              // Observe entry directly instead of relying on a Flow's RUNNING emission.
+              recoveryStarted.complete(Unit)
+              return RecordNotificationRecoveryWorker(appContext, parameters).doWork()
+            }
+          }
+        }
+        check(workerClassName == RecordNotificationWorker::class.java.name)
+        return object : CoroutineWorker(appContext, parameters) {
           override suspend fun doWork(): Result {
             if (starts.getAndIncrement() == 0) {
               started.complete(Unit)
@@ -158,6 +169,7 @@ class RecordNotificationRegistrationTest {
               })
           }
         }
+      }
     }
     try {
       authorize(context)
@@ -169,31 +181,49 @@ class RecordNotificationRegistrationTest {
       val manager = WorkManager.getInstance(context)
       val driver = checkNotNull(WorkManagerTestInitHelper.getTestDriver(context))
       fun requests() = manager.getWorkInfosForUniqueWork("records-notification-registration-v1").get(10, TimeUnit.SECONDS)
+      fun states(name: String): String = try {
+        manager.getWorkInfosForUniqueWork(name).get(1, TimeUnit.SECONDS).map { it.state }.toString()
+      } catch (error: Exception) { error.javaClass.simpleName }
+      fun <T> await(stage: String, block: suspend () -> T): T = runBlocking {
+        try { withTimeout(10_000) { block() } }
+        catch (error: TimeoutCancellationException) {
+          throw AssertionError("Timed out at $stage; " +
+            "records-notification-registration-v1=${states("records-notification-registration-v1")}; " +
+            "${RecordNotificationRegistration.RECOVERY_WORK}=${states(RecordNotificationRegistration.RECOVERY_WORK)}; " +
+            "registrationStarts=${starts.get()}", error)
+        }
+      }
       RecordNotificationRegistration.schedule(context)
       val failed = requests().single()
       driver.setAllConstraintsMet(failed.id)
-      runBlocking { withTimeout(10_000) { started.await() } }
+      await("initial_registration_entered") { started.await() }
       assertEquals(WorkInfo.State.RUNNING, manager.getWorkInfoById(failed.id).get()?.state)
       assertEquals(null, settings.binding)
       RecordNotificationRegistration.onRegistered(context, "late-fid")
       val waiting = manager.getWorkInfosForUniqueWork(RecordNotificationRegistration.RECOVERY_WORK).get(10, TimeUnit.SECONDS).single()
-      runBlocking { withTimeout(10_000) { manager.getWorkInfoByIdFlow(waiting.id).first { it?.state == WorkInfo.State.RUNNING } } }
+      driver.setAllConstraintsMet(waiting.id)
+      await("recovery_worker_entered") { recoveryStarted.await() }
+      assertEquals(WorkInfo.State.RUNNING, manager.getWorkInfoById(waiting.id).get()?.state)
       assertEquals(1, requests().size) // No dependent that would inherit the imminent failure.
       fail.complete(Unit)
-      runBlocking { withTimeout(10_000) { manager.getWorkInfoByIdFlow(failed.id).first { it?.state == WorkInfo.State.FAILED } } }
-      val recovery = runBlocking { withTimeout(10_000) {
+      await("initial_registration_failed") {
+        manager.getWorkInfoByIdFlow(failed.id).first { it?.state == WorkInfo.State.FAILED }
+      }
+      val recovery = await("follow_up_enqueued") {
         manager.getWorkInfosForUniqueWorkFlow("records-notification-registration-v1")
           .first { work -> work.any { it.id != failed.id && it.state == WorkInfo.State.ENQUEUED } }
           .single { it.id != failed.id && !it.state.isFinished }
-      } }
+      }
       assertEquals(WorkInfo.State.ENQUEUED, recovery.state)
       driver.setAllConstraintsMet(recovery.id)
-      runBlocking { withTimeout(10_000) { manager.getWorkInfoByIdFlow(recovery.id).first { it?.state == WorkInfo.State.SUCCEEDED } } }
+      await("follow_up_succeeded") {
+        manager.getWorkInfoByIdFlow(recovery.id).first { it?.state == WorkInfo.State.SUCCEEDED }
+      }
       assertFalse(settings.failed)
       checkNotNull(settings.binding)
-      runBlocking { withTimeout(10_000) {
+      await("recovery_work_finished") {
         manager.getWorkInfosForUniqueWorkFlow(RecordNotificationRegistration.RECOVERY_WORK).first { work -> work.all { it.state.isFinished } }
-      } }
+      }
       val count = requests().size
       RecordNotificationRegistration.onRegistered(context, "late-fid")
       assertEquals(count, requests().size)
