@@ -1090,7 +1090,9 @@ test("record detail identifies the requester and uses affection hearts", async (
         exact: true,
       }),
     });
-    await expect(card.getByRole("heading", { name: `${person.displayName}から一言` })).toBeVisible();
+    await expect(
+      card.getByRole("heading", { name: `${person.displayName}から一言` }),
+    ).toBeVisible();
     await expect(card.getByText(change.reason)).toBeVisible();
   }
 
