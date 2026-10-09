@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="notification_diagnostic">登録の診断：%1$s／%2$s（試行%3$d）</string>
+    <string name="notification_stage_session">端末の認証確認</string>
+    <string name="notification_stage_firebase">Googleへの端末登録</string>
+    <string name="notification_stage_register">サーバーへの登録</string>
+    <string name="notification_stage_unregister">サーバーからの解除</string>
+    <string name="notification_stage_expiry">有効期限の確認</string>
+    <string name="notification_stage_save">端末への保存</string>
+    <string name="notification_failure_network">通信できませんでした</string>
+    <string name="notification_failure_throttled">要求が集中しています</string>
+    <string name="notification_failure_unavailable">サービスを利用できません</string>
+    <string name="notification_failure_response">応答を確認できませんでした</string>
+    <string name="notification_failure_authorization">再認証が必要です</string>
+    <string name="notification_failure_expiry">有効な期限を確認できませんでした</string>
+    <string name="notification_failure_storage">保存できませんでした</string>
+    <string name="notification_failure_firebase">Googleへの登録に失敗しました</string>
+    <string name="notification_failure_configuration">通知の設定を確認できませんでした</string>
+    <string name="notification_failure_unexpected">処理を完了できませんでした</string>
+</resources>
