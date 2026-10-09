@@ -2,7 +2,7 @@
 
 ARG SOURCE_DATE_EPOCH=0
 
-FROM ghcr.io/astral-sh/uv:0.12.17@sha256:10787c682e4184e4f290de1171fd4703dc63de99221f10fe1c99002ce7fa9acc AS uv
+FROM ghcr.io/astral-sh/uv:0.12.24@sha256:3af4716e991d6956a41e573eab705d0ee08500cd829ed30293eb8472f372c65a AS uv
 
 FROM dhi.io/python:3.14.8-debian13-dev@sha256:efbe85d819ebe4ffcd0c8447a4f8330bfd95dd99a6dcd0be5a8380ad15c64867 AS builder
 
