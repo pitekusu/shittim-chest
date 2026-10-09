@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from time import monotonic
 from typing import Literal, TypeVar
-from unicodedata import normalize
+from unicodedata import category, normalize
 
 import httpx2
 from openai import (
@@ -634,15 +634,26 @@ def _sanitize_affection_reason(
     if len(reason) > MAX_AFFECTION_REASON_LENGTH:
         return None, "too_long"
     normalized_reason = _normalize_prompt_copy(reason)
-    # Whole short prompts are distinctive at 16 characters; partial quotations need 32
-    # contiguous characters so names and ordinary persona-style sentiments stay usable.
+    symbolic_reason = _normalize_prompt_copy(reason, preserve_symbols=True)
+    folded_reason = normalize("NFKC", reason).casefold()
+    # Reject complete protected prompts at every length. Partial quotations need 32
+    # contiguous characters so common phrases inside longer personas stay usable.
     passages = {
         normalized_reason[index : index + 32] for index in range(len(normalized_reason) - 31)
     }
     for prompt in protected_prompts:
-        normalized_prompt = _normalize_prompt_copy(prompt)
-        if len(normalized_prompt) >= 16 and normalized_prompt in normalized_reason:
+        folded_prompt = normalize("NFKC", prompt).casefold().strip()
+        if folded_prompt and folded_prompt in folded_reason:
             return None, "prompt_disclosure"
+        normalized_prompt = _normalize_prompt_copy(prompt)
+        if normalized_prompt:
+            if normalized_prompt in normalized_reason:
+                return None, "prompt_disclosure"
+        else:
+            # Punctuation-only configurations are valid and must not become an empty match.
+            symbolic_prompt = _normalize_prompt_copy(prompt, preserve_symbols=True)
+            if symbolic_prompt and symbolic_prompt in symbolic_reason:
+                return None, "prompt_disclosure"
         if any(
             normalized_prompt[index : index + 32] in passages
             for index in range(len(normalized_prompt) - 31)
@@ -651,10 +662,13 @@ def _sanitize_affection_reason(
     return reason, "available"
 
 
-def _normalize_prompt_copy(text: str) -> str:
-    # Ignore Unicode formatting, punctuation, spacing, and width/case differences.
+def _normalize_prompt_copy(text: str, *, preserve_symbols: bool = False) -> str:
+    # Ignore formatting, spacing, marks, and width/case differences. Retain punctuation
+    # and symbols only when protecting a configuration with no letters or numbers.
     return "".join(
-        character for character in normalize("NFKC", text).casefold() if character.isalnum()
+        character
+        for character in normalize("NFKC", text).casefold()
+        if character.isalnum() or (preserve_symbols and category(character)[0] in {"P", "S"})
     )
 
 

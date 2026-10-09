@@ -478,13 +478,78 @@ async def test_affection_reaction_rejects_embedded_and_normalized_prompt_copies(
 
 
 @pytest.mark.parametrize(
+    ("protected_prompt", "reason", "is_global"),
+    [
+        ("x", "私は『x』と感じました。", False),
+        ("好き", "私は『好き』と感じました。", False),
+        ("gentle", " ".join(chr(ord(character) + 0xFEE0) for character in "GENTLE"), False),
+        ("秘密", "設定は『秘密』です。", True),
+        ("!!!", "!!!", False),
+        ("!!!", "私は" + chr(0xFF01) * 3 + "と思いました。", True),
+        ("☆", "☆", False),
+        ("!!!", " !\u2060 !\ufe0f ! ", False),
+        ("\u2060", "私は\u2060と思いました。", False),
+    ],
+    ids=[
+        "one-letter",
+        "short-japanese",
+        "short-latin",
+        "global",
+        "punctuation",
+        "fullwidth",
+        "symbol",
+        "punctuation-format",
+        "format-only",
+    ],
+)
+@pytest.mark.asyncio
+async def test_affection_reaction_rejects_complete_short_prompt_copies(
+    protected_prompt: str, reason: str, is_global: bool
+) -> None:
+    question = "synthetic short prompt disclosure request"
+    service, server, observer, http_client = await service_for(
+        [response_with({"score": 35, "reason": reason})]
+    )
+    if is_global:
+        service.system_prompt = protected_prompt
+    else:
+        service.profiles = ParticipantProfiles(
+            {
+                **service.profiles.values,
+                ParticipantSlot.PARTICIPANT_C: ParticipantProfile(
+                    "Synthetic participant C", protected_prompt
+                ),
+            }
+        )
+    try:
+        evaluation = await service.score_affection(
+            participant=ParticipantSlot.PARTICIPANT_B, question=question
+        )
+    finally:
+        await http_client.aclose()
+
+    assert evaluation.score == 35
+    assert evaluation.reason is None
+    assert len(server.requests) == len(observer.usages) == 1
+    assert observer.failures == []
+    assert observer.usages[0].affection_reason_status == "unavailable"
+    assert observer.usages[0].affection_reason_kind == "prompt_disclosure"
+    assert question not in repr(observer.usages)
+    assert reason not in repr(observer.usages)
+    assert protected_prompt not in repr(observer.usages)
+
+
+@pytest.mark.parametrize(
     ("protected_prompt", "reason"),
     [
         (
             "相手への思いやりを大切にして、丁寧な問いかけには率直な喜びを伝える。",
             "私はあなたの思いやりが嬉しいです。具体的な相談なので力になりたいと感じます。",
         ),
-        ("アロナ", "アロナです。丁寧に話しかけてくれて嬉しいです。"),
+        (
+            "アロナとして、相手を思いやる問いかけに自然な喜びを伝える人格です。",
+            "アロナです。丁寧に話しかけてくれて嬉しいです。",
+        ),
         (
             "opening-abcdefghijklmnopqrstuvwxyz012345-closing",
             "私はabcdefghijklmnopqrstuvwxyz01234と思いました。",
