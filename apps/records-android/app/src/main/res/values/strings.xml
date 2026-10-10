@@ -9,6 +9,7 @@
     <string name="play_update_failed">更新できませんでした。あとで再試行できます</string>
   <string name="debate_start">議論を開始</string>
   <string name="debate_requests">自分の議論依頼</string>
+  <string name="debate_request_created_at">依頼日時：%1$s（日本時間）</string>
   <string name="debate_requests_empty">まだ議論を依頼していません。</string>
   <string name="debate_requests_more">さらに表示</string>
   <string name="debate_requests_online">進行状況の確認にはオンライン接続が必要です。</string>
