@@ -1,0 +1,2 @@
+# Gradle generates the Windows launcher with CRLF; keep all other whitespace checks.
+apps/records-android/gradlew.bat whitespace=cr-at-eol

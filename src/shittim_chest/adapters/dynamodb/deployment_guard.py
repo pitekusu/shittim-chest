@@ -642,7 +642,7 @@ def _post_acquire_items(
             schema_version=CURRENT_SCHEMA_VERSION,
         )
         if validated.schema_version == PREVIOUS_SCHEMA_VERSION
-        else dict(item)
+        else item.copy()
         for spec, item in zip(specs, validated.items[:10], strict=True)
     )
     return (*controls, serialize_deployment_lock(locked))

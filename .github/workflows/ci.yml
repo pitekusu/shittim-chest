@@ -21,8 +21,8 @@ concurrency:
 
 env:
   DOCKER_BUILD_RECORD_RETENTION_DAYS: "30"
-  PYTHON_VERSION: "3.14.7"
-  UV_VERSION: "0.12.17"
+  PYTHON_VERSION: "3.14.8"
+  UV_VERSION: "0.12.24"
 
 jobs:
   changes:
@@ -75,7 +75,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ env.PYTHON_VERSION }}
@@ -116,7 +116,7 @@ jobs:
           python3 tools/check_ci_scope.py --github-output "${GITHUB_OUTPUT}"
       - name: Install pinned Python and uv
         if: ${{ steps.scope.outputs.required == 'true' }}
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ env.PYTHON_VERSION }}
@@ -164,7 +164,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ env.PYTHON_VERSION }}
@@ -268,7 +268,7 @@ jobs:
           python3 tools/check_ci_scope.py --github-output "${GITHUB_OUTPUT}"
       - name: Install pinned Python and uv
         if: ${{ steps.scope.outputs.required == 'true' }}
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ env.PYTHON_VERSION }}
@@ -332,7 +332,7 @@ jobs:
         if: ${{ steps.scope.outputs.required == 'true' }}
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "24.20.0"
+          node-version: "24.21.0"
           cache: npm
       - name: Install locked CDK dependencies
         if: ${{ steps.scope.outputs.required == 'true' }}
@@ -380,7 +380,7 @@ jobs:
           java-version-file: apps/records-android/.java-version
       - name: Validate the Wrapper and set up Gradle caching
         if: ${{ steps.scope.outputs.required == 'true' }}
-        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
       - name: Install the compile SDK and build tools
@@ -388,7 +388,7 @@ jobs:
         id: android-sdk
         run: |
           "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" \
-            "platforms;android-37.1" "build-tools;36.0.0" emulator
+            "platforms;android-37.2" "build-tools;37.0.0" emulator
           version=$(sed -n 's/^Pkg.Revision *= *//p' "${ANDROID_HOME}/emulator/source.properties")
           [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           echo "emulator=${version}" >> "${GITHUB_OUTPUT}"
@@ -584,7 +584,7 @@ jobs:
         if: ${{ steps.scope.outputs.required == 'true' }}
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
-          version: v0.37.0
+          version: v0.38.0
           driver-opts: |
             image=${{ steps.buildkit-image.outputs.image }}
       - name: Verify the pinned DHI ARM64 manifests
@@ -918,14 +918,14 @@ jobs:
       - name: Upload the source SBOM SARIF to code scanning
         if: ${{ steps.scope.outputs.required == 'true' && (always()) }}
         id: source-sarif
-        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           sarif_file: ${{ runner.temp }}/grype-sarif/grype-source.sarif
           category: grype-source-sbom
       - name: Upload the image SBOM SARIF to code scanning
         if: ${{ steps.scope.outputs.required == 'true' && (always()) }}
         id: image-sarif
-        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           sarif_file: ${{ runner.temp }}/grype-sarif/grype-image-arm64.sarif
           category: grype-image-sbom
@@ -981,7 +981,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ env.PYTHON_VERSION }}

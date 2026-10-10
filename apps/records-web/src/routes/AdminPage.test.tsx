@@ -296,22 +296,22 @@ describe("AdminPage", () => {
       "admin-service-inspector": -150,
       "admin-service-dynamodb": 50,
     };
-    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
-      function (this: HTMLElement) {
-        const top = tops[this.id] ?? 0;
-        return {
-          top,
-          bottom: top + 20,
-          left: 0,
-          right: 300,
-          width: 300,
-          height: 20,
-          x: 0,
-          y: top,
-          toJSON: () => ({}),
-        };
-      },
-    );
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      const top = tops[this.id] ?? 0;
+      return {
+        top,
+        bottom: top + 20,
+        left: 0,
+        right: 300,
+        width: 300,
+        height: 20,
+        x: 0,
+        y: top,
+        toJSON: () => ({}),
+      };
+    });
     fireEvent.scroll(window);
     await waitFor(() => {
       expect(screen.getByRole("link", { name: "DynamoDB" })).toHaveAttribute(

@@ -1340,11 +1340,11 @@ describe("MemorialPage", () => {
     const refresh = deferred<MemoryResponse>();
     getMemoryMock.mockReturnValueOnce(refresh.promise);
     const downloads: HTMLAnchorElement[] = [];
-    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
-      function (this: HTMLAnchorElement) {
-        downloads.push(this);
-      },
-    );
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      downloads.push(this);
+    });
     renderMemorial(readyState());
     fireEvent.click(await screen.findByRole("button", { name: "画像を保存" }));
     expect(screen.getByRole("button", { name: "保存を準備しています" })).toBeDisabled();
