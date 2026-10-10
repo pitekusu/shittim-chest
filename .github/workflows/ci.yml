@@ -241,7 +241,7 @@ jobs:
           uv run --frozen python tools/check_sbom.py validate \
             "${RUNNER_TEMP}/source-sbom.cdx.json"
       - name: Retain the source SBOM
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: source-sbom-${{ github.sha }}
           path: ${{ runner.temp }}/source-sbom.cdx.json
@@ -330,7 +330,7 @@ jobs:
           python3 tools/check_ci_scope.py --github-output "${GITHUB_OUTPUT}"
       - name: Install Node.js
         if: ${{ steps.scope.outputs.required == 'true' }}
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.21.0"
           cache: npm
@@ -507,7 +507,7 @@ jobs:
       - name: Retain Android reports, not an unsigned distribution
         if: ${{ steps.scope.outputs.required == 'true' && (!cancelled()) }}
         id: reports-android
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: android-reports-${{ github.sha }}
           path: |
@@ -753,7 +753,7 @@ jobs:
       - name: Retain the final image SBOM
         if: ${{ steps.scope.outputs.required == 'true' }}
         id: retain-sbom
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: image-sbom-arm64-${{ github.sha }}
           path: |
@@ -804,13 +804,13 @@ jobs:
           python3 tools/check_ci_scope.py --github-output "${GITHUB_OUTPUT}" --require-dependency security --require-dependency container-arm64
       - name: Download the source SBOM
         if: ${{ steps.scope.outputs.required == 'true' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: source-sbom-${{ github.sha }}
           path: ${{ runner.temp }}/grype-input/source
       - name: Download the arm64 image SBOM
         if: ${{ steps.scope.outputs.required == 'true' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: image-sbom-arm64-${{ github.sha }}
           path: ${{ runner.temp }}/grype-input/image
@@ -903,7 +903,7 @@ jobs:
           rewrite_locations "${RUNNER_TEMP}/grype-sarif/grype-image-arm64.sarif" "Dockerfile"
       - name: Retain the complete Grype scan results
         if: ${{ steps.scope.outputs.required == 'true' && (always()) }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: grype-scan-${{ github.sha }}
           path: |

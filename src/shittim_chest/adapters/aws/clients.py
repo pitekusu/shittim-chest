@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import threading
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Final
@@ -79,7 +79,7 @@ _CURRENT_INGRESS_SDK_GATE: Final[ContextVar[IngressSdkCancellationGate | None]] 
 @contextmanager
 def activate_ingress_sdk_cancellation_gate(
     gate: IngressSdkCancellationGate,
-) -> Iterator[None]:
+) -> Generator[None]:
     """Propagate one mutable gate through asyncio.to_thread context copies."""
 
     token = _CURRENT_INGRESS_SDK_GATE.set(gate)

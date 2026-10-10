@@ -6,7 +6,7 @@ import asyncio
 import logging
 import os
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Final, Literal, cast
@@ -105,7 +105,7 @@ class _IngressStageTimings:
         self.response_build_ms = -1
 
     @contextmanager
-    def measure(self, stage: _IngressTimingStage) -> Iterator[None]:
+    def measure(self, stage: _IngressTimingStage) -> Generator[None]:
         """Record one stage even when that stage raises."""
 
         started_ns = self._clock_ns()
@@ -125,7 +125,7 @@ class _IngressStageTimings:
 def _measure_stage(
     timings: _IngressStageTimings | None,
     stage: _IngressTimingStage,
-) -> Iterator[None]:
+) -> Generator[None]:
     if timings is None:
         yield
         return
