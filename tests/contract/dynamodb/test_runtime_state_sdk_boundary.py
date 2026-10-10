@@ -2,7 +2,6 @@
 
 import traceback
 from datetime import UTC, datetime, timedelta
-from typing import cast
 
 import boto3
 import pytest
@@ -76,22 +75,19 @@ def operation(ingress_request: IngressRequest) -> IngressOperationResult:
 
 def test_transaction_token_covers_the_complete_canonical_body() -> None:
     def actions_for(*, at: str, updated_at: str) -> list[TransactWriteItemTypeDef]:
-        return cast(
-            list[TransactWriteItemTypeDef],
-            [
-                {
-                    "ConditionCheck": {
-                        "TableName": "test-table",
-                        "Key": {"PK": {"S": "request"}},
-                        "ConditionExpression": "updated_at=:updated AND terminal_deadline_at>:at",
-                        "ExpressionAttributeValues": {
-                            ":updated": {"S": updated_at},
-                            ":at": {"S": at},
-                        },
-                    }
+        return [
+            {
+                "ConditionCheck": {
+                    "TableName": "test-table",
+                    "Key": {"PK": {"S": "request"}},
+                    "ConditionExpression": "updated_at=:updated AND terminal_deadline_at>:at",
+                    "ExpressionAttributeValues": {
+                        ":updated": {"S": updated_at},
+                        ":at": {"S": at},
+                    },
                 }
-            ],
-        )
+            }
+        ]
 
     actions = actions_for(
         at="2026-07-26T05:30:01.000000Z",

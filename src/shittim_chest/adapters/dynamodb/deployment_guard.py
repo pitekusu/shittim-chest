@@ -350,19 +350,16 @@ class DynamoDbDeploymentGuard:
     ) -> list[TransactWriteItemTypeDef]:
         if validated is None:
             return [
-                cast(
-                    TransactWriteItemTypeDef,
-                    {
-                        "Put": {
-                            "TableName": self._table_name,
-                            "Item": marshal_item(serialize_deployment_lock(opened)),
-                            **_exact_condition(
-                                serialize_deployment_lock(current),
-                                allowed_fields=_DeploymentLockSpec().allowed_fields,
-                            ),
-                        }
-                    },
-                ),
+                {
+                    "Put": {
+                        "TableName": self._table_name,
+                        "Item": marshal_item(serialize_deployment_lock(opened)),
+                        **_exact_condition(
+                            serialize_deployment_lock(current),
+                            allowed_fields=_DeploymentLockSpec().allowed_fields,
+                        ),
+                    }
+                },
                 _put_immutable(self._table_name, audit),
             ]
         if validated.schema_version != CURRENT_SCHEMA_VERSION:
@@ -523,19 +520,16 @@ class DynamoDbDeploymentGuard:
             ]
         previous_lock = validated.items[10]
         actions.append(
-            cast(
-                TransactWriteItemTypeDef,
-                {
-                    "Put": {
-                        "TableName": self._table_name,
-                        "Item": marshal_item(post_acquire_items[10]),
-                        **_exact_condition(
-                            previous_lock,
-                            allowed_fields=_DeploymentLockSpec().allowed_fields,
-                        ),
-                    }
-                },
-            )
+            {
+                "Put": {
+                    "TableName": self._table_name,
+                    "Item": marshal_item(post_acquire_items[10]),
+                    **_exact_condition(
+                        previous_lock,
+                        allowed_fields=_DeploymentLockSpec().allowed_fields,
+                    ),
+                }
+            }
         )
         actions.append(_put_immutable(self._table_name, audit))
         return actions
@@ -844,16 +838,13 @@ def _audit_key(*, guard_id: str, action: str) -> DynamoItem:
 
 
 def _put_immutable(table_name: str, item: DynamoItem) -> TransactWriteItemTypeDef:
-    return cast(
-        TransactWriteItemTypeDef,
-        {
-            "Put": {
-                "TableName": table_name,
-                "Item": marshal_item(item),
-                "ConditionExpression": "attribute_not_exists(PK) AND attribute_not_exists(SK)",
-            }
-        },
-    )
+    return {
+        "Put": {
+            "TableName": table_name,
+            "Item": marshal_item(item),
+            "ConditionExpression": "attribute_not_exists(PK) AND attribute_not_exists(SK)",
+        }
+    }
 
 
 def _acquire_audit_context(audit: DynamoItem) -> DeploymentGuardContext:

@@ -79,21 +79,18 @@ def legacy_affection_profile(
     scores: tuple[int, int, int] = (625, 55, 987),
     version: int = 3,
 ) -> DynamoItem:
-    return cast(
-        DynamoItem,
-        {
-            "PK": "AFFECTION#REQUESTER#private-user",
-            "SK": "PROFILE",
-            "record_type": "affection_profile",
-            "schema_version": 8,
-            "requester_id": "private-user",
-            "requester_username": "private-name",
-            "requester_display_name": "Requester",
-            "scores": list(scores),
-            "version": version,
-            "updated_at": NOW.isoformat(timespec="microseconds").replace("+00:00", "Z"),
-        },
-    )
+    return {
+        "PK": "AFFECTION#REQUESTER#private-user",
+        "SK": "PROFILE",
+        "record_type": "affection_profile",
+        "schema_version": 8,
+        "requester_id": "private-user",
+        "requester_username": "private-name",
+        "requester_display_name": "Requester",
+        "scores": list(scores),
+        "version": version,
+        "updated_at": NOW.isoformat(timespec="microseconds").replace("+00:00", "Z"),
+    }
 
 
 class FakeSource:
