@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-10-10
+updated: 2026-10-11
 ---
 
 # GitHub・CI-CD詳細設計
@@ -112,11 +112,12 @@ trace・動画・HTML report・他の添付画像はアップロードしない�
 `tests`・`package`・`cdk`・`android-gate`・`container-arm64`・`grype`は、必須チェックと実処理を同じジョブで実行する。
 分類成功と明示的な対象フラグを先に検証し、対象外だけ重い処理を省く。終了時には必要な試験・成果物の
 step outcomeとconclusionを検査し、未実行・失敗・キャンセルやcontinue-on-errorによる失敗の隠蔽を通さない。
-対象外と実行成功は各ジョブのSummaryで区別する。主要3ワークフローの全対象時は19ジョブとなる。
+対象外と実行成功は各ジョブのSummaryで区別する。主要3ワークフローの全対象時は20ジョブとなる。
 CodeQLは`.github/workflows/codeql.yml`のadvanced setupでPython、JavaScript/TypeScript、
-GitHub Actionsを解析し、`ubuntu-26.04`と`security-extended`を使う。
+GitHub Actions、Java/Kotlinを解析し、`ubuntu-26.04`と`security-extended`を使う。
+CodeQL Action v4.38.3はCLI 2.27.2を同梱する。Java/Kotlinだけ`manual`モードでAndroidをビルドし、既存3言語の`none`モードは維持する。
 PR、mainへのpush、週次定期実行、手動実行を対象にする。
-Android追加後のJava/Kotlin解析は未完了であり、Kotlin 2.4.20へのCodeQL対応待ちとする。
+2026年10月11日にKotlin 2.4.20のローカルmanual抽出を確認した。C04完了にはPRとマージ後のmainで4言語の解析・upload成功を確認する。
 既存3言語の解析・必須チェックを維持し、Androidの失敗を成功や対象外に置き換えない。
 ブランチ保護のチェック名は実際のジョブ名に合わせ、失敗を隠すための再実行はしない。
 
@@ -139,16 +140,16 @@ default setupとadvanced setupは併用しない。必須チェックとブラ�
 
 2026年9月17日の確認では、自動設定で新しく追加されたKotlinが`none`モードで処理され、
 ソース抽出に失敗した。CodeQL 2.27.0によるmanual buildでもKotlin 2.4.20が未対応として拒否された。
-Kotlinのダウングレードは行わず、Android解析は対応版の公開後に別PRで追加する。
+Kotlin 2.4.20への対応は2026年9月22日公開のCodeQL 2.27.1で入り、2.27.2でローカルmanual抽出を確認した。Kotlinはダウングレードせず、C04の別PRでAndroid解析を追加する。
 
 1. 対応版のCodeQLでAndroidビルドとKotlin抽出の成功を確認する。
 2. 既存の`.github/workflows/codeql.yml`へJava/Kotlinを追加し、JDK・SDKを用意して
-   `manual`モードでビルドする。既存3言語の解析・チェック名・query suiteは維持する。
+   `manual`モードで`:app:assembleDebug`をビルドする。Gradle Actionのキャッシュ、daemon、build/configuration cache、Kotlin incremental compilationを無効にしてtaskを再実行する。既存3言語の解析・チェック名・query suiteは維持する。
 3. PRで4言語すべての解析・uploadを確認してから、許可された範囲でsquash mergeする。
    mainの同一SHAでも4言語の成功を確認する。
 
 既存3言語の切替中は他PRのマージ・リリースを行わない。Android解析未完了は成功として扱わない。
-Core／Records Releaseの既存3言語のチェック名は変更しない。Androidの配布ゲートは配布実装時に追加する。
+Core／Records／Android Releaseの共通判定は既存3言語のチェック名を維持し、`Analyze (java-kotlin)`も必須とする。
 
 ### Android検証（C03）
 
@@ -397,7 +398,7 @@ flowchart TD
 手動ワークフローは`main`の固定SHAを使う。CoreはRuntimeConfigのバージョンも入力する。
 Core／Records Releaseは共通スクリプトで、固定したmain SHAに対するCI・Records CI・CodeQLの
 最新run／attemptを確認する。対象はmainのpush・手動・定期実行であり、PRの同名チェックは採用しない。
-10個の必須チェック名とCodeQL既存3言語を全件照合し、未完了・失敗・キャンセル・欠落・重複を不合格とする。
+10個の必須チェック名とCodeQLの4言語を全件照合し、未完了・失敗・キャンセル・欠落・重複を不合格とする。
 workflowとjobの一覧は全ページを取得する。既存の承認後の証拠照合と同一SHAのRecords→Core順序は維持する。
 
 開始前にOIDCのリポジトリ識別情報、必須mainチェック、CodeQL、非公開設定のメタデータ、

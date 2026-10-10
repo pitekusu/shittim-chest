@@ -24,7 +24,12 @@ WORKFLOW_CHECKS = {
         "android-gate",
     ),
     "records-ci.yml": ("records-gate",),
-    "codeql.yml": ("Analyze (python)", "Analyze (javascript-typescript)", "Analyze (actions)"),
+    "codeql.yml": (
+        "Analyze (python)",
+        "Analyze (javascript-typescript)",
+        "Analyze (actions)",
+        "Analyze (java-kotlin)",
+    ),
 }
 
 
