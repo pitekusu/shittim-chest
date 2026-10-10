@@ -11,6 +11,7 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
+    JsonValue,
     RootModel,
     model_validator,
 )
@@ -50,7 +51,7 @@ _ALL_PARTICIPANT_SLOTS = frozenset[ParticipantSlot](
 )
 
 
-def _complete_slot_json_schema(field_name: str) -> dict[str, object]:
+def _complete_slot_json_schema(field_name: str) -> dict[str, JsonValue]:
     return {
         "allOf": [
             {
@@ -72,7 +73,7 @@ def _require_complete_slots(slots: tuple[ParticipantSlot, ...], field_name: str)
         raise ValueError(f"{field_name} must contain every participant slot exactly once")
 
 
-def _no_self_vote_json_schema() -> dict[str, object]:
+def _no_self_vote_json_schema() -> dict[str, JsonValue]:
     return {
         "allOf": [
             {
@@ -87,7 +88,7 @@ def _no_self_vote_json_schema() -> dict[str, object]:
     }
 
 
-def _admin_prompt_mode_json_schema() -> dict[str, object]:
+def _admin_prompt_mode_json_schema() -> dict[str, JsonValue]:
     return {
         "allOf": [
             {

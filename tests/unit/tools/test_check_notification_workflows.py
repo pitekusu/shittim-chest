@@ -1231,7 +1231,7 @@ def test_runtime_required_gates_require_the_classifier_job_to_succeed(directory:
 @pytest.mark.parametrize(
     ("workflow", "old", "new"),
     [
-        ("ci.yml", "version: v0.37.0", "version: latest"),
+        ("ci.yml", "version: v0.38.0", "version: latest"),
         (
             RELEASE_WORKFLOW,
             "image=${{ steps.buildkit-image.outputs.image }}",
@@ -1347,7 +1347,7 @@ def test_repeated_action_version_requires_one_commit_pin(directory: Path) -> Non
 def test_release_requires_the_locked_node_version(directory: Path) -> None:
     _replace(
         directory / RELEASE_WORKFLOW,
-        '          node-version: "24.20.0"',
+        '          node-version: "24.21.0"',
         "          node-version-file: .node-version",
         1,
     )

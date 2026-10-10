@@ -68,6 +68,9 @@ def affection_profile(
     display_name: str,
     scores: tuple[int, int, int],
 ) -> DynamoItem:
+    participant_scores: DynamoItem = {
+        slot: score for slot, score in zip(PARTICIPANTS, scores, strict=True)
+    }
     return {
         "PK": "AFFECTION#PROFILE",
         "SK": requester_key,
@@ -75,7 +78,7 @@ def affection_profile(
         "record_type": "affection_profile",
         "source_version": 1,
         "display_name": display_name,
-        "scores": dict(zip(PARTICIPANTS, scores, strict=True)),
+        "scores": participant_scores,
         "updated_at": NOW.isoformat(),
     }
 
@@ -340,9 +343,9 @@ def test_build_rankings_rejects_duplicate_or_malformed_archive_metadata() -> Non
         requester_name="Requester",
     )
     with pytest.raises(RankingDataInvalid, match="duplicate"):
-        build_rankings((first, dict(first)), generated_at=NOW)
+        build_rankings((first, first.copy()), generated_at=NOW)
 
-    malformed = dict(first)
+    malformed = first.copy()
     malformed["schema_version"] = 999
     with pytest.raises(RankingDataInvalid, match="identity"):
         build_rankings((malformed,), generated_at=NOW)

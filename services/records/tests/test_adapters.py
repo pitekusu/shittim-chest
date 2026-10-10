@@ -190,7 +190,7 @@ def test_source_repository_rejects_missing_or_duplicate_completion_metadata(
     if mode == "missing":
         del items[index]
     else:
-        items.append(dict(items[index]))
+        items.append(items[index].copy())
     client = FakeSourceDynamoDb([{"Items": [marshal_item(item) for item in items]}])
 
     with pytest.raises(ValueError, match=r"debate metadata|attempt metadata"):

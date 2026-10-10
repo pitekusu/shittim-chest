@@ -18,7 +18,7 @@ RECORDS_RELEASE_WORKFLOW = "records-release.yml"
 RECORDS_BACKFILL_WORKFLOW = "records-backfill.yml"
 ANDROID_RELEASE_WORKFLOW = "android-release.yml"
 WORKFLOW_RUN_NOTIFICATION = "discord-workflow-run.yml"
-PINNED_BUILDX_VERSION = "v0.37.0"
+PINNED_BUILDX_VERSION = "v0.38.0"
 PERMISSIONS_KEY = re.compile(r"(?<![a-zA-Z0-9_-])(?:\"|')?permissions(?:\"|')?\s*:")
 YAML_HEXADECIMAL_ESCAPE = re.compile(r"\\(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|U([0-9a-fA-F]{8}))")
 AWS_OR_DEPLOY_CAPABILITY = re.compile(
@@ -510,7 +510,7 @@ def _validate_release(directory: Path) -> None:
         "group: production-release",
         "cancel-in-progress: false",
         "runs-on: ubuntu-26.04-arm",
-        'node-version: "24.20.0"',
+        'node-version: "24.21.0"',
         'EXPECTED_REPOSITORY_ID: "1302516701"',
         ".use_immutable_subject == true",
         "ACTIONS_ID_TOKEN_REQUEST_URL",

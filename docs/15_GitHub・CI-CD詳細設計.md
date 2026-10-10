@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-10-08
+updated: 2026-10-10
 ---
 
 # GitHub・CI-CD詳細設計
@@ -270,6 +270,10 @@ Docker Hubを使う試験・ビルド用イメージには既定の待機期間�
 
 Vite+の`npm:`エイリアスとpnpmの固定overrideは、Dependabotの通常更新だけでは揃わない。
 Vite+関連は専用グループへ分け、CLI・coreエイリアス・Vitest overrideの不一致を通常CIで拒否する。
+Vite+のメジャー更新は公式の移行コマンドを使い、同梱Vitestと上書き設定も同時に更新する。
+Vitest 5への移行では`clearMocks: false`を明示して既存試験の互換動作を保ち、型検査・全Web試験・build・Playwrightを確認する。
+Gradleが配布するWindows用WrapperのCRLFは、該当ファイルだけにGitの`whitespace=cr-at-eol`属性を指定する。
+行末の余分な空白と他のファイルの検査は継続する。
 coreエイリアス、Vitest、fast-uriの固定overrideは専用監視でも確認し、対応系列と組み合わせを検証して更新する。
 JDK、Android SDK、Actionsの入力で選ぶ実行ツールもDependabotの直接更新対象外として専用監視で補う。
 runner同梱のCLIやAndroid EmulatorはGitHub runner image／SDK配布元による更新を使用する。

@@ -242,8 +242,8 @@ updates:
       # Upgrade Vite+ and its core/Vitest overrides together in a dedicated change.
       - dependency-name: "vite-plus"
         versions:
-          - ">=0.4"
+          - ">=2"
       - dependency-name: "vitest"
         versions:
-          - ">4.1.11"
+          - ">=5.1"
     open-pull-requests-limit: 5
