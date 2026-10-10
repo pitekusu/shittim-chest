@@ -1285,7 +1285,11 @@ describe("MemorialPage", () => {
 
   it("loads the latest ready memory and switches owner-only history tabs", async () => {
     useReducedMotion();
-    getMemoryMock.mockImplementation((summary) => Promise.resolve(memory(summary.cycle as 1 | 2)));
+    vi.when(getMemoryMock, { onUnmatched: "throw" })
+      .calledWith(MEMORY_SUMMARIES[0]!, expect.any(AbortSignal))
+      .thenResolve(memory(1))
+      .calledWith(MEMORY_SUMMARIES[1]!, expect.any(AbortSignal))
+      .thenResolve(memory(2));
     renderMemorial(readyState());
 
     expect(await screen.findByRole("heading", { name: "メモリアルロビー" })).toBeVisible();

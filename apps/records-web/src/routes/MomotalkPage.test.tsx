@@ -56,14 +56,17 @@ describe("Momotalk week selection", () => {
       .mocked(getMomotalkWeeks)
       .mockResolvedValueOnce({ schemaVersion: 1, weeks: [week], nextCursor: null })
       .mockResolvedValue({ schemaVersion: 1, weeks: [nextWeek, week], nextCursor: null });
-    const rooms = vi.mocked(getMomotalkRooms).mockImplementation((weekId) =>
-      Promise.resolve({
+    const rooms = vi.mocked(getMomotalkRooms);
+    vi.when(rooms, { onUnmatched: "throw" })
+      .calledWith(week.weekId, undefined, expect.any(AbortSignal))
+      .thenResolve({ schemaVersion: 1, week, rooms: [conversation.room], nextCursor: null })
+      .calledWith(nextWeek.weekId, undefined, expect.any(AbortSignal))
+      .thenResolve({
         schemaVersion: 1,
-        week: weekId === nextWeek.weekId ? nextWeek : week,
+        week: nextWeek,
         rooms: [conversation.room],
         nextCursor: null,
-      }),
-    );
+      });
     const room = vi.mocked(getMomotalkRoom).mockResolvedValue(conversation);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
