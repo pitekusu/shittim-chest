@@ -22,6 +22,16 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import dev.pitekusu.shittim.records.ui.ShittimPanel
 import dev.pitekusu.shittim.records.ui.ShittimSpacing
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
+
+private val debateRequestDateTime = DateTimeFormatter.ofPattern("uuuu年M月d日 HH:mm", Locale.JAPAN)
+  .withZone(ZoneId.of("Asia/Tokyo"))
+
+internal fun formatDebateRequestDateTime(createdAt: String): String =
+  debateRequestDateTime.format(Instant.parse(createdAt))
 
 @Composable
 internal fun DebateRequestsScreen(state: DebateHistoryState, online: Boolean,
@@ -35,7 +45,8 @@ internal fun DebateRequestsScreen(state: DebateHistoryState, online: Boolean,
           Text(stringResource(debateStatusLabel(request.status)), color = MaterialTheme.colorScheme.primary,
             style = MaterialTheme.typography.labelLarge)
           Text(request.question, maxLines = 4, overflow = TextOverflow.Ellipsis)
-          Text(request.createdAt, style = MaterialTheme.typography.labelSmall)
+          Text(stringResource(R.string.debate_request_created_at, formatDebateRequestDateTime(request.createdAt)),
+            style = MaterialTheme.typography.labelSmall)
         }
       }
     }
