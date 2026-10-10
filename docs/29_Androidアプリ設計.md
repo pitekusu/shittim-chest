@@ -3,7 +3,7 @@ aliases: [シッテムの箱 Android, Records Android]
 tags: [project, shittim-chest, android]
 status: current
 created: 2026-09-16
-updated: 2026-10-10
+updated: 2026-10-11
 ---
 
 # Androidアプリ設計
@@ -21,7 +21,7 @@ updated: 2026-10-10
 | デザイン基盤の先行実装 | Expressiveテーマ、独自配色・書体・背景、準備画面 | C01を維持した追加差分。C02の機能実装とは分離 |
 | C02 | Circuit・Metroによる準備画面の状態管理・依存接続 | 実装済み |
 | C03 | Android CI | 実装済み |
-| C04 | CodeQL接続 | Kotlin 2.4.20へのCodeQL対応待ち。GitHub切替は未実施 |
+| C04 | CodeQL接続 | CodeQL 2.27.2でKotlin 2.4.20のmanual抽出を確認し、解析workflowを追加。mainの4言語解析・upload確認待ち |
 | C05 | モバイル認証の要求・応答・内部状態 | 契約定義を実装済み。C12で公開接続 |
 | C06 | 認証取引と一回限りコードの保存処理 | 条件付き保存・期限確認・消費用transaction部品を実装済み。C09でセッション発行と結合 |
 | C07 | ログイン開始とブラウザー認可 | 内部serviceを実装済み。state・Cookie検証をC08から利用。C12で公開接続 |
@@ -66,7 +66,7 @@ updated: 2026-10-10
 
 実装計画のC01、C02…を、それぞれ独立したPRとして進める。複数のCを1本のPRへまとめない。
 原則は番号順だが、2026年9月20日の合意により、独立したC04を保留してC05へ先行する。
-C04を完了扱いにはせず、[Issue #376](https://github.com/pitekusu/shittim-chest/issues/376)で安定版の対応と再開を追跡する。
+C04は[Issue #376](https://github.com/pitekusu/shittim-chest/issues/376)で追跡する。対応版でのローカル抽出だけでは完了扱いにせず、PRとマージ後のmainで4言語の解析・uploadを確認する。
 各PRには対象Cの実装・関連試験・文書を含め、同じCの不具合修正もそのPRで扱う。
 C01には合意済みのExpressiveデザイン基盤の先行実装を含めるが、C02以降の機能は追加しない。
 PRの公開状態はその工程の依頼に従う。C02・C03は確認後に通常PRとして公開した。
@@ -77,16 +77,16 @@ C04はCodeQLの対応後に独立したPRで再開し、C02・C03の機能は混
 ### CodeQLのビルドと切替
 
 2026年9月17日の実行確認では、CodeQL 2.27.0がKotlin 2.4.20を未対応として拒否した。
-Kotlin／Compose Compilerは2.4.20を維持し、CodeQLの対応版を待つ。
-Android解析の追加は保留し、既存3言語の解析・必須条件は維持する。
-Androidの解析未完了を成功として扱わず、対応版で抽出成功を確認してからGitHub側へ追加する。
+2026年9月22日公開の[CodeQL 2.27.1](https://codeql.github.com/docs/codeql-overview/codeql-changelog/codeql-cli-2.27.1/)で対応が入り、2026年10月11日に安定版2.27.2でKotlin／Compose Compiler 2.4.20を維持したmanual抽出を確認した。
+公式Java/Kotlin bundleのSHA-256を照合し、管理用ビルド入口で`:app:assembleDebug`を実行してデータベースを作成した。アプリのmain Kotlinソース67件が抽出され、`security-extended`の解析は成功し検出0件だった。テストソースはこのビルドの解析対象に含めない。
+依存ライブラリFirebaseの`JavaDataStorage.getAllSync`にextractorの型診断が残るため、依存の全metadataまで完全に抽出できたとは扱わない。
 
-再開時は既存の`.github/workflows/codeql.yml`へKotlinの`manual`モード解析を追加する。
+既存の`.github/workflows/codeql.yml`へ`java-kotlin`の`manual`モード解析を追加し、CodeQL Action v4.38.3（同梱CLI 2.27.2）を使う。
 TemurinはAndroidの`.java-version`から読み、SDK Platform 37.2とBuild Tools 37.0.0を用意する。
-CodeQL初期化後にWrapperから`assembleDebug`を実行し、キャッシュや差分コンパイルによる抽出漏れを防ぐ。
+CodeQL初期化後にWrapperから`:app:assembleDebug`を実行する。Gradle Actionのキャッシュを無効にし、`--no-daemon --no-build-cache --no-configuration-cache --rerun-tasks -Pkotlin.incremental=false`で再コンパイルを保証する。
 エミュレーター、署名鍵、認証情報は使用しない。通常のAndroid CI（C03）とは役割を分ける。
 
-Python・JavaScript/TypeScript・GitHub ActionsはUbuntu 26.04への固定のため先に同workflowへ移す。
+Python・JavaScript/TypeScript・GitHub Actionsは同workflowの`none`モード解析を維持する。4言語ともUbuntu 26.04で実行し、共通リリース判定は`Analyze (java-kotlin)`も必須とする。
 既存のチェック名と`security-extended`を維持し、PR、mainへのpush、週次定期実行、手動実行を対象にする。
 GitHubのdefault setupとadvanced setupは併用せず、切替手順は
 [GitHub・CI-CD詳細設計](15_GitHub・CI-CD詳細設計.md)に従う。
@@ -330,7 +330,7 @@ debug APK／テストAPK・LintとAPI 36の非画面instrumentation testを実�
 - Android専用差分では無関係なCore／Recordsの全試験を実行しない。共通CI・分類器の変更は両側を検証する。
 - `android-gate`は必要なビルドの失敗・取消・skipや分類失敗を成功扱いしない。Gradleの成功終了だけでは合格にせず、実行済みJUnit結果を確認し、結果欠落・0件・失敗・skipを拒否する。
 - レポートのみを短期保存し、APK／署名済み配布は後続工程に残す。
-- Kotlin 2.4.20とMaterial 3 1.5.0-alpha28は維持する。CodeQL対応待ちのC04は分離する。
+- Kotlin 2.4.20とMaterial 3 1.5.0-alpha28は維持する。C04のCodeQL解析は独立したworkflowで確認する。
 
 ## C05：モバイル認証の契約（公開前）
 
