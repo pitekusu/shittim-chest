@@ -1516,6 +1516,38 @@ def _validate_ci_path_isolation(directory: Path) -> None:
     if "npm ci" in records_web or "package-lock.json" in records_web:
         raise WorkflowPolicyError("Records CI must not fall back to the retired npm lock")
 
+    unit_step_name = "Test Records web"
+    unit_report_step_name = "Preserve Records unit test HTML report"
+    if f"name: {unit_report_step_name}" not in records_web:
+        raise WorkflowPolicyError("Records CI must retain bounded unit-test HTML evidence")
+    unit_tests = _workflow_step_block(records_web, unit_step_name)
+    unit_report = _workflow_step_block(records_web, unit_report_step_name)
+    required_unit_tests = (
+        "id: unit-tests",
+        'VITEST_HTML_REPORT: "1"',
+        "run: pnpm exec vp test",
+    )
+    required_unit_report = (
+        "if: ${{ failure() && steps.unit-tests.outcome == 'failure' }}",
+        "uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2",
+        "name: records-web-vitest-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
+        "include-hidden-files: true",
+        "archive: true",
+        "if-no-files-found: ignore",
+        "retention-days: 7",
+    )
+    if (
+        any(marker not in unit_tests for marker in required_unit_tests)
+        or records_text.count("VITEST_HTML_REPORT:") != 1
+        or "continue-on-error:" in unit_tests
+        or any(marker not in unit_report for marker in required_unit_report)
+        or records_web.index(unit_report_step_name) < records_web.index(unit_step_name)
+    ):
+        raise WorkflowPolicyError("Records CI must retain bounded unit-test HTML evidence")
+    unit_report_paths = re.findall(r"(?m)^          path: ([^\n]+)$", unit_report)
+    if unit_report_paths != ["apps/records-web/.vitest/index.html"]:
+        raise WorkflowPolicyError("Records CI unit-test evidence must include only one HTML report")
+
     browser_step_name = "Test Records browser flows and visual contracts"
     comparisons_step_name = "Preserve Records browser comparison images"
     if f"name: {comparisons_step_name}" not in records_web:

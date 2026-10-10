@@ -585,9 +585,104 @@ def test_records_release_cannot_bypass_package_build_checks(directory: Path) -> 
 def test_records_ci_requires_bounded_failure_image_evidence(
     directory: Path, before: str, after: str
 ) -> None:
-    _replace(directory / RECORDS_CI_WORKFLOW, before, after, 1)
+    step_name = (
+        "Test Records browser flows and visual contracts"
+        if before.startswith("id: browser-tests")
+        else "Preserve Records browser comparison images"
+    )
+    path = directory / RECORDS_CI_WORKFLOW
+    step = _workflow_step_block(path.read_text(encoding="utf-8"), step_name)
+    _replace(path, step, step.replace(before, after, 1), 1)
 
     with pytest.raises(WorkflowPolicyError, match="bounded browser comparison images"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "step_name,before,after",
+    (
+        (
+            "Test Records web",
+            "id: unit-tests",
+            "id: renamed-unit-tests",
+        ),
+        (
+            "Test Records web",
+            'VITEST_HTML_REPORT: "1"',
+            'VITEST_HTML_REPORT: "0"',
+        ),
+        (
+            "Test Records web",
+            "id: unit-tests",
+            "id: unit-tests\n        continue-on-error: true",
+        ),
+        (
+            "Preserve Records unit test HTML report",
+            "if: ${{ failure() && steps.unit-tests.outcome == 'failure' }}",
+            "if: always()",
+        ),
+        (
+            "Preserve Records unit test HTML report",
+            "steps.unit-tests.outcome == 'failure'",
+            "steps.browser-tests.outcome == 'failure'",
+        ),
+        (
+            "Preserve Records unit test HTML report",
+            "records-web-vitest-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
+            "records-web-vitest-${{ github.run_id }}",
+        ),
+        (
+            "Preserve Records unit test HTML report",
+            "include-hidden-files: true",
+            "include-hidden-files: false",
+        ),
+        (
+            "Preserve Records unit test HTML report",
+            "archive: true",
+            "archive: false",
+        ),
+        (
+            "Preserve Records unit test HTML report",
+            "if-no-files-found: ignore",
+            "if-no-files-found: error",
+        ),
+        (
+            "Preserve Records unit test HTML report",
+            "retention-days: 7",
+            "retention-days: 90",
+        ),
+    ),
+)
+def test_records_ci_requires_bounded_failure_unit_html_evidence(
+    directory: Path, step_name: str, before: str, after: str
+) -> None:
+    path = directory / RECORDS_CI_WORKFLOW
+    step = _workflow_step_block(path.read_text(encoding="utf-8"), step_name)
+    _replace(path, step, step.replace(before, after, 1), 1)
+
+    with pytest.raises(WorkflowPolicyError, match="bounded unit-test HTML evidence"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    (
+        "apps/records-web/.vitest/**/*",
+        "apps/records-web/.vitest/*.html",
+        "apps/records-web/.vitest/ui/html.meta.json.gz",
+    ),
+)
+def test_records_ci_retains_only_one_unit_test_html_report(
+    directory: Path, replacement: str
+) -> None:
+    _replace(
+        directory / RECORDS_CI_WORKFLOW,
+        "path: apps/records-web/.vitest/index.html",
+        f"path: {replacement}",
+        1,
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="only one HTML report"):
         validate_notification_workflows(directory)
 
 

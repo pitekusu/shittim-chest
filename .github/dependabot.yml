@@ -228,6 +228,7 @@ updates:
           - "vite"
           - "@voidzero-dev/vite-plus-core"
           - "vitest"
+          - "@vitest/ui"
       records-web-minor-and-patch:
         applies-to: "version-updates"
         patterns:
@@ -244,6 +245,9 @@ updates:
         versions:
           - ">=2"
       - dependency-name: "vitest"
+        versions:
+          - ">=5.1"
+      - dependency-name: "@vitest/ui"
         versions:
           - ">=5.1"
     open-pull-requests-limit: 5

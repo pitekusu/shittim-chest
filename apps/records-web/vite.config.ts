@@ -1,5 +1,6 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite-plus";
+import { configDefaults } from "vitest/config";
 
 import { assertGeneratedValidatorCurrent } from "./scripts/generate-contract-validator.mjs";
 import { codeSplittingModuleOwnershipGuard } from "./scripts/code-splitting-guard";
@@ -57,6 +58,10 @@ export default defineConfig({
     // https://vitest.dev/guide/migration/#clearmocks-is-enabled-by-default
     clearMocks: false,
     environment: "jsdom",
+    reporters:
+      process.env.VITEST_HTML_REPORT === "1"
+        ? [...configDefaults.reporters, ["html", { singleFile: true, outputDir: ".vitest" }]]
+        : configDefaults.reporters,
     exclude: ["e2e/**", "node_modules/**", "dist/**"],
     setupFiles: ["./src/test/setup.ts"],
   },
