@@ -3,6 +3,7 @@ package dev.pitekusu.shittim.records
 import android.content.ActivityNotFoundException
 import android.net.Uri
 import androidx.browser.customtabs.CustomTabsIntent
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -28,6 +30,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
@@ -80,11 +83,10 @@ internal fun RecordsNavigationMenu(state: BootstrapScreen.State, onDismiss: () -
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).testTag("records-menu-content")
       .padding(horizontal = ShittimSpacing.Medium, vertical = ShittimSpacing.Small),
       verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Small)) {
-      MenuItem(R.string.debate_requests, R.drawable.ic_add_debate,
-        modifier = Modifier.testTag("debate-requests-open"), onClick = {
-          onDismiss()
-          state.eventSink(BootstrapScreen.Event.ShowDebateRequests)
-        })
+      DebateRequestsMenuItem(onClick = {
+        onDismiss()
+        state.eventSink(BootstrapScreen.Event.ShowDebateRequests)
+      })
       ShittimSectionHeading(stringResource(R.string.menu_web))
       webDestinations.forEach { (label, path) ->
         MenuItem(label, R.drawable.ic_open_web, onClick = { openWeb(path) })
@@ -105,6 +107,30 @@ internal fun RecordsNavigationMenu(state: BootstrapScreen.State, onDismiss: () -
         onDismiss()
         state.eventSink(BootstrapScreen.Event.Logout)
       })
+    }
+  }
+}
+
+@Composable
+private fun DebateRequestsMenuItem(onClick: () -> Unit) {
+  val colors = MaterialTheme.colorScheme
+  Surface(onClick = onClick, modifier = Modifier.fillMaxWidth().testTag("debate-requests-open"),
+    shape = MaterialTheme.shapes.large, color = colors.primaryContainer,
+    contentColor = colors.onPrimaryContainer, border = BorderStroke(1.dp, colors.primary.copy(alpha = .45f))) {
+    ListItem(leadingContent = {
+      Surface(shape = CircleShape, color = colors.primary, contentColor = colors.onPrimary) {
+        Icon(painterResource(R.drawable.ic_debate_history), contentDescription = null,
+          modifier = Modifier.padding(12.dp).size(28.dp))
+      }
+    }, supportingContent = {
+      Text(stringResource(R.string.debate_requests_description), style = MaterialTheme.typography.bodyMedium)
+    }, trailingContent = {
+      Icon(painterResource(R.drawable.ic_expand_more), contentDescription = null,
+        modifier = Modifier.size(24.dp).rotate(-90f))
+    }, colors = ListItemDefaults.colors(containerColor = colors.primaryContainer,
+      headlineColor = colors.onPrimaryContainer, supportingColor = colors.onPrimaryContainer,
+      trailingIconColor = colors.primary)) {
+      Text(stringResource(R.string.debate_requests), style = MaterialTheme.typography.titleLargeEmphasized)
     }
   }
 }
