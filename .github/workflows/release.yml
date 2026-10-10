@@ -126,7 +126,7 @@ jobs:
             echo "artifact_name=records-plan-${run_id}-${run_attempt}"
           } >> "${GITHUB_OUTPUT}"
       - name: Download the successful same-SHA Records evidence
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ steps.records_release.outputs.artifact_name }}
           path: ${{ runner.temp }}/records-release-evidence
@@ -141,7 +141,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
       - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.21.0"
           cache: npm
@@ -965,7 +965,7 @@ jobs:
             >> "${GITHUB_OUTPUT}"
           echo "run_attempt=${GITHUB_RUN_ATTEMPT}" >> "${GITHUB_OUTPUT}"
       - name: Retain immutable release evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.evidence.outputs.artifact_name }}
           path: |
@@ -991,7 +991,7 @@ jobs:
           retention-days: 90
       - name: Retain bounded Change Set failure evidence
         if: ${{ failure() && steps.prepare_changes.outcome == 'failure' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: production-release-plan-failure-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/*.change-set-failure.json
@@ -1055,7 +1055,7 @@ jobs:
              .ref == "refs/heads/main"' \
             "${RUNNER_TEMP}/oidc-claims.json" >/dev/null
       - name: Download only this run's release evidence
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ needs.plan.outputs.evidence_name }}
           path: ${{ runner.temp }}/release
@@ -1559,7 +1559,7 @@ jobs:
             --apply --expected-plan-sha256 "${digest}"
       - name: Retain deployment lock evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: production-release-deploy-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -1590,7 +1590,7 @@ jobs:
         id: cleanup_evidence
         if: ${{ needs.plan.result == 'success' }}
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ${{ needs.plan.outputs.evidence_name }}
           path: ${{ runner.temp }}/release-cleanup
