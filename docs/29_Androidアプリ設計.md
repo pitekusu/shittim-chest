@@ -3,7 +3,7 @@ aliases: [シッテムの箱 Android, Records Android]
 tags: [project, shittim-chest, android]
 status: current
 created: 2026-09-16
-updated: 2026-10-04
+updated: 2026-10-10
 ---
 
 # Androidアプリ設計
@@ -82,7 +82,7 @@ Android解析の追加は保留し、既存3言語の解析・必須条件は維
 Androidの解析未完了を成功として扱わず、対応版で抽出成功を確認してからGitHub側へ追加する。
 
 再開時は既存の`.github/workflows/codeql.yml`へKotlinの`manual`モード解析を追加する。
-TemurinはAndroidの`.java-version`から読み、SDK Platform 37.1とBuild Tools 36.0.0を用意する。
+TemurinはAndroidの`.java-version`から読み、SDK Platform 37.2とBuild Tools 37.0.0を用意する。
 CodeQL初期化後にWrapperから`assembleDebug`を実行し、キャッシュや差分コンパイルによる抽出漏れを防ぐ。
 エミュレーター、署名鍵、認証情報は使用しない。通常のAndroid CI（C03）とは役割を分ける。
 
@@ -1015,7 +1015,7 @@ flowchart LR
 - `main`の依存解決結果をGitHub Dependency Graphへ送信し、Dependabotの脆弱性検知にも使用する。JDK・SDKの更新候補は固定ツールの週次監視で確認する。
 - AGP由来の間接依存に脆弱性がある場合は、Version Catalogで管理する修正版の制約をビルド用classpathと独立したLintツールへ適用し、Dependabotによる更新を可能にする。
 - 実行用JDKはTemurinの`.java-version`指定版、生成するJVMバイトコードは17とする。
-- minSdkは26、targetSdkは37。Composeの要件に合わせ、compileSdkは37.1（`platforms;android-37.1`）とする。
+- minSdkは26、targetSdkは37。Composeの要件に合わせ、compileSdkはAGP 9.4.1が対応する公開SDK 37.2（`platforms;android-37.2`）とする。
 - debug版はapplication ID末尾に`.dev`を付け、将来の配布版との混同を防ぐ。
 - 通信権限や本番接続先は持たせない。端末バックアップと平文HTTPを許可しない。
 - SDKパス、ビルド出力、IDE設定、署名鍵をGitから除外する。
@@ -1495,7 +1495,7 @@ C40の確認は既存設定と担当表、C38／C39・Android READMEの参照、
 - [AGP 9.4の互換性](https://developer.android.com/build/releases/agp-9-4-0-release-notes)
 - [built-in Kotlin](https://developer.android.com/build/migrate-to-built-in-kotlin)
 - [Kotlin Gradle Pluginの版の指定](https://developer.android.com/build/releases/agp-9-0-0-release-notes#runtime-dependency-on-kotlin-gradle-plugin)
-- [Gradle Wrapper](https://docs.gradle.org/9.7.1/userguide/gradle_wrapper.html)
+- [Gradle Wrapper](https://docs.gradle.org/9.8.0/userguide/gradle_wrapper.html)
 - [Material 3と独自テーマ](https://developer.android.com/develop/ui/compose/designsystems/material3)
 - [Compose Material 3リリース情報](https://developer.android.com/jetpack/androidx/releases/compose-material3)
 - [Compose BOMとプレビュー版の管理](https://developer.android.com/develop/ui/compose/bom)

@@ -827,19 +827,16 @@ class DynamoDbOutboxRepository:
         return operation
 
     def _current_attempt_check(self, expected: DebateSnapshot) -> TransactWriteItemTypeDef:
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "ConditionCheck": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item({"PK": f"DEBATE#{expected.state.debate_id}", "SK": "META"}),
-                    "ConditionExpression": "current_attempt_id=:attempt",
-                    "ExpressionAttributeValues": marshal_item(
-                        {":attempt": str(expected.state.attempt_id)}
-                    ),
-                }
-            },
-        )
+        return {
+            "ConditionCheck": {
+                "TableName": self._table_name,
+                "Key": marshal_item({"PK": f"DEBATE#{expected.state.debate_id}", "SK": "META"}),
+                "ConditionExpression": "current_attempt_id=:attempt",
+                "ExpressionAttributeValues": marshal_item(
+                    {":attempt": str(expected.state.attempt_id)}
+                ),
+            }
+        }
 
     def _lease_check(
         self,
@@ -900,23 +897,20 @@ class DynamoDbOutboxRepository:
                 "AND terminal_delivery_staged_at=:staged_at "
                 "AND terminal_delivery_deadline_at=:deadline AND " + status_condition
             )
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "ConditionCheck": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(
-                        {
-                            "PK": f"DEBATE#{expected.state.debate_id}",
-                            "SK": f"ATTEMPT#{expected.state.attempt_id}#META",
-                        }
-                    ),
-                    "ConditionExpression": condition,
-                    **({"ExpressionAttributeNames": names} if names else {}),
-                    "ExpressionAttributeValues": marshal_item(values),
-                }
-            },
-        )
+        return {
+            "ConditionCheck": {
+                "TableName": self._table_name,
+                "Key": marshal_item(
+                    {
+                        "PK": f"DEBATE#{expected.state.debate_id}",
+                        "SK": f"ATTEMPT#{expected.state.attempt_id}#META",
+                    }
+                ),
+                "ConditionExpression": condition,
+                **({"ExpressionAttributeNames": names} if names else {}),
+                "ExpressionAttributeValues": marshal_item(values),
+            }
+        }
 
     def _phase_plan_check(
         self,
@@ -957,33 +951,30 @@ class DynamoDbOutboxRepository:
             values[":at"] = _timestamp(at)
             status_condition = "#status=:staged"
             deadline_condition = " AND deadline_at > :at"
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "ConditionCheck": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(
-                        {
-                            "PK": f"DEBATE#{operation.debate_id}",
-                            "SK": (f"ATTEMPT#{operation.attempt_id}#DELIVERY#{plan.plan_id}"),
-                        }
-                    ),
-                    "ConditionExpression": (
-                        "record_type=:type AND schema_version=:schema "
-                        "AND record_schema_version=:record_schema "
-                        "AND debate_id=:debate AND attempt_id=:attempt AND plan_id=:plan "
-                        "AND source_phase=:source AND target_phase=:target "
-                        "AND operation_ids=:operation_ids AND content_hashes=:content_hashes "
-                        "AND delivery_sequences=:delivery_sequences "
-                        "AND staged_at=:staged_at AND deadline_at=:deadline "
-                        "AND updated_at=:updated "
-                        f"AND {status_condition}" + deadline_condition
-                    ),
-                    "ExpressionAttributeNames": {"#status": "status"},
-                    "ExpressionAttributeValues": marshal_item(values),
-                }
-            },
-        )
+        return {
+            "ConditionCheck": {
+                "TableName": self._table_name,
+                "Key": marshal_item(
+                    {
+                        "PK": f"DEBATE#{operation.debate_id}",
+                        "SK": (f"ATTEMPT#{operation.attempt_id}#DELIVERY#{plan.plan_id}"),
+                    }
+                ),
+                "ConditionExpression": (
+                    "record_type=:type AND schema_version=:schema "
+                    "AND record_schema_version=:record_schema "
+                    "AND debate_id=:debate AND attempt_id=:attempt AND plan_id=:plan "
+                    "AND source_phase=:source AND target_phase=:target "
+                    "AND operation_ids=:operation_ids AND content_hashes=:content_hashes "
+                    "AND delivery_sequences=:delivery_sequences "
+                    "AND staged_at=:staged_at AND deadline_at=:deadline "
+                    "AND updated_at=:updated "
+                    f"AND {status_condition}" + deadline_condition
+                ),
+                "ExpressionAttributeNames": {"#status": "status"},
+                "ExpressionAttributeValues": marshal_item(values),
+            }
+        }
 
     @staticmethod
     def _expected_phase_plan(
@@ -1111,18 +1102,15 @@ def outbox_activity_action(
         "AND pending_count <= :pending_maximum "
         "AND claimed_count <= :claimed_maximum"
     )
-    return cast(
-        TransactWriteItemTypeDef,
-        {
-            "Update": {
-                "TableName": table_name,
-                "Key": marshal_item(_outbox_activity_key()),
-                "UpdateExpression": update,
-                "ConditionExpression": condition,
-                "ExpressionAttributeValues": marshal_item(values),
-            }
-        },
-    )
+    return {
+        "Update": {
+            "TableName": table_name,
+            "Key": marshal_item(_outbox_activity_key()),
+            "UpdateExpression": update,
+            "ConditionExpression": condition,
+            "ExpressionAttributeValues": marshal_item(values),
+        }
+    }
 
 
 def _require_same_attempt(expected: DebateSnapshot, operation: OutboxOperation) -> None:

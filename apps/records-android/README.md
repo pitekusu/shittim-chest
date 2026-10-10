@@ -14,8 +14,9 @@ CodeQL接続（C04）はKotlin 2.4.20への対応待ちとする。Kotlinはダ�
 
 - Android Studioではこのディレクトリを開く。
 - JDKはTemurinを使用し、バージョンは`.java-version`に合わせる。
-- Android SDK Platform 37.1（`platforms;android-37.1`）とBuild Tools 36.0.0を用意する。
-  Composeのコンパイル要件に合わせたもので、minSdk 26・targetSdk 37は維持する。
+- Android SDK Platform 37.2（`platforms;android-37.2`）とBuild Tools 37.0.0を用意する。
+  AGP 9.4.1が対応する公開済みSDKを使い、minSdk 26・targetSdk 37は維持する。
+  Android 17 QPR2の端末向けOSはBetaであり、このSDK更新だけで新しい端末向けAPIを使用しない。
 - `JAVA_HOME`にJDK、`ANDROID_HOME`にSDKのディレクトリを指定する。
   Android Studioが作る`local.properties`でもSDKを指定できるが、Gitへ追加しない。
 - Gradleは同梱Wrapperを使う。プラグイン・ライブラリは`gradle/libs.versions.toml`を正とする。

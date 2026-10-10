@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
@@ -21,7 +21,7 @@ class OpenAIRequestLimiter:
         self._semaphore = asyncio.Semaphore(self.max_concurrency)
 
     @asynccontextmanager
-    async def slot(self) -> AsyncIterator[None]:
+    async def slot(self) -> AsyncGenerator[None]:
         """Acquire and always release one shared request slot."""
 
         async with self._semaphore:

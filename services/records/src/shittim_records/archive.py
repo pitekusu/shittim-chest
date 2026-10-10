@@ -177,24 +177,21 @@ def project_completed_debate(
         affection = {
             "status": assessment.status.value,
             "rubric_version": assessment.rules_version,
-            "participants": cast(
-                list[DynamoValue],
-                [
-                    {
-                        "participant": entry.participant.value,
-                        "before": entry.before,
-                        "question_score": entry.question_score,
-                        "applied_delta": entry.applied_delta,
-                        "after": entry.after,
-                        **(
-                            {"reason": entry.reason, "reason_status": entry.reason_status.value}
-                            if entry.reason_status is not AffectionReasonStatus.NOT_RECORDED
-                            else {}
-                        ),
-                    }
-                    for entry in assessment.participants
-                ],
-            ),
+            "participants": [
+                {
+                    "participant": entry.participant.value,
+                    "before": entry.before,
+                    "question_score": entry.question_score,
+                    "applied_delta": entry.applied_delta,
+                    "after": entry.after,
+                    **(
+                        {"reason": entry.reason, "reason_status": entry.reason_status.value}
+                        if entry.reason_status is not AffectionReasonStatus.NOT_RECORDED
+                        else {}
+                    ),
+                }
+                for entry in assessment.participants
+            ],
         }
     canonical_source = {
         "source_schema_version": canonical_source_schema_version,
@@ -304,8 +301,8 @@ def project_completed_debate(
         "winner": snapshot.final_decision.winner.value,
         "victory_message": snapshot.final_decision.victory_message,
         "decision": snapshot.final_decision.decision,
-        "actions": cast(list[DynamoValue], list(snapshot.final_decision.actions)),
-        "caveats": cast(list[DynamoValue], list(snapshot.final_decision.caveats)),
+        "actions": list(snapshot.final_decision.actions),
+        "caveats": list(snapshot.final_decision.caveats),
     }
     marker_item: DynamoItem = {
         **common,

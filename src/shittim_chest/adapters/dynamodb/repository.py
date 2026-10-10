@@ -1958,34 +1958,31 @@ class DynamoDbDebateRepository:
         if expected.panel_refresh_error_code is not None:
             values[":panel_error"] = expected.panel_refresh_error_code
             error_condition = "panel_refresh_error_code=:panel_error"
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "Update": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(
-                        _attempt_key(expected.state.debate_id, expected.state.attempt_id)
-                    ),
-                    "UpdateExpression": update_expression,
-                    "ConditionExpression": (
-                        "#phase=:phase AND updated_at=:updated "
-                        "AND panel_refresh_required_at=:required "
-                        "AND "
-                        + refreshed_condition
-                        + " AND "
-                        + failed_condition
-                        + " AND "
-                        + error_condition
-                        + " AND panel_refresh_claim_owner=:owner "
-                        "AND panel_refresh_claim_expiry=:expiry "
-                        "AND panel_refresh_claim_expiry >= :at "
-                        "AND panel_refresh_delivery_attempt=:attempts"
-                    ),
-                    "ExpressionAttributeNames": {"#phase": "phase"},
-                    "ExpressionAttributeValues": marshal_item(values),
-                }
-            },
-        )
+        return {
+            "Update": {
+                "TableName": self._table_name,
+                "Key": marshal_item(
+                    _attempt_key(expected.state.debate_id, expected.state.attempt_id)
+                ),
+                "UpdateExpression": update_expression,
+                "ConditionExpression": (
+                    "#phase=:phase AND updated_at=:updated "
+                    "AND panel_refresh_required_at=:required "
+                    "AND "
+                    + refreshed_condition
+                    + " AND "
+                    + failed_condition
+                    + " AND "
+                    + error_condition
+                    + " AND panel_refresh_claim_owner=:owner "
+                    "AND panel_refresh_claim_expiry=:expiry "
+                    "AND panel_refresh_claim_expiry >= :at "
+                    "AND panel_refresh_delivery_attempt=:attempts"
+                ),
+                "ExpressionAttributeNames": {"#phase": "phase"},
+                "ExpressionAttributeValues": marshal_item(values),
+            }
+        }
 
     def _reclaim_for_ingress(
         self,
@@ -2355,29 +2352,26 @@ class DynamoDbDebateRepository:
         expression = f"SET {', '.join(assignments)}"
         if removals:
             expression += f" REMOVE {', '.join(removals)}"
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "Update": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(
-                        _attempt_key(expected.state.debate_id, expected.state.attempt_id)
-                    ),
-                    "UpdateExpression": expression,
-                    "ConditionExpression": (
-                        "#phase=:phase AND recovery_state=:recovery AND updated_at=:updated "
-                        "AND lease_owner=:owner AND lease_slot=:slot "
-                        "AND fencing_token=:token AND lease_expiry=:expiry "
-                        "AND origin_ingress_interaction_id=:origin AND "
-                        + generation_condition
-                        + " AND "
-                        + panel_condition
-                    ),
-                    "ExpressionAttributeNames": names,
-                    "ExpressionAttributeValues": marshal_item(values),
-                }
-            },
-        )
+        return {
+            "Update": {
+                "TableName": self._table_name,
+                "Key": marshal_item(
+                    _attempt_key(expected.state.debate_id, expected.state.attempt_id)
+                ),
+                "UpdateExpression": expression,
+                "ConditionExpression": (
+                    "#phase=:phase AND recovery_state=:recovery AND updated_at=:updated "
+                    "AND lease_owner=:owner AND lease_slot=:slot "
+                    "AND fencing_token=:token AND lease_expiry=:expiry "
+                    "AND origin_ingress_interaction_id=:origin AND "
+                    + generation_condition
+                    + " AND "
+                    + panel_condition
+                ),
+                "ExpressionAttributeNames": names,
+                "ExpressionAttributeValues": marshal_item(values),
+            }
+        }
 
     def _origin_ingress_is_accepted(self, snapshot: DebateSnapshot) -> bool:
         if snapshot.terminal_delivery is not None:
@@ -2651,32 +2645,29 @@ class DynamoDbDebateRepository:
 
     def _quota_action(self, guild_id: str, at: datetime) -> TransactWriteItemTypeDef:
         day = at.astimezone(_JST).date().isoformat()
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "Update": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item({"PK": f"QUOTA#GUILD#{guild_id}", "SK": f"DAY#{day}"}),
-                    "UpdateExpression": (
-                        "SET #count=if_not_exists(#count,:zero)+:one, "
-                        "record_type=:type, schema_version=:schema, "
-                        "created_at=if_not_exists(created_at,:at), updated_at=:at"
-                    ),
-                    "ConditionExpression": "attribute_not_exists(#count) OR #count < :limit",
-                    "ExpressionAttributeNames": {"#count": "count"},
-                    "ExpressionAttributeValues": marshal_item(
-                        {
-                            ":zero": 0,
-                            ":one": 1,
-                            ":limit": DAILY_GUILD_QUOTA,
-                            ":type": "guild_daily_quota",
-                            ":schema": CURRENT_SCHEMA_VERSION,
-                            ":at": _timestamp(at),
-                        }
-                    ),
-                }
-            },
-        )
+        return {
+            "Update": {
+                "TableName": self._table_name,
+                "Key": marshal_item({"PK": f"QUOTA#GUILD#{guild_id}", "SK": f"DAY#{day}"}),
+                "UpdateExpression": (
+                    "SET #count=if_not_exists(#count,:zero)+:one, "
+                    "record_type=:type, schema_version=:schema, "
+                    "created_at=if_not_exists(created_at,:at), updated_at=:at"
+                ),
+                "ConditionExpression": "attribute_not_exists(#count) OR #count < :limit",
+                "ExpressionAttributeNames": {"#count": "count"},
+                "ExpressionAttributeValues": marshal_item(
+                    {
+                        ":zero": 0,
+                        ":one": 1,
+                        ":limit": DAILY_GUILD_QUOTA,
+                        ":type": "guild_daily_quota",
+                        ":schema": CURRENT_SCHEMA_VERSION,
+                        ":at": _timestamp(at),
+                    }
+                ),
+            }
+        }
 
     def _panel_refresh_count_action(
         self,
@@ -2702,19 +2693,16 @@ class DynamoDbDebateRepository:
         else:
             update_expression = "SET #count=#count-:one, updated_at=:at"
             condition = "record_type=:type AND schema_version=:schema AND #count >= :one"
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "Update": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item({"PK": "CONTROL#PANEL_REFRESH", "SK": "PENDING_COUNT"}),
-                    "UpdateExpression": update_expression,
-                    "ConditionExpression": condition,
-                    "ExpressionAttributeNames": {"#count": "count"},
-                    "ExpressionAttributeValues": marshal_item(values),
-                }
-            },
-        )
+        return {
+            "Update": {
+                "TableName": self._table_name,
+                "Key": marshal_item({"PK": "CONTROL#PANEL_REFRESH", "SK": "PENDING_COUNT"}),
+                "UpdateExpression": update_expression,
+                "ConditionExpression": condition,
+                "ExpressionAttributeNames": {"#count": "count"},
+                "ExpressionAttributeValues": marshal_item(values),
+            }
+        }
 
     def _active_attempt_count_action(
         self,
@@ -2744,52 +2732,46 @@ class DynamoDbDebateRepository:
                 "#count >= :one AND #count <= :limit AND record_type=:type "
                 "AND schema_version=:schema AND record_schema_version=:record_schema"
             )
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "Update": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(_active_attempt_count_key()),
-                    "UpdateExpression": update_expression,
-                    "ConditionExpression": condition,
-                    "ExpressionAttributeNames": {"#count": "count"},
-                    "ExpressionAttributeValues": marshal_item(values),
-                }
-            },
-        )
+        return {
+            "Update": {
+                "TableName": self._table_name,
+                "Key": marshal_item(_active_attempt_count_key()),
+                "UpdateExpression": update_expression,
+                "ConditionExpression": condition,
+                "ExpressionAttributeNames": {"#count": "count"},
+                "ExpressionAttributeValues": marshal_item(values),
+            }
+        }
 
     def _panel_refresh_abandoned_count_action(
         self,
         at: datetime,
     ) -> TransactWriteItemTypeDef:
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "Update": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item({"PK": "CONTROL#PANEL_REFRESH", "SK": "ABANDONED_COUNT"}),
-                    "UpdateExpression": (
-                        "SET #count=if_not_exists(#count,:zero)+:one, "
-                        "record_type=if_not_exists(record_type,:type), "
-                        "schema_version=:schema, updated_at=:at"
-                    ),
-                    "ConditionExpression": (
-                        "(attribute_not_exists(record_type) OR record_type=:type) AND "
-                        "(attribute_not_exists(schema_version) OR schema_version=:schema)"
-                    ),
-                    "ExpressionAttributeNames": {"#count": "count"},
-                    "ExpressionAttributeValues": marshal_item(
-                        {
-                            ":zero": 0,
-                            ":one": 1,
-                            ":type": "panel_refresh_abandoned_counter",
-                            ":schema": CURRENT_SCHEMA_VERSION,
-                            ":at": _timestamp(at),
-                        }
-                    ),
-                }
-            },
-        )
+        return {
+            "Update": {
+                "TableName": self._table_name,
+                "Key": marshal_item({"PK": "CONTROL#PANEL_REFRESH", "SK": "ABANDONED_COUNT"}),
+                "UpdateExpression": (
+                    "SET #count=if_not_exists(#count,:zero)+:one, "
+                    "record_type=if_not_exists(record_type,:type), "
+                    "schema_version=:schema, updated_at=:at"
+                ),
+                "ConditionExpression": (
+                    "(attribute_not_exists(record_type) OR record_type=:type) AND "
+                    "(attribute_not_exists(schema_version) OR schema_version=:schema)"
+                ),
+                "ExpressionAttributeNames": {"#count": "count"},
+                "ExpressionAttributeValues": marshal_item(
+                    {
+                        ":zero": 0,
+                        ":one": 1,
+                        ":type": "panel_refresh_abandoned_counter",
+                        ":schema": CURRENT_SCHEMA_VERSION,
+                        ":at": _timestamp(at),
+                    }
+                ),
+            }
+        }
 
     def _pending_panel_refresh_count(self) -> int:
         item = self._get_item({"PK": "CONTROL#PANEL_REFRESH", "SK": "PENDING_COUNT"})
@@ -2907,32 +2889,29 @@ class DynamoDbDebateRepository:
         update_expression = f"SET {', '.join(assignments)}"
         if removals:
             update_expression += f" REMOVE {', '.join(removals)}"
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "Update": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(
-                        _attempt_key(expected.state.debate_id, expected.state.attempt_id)
-                    ),
-                    "UpdateExpression": update_expression,
-                    "ConditionExpression": (
-                        "#phase=:phase AND recovery_state=:recovery "
-                        "AND updated_at=:expected_updated "
-                        "AND lease_owner=:owner AND lease_slot=:slot "
-                        "AND fencing_token=:token AND lease_expiry >= :at "
-                        "AND "
-                        + generation_condition
-                        + " AND "
-                        + " AND ".join(pointer_conditions)
-                        + " AND "
-                        + panel_condition
-                    ),
-                    "ExpressionAttributeNames": names,
-                    "ExpressionAttributeValues": marshal_item(values),
-                }
-            },
-        )
+        return {
+            "Update": {
+                "TableName": self._table_name,
+                "Key": marshal_item(
+                    _attempt_key(expected.state.debate_id, expected.state.attempt_id)
+                ),
+                "UpdateExpression": update_expression,
+                "ConditionExpression": (
+                    "#phase=:phase AND recovery_state=:recovery "
+                    "AND updated_at=:expected_updated "
+                    "AND lease_owner=:owner AND lease_slot=:slot "
+                    "AND fencing_token=:token AND lease_expiry >= :at "
+                    "AND "
+                    + generation_condition
+                    + " AND "
+                    + " AND ".join(pointer_conditions)
+                    + " AND "
+                    + panel_condition
+                ),
+                "ExpressionAttributeNames": names,
+                "ExpressionAttributeValues": marshal_item(values),
+            }
+        }
 
     def _condition_failed_attempt(self, expected: DebateSnapshot) -> TransactWriteItemTypeDef:
         values: DynamoItem = {
@@ -2949,88 +2928,69 @@ class DynamoDbDebateRepository:
                 " AND panel_refresh_required_at=:panel_required "
                 "AND panel_refreshed_at >= :panel_required"
             )
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "ConditionCheck": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(
-                        _attempt_key(expected.state.debate_id, expected.state.attempt_id)
-                    ),
-                    "ConditionExpression": (
-                        "#phase=:failed AND updated_at=:updated" + panel_condition
-                    ),
-                    "ExpressionAttributeNames": {"#phase": "phase"},
-                    "ExpressionAttributeValues": marshal_item(values),
-                }
-            },
-        )
+        return {
+            "ConditionCheck": {
+                "TableName": self._table_name,
+                "Key": marshal_item(
+                    _attempt_key(expected.state.debate_id, expected.state.attempt_id)
+                ),
+                "ConditionExpression": ("#phase=:failed AND updated_at=:updated" + panel_condition),
+                "ExpressionAttributeNames": {"#phase": "phase"},
+                "ExpressionAttributeValues": marshal_item(values),
+            }
+        }
 
     def _current_attempt_check(
         self,
         debate_id: DebateId,
         attempt_id: AttemptId,
     ) -> TransactWriteItemTypeDef:
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "ConditionCheck": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(_debate_key(debate_id)),
-                    "ConditionExpression": "current_attempt_id=:attempt",
-                    "ExpressionAttributeValues": marshal_item({":attempt": str(attempt_id)}),
-                }
-            },
-        )
+        return {
+            "ConditionCheck": {
+                "TableName": self._table_name,
+                "Key": marshal_item(_debate_key(debate_id)),
+                "ConditionExpression": "current_attempt_id=:attempt",
+                "ExpressionAttributeValues": marshal_item({":attempt": str(attempt_id)}),
+            }
+        }
 
     def _put_current_attempt(
         self,
         item: DynamoItem,
         expected_attempt_id: AttemptId,
     ) -> TransactWriteItemTypeDef:
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "Put": {
-                    "TableName": self._table_name,
-                    "Item": marshal_item(item),
-                    "ConditionExpression": "current_attempt_id=:expected",
-                    "ExpressionAttributeValues": marshal_item(
-                        {":expected": str(expected_attempt_id)}
-                    ),
-                }
-            },
-        )
+        return {
+            "Put": {
+                "TableName": self._table_name,
+                "Item": marshal_item(item),
+                "ConditionExpression": "current_attempt_id=:expected",
+                "ExpressionAttributeValues": marshal_item({":expected": str(expected_attempt_id)}),
+            }
+        }
 
     def _release_slot_action(
         self,
         lease: LeaseGrant,
         at: datetime,
     ) -> TransactWriteItemTypeDef:
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "Update": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(_slot_key(lease.slot)),
-                    "UpdateExpression": "SET updated_at=:at REMOVE lease_owner, lease_expiry",
-                    "ConditionExpression": "lease_owner=:owner AND fencing_token=:token",
-                    "ExpressionAttributeValues": marshal_item(
-                        {
-                            ":owner": lease.owner_id,
-                            ":token": lease.fencing_token,
-                            ":at": _timestamp(at),
-                        }
-                    ),
-                }
-            },
-        )
+        return {
+            "Update": {
+                "TableName": self._table_name,
+                "Key": marshal_item(_slot_key(lease.slot)),
+                "UpdateExpression": "SET updated_at=:at REMOVE lease_owner, lease_expiry",
+                "ConditionExpression": "lease_owner=:owner AND fencing_token=:token",
+                "ExpressionAttributeValues": marshal_item(
+                    {
+                        ":owner": lease.owner_id,
+                        ":token": lease.fencing_token,
+                        ":at": _timestamp(at),
+                    }
+                ),
+            }
+        }
 
     def _put(self, item: DynamoItem) -> TransactWriteItemTypeDef:
-        return cast(
-            TransactWriteItemTypeDef,
-            {"Put": {"TableName": self._table_name, "Item": marshal_item(item)}},
-        )
+        return {"Put": {"TableName": self._table_name, "Item": marshal_item(item)}}
 
     def _put_affection_profile(
         self,
@@ -3038,60 +2998,54 @@ class DynamoDbDebateRepository:
         *,
         expected_version: int,
     ) -> TransactWriteItemTypeDef:
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "Put": {
-                    "TableName": self._table_name,
-                    "Item": marshal_item(serialize_affection_profile(profile)),
-                    "ConditionExpression": (
-                        "record_type=:type AND schema_version IN (:opaque_schema, :schema) "
-                        "AND version=:version AND requester_key=:requester"
-                    ),
-                    "ExpressionAttributeValues": marshal_item(
-                        {
-                            ":type": "affection_profile",
-                            ":opaque_schema": 9,
-                            ":schema": CURRENT_SCHEMA_VERSION,
-                            ":version": expected_version,
-                            ":requester": profile.requester_key,
-                        }
-                    ),
-                }
-            },
-        )
+        return {
+            "Put": {
+                "TableName": self._table_name,
+                "Item": marshal_item(serialize_affection_profile(profile)),
+                "ConditionExpression": (
+                    "record_type=:type AND schema_version IN (:opaque_schema, :schema) "
+                    "AND version=:version AND requester_key=:requester"
+                ),
+                "ExpressionAttributeValues": marshal_item(
+                    {
+                        ":type": "affection_profile",
+                        ":opaque_schema": 9,
+                        ":schema": CURRENT_SCHEMA_VERSION,
+                        ":version": expected_version,
+                        ":requester": profile.requester_key,
+                    }
+                ),
+            }
+        }
 
     def _check_affection_profile(
         self,
         profile: AffectionProfile,
     ) -> TransactWriteItemTypeDef:
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "ConditionCheck": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(
-                        {
-                            "PK": f"AFFECTION#REQUESTER#{profile.requester_key}",
-                            "SK": "PROFILE",
-                        }
-                    ),
-                    "ConditionExpression": (
-                        "record_type=:type AND schema_version IN (:opaque_schema, :schema) "
-                        "AND version=:version AND requester_key=:requester"
-                    ),
-                    "ExpressionAttributeValues": marshal_item(
-                        {
-                            ":type": "affection_profile",
-                            ":opaque_schema": 9,
-                            ":schema": CURRENT_SCHEMA_VERSION,
-                            ":version": profile.version,
-                            ":requester": profile.requester_key,
-                        }
-                    ),
-                }
-            },
-        )
+        return {
+            "ConditionCheck": {
+                "TableName": self._table_name,
+                "Key": marshal_item(
+                    {
+                        "PK": f"AFFECTION#REQUESTER#{profile.requester_key}",
+                        "SK": "PROFILE",
+                    }
+                ),
+                "ConditionExpression": (
+                    "record_type=:type AND schema_version IN (:opaque_schema, :schema) "
+                    "AND version=:version AND requester_key=:requester"
+                ),
+                "ExpressionAttributeValues": marshal_item(
+                    {
+                        ":type": "affection_profile",
+                        ":opaque_schema": 9,
+                        ":schema": CURRENT_SCHEMA_VERSION,
+                        ":version": profile.version,
+                        ":requester": profile.requester_key,
+                    }
+                ),
+            }
+        }
 
     def _check_legacy_affection_profile(
         self,
@@ -3099,32 +3053,29 @@ class DynamoDbDebateRepository:
         *,
         requester_id: str,
     ) -> TransactWriteItemTypeDef:
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "ConditionCheck": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(
-                        {
-                            "PK": f"AFFECTION#REQUESTER#{requester_id}",
-                            "SK": "PROFILE",
-                        }
-                    ),
-                    "ConditionExpression": (
-                        "record_type=:type AND schema_version=:schema "
-                        "AND version=:version AND requester_id=:requester"
-                    ),
-                    "ExpressionAttributeValues": marshal_item(
-                        {
-                            ":type": "affection_profile",
-                            ":schema": LEGACY_AFFECTION_SCHEMA_VERSION,
-                            ":version": profile.version,
-                            ":requester": requester_id,
-                        }
-                    ),
-                }
-            },
-        )
+        return {
+            "ConditionCheck": {
+                "TableName": self._table_name,
+                "Key": marshal_item(
+                    {
+                        "PK": f"AFFECTION#REQUESTER#{requester_id}",
+                        "SK": "PROFILE",
+                    }
+                ),
+                "ConditionExpression": (
+                    "record_type=:type AND schema_version=:schema "
+                    "AND version=:version AND requester_id=:requester"
+                ),
+                "ExpressionAttributeValues": marshal_item(
+                    {
+                        ":type": "affection_profile",
+                        ":schema": LEGACY_AFFECTION_SCHEMA_VERSION,
+                        ":version": profile.version,
+                        ":requester": requester_id,
+                    }
+                ),
+            }
+        }
 
     def _delete_legacy_affection_profile(
         self,
@@ -3132,47 +3083,41 @@ class DynamoDbDebateRepository:
         *,
         requester_id: str,
     ) -> TransactWriteItemTypeDef:
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "Delete": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(
-                        {
-                            "PK": f"AFFECTION#REQUESTER#{requester_id}",
-                            "SK": "PROFILE",
-                        }
-                    ),
-                    "ConditionExpression": (
-                        "record_type=:type AND schema_version=:schema "
-                        "AND version=:version AND requester_id=:requester"
-                    ),
-                    "ExpressionAttributeValues": marshal_item(
-                        {
-                            ":type": "affection_profile",
-                            ":schema": LEGACY_AFFECTION_SCHEMA_VERSION,
-                            ":version": profile.version,
-                            ":requester": requester_id,
-                        }
-                    ),
-                }
-            },
-        )
+        return {
+            "Delete": {
+                "TableName": self._table_name,
+                "Key": marshal_item(
+                    {
+                        "PK": f"AFFECTION#REQUESTER#{requester_id}",
+                        "SK": "PROFILE",
+                    }
+                ),
+                "ConditionExpression": (
+                    "record_type=:type AND schema_version=:schema "
+                    "AND version=:version AND requester_id=:requester"
+                ),
+                "ExpressionAttributeValues": marshal_item(
+                    {
+                        ":type": "affection_profile",
+                        ":schema": LEGACY_AFFECTION_SCHEMA_VERSION,
+                        ":version": profile.version,
+                        ":requester": requester_id,
+                    }
+                ),
+            }
+        }
 
     def _check_missing_affection_profile(
         self,
         key: DynamoItem,
     ) -> TransactWriteItemTypeDef:
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "ConditionCheck": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(key),
-                    "ConditionExpression": "attribute_not_exists(PK)",
-                }
-            },
-        )
+        return {
+            "ConditionCheck": {
+                "TableName": self._table_name,
+                "Key": marshal_item(key),
+                "ConditionExpression": "attribute_not_exists(PK)",
+            }
+        }
 
     def _put_phase_plan(
         self,
@@ -3202,18 +3147,15 @@ class DynamoDbDebateRepository:
                 conditions.append(f"{name}={value}")
             else:
                 conditions.append(f"attribute_not_exists({name})")
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "Put": {
-                    "TableName": self._table_name,
-                    "Item": marshal_item(updated),
-                    "ConditionExpression": " AND ".join(conditions),
-                    "ExpressionAttributeNames": names,
-                    "ExpressionAttributeValues": marshal_item(values),
-                }
-            },
-        )
+        return {
+            "Put": {
+                "TableName": self._table_name,
+                "Item": marshal_item(updated),
+                "ConditionExpression": " AND ".join(conditions),
+                "ExpressionAttributeNames": names,
+                "ExpressionAttributeValues": marshal_item(values),
+            }
+        }
 
     def _put_pre_activation_meta(
         self,
@@ -3246,29 +3188,23 @@ class DynamoDbDebateRepository:
             )
         else:
             raise RepositoryConflict("partially bound Discord context cannot be compensated")
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "Put": {
-                    "TableName": self._table_name,
-                    "Item": marshal_item(item),
-                    "ConditionExpression": ("current_attempt_id=:attempt AND " + context_condition),
-                    "ExpressionAttributeValues": marshal_item(values),
-                }
-            },
-        )
+        return {
+            "Put": {
+                "TableName": self._table_name,
+                "Item": marshal_item(item),
+                "ConditionExpression": ("current_attempt_id=:attempt AND " + context_condition),
+                "ExpressionAttributeValues": marshal_item(values),
+            }
+        }
 
     def _put_new(self, item: DynamoItem) -> TransactWriteItemTypeDef:
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "Put": {
-                    "TableName": self._table_name,
-                    "Item": marshal_item(item),
-                    "ConditionExpression": "attribute_not_exists(PK) AND attribute_not_exists(SK)",
-                }
-            },
-        )
+        return {
+            "Put": {
+                "TableName": self._table_name,
+                "Item": marshal_item(item),
+                "ConditionExpression": "attribute_not_exists(PK) AND attribute_not_exists(SK)",
+            }
+        }
 
     def _ingress_claim_actions(
         self,
@@ -3327,47 +3263,40 @@ class DynamoDbDebateRepository:
             ":request_sort_key": request_sort_key,
         }
         return (
-            cast(
-                TransactWriteItemTypeDef,
-                {
-                    "Update": {
-                        "TableName": self._table_name,
-                        "Key": marshal_item({"PK": "CONTROL#INGRESS", "SK": request_sort_key}),
-                        "UpdateExpression": (
-                            "SET processing_started_at="
-                            "if_not_exists(processing_started_at,:write_at)"
-                        ),
-                        "ConditionExpression": request_condition,
-                        "ExpressionAttributeNames": {"#status": "status"},
-                        "ExpressionAttributeValues": marshal_item(request_values),
-                    }
-                },
-            ),
-            cast(
-                TransactWriteItemTypeDef,
-                {
-                    "ConditionCheck": {
-                        "TableName": self._table_name,
-                        "Key": marshal_item(
-                            {
-                                "PK": f"INGRESS_OPERATION#{ingress_claim.interaction_id}",
-                                "SK": "RESULT",
-                            }
-                        ),
-                        "ConditionExpression": (
-                            "#status=:claimed_status AND schema_version=:schema "
-                            "AND record_schema_version=:record_schema "
-                            "AND record_type=:operation_type "
-                            "AND interaction_id=:interaction_id "
-                            "AND operation_id=:operation_id "
-                            "AND request_sort_key=:request_sort_key "
-                            "AND created_at=:created_at"
-                        ),
-                        "ExpressionAttributeNames": {"#status": "status"},
-                        "ExpressionAttributeValues": marshal_item(operation_values),
-                    }
-                },
-            ),
+            {
+                "Update": {
+                    "TableName": self._table_name,
+                    "Key": marshal_item({"PK": "CONTROL#INGRESS", "SK": request_sort_key}),
+                    "UpdateExpression": (
+                        "SET processing_started_at=if_not_exists(processing_started_at,:write_at)"
+                    ),
+                    "ConditionExpression": request_condition,
+                    "ExpressionAttributeNames": {"#status": "status"},
+                    "ExpressionAttributeValues": marshal_item(request_values),
+                }
+            },
+            {
+                "ConditionCheck": {
+                    "TableName": self._table_name,
+                    "Key": marshal_item(
+                        {
+                            "PK": f"INGRESS_OPERATION#{ingress_claim.interaction_id}",
+                            "SK": "RESULT",
+                        }
+                    ),
+                    "ConditionExpression": (
+                        "#status=:claimed_status AND schema_version=:schema "
+                        "AND record_schema_version=:record_schema "
+                        "AND record_type=:operation_type "
+                        "AND interaction_id=:interaction_id "
+                        "AND operation_id=:operation_id "
+                        "AND request_sort_key=:request_sort_key "
+                        "AND created_at=:created_at"
+                    ),
+                    "ExpressionAttributeNames": {"#status": "status"},
+                    "ExpressionAttributeValues": marshal_item(operation_values),
+                }
+            },
         )
 
     def _require_current_ingress_claim(
@@ -4128,16 +4057,13 @@ def _put_new_outbox(
     table_name: str,
     operation: OutboxOperation,
 ) -> TransactWriteItemTypeDef:
-    return cast(
-        TransactWriteItemTypeDef,
-        {
-            "Put": {
-                "TableName": table_name,
-                "Item": marshal_item(serialize_outbox(operation)),
-                "ConditionExpression": "attribute_not_exists(PK) AND attribute_not_exists(SK)",
-            }
-        },
-    )
+    return {
+        "Put": {
+            "TableName": table_name,
+            "Item": marshal_item(serialize_outbox(operation)),
+            "ConditionExpression": "attribute_not_exists(PK) AND attribute_not_exists(SK)",
+        }
+    }
 
 
 def _sent_outbox_check(
@@ -4206,23 +4132,20 @@ def _sent_outbox_check(
                     ":channel": expected.channel_id,
                 }
             )
-    return cast(
-        TransactWriteItemTypeDef,
-        {
-            "ConditionCheck": {
-                "TableName": table_name,
-                "Key": marshal_item(
-                    {
-                        "PK": f"DEBATE#{expected.state.debate_id}",
-                        "SK": (f"ATTEMPT#{expected.state.attempt_id}#OUTBOX#{operation_id}"),
-                    }
-                ),
-                "ConditionExpression": condition,
-                "ExpressionAttributeNames": {"#status": "status"},
-                "ExpressionAttributeValues": marshal_item(values),
-            }
-        },
-    )
+    return {
+        "ConditionCheck": {
+            "TableName": table_name,
+            "Key": marshal_item(
+                {
+                    "PK": f"DEBATE#{expected.state.debate_id}",
+                    "SK": (f"ATTEMPT#{expected.state.attempt_id}#OUTBOX#{operation_id}"),
+                }
+            ),
+            "ConditionExpression": condition,
+            "ExpressionAttributeNames": {"#status": "status"},
+            "ExpressionAttributeValues": marshal_item(values),
+        }
+    }
 
 
 def _abandon_outbox_action(
@@ -4271,44 +4194,41 @@ def _abandon_outbox_action(
     else:
         values[":next_retry"] = _timestamp(operation.next_retry_at)
         retry_condition = "next_retry_at=:next_retry"
-    return cast(
-        TransactWriteItemTypeDef,
-        {
-            "Update": {
-                "TableName": table_name,
-                "Key": marshal_item(
-                    {
-                        "PK": f"DEBATE#{operation.debate_id}",
-                        "SK": (f"ATTEMPT#{operation.attempt_id}#OUTBOX#{operation.operation_id}"),
-                    }
-                ),
-                "UpdateExpression": (
-                    "SET #status=:abandoned, abandoned_at=:at, "
-                    "abandon_reason=:reason, updated_at=:at "
-                    "REMOVE claim_owner, claim_expiry, next_retry_at"
-                ),
-                "ConditionExpression": (
-                    "record_type=:type AND schema_version=:schema "
-                    "AND record_schema_version=:record_schema "
-                    "AND debate_id=:debate AND attempt_id=:attempt "
-                    "AND operation_id=:operation AND plan_id=:plan AND phase=:phase "
-                    "AND delivery_sequence=:delivery_sequence AND deadline_at=:deadline "
-                    "AND created_at=:created AND content_hash=:content_hash "
-                    "AND delivery_attempt=:delivery_attempt AND #status=:expected_status "
-                    "AND "
-                    + claim_condition
-                    + " AND "
-                    + retry_condition
-                    + " AND attribute_not_exists(message_id) "
-                    "AND attribute_not_exists(sent_at) "
-                    "AND attribute_not_exists(abandoned_at) "
-                    "AND attribute_not_exists(abandon_reason)"
-                ),
-                "ExpressionAttributeNames": {"#status": "status"},
-                "ExpressionAttributeValues": marshal_item(values),
-            }
-        },
-    )
+    return {
+        "Update": {
+            "TableName": table_name,
+            "Key": marshal_item(
+                {
+                    "PK": f"DEBATE#{operation.debate_id}",
+                    "SK": (f"ATTEMPT#{operation.attempt_id}#OUTBOX#{operation.operation_id}"),
+                }
+            ),
+            "UpdateExpression": (
+                "SET #status=:abandoned, abandoned_at=:at, "
+                "abandon_reason=:reason, updated_at=:at "
+                "REMOVE claim_owner, claim_expiry, next_retry_at"
+            ),
+            "ConditionExpression": (
+                "record_type=:type AND schema_version=:schema "
+                "AND record_schema_version=:record_schema "
+                "AND debate_id=:debate AND attempt_id=:attempt "
+                "AND operation_id=:operation AND plan_id=:plan AND phase=:phase "
+                "AND delivery_sequence=:delivery_sequence AND deadline_at=:deadline "
+                "AND created_at=:created AND content_hash=:content_hash "
+                "AND delivery_attempt=:delivery_attempt AND #status=:expected_status "
+                "AND "
+                + claim_condition
+                + " AND "
+                + retry_condition
+                + " AND attribute_not_exists(message_id) "
+                "AND attribute_not_exists(sent_at) "
+                "AND attribute_not_exists(abandoned_at) "
+                "AND attribute_not_exists(abandon_reason)"
+            ),
+            "ExpressionAttributeNames": {"#status": "status"},
+            "ExpressionAttributeValues": marshal_item(values),
+        }
+    }
 
 
 def _require_transaction_size(actions: list[TransactWriteItemTypeDef]) -> None:

@@ -104,25 +104,22 @@ class DynamoRankingSource:
                 raise RuntimeError("affection statistics table is unavailable")
             return
         items: tuple[DynamoItem, ...] = tuple(
-            cast(
-                DynamoItem,
-                {
-                    "PK": "AFFECTION#PROFILE",
-                    "SK": seed.requester_key,
-                    "schema_version": 2,
-                    "record_type": "affection_profile",
-                    "source_version": 0,
-                    "display_name": seed.display_name,
-                    "scores": {
-                        "participant-a": 500,
-                        "participant-b": 500,
-                        "participant-c": 500,
-                    },
-                    "updated_at": updated_at.isoformat(),
-                    "reset_count": 0,
-                    "memorial_cycle": 1,
+            {
+                "PK": "AFFECTION#PROFILE",
+                "SK": seed.requester_key,
+                "schema_version": 2,
+                "record_type": "affection_profile",
+                "source_version": 0,
+                "display_name": seed.display_name,
+                "scores": {
+                    "participant-a": 500,
+                    "participant-b": 500,
+                    "participant-c": 500,
                 },
-            )
+                "updated_at": updated_at.isoformat(),
+                "reset_count": 0,
+                "memorial_cycle": 1,
+            }
             for seed in seeds
         )
         for offset in range(0, len(items), 100):

@@ -492,21 +492,18 @@ class DynamoDbControlRecordInitializer:
         return tuple(actions)
 
     def _require_no_legacy_active_work(self) -> None:
-        request: ScanInputTypeDef = cast(
-            ScanInputTypeDef,
-            {
-                "TableName": self._table_name,
-                "ConsistentRead": True,
-                "Limit": _LEGACY_SCAN_PAGE_SIZE,
-                "ProjectionExpression": ",".join(
-                    f"#f{index}" for index in range(len(_LEGACY_SCAN_FIELDS))
-                ),
-                "ExpressionAttributeNames": {
-                    f"#f{index}": field for index, field in enumerate(_LEGACY_SCAN_FIELDS)
-                },
-                "ReturnConsumedCapacity": "NONE",
+        request: ScanInputTypeDef = {
+            "TableName": self._table_name,
+            "ConsistentRead": True,
+            "Limit": _LEGACY_SCAN_PAGE_SIZE,
+            "ProjectionExpression": ",".join(
+                f"#f{index}" for index in range(len(_LEGACY_SCAN_FIELDS))
+            ),
+            "ExpressionAttributeNames": {
+                f"#f{index}": field for index, field in enumerate(_LEGACY_SCAN_FIELDS)
             },
-        )
+            "ReturnConsumedCapacity": "NONE",
+        }
         evaluated_items = 0
         for page_number in range(_LEGACY_SCAN_MAX_PAGES):
             page = self._client.scan(**request)
@@ -534,7 +531,7 @@ class DynamoDbControlRecordInitializer:
                 return
             if page_number + 1 == _LEGACY_SCAN_MAX_PAGES:
                 raise ControlRecordMigrationRequired("bounded legacy scan was exceeded")
-            request = cast(ScanInputTypeDef, {**request, "ExclusiveStartKey": last_key})
+            request = {**request, "ExclusiveStartKey": last_key}
 
         raise ControlRecordMigrationRequired(  # pragma: no cover - loop always returns or raises
             "bounded legacy scan was exceeded"
@@ -749,16 +746,13 @@ def _convert_fixed_record_schema(
 
 
 def _put_missing(table_name: str, item: DynamoItem) -> TransactWriteItemTypeDef:
-    return cast(
-        TransactWriteItemTypeDef,
-        {
-            "Put": {
-                "TableName": table_name,
-                "Item": marshal_item(item),
-                "ConditionExpression": "attribute_not_exists(PK) AND attribute_not_exists(SK)",
-            }
-        },
-    )
+    return {
+        "Put": {
+            "TableName": table_name,
+            "Item": marshal_item(item),
+            "ConditionExpression": "attribute_not_exists(PK) AND attribute_not_exists(SK)",
+        }
+    }
 
 
 def _condition_exact(
@@ -783,16 +777,13 @@ def _put_migrated(
     current: DynamoItem,
     allowed_fields: frozenset[str],
 ) -> TransactWriteItemTypeDef:
-    return cast(
-        TransactWriteItemTypeDef,
-        {
-            "Put": {
-                "TableName": table_name,
-                "Item": marshal_item(current),
-                **_exact_condition(previous, allowed_fields=allowed_fields),
-            }
-        },
-    )
+    return {
+        "Put": {
+            "TableName": table_name,
+            "Item": marshal_item(current),
+            **_exact_condition(previous, allowed_fields=allowed_fields),
+        }
+    }
 
 
 def _exact_condition(

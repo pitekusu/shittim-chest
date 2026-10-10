@@ -19,8 +19,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  PYTHON_VERSION: "3.14.7"
-  UV_VERSION: "0.12.17"
+  PYTHON_VERSION: "3.14.8"
+  UV_VERSION: "0.12.24"
 
 jobs:
   submit-android-dependencies:
@@ -40,9 +40,9 @@ jobs:
           distribution: temurin
           java-version-file: apps/records-android/.java-version
       - name: Install the compile SDK and build tools
-        run: '"${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.1" "build-tools;36.0.0"'
+        run: '"${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.2" "build-tools;37.0.0"'
       - name: Resolve and submit Android dependencies for Dependabot alerts
-        uses: gradle/actions/dependency-submission@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        uses: gradle/actions/dependency-submission@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
           build-root-directory: apps/records-android
           dependency-graph: generate-and-submit
@@ -60,7 +60,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: ${{ env.UV_VERSION }}
           python-version: ${{ env.PYTHON_VERSION }}
@@ -73,6 +73,8 @@ jobs:
             --output-file "${RUNNER_TEMP}/source-sbom.cdx.json"
           uv export --quiet --frozen --all-groups --project services/records \
             --format cyclonedx1.5 --output-file "${RUNNER_TEMP}/records-sbom.cdx.json"
+          uv export --quiet --frozen --all-groups --project apps/records-web/scripts/fonts \
+            --format cyclonedx1.5 --output-file "${RUNNER_TEMP}/fonts-sbom.cdx.json"
       - name: Wait for and compare the GitHub-managed SPDX SBOM
         timeout-minutes: 12
         env:
@@ -85,7 +87,7 @@ jobs:
             exit 1
           fi
           for attempt in {1..5}; do
-            printf 'Comparing Core and Records Python inventories (attempt %s/5)\n' "${attempt}"
+            printf 'Comparing Core, Records, and Web font Python inventories (attempt %s/5)\n' "${attempt}"
             timeout 60s gh api --method GET \
               -H "Accept: application/vnd.github+json" \
               -H "X-GitHub-Api-Version: 2026-03-10" \
@@ -96,7 +98,10 @@ jobs:
               "${RUNNER_TEMP}/source-sbom.cdx.json" \
               "${RUNNER_TEMP}/github-sbom.spdx.json" \
               --additional-source "${RUNNER_TEMP}/records-sbom.cdx.json" \
-              services/records/uv.lock services/records/pyproject.toml; then
+              services/records/uv.lock services/records/pyproject.toml \
+              --additional-source "${RUNNER_TEMP}/fonts-sbom.cdx.json" \
+              apps/records-web/scripts/fonts/uv.lock \
+              apps/records-web/scripts/fonts/pyproject.toml; then
               comparison=0
             fi
             main_sha=$(timeout 15s gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)
@@ -116,12 +121,13 @@ jobs:
           done
       - name: Retain both SBOM representations
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dependency-graph-sbom-${{ github.sha }}
           path: |
             ${{ runner.temp }}/source-sbom.cdx.json
             ${{ runner.temp }}/records-sbom.cdx.json
+            ${{ runner.temp }}/fonts-sbom.cdx.json
             ${{ runner.temp }}/github-sbom.spdx.json
           if-no-files-found: error
           retention-days: 30

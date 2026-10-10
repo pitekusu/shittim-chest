@@ -969,7 +969,7 @@ def _validate_cursor_key(value: Any, *, index_name: str) -> DynamoItem:
         not isinstance(key, str) or not isinstance(item, str) for key, item in value.items()
     ):
         raise ValueError("cursor key is invalid")
-    return cast(DynamoItem, dict(value))
+    return dict(value)
 
 
 def _validate_meta_item(item: DynamoItem) -> None:

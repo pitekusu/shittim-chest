@@ -18,7 +18,7 @@ RECORDS_RELEASE_WORKFLOW = "records-release.yml"
 RECORDS_BACKFILL_WORKFLOW = "records-backfill.yml"
 ANDROID_RELEASE_WORKFLOW = "android-release.yml"
 WORKFLOW_RUN_NOTIFICATION = "discord-workflow-run.yml"
-PINNED_BUILDX_VERSION = "v0.37.0"
+PINNED_BUILDX_VERSION = "v0.38.0"
 PERMISSIONS_KEY = re.compile(r"(?<![a-zA-Z0-9_-])(?:\"|')?permissions(?:\"|')?\s*:")
 YAML_HEXADECIMAL_ESCAPE = re.compile(r"\\(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|U([0-9a-fA-F]{8}))")
 AWS_OR_DEPLOY_CAPABILITY = re.compile(
@@ -207,7 +207,7 @@ def _validate_deploy_guard(directory: Path) -> None:
         "python -m tools.control_records guard",
         "--audit-output",
         "if: always()",
-        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
         "if-no-files-found: error",
         "retention-days: 90",
     )
@@ -464,7 +464,7 @@ def _validate_release(directory: Path) -> None:
         text, "Download the successful same-SHA Records evidence"
     )
     required_records_download_markers = (
-        "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+        "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
         "name: ${{ steps.records_release.outputs.artifact_name }}",
         "path: ${{ runner.temp }}/records-release-evidence",
         "github-token: ${{ github.token }}",
@@ -510,7 +510,7 @@ def _validate_release(directory: Path) -> None:
         "group: production-release",
         "cancel-in-progress: false",
         "runs-on: ubuntu-26.04-arm",
-        'node-version: "24.20.0"',
+        'node-version: "24.21.0"',
         'EXPECTED_REPOSITORY_ID: "1302516701"',
         ".use_immutable_subject == true",
         "ACTIONS_ID_TOKEN_REQUEST_URL",
@@ -1525,7 +1525,7 @@ def _validate_ci_path_isolation(directory: Path) -> None:
     required_browser = ("id: browser-tests", "run: pnpm exec playwright test")
     required_comparisons = (
         "if: ${{ failure() && steps.browser-tests.outcome == 'failure' }}",
-        "uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
+        "uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2",
         "name: records-web-comparison-${{ github.run_id }}-${{ github.run_attempt }}",
         "if-no-files-found: ignore",
         "retention-days: 7",

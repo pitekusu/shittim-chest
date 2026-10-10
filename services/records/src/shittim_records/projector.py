@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol, cast
+from typing import Protocol
 
 from pydantic import AwareDatetime, TypeAdapter, ValidationError
 from shittim_chest.adapters.dynamodb.serializer import (
@@ -263,22 +263,19 @@ def project_affection_profile(
             identity_hmac_key=identity_hmac_key,
             memorial_cycle=memorial_cycle,
         )
-    return cast(
-        DynamoItem,
-        {
-            "PK": "AFFECTION#PROFILE",
-            "SK": requester_key,
-            "schema_version": 2,
-            "record_type": "affection_profile",
-            "source_version": version,
-            "display_name": display_name,
-            "scores": clean_scores,
-            "updated_at": updated_at.isoformat(),
-            "reset_count": reset_count,
-            "memorial_cycle": memorial_cycle,
-            **unlock_projection,
-        },
-    )
+    return {
+        "PK": "AFFECTION#PROFILE",
+        "SK": requester_key,
+        "schema_version": 2,
+        "record_type": "affection_profile",
+        "source_version": version,
+        "display_name": display_name,
+        "scores": clean_scores,
+        "updated_at": updated_at.isoformat(),
+        "reset_count": reset_count,
+        "memorial_cycle": memorial_cycle,
+        **unlock_projection,
+    }
 
 
 def _project_memorial_unlock(
@@ -321,17 +318,14 @@ def _project_memorial_unlock(
     canonical = unlocked_at.isoformat(timespec="microseconds").replace("+00:00", "Z")
     if canonical != unlocked_at_text:
         raise ValueError("source memorial unlock timestamp is not canonical UTC")
-    return cast(
-        DynamoItem,
-        {
-            "unlocked_participant": participant,
-            "unlocked_at": unlocked_at.isoformat(),
-            "unlock_record_id": derive_record_key(identity_hmac_key, debate_id),
-            "unlock_display_name": display_name,
-            "unlock_memorial_cycle": memorial_cycle,
-            "unlock_retroactive": retroactive,
-        },
-    )
+    return {
+        "unlocked_participant": participant,
+        "unlocked_at": unlocked_at.isoformat(),
+        "unlock_record_id": derive_record_key(identity_hmac_key, debate_id),
+        "unlock_display_name": display_name,
+        "unlock_memorial_cycle": memorial_cycle,
+        "unlock_retroactive": retroactive,
+    }
 
 
 def _is_opaque_key(value: object) -> bool:

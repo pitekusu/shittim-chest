@@ -2215,36 +2215,30 @@ class DynamoDbIngressRepository:
                 values[f":expected_{field}"] = value
         if extra_values is not None:
             values.update(extra_values)
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "Put": {
-                    "TableName": self._table_name,
-                    "Item": marshal_item(serialize_ingress_status_publication(updated)),
-                    "ConditionExpression": condition,
-                    "ExpressionAttributeValues": marshal_item(values),
-                }
-            },
-        )
+        return {
+            "Put": {
+                "TableName": self._table_name,
+                "Item": marshal_item(serialize_ingress_status_publication(updated)),
+                "ConditionExpression": condition,
+                "ExpressionAttributeValues": marshal_item(values),
+            }
+        }
 
     def _check_status_request_action(
         self,
         request: IngressRequest,
     ) -> TransactWriteItemTypeDef:
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "ConditionCheck": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(_request_key(ingress_request_sort_key(request))),
-                    "ConditionExpression": self._status_request_condition(request),
-                    "ExpressionAttributeNames": {"#status": "status"},
-                    "ExpressionAttributeValues": marshal_item(
-                        self._status_request_expected_values(request)
-                    ),
-                }
-            },
-        )
+        return {
+            "ConditionCheck": {
+                "TableName": self._table_name,
+                "Key": marshal_item(_request_key(ingress_request_sort_key(request))),
+                "ConditionExpression": self._status_request_condition(request),
+                "ExpressionAttributeNames": {"#status": "status"},
+                "ExpressionAttributeValues": marshal_item(
+                    self._status_request_expected_values(request)
+                ),
+            }
+        }
 
     def _put_status_request_metadata_action(
         self,
@@ -2252,20 +2246,17 @@ class DynamoDbIngressRepository:
         previous: IngressRequest,
         updated: IngressRequest,
     ) -> TransactWriteItemTypeDef:
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "Put": {
-                    "TableName": self._table_name,
-                    "Item": marshal_item(serialize_ingress_request(updated)),
-                    "ConditionExpression": self._status_request_condition(previous),
-                    "ExpressionAttributeNames": {"#status": "status"},
-                    "ExpressionAttributeValues": marshal_item(
-                        self._status_request_expected_values(previous)
-                    ),
-                }
-            },
-        )
+        return {
+            "Put": {
+                "TableName": self._table_name,
+                "Item": marshal_item(serialize_ingress_request(updated)),
+                "ConditionExpression": self._status_request_condition(previous),
+                "ExpressionAttributeNames": {"#status": "status"},
+                "ExpressionAttributeValues": marshal_item(
+                    self._status_request_expected_values(previous)
+                ),
+            }
+        }
 
     def _status_request_condition(self, request: IngressRequest) -> str:
         return self._request_condition(request)
@@ -2503,89 +2494,80 @@ class DynamoDbIngressRepository:
         }
 
     def _increment_counter_action(self, at: datetime) -> TransactWriteItemTypeDef:
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "Update": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(_counter_key()),
-                    "UpdateExpression": "SET #count=#count+:one, updated_at=:at",
-                    "ConditionExpression": (
-                        "#count >= :zero AND #count < :limit AND record_type=:type "
-                        "AND schema_version=:schema "
-                        "AND record_schema_version=:record_schema"
-                    ),
-                    "ExpressionAttributeNames": {"#count": "count"},
-                    "ExpressionAttributeValues": marshal_item(
-                        {
-                            ":zero": 0,
-                            ":one": 1,
-                            ":limit": INGRESS_QUEUE_LIMIT,
-                            ":type": "ingress_queue_counter",
-                            ":schema": CURRENT_SCHEMA_VERSION,
-                            ":record_schema": INGRESS_RECORD_SCHEMA_VERSION,
-                            ":at": _timestamp(at),
-                        }
-                    ),
-                }
-            },
-        )
+        return {
+            "Update": {
+                "TableName": self._table_name,
+                "Key": marshal_item(_counter_key()),
+                "UpdateExpression": "SET #count=#count+:one, updated_at=:at",
+                "ConditionExpression": (
+                    "#count >= :zero AND #count < :limit AND record_type=:type "
+                    "AND schema_version=:schema "
+                    "AND record_schema_version=:record_schema"
+                ),
+                "ExpressionAttributeNames": {"#count": "count"},
+                "ExpressionAttributeValues": marshal_item(
+                    {
+                        ":zero": 0,
+                        ":one": 1,
+                        ":limit": INGRESS_QUEUE_LIMIT,
+                        ":type": "ingress_queue_counter",
+                        ":schema": CURRENT_SCHEMA_VERSION,
+                        ":record_schema": INGRESS_RECORD_SCHEMA_VERSION,
+                        ":at": _timestamp(at),
+                    }
+                ),
+            }
+        }
 
     def _increment_status_counter_action(self, at: datetime) -> TransactWriteItemTypeDef:
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "Update": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(_status_counter_key()),
-                    "UpdateExpression": "SET #count=#count+:one, updated_at=:at",
-                    "ConditionExpression": (
-                        "#count >= :zero AND record_type=:type "
-                        "AND schema_version=:schema "
-                        "AND record_schema_version=:record_schema"
-                    ),
-                    "ExpressionAttributeNames": {"#count": "count"},
-                    "ExpressionAttributeValues": marshal_item(
-                        {
-                            ":zero": 0,
-                            ":one": 1,
-                            ":type": "ingress_status_pending_counter",
-                            ":schema": CURRENT_SCHEMA_VERSION,
-                            ":record_schema": INGRESS_RECORD_SCHEMA_VERSION,
-                            ":at": _timestamp(at),
-                        }
-                    ),
-                }
-            },
-        )
+        return {
+            "Update": {
+                "TableName": self._table_name,
+                "Key": marshal_item(_status_counter_key()),
+                "UpdateExpression": "SET #count=#count+:one, updated_at=:at",
+                "ConditionExpression": (
+                    "#count >= :zero AND record_type=:type "
+                    "AND schema_version=:schema "
+                    "AND record_schema_version=:record_schema"
+                ),
+                "ExpressionAttributeNames": {"#count": "count"},
+                "ExpressionAttributeValues": marshal_item(
+                    {
+                        ":zero": 0,
+                        ":one": 1,
+                        ":type": "ingress_status_pending_counter",
+                        ":schema": CURRENT_SCHEMA_VERSION,
+                        ":record_schema": INGRESS_RECORD_SCHEMA_VERSION,
+                        ":at": _timestamp(at),
+                    }
+                ),
+            }
+        }
 
     def _decrement_status_counter_action(self, at: datetime) -> TransactWriteItemTypeDef:
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "Update": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(_status_counter_key()),
-                    "UpdateExpression": "SET #count=#count-:one, updated_at=:at",
-                    "ConditionExpression": (
-                        "#count > :zero AND record_type=:type "
-                        "AND schema_version=:schema "
-                        "AND record_schema_version=:record_schema"
-                    ),
-                    "ExpressionAttributeNames": {"#count": "count"},
-                    "ExpressionAttributeValues": marshal_item(
-                        {
-                            ":zero": 0,
-                            ":one": 1,
-                            ":type": "ingress_status_pending_counter",
-                            ":schema": CURRENT_SCHEMA_VERSION,
-                            ":record_schema": INGRESS_RECORD_SCHEMA_VERSION,
-                            ":at": _timestamp(at),
-                        }
-                    ),
-                }
-            },
-        )
+        return {
+            "Update": {
+                "TableName": self._table_name,
+                "Key": marshal_item(_status_counter_key()),
+                "UpdateExpression": "SET #count=#count-:one, updated_at=:at",
+                "ConditionExpression": (
+                    "#count > :zero AND record_type=:type "
+                    "AND schema_version=:schema "
+                    "AND record_schema_version=:record_schema"
+                ),
+                "ExpressionAttributeNames": {"#count": "count"},
+                "ExpressionAttributeValues": marshal_item(
+                    {
+                        ":zero": 0,
+                        ":one": 1,
+                        ":type": "ingress_status_pending_counter",
+                        ":schema": CURRENT_SCHEMA_VERSION,
+                        ":record_schema": INGRESS_RECORD_SCHEMA_VERSION,
+                        ":at": _timestamp(at),
+                    }
+                ),
+            }
+        }
 
     def _leave_active_queue_actions(
         self,
@@ -2604,76 +2586,67 @@ class DynamoDbIngressRepository:
         request: IngressRequest,
     ) -> TransactWriteItemTypeDef:
         pointer = serialize_ingress_active_pointer(request)
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "Delete": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(
-                        {
-                            "PK": INGRESS_ACTIVE_POINTER_PARTITION,
-                            "SK": ingress_request_sort_key(request),
-                        }
-                    ),
-                    "ConditionExpression": (
-                        "record_type=:type AND schema_version=:schema "
-                        "AND record_schema_version=:record_schema "
-                        "AND interaction_id=:interaction_id "
-                        "AND request_sort_key=:request_sort_key AND created_at=:created_at"
-                    ),
-                    "ExpressionAttributeValues": marshal_item(
-                        {
-                            ":type": pointer["record_type"],
-                            ":schema": pointer["schema_version"],
-                            ":record_schema": pointer["record_schema_version"],
-                            ":interaction_id": pointer["interaction_id"],
-                            ":request_sort_key": pointer["request_sort_key"],
-                            ":created_at": pointer["created_at"],
-                        }
-                    ),
-                }
-            },
-        )
+        return {
+            "Delete": {
+                "TableName": self._table_name,
+                "Key": marshal_item(
+                    {
+                        "PK": INGRESS_ACTIVE_POINTER_PARTITION,
+                        "SK": ingress_request_sort_key(request),
+                    }
+                ),
+                "ConditionExpression": (
+                    "record_type=:type AND schema_version=:schema "
+                    "AND record_schema_version=:record_schema "
+                    "AND interaction_id=:interaction_id "
+                    "AND request_sort_key=:request_sort_key AND created_at=:created_at"
+                ),
+                "ExpressionAttributeValues": marshal_item(
+                    {
+                        ":type": pointer["record_type"],
+                        ":schema": pointer["schema_version"],
+                        ":record_schema": pointer["record_schema_version"],
+                        ":interaction_id": pointer["interaction_id"],
+                        ":request_sort_key": pointer["request_sort_key"],
+                        ":created_at": pointer["created_at"],
+                    }
+                ),
+            }
+        }
 
     def _decrement_counter_action(self, at: datetime) -> TransactWriteItemTypeDef:
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "Update": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(_counter_key()),
-                    "UpdateExpression": "SET #count=#count-:one, updated_at=:at",
-                    "ConditionExpression": (
-                        "#count > :zero AND #count <= :limit AND schema_version=:schema "
-                        "AND record_schema_version=:record_schema AND record_type=:type"
-                    ),
-                    "ExpressionAttributeNames": {"#count": "count"},
-                    "ExpressionAttributeValues": marshal_item(
-                        {
-                            ":zero": 0,
-                            ":one": 1,
-                            ":limit": INGRESS_QUEUE_LIMIT,
-                            ":schema": CURRENT_SCHEMA_VERSION,
-                            ":record_schema": INGRESS_RECORD_SCHEMA_VERSION,
-                            ":type": "ingress_queue_counter",
-                            ":at": _timestamp(at),
-                        }
-                    ),
-                }
-            },
-        )
+        return {
+            "Update": {
+                "TableName": self._table_name,
+                "Key": marshal_item(_counter_key()),
+                "UpdateExpression": "SET #count=#count-:one, updated_at=:at",
+                "ConditionExpression": (
+                    "#count > :zero AND #count <= :limit AND schema_version=:schema "
+                    "AND record_schema_version=:record_schema AND record_type=:type"
+                ),
+                "ExpressionAttributeNames": {"#count": "count"},
+                "ExpressionAttributeValues": marshal_item(
+                    {
+                        ":zero": 0,
+                        ":one": 1,
+                        ":limit": INGRESS_QUEUE_LIMIT,
+                        ":schema": CURRENT_SCHEMA_VERSION,
+                        ":record_schema": INGRESS_RECORD_SCHEMA_VERSION,
+                        ":type": "ingress_queue_counter",
+                        ":at": _timestamp(at),
+                    }
+                ),
+            }
+        }
 
     def _put_new(self, item: DynamoItem) -> TransactWriteItemTypeDef:
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "Put": {
-                    "TableName": self._table_name,
-                    "Item": marshal_item(item),
-                    "ConditionExpression": "attribute_not_exists(PK) AND attribute_not_exists(SK)",
-                }
-            },
-        )
+        return {
+            "Put": {
+                "TableName": self._table_name,
+                "Item": marshal_item(item),
+                "ConditionExpression": "attribute_not_exists(PK) AND attribute_not_exists(SK)",
+            }
+        }
 
     def _transact(
         self,

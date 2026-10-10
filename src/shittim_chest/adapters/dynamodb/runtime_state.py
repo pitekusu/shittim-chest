@@ -329,18 +329,15 @@ class DynamoDbRuntimeStateRepository:
         condition, names, values = _runtime_cas(expected)
         actions: list[TransactWriteItemTypeDef] = [
             deployment_lock_open_check(table_name=self._table_name),
-            cast(
-                TransactWriteItemTypeDef,
-                {
-                    "Put": {
-                        "TableName": self._table_name,
-                        "Item": marshal_item(serialize_runtime_state(updated)),
-                        "ConditionExpression": condition,
-                        "ExpressionAttributeNames": names,
-                        "ExpressionAttributeValues": marshal_item(values),
-                    }
-                },
-            ),
+            {
+                "Put": {
+                    "TableName": self._table_name,
+                    "Item": marshal_item(serialize_runtime_state(updated)),
+                    "ConditionExpression": condition,
+                    "ExpressionAttributeNames": names,
+                    "ExpressionAttributeValues": marshal_item(values),
+                }
+            },
             _activity_schema_check(table_name=self._table_name),
             _zero_counter_check(
                 table_name=self._table_name,
@@ -505,36 +502,33 @@ class DynamoDbRuntimeStateRepository:
         self,
         operation: IngressOperationResult,
     ) -> TransactWriteItemTypeDef:
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "ConditionCheck": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(_operation_key(operation.interaction_id)),
-                    "ConditionExpression": (
-                        "record_type=:operation_type AND schema_version=:schema "
-                        "AND record_schema_version=:record_schema "
-                        "AND interaction_id=:interaction_id AND operation_id=:operation_id "
-                        "AND request_sort_key=:request_sort_key AND created_at=:created_at "
-                        "AND updated_at=:updated_at AND #operation_status=:operation_status"
-                    ),
-                    "ExpressionAttributeNames": {"#operation_status": "status"},
-                    "ExpressionAttributeValues": marshal_item(
-                        {
-                            ":operation_type": "ingress_operation_result",
-                            ":schema": CURRENT_SCHEMA_VERSION,
-                            ":record_schema": operation.schema_version,
-                            ":interaction_id": operation.interaction_id,
-                            ":operation_id": operation.operation_id,
-                            ":request_sort_key": operation.request_sort_key,
-                            ":created_at": _timestamp(operation.created_at),
-                            ":updated_at": _timestamp(operation.updated_at),
-                            ":operation_status": operation.status.value,
-                        }
-                    ),
-                }
-            },
-        )
+        return {
+            "ConditionCheck": {
+                "TableName": self._table_name,
+                "Key": marshal_item(_operation_key(operation.interaction_id)),
+                "ConditionExpression": (
+                    "record_type=:operation_type AND schema_version=:schema "
+                    "AND record_schema_version=:record_schema "
+                    "AND interaction_id=:interaction_id AND operation_id=:operation_id "
+                    "AND request_sort_key=:request_sort_key AND created_at=:created_at "
+                    "AND updated_at=:updated_at AND #operation_status=:operation_status"
+                ),
+                "ExpressionAttributeNames": {"#operation_status": "status"},
+                "ExpressionAttributeValues": marshal_item(
+                    {
+                        ":operation_type": "ingress_operation_result",
+                        ":schema": CURRENT_SCHEMA_VERSION,
+                        ":record_schema": operation.schema_version,
+                        ":interaction_id": operation.interaction_id,
+                        ":operation_id": operation.operation_id,
+                        ":request_sort_key": operation.request_sort_key,
+                        ":created_at": _timestamp(operation.created_at),
+                        ":updated_at": _timestamp(operation.updated_at),
+                        ":operation_status": operation.status.value,
+                    }
+                ),
+            }
+        }
 
     def _active_request_check(
         self,
@@ -574,79 +568,70 @@ class DynamoDbRuntimeStateRepository:
                 "AND processing_started_at < terminal_deadline_at"
             )
             values[":processing_started"] = _timestamp(request.processing_started_at)
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "ConditionCheck": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(_request_key(ingress_request_sort_key(request))),
-                    "ConditionExpression": condition,
-                    "ExpressionAttributeNames": {"#request_status": "status"},
-                    "ExpressionAttributeValues": marshal_item(values),
-                }
-            },
-        )
+        return {
+            "ConditionCheck": {
+                "TableName": self._table_name,
+                "Key": marshal_item(_request_key(ingress_request_sort_key(request))),
+                "ConditionExpression": condition,
+                "ExpressionAttributeNames": {"#request_status": "status"},
+                "ExpressionAttributeValues": marshal_item(values),
+            }
+        }
 
     def _active_pointer_check(
         self,
         pointer: IngressActivePointer,
     ) -> TransactWriteItemTypeDef:
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "ConditionCheck": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(_active_pointer_key(pointer.request_sort_key)),
-                    "ConditionExpression": (
-                        "record_type=:pointer_type AND schema_version=:schema "
-                        "AND record_schema_version=:record_schema "
-                        "AND interaction_id=:interaction_id "
-                        "AND request_sort_key=:request_sort_key AND created_at=:created_at"
-                    ),
-                    "ExpressionAttributeValues": marshal_item(
-                        {
-                            ":pointer_type": "ingress_active_pointer",
-                            ":schema": CURRENT_SCHEMA_VERSION,
-                            ":record_schema": pointer.schema_version,
-                            ":interaction_id": pointer.interaction_id,
-                            ":request_sort_key": pointer.request_sort_key,
-                            ":created_at": _timestamp(pointer.created_at),
-                        }
-                    ),
-                }
-            },
-        )
+        return {
+            "ConditionCheck": {
+                "TableName": self._table_name,
+                "Key": marshal_item(_active_pointer_key(pointer.request_sort_key)),
+                "ConditionExpression": (
+                    "record_type=:pointer_type AND schema_version=:schema "
+                    "AND record_schema_version=:record_schema "
+                    "AND interaction_id=:interaction_id "
+                    "AND request_sort_key=:request_sort_key AND created_at=:created_at"
+                ),
+                "ExpressionAttributeValues": marshal_item(
+                    {
+                        ":pointer_type": "ingress_active_pointer",
+                        ":schema": CURRENT_SCHEMA_VERSION,
+                        ":record_schema": pointer.schema_version,
+                        ":interaction_id": pointer.interaction_id,
+                        ":request_sort_key": pointer.request_sort_key,
+                        ":created_at": _timestamp(pointer.created_at),
+                    }
+                ),
+            }
+        }
 
     def _wake_result_check(
         self,
         result: RuntimeWakeResult,
     ) -> TransactWriteItemTypeDef:
-        return cast(
-            TransactWriteItemTypeDef,
-            {
-                "ConditionCheck": {
-                    "TableName": self._table_name,
-                    "Key": marshal_item(_wake_key(result.interaction_id)),
-                    "ConditionExpression": (
-                        "record_type=:wake_type AND schema_version=:schema "
-                        "AND record_schema_version=:record_schema "
-                        "AND interaction_id=:interaction_id AND generation=:generation "
-                        "AND runtime_version=:runtime_version AND recorded_at=:recorded_at"
-                    ),
-                    "ExpressionAttributeValues": marshal_item(
-                        {
-                            ":wake_type": "runtime_wake_result",
-                            ":schema": CURRENT_SCHEMA_VERSION,
-                            ":record_schema": result.schema_version,
-                            ":interaction_id": result.interaction_id,
-                            ":generation": result.generation,
-                            ":runtime_version": result.runtime_version,
-                            ":recorded_at": _timestamp(result.recorded_at),
-                        }
-                    ),
-                }
-            },
-        )
+        return {
+            "ConditionCheck": {
+                "TableName": self._table_name,
+                "Key": marshal_item(_wake_key(result.interaction_id)),
+                "ConditionExpression": (
+                    "record_type=:wake_type AND schema_version=:schema "
+                    "AND record_schema_version=:record_schema "
+                    "AND interaction_id=:interaction_id AND generation=:generation "
+                    "AND runtime_version=:runtime_version AND recorded_at=:recorded_at"
+                ),
+                "ExpressionAttributeValues": marshal_item(
+                    {
+                        ":wake_type": "runtime_wake_result",
+                        ":schema": CURRENT_SCHEMA_VERSION,
+                        ":record_schema": result.schema_version,
+                        ":interaction_id": result.interaction_id,
+                        ":generation": result.generation,
+                        ":runtime_version": result.runtime_version,
+                        ":recorded_at": _timestamp(result.recorded_at),
+                    }
+                ),
+            }
+        }
 
     def _load_ingress_operation(self, interaction_id: str) -> IngressOperationResult:
         item = self._get_item(_operation_key(interaction_id))
@@ -729,26 +714,23 @@ def _activity_schema_key() -> DynamoItem:
 
 
 def _activity_schema_check(*, table_name: str) -> TransactWriteItemTypeDef:
-    return cast(
-        TransactWriteItemTypeDef,
-        {
-            "ConditionCheck": {
-                "TableName": table_name,
-                "Key": marshal_item(_activity_schema_key()),
-                "ConditionExpression": (
-                    "record_type=:type AND schema_version=:schema "
-                    "AND record_schema_version=:record_schema"
-                ),
-                "ExpressionAttributeValues": marshal_item(
-                    {
-                        ":type": RUNTIME_ACTIVITY_SCHEMA_RECORD_TYPE,
-                        ":schema": CURRENT_SCHEMA_VERSION,
-                        ":record_schema": RUNTIME_ACTIVITY_SCHEMA_VERSION,
-                    }
-                ),
-            }
-        },
-    )
+    return {
+        "ConditionCheck": {
+            "TableName": table_name,
+            "Key": marshal_item(_activity_schema_key()),
+            "ConditionExpression": (
+                "record_type=:type AND schema_version=:schema "
+                "AND record_schema_version=:record_schema"
+            ),
+            "ExpressionAttributeValues": marshal_item(
+                {
+                    ":type": RUNTIME_ACTIVITY_SCHEMA_RECORD_TYPE,
+                    ":schema": CURRENT_SCHEMA_VERSION,
+                    ":record_schema": RUNTIME_ACTIVITY_SCHEMA_VERSION,
+                }
+            ),
+        }
+    }
 
 
 def _zero_counter_check(
@@ -775,44 +757,38 @@ def _zero_counter_check(
         valid.append("record_schema_version=:record_schema")
     else:
         valid.append("attribute_not_exists(record_schema_version)")
-    return cast(
-        TransactWriteItemTypeDef,
-        {
-            "ConditionCheck": {
-                "TableName": table_name,
-                "Key": marshal_item(key),
-                "ConditionExpression": " AND ".join(valid),
-                "ExpressionAttributeNames": names,
-                "ExpressionAttributeValues": marshal_item(values),
-            }
-        },
-    )
+    return {
+        "ConditionCheck": {
+            "TableName": table_name,
+            "Key": marshal_item(key),
+            "ConditionExpression": " AND ".join(valid),
+            "ExpressionAttributeNames": names,
+            "ExpressionAttributeValues": marshal_item(values),
+        }
+    }
 
 
 def _free_slot_check(*, table_name: str, slot: int) -> TransactWriteItemTypeDef:
-    return cast(
-        TransactWriteItemTypeDef,
-        {
-            "ConditionCheck": {
-                "TableName": table_name,
-                "Key": marshal_item({"PK": "CONTROL#GLOBAL", "SK": f"SLOT#{slot}"}),
-                "ConditionExpression": (
-                    "record_type=:type AND schema_version=:schema AND slot=:slot "
-                    "AND fencing_token >= :zero "
-                    "AND attribute_not_exists(lease_owner) "
-                    "AND attribute_not_exists(lease_expiry)"
-                ),
-                "ExpressionAttributeValues": marshal_item(
-                    {
-                        ":type": "lease_slot",
-                        ":schema": CURRENT_SCHEMA_VERSION,
-                        ":slot": slot,
-                        ":zero": 0,
-                    }
-                ),
-            }
-        },
-    )
+    return {
+        "ConditionCheck": {
+            "TableName": table_name,
+            "Key": marshal_item({"PK": "CONTROL#GLOBAL", "SK": f"SLOT#{slot}"}),
+            "ConditionExpression": (
+                "record_type=:type AND schema_version=:schema AND slot=:slot "
+                "AND fencing_token >= :zero "
+                "AND attribute_not_exists(lease_owner) "
+                "AND attribute_not_exists(lease_expiry)"
+            ),
+            "ExpressionAttributeValues": marshal_item(
+                {
+                    ":type": "lease_slot",
+                    ":schema": CURRENT_SCHEMA_VERSION,
+                    ":slot": slot,
+                    ":zero": 0,
+                }
+            ),
+        }
+    }
 
 
 def _runtime_cas(

@@ -7,7 +7,7 @@ import json
 import logging
 import math
 import re
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
@@ -63,7 +63,7 @@ def build_discord_rate_limit_trace() -> aiohttp.TraceConfig:
 
 
 @contextmanager
-def discord_rate_limit_operation(operation: DiscordIngressOperation) -> Iterator[None]:
+def discord_rate_limit_operation(operation: DiscordIngressOperation) -> Generator[None]:
     """Associate one allowlisted operation with its discord.py response."""
 
     token = _CURRENT_OPERATION.set(operation.value)
