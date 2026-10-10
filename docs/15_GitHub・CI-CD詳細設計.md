@@ -488,16 +488,17 @@ ReleaseIdentity更新、失敗したワークフローの再実行、手動Cloud
 | ワークフロー | 頻度 | 役割 |
 |---|---|---|
 | Infrastructure Drift | 毎週火曜 | Core 5/Records 3スタックの構成差分を検出。自動修復なし |
-| Dependency Graph | 毎週火曜・Android変更時 | Core・RecordsのPython依存一覧を照合し、Androidの解決済み依存をGitHubへ送信 |
+| Dependency Graph | 毎週火曜・Android変更時 | Core・Records・Webフォント生成のPython依存一覧を照合し、Androidの解決済み依存をGitHubへ送信 |
 | Release Tool Versions | 毎週水曜 | 固定ツールの更新候補を通知 |
 | Discord Security Digest | 毎日 | セキュリティ情報を補助通知 |
 | Discord通知 | 対象イベント発生時 | PR/対象ワークフローの状態を補助通知 |
 
-Dependency Graphでは、両Pythonプロジェクトの全依存グループをfrozenでCycloneDX 1.5へ出力し、
+Dependency Graphでは、Core・Records・Webフォント生成の3プロジェクトの全依存グループをfrozenでCycloneDX 1.5へ出力し、
 各lockfileとの一致を検証したうえで、和集合をGitHubのSPDX内のPython依存と比較する。
+パッケージとして導入しないフォント生成プロジェクトのvirtual rootも、名前・版・唯一のrootという同じ条件で検証する。
 RecordsからCoreへのローカル参照は、比較に含めたプロジェクトのパス・名前・版が一致する場合だけ認める。
 不足・余分な依存は失敗とし、反映待ちは最大5回・60秒間隔とする。API取得にも時間制限を設け、
-比較失敗時も取得済みのCore・Records・GitHubのSBOMを保持する。mainが進んだ場合は比較を破棄する。
+比較失敗時も取得済みのCore・Records・Webフォント生成・GitHubのSBOMを保持する。mainが進んだ場合は比較を破棄する。
 
 Androidは`gradle/actions/dependency-submission`で依存解決結果を送信し、Dependabot alertsとsecurity updatesの対象にする。
 送信は`main`限定の専用jobに`contents: write`を与え、PRのコードへ書込権限を渡さない。

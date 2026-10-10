@@ -202,10 +202,10 @@ def validate_project_inventory(
         name = _text(package.get("name"), f"uv.lock package[{index}].name")
         version = _text(package.get("version"), f"uv.lock package[{index}].version")
         source = _object(package.get("source"), f"uv.lock package[{index}].source")
-        if source.get("editable") == ".":
+        if source.get("editable") == "." or source.get("virtual") == ".":
             package_purl = _package_purl(name, version, f"uv.lock package[{index}]")
             if package_purl != project_purl or root_package_seen:
-                raise SbomError("uv.lock must contain exactly one editable project root")
+                raise SbomError("uv.lock must contain exactly one editable or virtual project root")
             root_package_seen = True
             continue
         purl = _package_purl(name, version, f"uv.lock package[{index}]")
@@ -221,7 +221,7 @@ def validate_project_inventory(
         locked_purls.add(purl)
 
     if not root_package_seen:
-        raise SbomError("uv.lock is missing the editable project root")
+        raise SbomError("uv.lock is missing the editable or virtual project root")
     missing = locked_purls - inventory.package_purls
     unexpected = set(inventory.package_purls) - locked_purls
     if missing or unexpected:

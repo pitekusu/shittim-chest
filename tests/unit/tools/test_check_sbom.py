@@ -122,11 +122,25 @@ def test_component_without_purl_requires_an_explicit_local_project(declared: boo
             validate_cyclonedx_text(json.dumps(document))
 
 
-def test_cyclonedx_inventory_matches_project_and_lock() -> None:
+@pytest.mark.parametrize("root_source", ["editable", "virtual"])
+def test_cyclonedx_inventory_matches_project_and_lock(root_source: str) -> None:
     inventory = validate_cyclonedx_text(json.dumps(_cyclonedx_document()))
     lock, project = _project_documents()
+    packages = cast(list[dict[str, object]], lock["package"])
+    packages[0]["source"] = {root_source: "."}
 
     validate_project_inventory(inventory, lock, project)
+
+
+def test_virtual_project_root_must_match_project() -> None:
+    inventory = validate_cyclonedx_text(json.dumps(_cyclonedx_document()))
+    lock, project = _project_documents()
+    packages = cast(list[dict[str, object]], lock["package"])
+    packages[0]["source"] = {"virtual": "."}
+    packages[0]["name"] = "unknown-project"
+
+    with pytest.raises(SbomError, match="exactly one editable or virtual project root"):
+        validate_project_inventory(inventory, lock, project)
 
 
 def test_lock_inventory_difference_is_rejected() -> None:
@@ -199,8 +213,11 @@ def test_github_spdx_match_is_accepted() -> None:
     compare_inventories(inventory, github_purls)
 
 
-@pytest.mark.parametrize("difference", [None, "missing-core", "missing-records", "unexpected"])
-def test_repository_comparison_requires_both_project_inventories(difference: str | None) -> None:
+@pytest.mark.parametrize(
+    "difference",
+    [None, "missing-core", "missing-records", "missing-fonts", "unincluded-fonts", "unexpected"],
+)
+def test_repository_comparison_requires_all_project_inventories(difference: str | None) -> None:
     core = validate_cyclonedx_text(json.dumps(_cyclonedx_document()))
     records_only = _versioned("pkg:pypi/pillow", "12.3.0")
     records = CycloneDxInventory(
@@ -208,19 +225,34 @@ def test_repository_comparison_requires_both_project_inventories(difference: str
         project_purl=_versioned("pkg:pypi/shittim-records", "0.1.0"),
         component_count=2,
     )
-    github = set(core.package_purls | records.package_purls | {records.project_purl})
+    fonts = CycloneDxInventory(
+        package_purls=frozenset(
+            {_versioned("pkg:pypi/brotli", "1.2.0"), _versioned("pkg:pypi/fonttools", "4.66.1")}
+        ),
+        project_purl=_versioned("pkg:pypi/records-web-fonts", "0.1.0"),
+        component_count=2,
+    )
+    github = set(
+        core.package_purls
+        | records.package_purls
+        | fonts.package_purls
+        | {records.project_purl, fonts.project_purl}
+    )
     if difference == "missing-core":
         github.difference_update(core.package_purls)
     elif difference == "missing-records":
         github.remove(records_only)
+    elif difference == "missing-fonts":
+        github.difference_update(fonts.package_purls | {fonts.project_purl})
     elif difference == "unexpected":
         github.add(_versioned("pkg:pypi/unexpected", "1.0.0"))
 
+    additional = (records,) if difference == "unincluded-fonts" else (records, fonts)
     if difference is None:
-        compare_inventories(core, frozenset(github), (records,))
+        compare_inventories(core, frozenset(github), additional)
     else:
         with pytest.raises(SbomError, match="inventories differ"):
-            compare_inventories(core, frozenset(github), (records,))
+            compare_inventories(core, frozenset(github), additional)
 
 
 @pytest.mark.parametrize("declared", [True, False])

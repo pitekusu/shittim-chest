@@ -207,7 +207,8 @@ class RecordNotificationRegistrationTest {
       assertEquals(1, requests().size) // No dependent that would inherit the imminent failure.
       fail.complete(Unit)
       await("initial_registration_failed") {
-        manager.getWorkInfoByIdFlow(failed.id).first { it?.state == WorkInfo.State.FAILED }
+        // KEEP may delete terminal work before this observer receives FAILED.
+        manager.getWorkInfoByIdFlow(failed.id).first { it == null || it.state == WorkInfo.State.FAILED }
       }
       val recovery = await("follow_up_enqueued") {
         manager.getWorkInfosForUniqueWorkFlow("records-notification-registration-v1")
