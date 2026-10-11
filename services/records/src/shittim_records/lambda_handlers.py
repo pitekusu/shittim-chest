@@ -610,6 +610,7 @@ def _read_controller() -> ReadHttpController:
             store=DynamoAuthStore(dynamodb, _environment("SESSION_TABLE_NAME")),
             mobile_store=DynamoMobileAuthStore(dynamodb, _environment("SESSION_TABLE_NAME")),
             session_key=session_key,
+            allowed_origin="https://" + _environment("RECORDS_PUBLIC_HOSTNAME"),
             records=RecordsReadService(
                 reader=reader,
                 cursor_codec=CursorCodec(session_key),

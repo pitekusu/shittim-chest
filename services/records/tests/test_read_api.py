@@ -20,6 +20,7 @@ from shittim_chest.domain.attachments import DebateImage
 from tests.factories import NOW, completed_snapshot, presentation
 
 from shittim_records.archive import project_completed_debate
+from shittim_records.contracts import RecordSearchRequest
 from shittim_records.costs import CostCategory, StoredDailyCost, StoredDailyRate
 from shittim_records.read_api import (
     AffectionRankingQuery,
@@ -1009,3 +1010,205 @@ def test_list_query_rejects_unknown_sort() -> None:
         records.list_records(query=ListQuery(sort=cast(Any, "unknown")), now=NOW)
 
     assert (caught.value.code, caught.value.status) == ("REQUEST_INVALID", 400)
+
+
+class PagedSearchReader(FakeReader):
+    """Realistic ordered META pages, without fetching discussion details."""
+
+    def __init__(self, count: int) -> None:
+        super().__init__()
+        self.rows: list[dict[str, Any]] = []
+        self.profiles: dict[str, RequesterProfile] | None = None
+        for number in range(count):
+            record_id = f"{number:043d}"
+            self.rows.append(
+                {
+                    **self.meta,
+                    "record_id": record_id,
+                    "PK": f"RECORD#{record_id}",
+                    "gsi1sk": f"{self.meta['completed_at']}#{record_id}",
+                    "gsi2sk": f"{self.meta['completed_at']}#{record_id}",
+                    "question": "unrelated topic",
+                }
+            )
+
+    def list_meta(self, **kwargs: Any) -> ArchivePage:
+        self.list_calls.append(kwargs)
+        rows = sorted(self.rows, key=lambda row: row["gsi1sk"], reverse=kwargs["sort"] == "newest")
+        if kwargs["winner"]:
+            rows = [row for row in rows if row["winner"] == kwargs["winner"]]
+        start = kwargs["exclusive_start_key"]
+        if start:
+            offset = next(index for index, row in enumerate(rows) if row["PK"] == start["PK"]) + 1
+            rows = rows[offset:]
+        page = rows[: kwargs["limit"]]
+        index_name = "gsi2" if kwargs["winner"] else "gsi1"
+        key = (
+            {field: page[-1][field] for field in ("PK", "SK", f"{index_name}pk", f"{index_name}sk")}
+            if len(rows) > len(page)
+            else None
+        )
+        return ArchivePage(items=tuple(page), last_evaluated_key=key, index_name=index_name)
+
+    def load_profiles(self, *, requester_keys: tuple[str, ...]) -> dict[str, RequesterProfile]:
+        if self.profiles is None:
+            return super().load_profiles(requester_keys=requester_keys)
+        return {key: value for key, value in self.profiles.items() if key in requester_keys}
+
+    def load_record(self, *, record_id: str) -> tuple[dict[str, Any], ...]:
+        raise AssertionError("search must not fetch every discussion's details")
+
+
+def test_search_finds_full_question_after_empty_partial_page() -> None:
+    reader = PagedSearchReader(300)
+    reader.rows[0]["question"] = "x" * 180 + " unique needle"
+    records, _ = service(reader)
+    first = records.search_records(query=RecordSearchRequest(search=" UNIQUE NEEDLE "), now=NOW)
+    assert first.items == ()
+    assert first.next_cursor is not None
+    assert sum(call["limit"] for call in reader.list_calls) <= 250
+    second = records.search_records(
+        query=RecordSearchRequest(search="unique needle", cursor=first.next_cursor), now=NOW
+    )
+    assert [item.record_id for item in second.items] == [reader.rows[0]["record_id"]]
+    assert "unique needle" not in second.items[0].question_preview
+    assert second.next_cursor is None
+
+
+def test_search_mid_batch_cursor_keeps_every_remaining_match() -> None:
+    reader = PagedSearchReader(6)
+    for row in reader.rows[:5]:
+        row["question"] = "matching subject"
+    records, _ = service(reader)
+    ids = []
+    cursor = None
+    for _page in range(3):
+        response = records.search_records(
+            query=RecordSearchRequest(search="matching", limit=2, cursor=cursor), now=NOW
+        )
+        ids.extend(item.record_id for item in response.items)
+        cursor = response.next_cursor
+    assert ids == [row["record_id"] for row in reversed(reader.rows[:5])]
+    assert cursor is None
+
+
+def test_search_combines_winner_name_requester_current_name_and_sort() -> None:
+    reader = PagedSearchReader(3)
+    reader.rows[1]["requester_key"] = "another-requester"
+    reader.profiles = {
+        cast(str, reader.meta["requester_key"]): RequesterProfile("Renamed requester", None),
+        "another-requester": RequesterProfile("Other", None),
+    }
+    records, _ = service(reader)
+    winner_name = reader.rows[0]["participants"]["participant-b"]["display_name"]
+    result = records.search_records(
+        query=RecordSearchRequest(
+            search=winner_name.upper(),
+            requester="Renamed requester",
+            winner="participant-b",
+            sort="oldest",
+        ),
+        now=NOW,
+    )
+    assert [item.record_id for item in result.items] == [
+        reader.rows[0]["record_id"],
+        reader.rows[2]["record_id"],
+    ]
+    assert all(item.requester.display_name == "Renamed requester" for item in result.items)
+    assert reader.list_calls[0]["winner"] == "participant-b"
+    none = records.search_records(query=RecordSearchRequest(requester="renamed requester"), now=NOW)
+    assert none.items == ()
+
+
+def test_search_does_not_join_separate_fields_into_a_false_match() -> None:
+    reader = PagedSearchReader(1)
+    reader.rows[0]["question"] = "question only"
+    winner_name = reader.rows[0]["participants"]["participant-b"]["display_name"]
+    records, _ = service(reader)
+    result = records.search_records(
+        query=RecordSearchRequest(search=f"only {winner_name}"), now=NOW
+    )
+    assert result.items == ()
+    assert result.next_cursor is None
+
+
+def test_search_stops_work_with_resumable_cursor_at_time_budget() -> None:
+    reader = PagedSearchReader(300)
+    ticks = iter((0.0, 5.0))
+    records = RecordsReadService(
+        reader=reader, cursor_codec=CursorCodec(SESSION_KEY), search_clock=lambda: next(ticks)
+    )
+    result = records.search_records(query=RecordSearchRequest(search="absent"), now=NOW)
+    assert result.items == ()
+    assert result.next_cursor is not None
+    assert len(reader.list_calls) == 1
+
+
+@pytest.mark.parametrize(
+    "changed",
+    (
+        {"search": "other"},
+        {"requester": "Different"},
+        {"winner": "participant-b"},
+        {"sort": "oldest"},
+        {"limit": 49},
+    ),
+)
+def test_search_cursor_binds_every_condition_without_exposing_private_text(
+    changed: dict[str, Any],
+) -> None:
+    import base64
+    import json
+
+    reader = PagedSearchReader(300)
+    records, _ = service(reader)
+    query = RecordSearchRequest(
+        search="Private search phrase", requester="Private requester", limit=50
+    )
+    response = records.search_records(query=query, now=NOW)
+    assert response.next_cursor is not None
+    encoded = response.next_cursor.split(".")[0]
+    payload = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+    assert "private" not in json.dumps(payload).lower()
+    assert "Private" not in repr(query)
+    assert sum(call["limit"] for call in reader.list_calls) == 250
+    with pytest.raises(ReadFailure, match="CURSOR_INVALID"):
+        records.search_records(
+            query=query.model_copy(update={**changed, "cursor": response.next_cursor}), now=NOW
+        )
+    with pytest.raises(ReadFailure, match="CURSOR_INVALID"):
+        records.list_requesters(cursor=response.next_cursor, now=NOW)
+    with pytest.raises(ReadFailure, match="CURSOR_INVALID"):
+        records.search_records(
+            query=query.model_copy(update={"cursor": response.next_cursor}),
+            now=NOW + timedelta(hours=2),
+        )
+    with pytest.raises(ReadFailure, match="CURSOR_INVALID"):
+        records.search_records(
+            query=query.model_copy(update={"cursor": response.next_cursor + "x"}), now=NOW
+        )
+
+
+def test_requesters_cover_all_pages_preserving_avatars_current_names_and_same_names() -> None:
+    reader = PagedSearchReader(260)
+    reader.profiles = {}
+    for number, row in enumerate(reader.rows):
+        row["requester_key"] = f"requester-{number}"
+        row["requester_display_name"] = f"Stored {number}"
+    reader.profiles["requester-259"] = RequesterProfile("Current name", "requesters/newest.webp")
+    reader.profiles["requester-258"] = RequesterProfile("Current name", "requesters/older.webp")
+    records, _ = service(reader)
+    first = records.list_requesters(cursor=None, now=NOW)
+    assert len(first.items) == 249
+    assert first.items[0].display_name == "Current name"
+    assert first.items[0].avatar.kind == "image"
+    assert first.items[0].avatar.url == "https://media.example.invalid/requesters/newest.webp"
+    assert first.next_cursor is not None
+    second = records.list_requesters(cursor=first.next_cursor, now=NOW)
+    assert len(second.items) == 10
+    assert second.items[0].display_name == "Stored 9"
+    assert second.items[0].avatar.kind == "placeholder"
+    assert second.next_cursor is None
+    assert "requesterKey" not in first.model_dump_json(by_alias=True)
+    with pytest.raises(ReadFailure, match="CURSOR_INVALID"):
+        records.search_records(query=RecordSearchRequest(cursor=first.next_cursor), now=NOW)

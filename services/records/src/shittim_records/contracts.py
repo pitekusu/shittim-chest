@@ -226,6 +226,21 @@ class RecordListResponse(PublicModel):
     next_cursor: Annotated[str, Field(min_length=1, max_length=4096)] | None = None
 
 
+class RecordSearchRequest(PublicModel):
+    search: Annotated[str, Field(max_length=1000, repr=False)] = ""
+    requester: Annotated[str | None, Field(min_length=1, pattern=r"\S", repr=False)] = None
+    winner: ParticipantSlot | None = None
+    sort: Literal["newest", "oldest"] = "newest"
+    limit: Annotated[int, Field(strict=True, ge=1, le=50)] = 12
+    cursor: Annotated[str | None, Field(min_length=1, max_length=4096, repr=False)] = None
+
+
+class RecordRequestersResponse(PublicModel):
+    schema_version: Literal[1]
+    items: tuple[RequesterSummary, ...]
+    next_cursor: Annotated[str, Field(min_length=1, max_length=4096)] | None = None
+
+
 class RecordSyncReference(PublicModel):
     record_id: RecordId
     revision: RecordId
@@ -1124,6 +1139,7 @@ PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
     DebateRequestResponse,
     DebateRequestsResponse,
     RecordListResponse,
+    RecordRequestersResponse,
     RecordSyncIndexResponse,
     RecordDetailResponse,
     RankingsResponse,
@@ -1146,6 +1162,7 @@ PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
 
 PUBLIC_REQUEST_MODELS: tuple[type[BaseModel], ...] = (
     DebateAttachmentUploadRequest,
+    RecordSearchRequest,
     DebateStartRequest,
     MemorialUploadRequest,
     MemorialGenerateRequest,

@@ -83,6 +83,17 @@ export interface RecordListResponse {
   readonly nextCursor: string | null;
 }
 
+export interface RecordSearchFilters extends RecordListFilters {
+  readonly search: string;
+  readonly requester?: string;
+}
+
+export interface RecordRequestersResponse {
+  readonly schemaVersion: 1;
+  readonly items: readonly RequesterSummary[];
+  readonly nextCursor: string | null;
+}
+
 export interface RecordSyncReference {
   readonly recordId: string;
   readonly revision: string;

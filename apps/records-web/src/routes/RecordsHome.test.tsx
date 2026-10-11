@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -9,74 +9,94 @@ import {
   renderRoute,
   response,
 } from "../test/recordsTestUtils";
-import RecordsHome from "./RecordsHome";
 import { useRecordsArchive } from "../hooks/useRecordsArchive";
+import RecordsHome from "./RecordsHome";
 
+const home = <RecordsHome csrfToken="csrf-token" />;
+type SearchBody = {
+  search: string;
+  requester?: string;
+  winner?: string;
+  sort: string;
+  cursor?: string;
+  limit: number;
+};
+function item(index: number, questionPreview = `記録 ${index}`) {
+  return {
+    ...structuredClone(listResponse().items[0]!),
+    recordId: String.fromCharCode(65 + index).repeat(43),
+    questionPreview,
+  };
+}
+function page(items: ReturnType<typeof item>[], nextCursor: string | null = null) {
+  return { schemaVersion: 1, items, nextCursor };
+}
+function searchMock(
+  handler: (body: SearchBody, init?: RequestInit) => Response | Promise<Response>,
+  requesters = [listResponse().items[0]!.requester],
+) {
+  mockApi();
+  const original = fetch;
+  const bodies: SearchBody[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (path === "/api/v1/records/search") {
+        const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as SearchBody;
+        bodies.push(body);
+        return Promise.resolve(handler(body, init));
+      }
+      if (path.startsWith("/api/v1/records/requesters"))
+        return Promise.resolve(response({ schemaVersion: 1, items: requesters, nextCursor: null }));
+      return original(input, init);
+    }),
+  );
+  return bodies;
+}
+function selectRequester(name: string) {
+  fireEvent.click(screen.getByRole("combobox", { name: "依頼者" }));
+  const option = within(screen.getByRole("listbox", { name: "依頼者" })).getByRole("option", {
+    name,
+  });
+  fireEvent.pointerDown(option, { pointerType: "mouse" });
+  fireEvent.click(option);
+}
+function mockEndSentinel() {
+  let notify: IntersectionObserverCallback | undefined;
+  const observe = vi.fn<(target: Element) => void>();
+  class MockIntersectionObserver implements IntersectionObserver {
+    readonly root = null;
+    readonly rootMargin = "320px 0px";
+    readonly scrollMargin = "";
+    readonly thresholds = [0];
+    constructor(callback: IntersectionObserverCallback) {
+      notify = callback;
+    }
+    observe = observe;
+    disconnect = vi.fn<() => void>();
+    unobserve = vi.fn<(target: Element) => void>();
+    takeRecords = () => [];
+  }
+  vi.stubGlobal("IntersectionObserver", MockIntersectionObserver);
+  return {
+    observe,
+    enter: () =>
+      notify?.([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver),
+  };
+}
 function ArchiveLifecycleHarness() {
   const [showArchive, setShowArchive] = useState(true);
   const { reset } = useRecordsArchive();
   return (
     <>
-      <button type="button" onClick={() => setShowArchive((value) => !value)}>
-        切り替える
-      </button>
-      <button type="button" onClick={reset}>
-        認証を破棄
-      </button>
-      {showArchive ? <RecordsHome /> : <p>別の画面</p>}
+      <button onClick={() => setShowArchive((value) => !value)}>切り替える</button>
+      <button onClick={reset}>認証を破棄</button>
+      {showArchive ? home : <p>別の画面</p>}
     </>
   );
 }
-
-function mockEndSentinel() {
-  let notify: IntersectionObserverCallback | undefined;
-  const observe = vi.fn<(target: Element) => void>();
-  const unobserve = vi.fn<(target: Element) => void>();
-  class MockIntersectionObserver implements IntersectionObserver {
-    public readonly root = null;
-    public readonly rootMargin = "320px 0px";
-    public readonly scrollMargin = "";
-    public readonly thresholds = [0];
-
-    public constructor(callback: IntersectionObserverCallback) {
-      notify = callback;
-    }
-
-    public observe = observe;
-    public disconnect = vi.fn<() => void>();
-    public unobserve = unobserve;
-    public takeRecords = () => [];
-  }
-  vi.stubGlobal("IntersectionObserver", MockIntersectionObserver);
-  return {
-    observe,
-    unobserve,
-    enter: () =>
-      notify?.([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver),
-  };
-}
-
-function mockNextPage(nextItems: ReturnType<typeof listResponse>["items"]) {
-  const requests: string[] = [];
-  vi.stubGlobal(
-    "fetch",
-    vi.fn((input: RequestInfo | URL) => {
-      const path =
-        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      requests.push(path);
-      if (!path.startsWith("/api/v1/records?")) throw new Error(`Unexpected request: ${path}`);
-      return Promise.resolve(
-        response(
-          path.includes("cursor=next-page")
-            ? { schemaVersion: 1, items: nextItems, nextCursor: null }
-            : { ...listResponse(), nextCursor: "next-page" },
-        ),
-      );
-    }),
-  );
-  return requests;
-}
-
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -84,183 +104,269 @@ afterEach(() => {
 });
 
 describe("RecordsHome", () => {
-  it("keeps filters through a route remount in memory and clears them with authentication", async () => {
-    mockApi();
-    const persist = vi.spyOn(Storage.prototype, "setItem");
-    renderRoute(<ArchiveLifecycleHarness />);
-    await screen.findByRole("article");
-    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "休日" } });
-    fireEvent.click(screen.getByRole("radio", { name: "古い順" }));
-    fireEvent.click(screen.getByRole("button", { name: "切り替える" }));
-    fireEvent.click(screen.getByRole("button", { name: "切り替える" }));
-    expect(screen.getByRole("searchbox")).toHaveValue("休日");
-    expect(screen.getByRole("radio", { name: "古い順" })).toBeChecked();
-    expect(persist).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "認証を破棄" }));
-    expect(screen.getByRole("searchbox")).toHaveValue("");
-    expect(screen.getByRole("radio", { name: "新しい順" })).toBeChecked();
-  });
-
-  it("explains the loaded search scope and clears filters without changing the selected order", async () => {
-    mockNextPage([]);
-    renderRoute(<RecordsHome />);
-    await screen.findByRole("article");
-    fireEvent.click(screen.getByRole("radio", { name: "古い順" }));
-    await screen.findByRole("article");
-    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "一致しない検索" } });
-    expect(screen.getByText(/読み込み済みの記録に一致しません/)).toBeVisible();
-    expect(screen.getByRole("searchbox")).toHaveAccessibleDescription(/読み込み済み 1 件から検索/);
-    fireEvent.click(screen.getByRole("button", { name: "絞り込みを解除" }));
-    expect(screen.getByRole("radio", { name: "古い順" })).toBeChecked();
-    expect(screen.getByRole("article")).toBeVisible();
-  });
-  it("renders completed records without duration or Evidence", async () => {
+  it("renders completed records and requests the selected order", async () => {
     const requests = mockApi();
-
-    renderRoute(<RecordsHome />);
-
-    expect(await screen.findByRole("heading", { name: "議論の記録" })).toBeVisible();
+    renderRoute(home);
     const card = await screen.findByRole("article");
     expect(within(card).getByText("休日の過ごし方を決める")).toBeVisible();
     expect(within(card).getByText("2026年8月15日 15:00")).toHaveAttribute(
       "datetime",
       "2026-08-15T06:00:00Z",
     );
-    expect(within(card).getAllByText("依頼者")).toHaveLength(2);
-    expect(within(card).getByText("アロナ")).toBeVisible();
     expect(screen.queryByText(/所要時間|Evidence|外部根拠/)).not.toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: "新しい順" })).toBeChecked();
-    expect(screen.getByRole("radio", { name: "古い順" })).not.toBeChecked();
-    const cardLink = screen.getByRole("link", {
-      name: "「休日の過ごし方を決める」の記録を読む",
-    });
-    expect(cardLink).toContainElement(card);
-    expect(within(card).queryByRole("link")).not.toBeInTheDocument();
     expect(requests).toContain("/api/v1/records?limit=12&sort=newest");
-  });
-
-  it("requests the complete archive in the selected order", async () => {
-    const requests = mockApi();
-    renderRoute(<RecordsHome />);
-    await screen.findByRole("heading", { name: "議論の記録" });
-
     fireEvent.click(screen.getByRole("radio", { name: "古い順" }));
+    await waitFor(() => expect(requests).toContain("/api/v1/records?limit=12&sort=oldest"));
+  });
 
-    await waitFor(() => {
-      expect(requests).toContain("/api/v1/records?limit=12&sort=oldest");
+  it("keeps filters and expanded results through a remount using only React memory", async () => {
+    const matches = Array.from({ length: 24 }, (_, i) => item(i, `休日 ${i}`));
+    searchMock((body) =>
+      response(body.cursor ? page(matches.slice(12)) : page(matches.slice(0, 12), "more")),
+    );
+    const persist = vi.spyOn(Storage.prototype, "setItem");
+    renderRoute(<ArchiveLifecycleHarness />);
+    await screen.findByRole("article");
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "休日" } });
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(12));
+    fireEvent.click(screen.getByRole("button", { name: "さらに読み込む" }));
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(24));
+    fireEvent.click(screen.getByRole("button", { name: "切り替える" }));
+    fireEvent.click(screen.getByRole("button", { name: "切り替える" }));
+    expect(screen.getByRole("searchbox")).toHaveValue("休日");
+    expect(screen.getAllByRole("article")).toHaveLength(24);
+    expect(persist).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "認証を破棄" }));
+    expect(screen.getByRole("searchbox")).toHaveValue("");
+    expect(await screen.findByRole("article")).toBeVisible();
+  });
+
+  it("finds a late full-question match through empty pages without prematurely declaring no matches", async () => {
+    let finish!: (value: Response) => void;
+    const bodies = searchMock((body, init) => {
+      expect(init?.method).toBe("POST");
+      expect(new Headers(init?.headers).get("X-CSRF-Token")).toBe("csrf-token");
+      return body.cursor
+        ? new Promise<Response>((resolve) => {
+            finish = resolve;
+          })
+        : response(page([], "late"));
     });
-    expect(screen.getByRole("radio", { name: "古い順" })).toBeChecked();
+    renderRoute(home);
+    await screen.findByRole("article");
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "質問の160文字より後ろ" } });
+    expect(screen.queryByRole("article")).not.toBeInTheDocument();
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(screen.queryByText("該当する記録はありません")).not.toBeInTheDocument();
+    expect(screen.getByText("全記録から探しています。")).toBeVisible();
+    finish(response(page([item(1, "検索語を含まない先頭160文字のプレビュー")])));
+    expect(await screen.findByText("検索語を含まない先頭160文字のプレビュー")).toBeVisible();
+    expect(screen.getByRole("searchbox")).toHaveAccessibleDescription(
+      /全記録の質問文・勝者名を検索/,
+    );
+    expect(bodies[1]?.cursor).toBe("late");
   });
 
-  it("keeps the latest choice after rapid sort changes", async () => {
-    const requests = mockApi();
-    renderRoute(<RecordsHome />);
-    await screen.findByRole("heading", { name: "議論の記録" });
-
-    const newest = screen.getByRole("radio", { name: "新しい順" });
-    const oldest = screen.getByRole("radio", { name: "古い順" });
-    fireEvent.click(oldest);
-    fireEvent.click(newest);
-    fireEvent.click(oldest);
-
-    await waitFor(() => expect(oldest).toBeChecked());
-    expect(newest).not.toBeChecked();
-    expect(requests).toContain("/api/v1/records?limit=12&sort=oldest");
-  });
-
-  it("filters loaded records by the selected requester", async () => {
-    const first = listResponse().items[0]!;
-    const second = {
-      ...structuredClone(first),
-      recordId: "s".repeat(43),
-      questionPreview: "別の依頼",
-      requester: {
-        displayName: "パワー系ウナギ",
-        avatar: placeholder("パワー系ウナギ", "pink"),
-      },
-    };
+  it("loads all requester candidates independently and keeps a selection through sort and empty results", async () => {
+    const second = { displayName: "全記録の依頼者", avatar: placeholder("全記録の依頼者", "pink") };
+    const bodies = searchMock(() => response(page([])));
+    const original = fetch;
+    const candidateCursors: string[] = [];
     vi.stubGlobal(
       "fetch",
-      vi.fn((input: RequestInfo | URL) => {
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
         const path =
           typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-        if (path.startsWith("/api/v1/records?")) {
-          const items = path.includes("sort=oldest") ? [first] : [first, second];
-          return Promise.resolve(response({ schemaVersion: 1, items, nextCursor: null }));
-        }
-        throw new Error(`Unexpected request: ${path}`);
+        if (!path.startsWith("/api/v1/records/requesters")) return original(input, init);
+        candidateCursors.push(path);
+        return Promise.resolve(
+          response({
+            schemaVersion: 1,
+            items: path.includes("cursor") ? [second] : [listResponse().items[0]!.requester],
+            nextCursor: path.includes("cursor") ? null : "candidates",
+          }),
+        );
       }),
     );
-
-    renderRoute(<RecordsHome />);
-
-    expect(await screen.findByText("別の依頼")).toBeVisible();
-    const requesterFilter = screen.getByRole("combobox", { name: "依頼者" });
-    fireEvent.click(requesterFilter);
-    const requesterOption = within(screen.getByRole("listbox", { name: "依頼者" })).getByRole(
-      "option",
-      { name: "パワー系ウナギ" },
-    );
-    expect(requesterOption.firstElementChild).toHaveAttribute("aria-hidden", "true");
-    fireEvent.pointerDown(requesterOption, { pointerType: "mouse" });
-    fireEvent.click(requesterOption);
-
-    expect(screen.getByText("別の依頼")).toBeVisible();
-    expect(screen.queryByText("休日の過ごし方を決める")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("combobox", { name: "勝者" }));
-    const winnerOption = within(screen.getByRole("listbox", { name: "勝者" })).getByRole("option", {
-      name: "アロナ",
-    });
-    expect(winnerOption.firstElementChild).toHaveAttribute("aria-hidden", "true");
-    fireEvent.keyDown(winnerOption, { key: "Escape" });
-
+    renderRoute(home);
+    await waitFor(() => expect(candidateCursors).toHaveLength(2));
+    selectRequester(second.displayName);
+    expect(await screen.findByText("該当する記録はありません")).toBeVisible();
+    expect(screen.getByRole("combobox", { name: "依頼者" })).toHaveTextContent(second.displayName);
     fireEvent.click(screen.getByRole("radio", { name: "古い順" }));
-
-    await waitFor(() => expect(requesterFilter).toHaveTextContent("すべて"));
-    expect(await screen.findByText("休日の過ごし方を決める")).toBeVisible();
+    await waitFor(() =>
+      expect(bodies.at(-1)).toMatchObject({ requester: second.displayName, sort: "oldest" }),
+    );
+    expect(screen.getByRole("combobox", { name: "依頼者" })).toHaveTextContent(second.displayName);
+    fireEvent.click(screen.getByRole("button", { name: "絞り込みを解除" }));
+    expect(screen.getByRole("radio", { name: "古い順" })).toBeChecked();
+    expect(await screen.findByRole("article")).toBeVisible();
   });
 
-  it("automatically loads the next page when the end sentinel enters the viewport", async () => {
-    const sentinel = mockEndSentinel();
-    const first = listResponse().items[0]!;
-    const second = {
-      ...structuredClone(first),
-      recordId: "s".repeat(43),
-      questionPreview: "自動で読み込まれた議論",
-    };
-    const requests = mockNextPage([second]);
-
-    renderRoute(<RecordsHome />);
-
-    expect(await screen.findByText(first.questionPreview)).toBeVisible();
-    await waitFor(() => expect(sentinel.observe).toHaveBeenCalledOnce());
-    sentinel.enter();
-
-    expect(await screen.findByText(second.questionPreview)).toBeVisible();
-    expect(requests.filter((path) => path.includes("cursor=next-page"))).toHaveLength(1);
-    expect(sentinel.unobserve).toHaveBeenCalledOnce();
+  it("debounces committed input, skips IME composition and cancels an obsolete search", async () => {
+    let aborted = false;
+    const bodies = searchMock((body, init) =>
+      body.search === "確定した検索"
+        ? new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => {
+              aborted = true;
+              reject(new DOMException("Aborted", "AbortError"));
+            });
+          })
+        : response(page([item(1, "新しい条件の結果")])),
+    );
+    renderRoute(home);
+    await screen.findByRole("article");
+    const input = screen.getByRole("searchbox");
+    fireEvent.compositionStart(input);
+    fireEvent.change(input, { target: { value: "変換中" } });
+    await new Promise((resolve) => window.setTimeout(resolve, 350));
+    expect(bodies).toHaveLength(0);
+    fireEvent.change(input, { target: { value: "確定した検索" } });
+    fireEvent.compositionEnd(input);
+    expect(bodies).toHaveLength(0);
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    fireEvent.change(input, { target: { value: "新しい" } });
+    expect(screen.queryByRole("article")).not.toBeInTheDocument();
+    await waitFor(() => expect(aborted).toBe(true));
+    fireEvent.change(input, { target: { value: "新しい条件" } });
+    expect(await screen.findByText("新しい条件の結果")).toBeVisible();
+    expect(bodies.map((body) => body.search)).toEqual(["確定した検索", "新しい条件"]);
   });
 
-  it("does not drain remaining pages automatically while a local filter is active", async () => {
+  it("preserves partial matches after failure and retries the same cursor", async () => {
+    let attempts = 0;
+    const bodies = searchMock((body) => {
+      if (!body.cursor) return response(page([item(1, "途中まで見つかった記録")], "retry-here"));
+      if (++attempts === 1)
+        return response(
+          {
+            error: {
+              code: "ARCHIVE_UNAVAILABLE",
+              message: "一時的な失敗",
+              requestId: "test-request",
+            },
+          },
+          503,
+        );
+      return response(page([item(2, "再試行で見つかった記録")]));
+    });
+    renderRoute(home);
+    await screen.findByRole("article");
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "検索" } });
+    expect(await screen.findByRole("alert")).toHaveTextContent("一時的な失敗");
+    expect(screen.getByText("途中まで見つかった記録")).toBeVisible();
+    expect(screen.queryByText("該当する記録はありません")).not.toBeInTheDocument();
+    fireEvent.click(within(screen.getByRole("alert")).getByRole("button"));
+    expect(await screen.findByText("再試行で見つかった記録")).toBeVisible();
+    expect(bodies.map((body) => body.cursor)).toEqual([undefined, "retry-here", "retry-here"]);
+  });
+
+  it("restarts current criteria after cursor expiration", async () => {
+    let starts = 0;
+    const bodies = searchMock((body) => {
+      if (body.cursor)
+        return response(
+          { error: { code: "CURSOR_INVALID", message: "期限切れ", requestId: "test-request" } },
+          400,
+        );
+      return response(++starts === 1 ? page([], "expired") : page([item(2, "再開した検索結果")]));
+    });
+    renderRoute(home);
+    await screen.findByRole("article");
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "検索" } });
+    expect(await screen.findByText("再開した検索結果")).toBeVisible();
+    expect(bodies.map((body) => body.cursor)).toEqual([undefined, "expired", undefined]);
+  });
+
+  it("fills the first twelve matches then loads the next group when the sentinel enters", async () => {
     const sentinel = mockEndSentinel();
-    const first = listResponse().items[0]!;
-    const requests = mockNextPage([]);
-
-    renderRoute(<RecordsHome />);
-
-    expect(await screen.findByText(first.questionPreview)).toBeVisible();
-    fireEvent.change(screen.getByLabelText("フリーワード検索"), {
-      target: { value: "一致しない検索" },
-    });
+    const bodies = searchMock((body) =>
+      response(
+        !body.cursor
+          ? page(
+              Array.from({ length: 2 }, (_, i) => item(i)),
+              "sparse",
+            )
+          : body.cursor === "sparse"
+            ? page(
+                Array.from({ length: 12 }, (_, i) => item(i + 2)),
+                "next",
+              )
+            : page(Array.from({ length: 10 }, (_, i) => item(i + 14))),
+      ),
+    );
+    renderRoute(home);
+    await screen.findByRole("article");
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "検索" } });
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(12));
+    expect(bodies).toHaveLength(2);
+    expect(screen.queryByText("記録 13")).not.toBeInTheDocument();
+    await waitFor(() => expect(sentinel.observe).toHaveBeenCalled());
     sentinel.enter();
-
-    await waitFor(() => {
-      expect(requests.filter((path) => path.includes("cursor=next-page"))).toHaveLength(0);
-    });
-    fireEvent.click(screen.getByRole("button", { name: "検索対象をさらに読み込む" }));
-    await waitFor(() => {
-      expect(requests.filter((path) => path.includes("cursor=next-page"))).toHaveLength(1);
-    });
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(24));
+    expect(bodies).toHaveLength(3);
+  });
+  it("reobserves the sentinel while revealing successive groups already cached", async () => {
+    const sentinel = mockEndSentinel();
+    const requests = mockApi();
+    const { client } = renderRoute(home);
+    await screen.findByRole("article");
+    const matches = Array.from({ length: 36 }, (_, index) => item(index));
+    await act(() =>
+      client.setQueryData(["records", "list", "", "newest", "", ""], {
+        pages: [
+          page(matches.slice(0, 12), "second"),
+          page(matches.slice(12, 24), "third"),
+          page(matches.slice(24)),
+        ],
+        pageParams: [undefined, "second", "third"],
+      }),
+    );
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(12));
+    await waitFor(() => expect(sentinel.observe).toHaveBeenCalledTimes(1));
+    sentinel.enter();
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(24));
+    await waitFor(() => expect(sentinel.observe).toHaveBeenCalledTimes(2));
+    sentinel.enter();
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(36));
+    expect(requests.filter((path) => path.startsWith("/api/v1/records?"))).toHaveLength(1);
+  });
+  it("restores thirteen cached normal records after searching and clearing without viewport loading", async () => {
+    const normal = Array.from({ length: 13 }, (_, index) =>
+      item(index, index === 12 ? "十三件目の読み込み済み記録" : `通常記録 ${index}`),
+    );
+    const matches = Array.from({ length: 12 }, (_, index) =>
+      item(index, `新しい検索の記録 ${index}`),
+    );
+    searchMock(() => response(page(matches)));
+    const original = fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const path =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (!path.startsWith("/api/v1/records?")) return original(input, init);
+        return Promise.resolve(
+          response(
+            path.includes("cursor=next")
+              ? page(normal.slice(12))
+              : page(normal.slice(0, 12), "next"),
+          ),
+        );
+      }),
+    );
+    renderRoute(home);
+    await waitFor(() => expect(screen.getAllByRole("article")).toHaveLength(12));
+    fireEvent.click(screen.getByRole("button", { name: "さらに読み込む" }));
+    expect(await screen.findByText("十三件目の読み込み済み記録")).toBeVisible();
+    expect(screen.getAllByRole("article")).toHaveLength(13);
+    const search = screen.getByRole("searchbox");
+    fireEvent.change(search, { target: { value: "新しい検索" } });
+    expect(await screen.findByText("新しい検索の記録 11")).toBeVisible();
+    expect(screen.getAllByRole("article")).toHaveLength(12);
+    fireEvent.change(search, { target: { value: "" } });
+    expect(await screen.findByText("十三件目の読み込み済み記録")).toBeVisible();
+    expect(screen.getAllByRole("article")).toHaveLength(13);
   });
 });

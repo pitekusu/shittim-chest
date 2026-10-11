@@ -483,7 +483,7 @@ describe("RecordsApplicationStack", () => {
     template.resourceCountIs("AWS::Lambda::Version", 7);
     template.resourceCountIs("AWS::Lambda::Alias", 7);
     template.resourceCountIs("AWS::ApiGatewayV2::Api", 1);
-    template.resourceCountIs("AWS::ApiGatewayV2::Route", 42);
+    template.resourceCountIs("AWS::ApiGatewayV2::Route", 44);
     template.resourceCountIs("AWS::ApiGatewayV2::Stage", 1);
     template.hasResourceProperties("AWS::ApiGatewayV2::Stage", {
       AutoDeploy: true,
@@ -885,6 +885,18 @@ describe("RecordsApplicationStack", () => {
     const mobile = routes.filter(route => route.Properties.RouteKey.includes("/auth/mobile/"));
     expect(mobile.map(route => route.Properties.RouteKey).sort()).toEqual(expected.sort());
     for (const route of mobile) expect(route.Properties.Target).toEqual(authTarget);
+    template.resourceCountIs("AWS::DynamoDB::Table", 0);
+    template.resourceCountIs("AWS::Lambda::Function", recordsFunctionNames.length);
+  });
+
+  test("routes archive search and all requester options through the existing Read integration", () => {
+    const { template } = fixture;
+    const routes = Object.values(template.findResources("AWS::ApiGatewayV2::Route"));
+    const readTarget = routes.find(route => route.Properties.RouteKey === "GET /api/v1/records")!.Properties.Target;
+    for (const routeKey of ["POST /api/v1/records/search", "GET /api/v1/records/requesters"]) {
+      expect(routes.find(route => route.Properties.RouteKey === routeKey)?.Properties.Target)
+        .toEqual(readTarget);
+    }
     template.resourceCountIs("AWS::DynamoDB::Table", 0);
     template.resourceCountIs("AWS::Lambda::Function", recordsFunctionNames.length);
   });

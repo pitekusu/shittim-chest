@@ -32,6 +32,8 @@ from shittim_records.contracts import (
     RankingEntry,
     RankingsResponse,
     RecordListResponse,
+    RecordRequestersResponse,
+    RecordSearchRequest,
 )
 from shittim_records.http_api import AuthHttpController, ReadHttpController
 from shittim_records.read_api import ListQuery
@@ -107,10 +109,20 @@ class FakeSessionStore:
 class FakeRecords:
     def __init__(self) -> None:
         self.list_query: ListQuery | None = None
+        self.search_query: RecordSearchRequest | None = None
+        self.requester_cursor: str | None = None
 
     def list_records(self, **_kwargs: Any) -> RecordListResponse:
         self.list_query = _kwargs["query"]
         return RecordListResponse(schema_version=1, items=())
+
+    def search_records(self, **kwargs: Any) -> RecordListResponse:
+        self.search_query = kwargs["query"]
+        return RecordListResponse(schema_version=1, items=())
+
+    def list_requesters(self, **kwargs: Any) -> RecordRequestersResponse:
+        self.requester_cursor = kwargs["cursor"]
+        return RecordRequestersResponse(schema_version=1, items=())
 
     def get_record(self, **_kwargs: Any) -> None:
         raise AssertionError("detail should not be called")
@@ -580,3 +592,161 @@ def test_unknown_auth_failure_is_content_free() -> None:
 
     assert response["statusCode"] == 503
     assert "provider_private_detail" not in response["body"]
+
+
+def search_event(body: str = "{}") -> dict[str, Any]:
+    request = event(
+        "POST /api/v1/records/search",
+        cookies=[f"{SESSION_COOKIE_NAME}=session-token", f"{CSRF_COOKIE_NAME}=csrf-token"],
+        headers={
+            "origin": "https://records.example.invalid",
+            "x-csrf-token": "csrf-token",
+            "content-type": "application/json",
+        },
+    )
+    request["body"] = body
+    return request
+
+
+def search_controller(
+    records: FakeRecords | None = None, *, expired: bool = False
+) -> ReadHttpController:
+    return ReadHttpController(
+        store=cast(Any, FakeSessionStore(session(expired=expired))),
+        session_key=SESSION_KEY,
+        allowed_origin="https://records.example.invalid",
+        records=cast(Any, records or FakeRecords()),
+    )
+
+
+def test_search_post_uses_private_cookie_session_and_existing_csrf() -> None:
+    records = FakeRecords()
+    response = search_controller(records).handle(
+        search_event(
+            json.dumps({"search": "Private question", "requester": "Requester", "sort": "oldest"})
+        ),
+        now=NOW,
+    )
+    assert response["statusCode"] == 200
+    assert response["headers"]["Cache-Control"] == "private, no-store"
+    assert json.loads(response["body"]) == {"schemaVersion": 1, "items": [], "nextCursor": None}
+    assert records.search_query is not None
+    assert records.search_query.search == "Private question"
+    assert records.search_query.sort == "oldest"
+    assert "Private" not in repr(records.search_query)
+
+
+@pytest.mark.parametrize(
+    "change",
+    (
+        {"origin": "https://foreign.example.invalid"},
+        {"origin": ""},
+        {"x-csrf-token": ""},
+        {"x-csrf-token": "different"},
+    ),
+)
+def test_search_rejects_foreign_origin_and_missing_or_mismatched_csrf(
+    change: dict[str, str],
+) -> None:
+    request = search_event()
+    request["headers"].update(change)
+    response = search_controller().handle(request, now=NOW)
+    assert response["statusCode"] == 403
+    assert json.loads(response["body"])["error"]["code"] in {"ORIGIN_INVALID", "CSRF_INVALID"}
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        "",
+        "{",
+        "[]",
+        '{"search":"Private phrase","search":"other"}',
+        '{"search":null}',
+        '{"unknown":"Private phrase"}',
+        '{"requester":" "}',
+        '{"limit":true}',
+        '{"limit":"12"}',
+        '{"limit":0}',
+        '{"limit":51}',
+        '{"sort":"unknown"}',
+        '{"winner":"participant-z"}',
+        '{"cursor":""}',
+        json.dumps({"search": "x" * 1001}),
+        json.dumps({"search": "x" * 17000}),
+    ),
+)
+def test_search_rejects_malformed_or_excessive_json_without_returning_private_inputs(
+    body: str,
+) -> None:
+    records = FakeRecords()
+    response = search_controller(records).handle(search_event(body), now=NOW)
+    assert response["statusCode"] == 400
+    assert json.loads(response["body"])["error"]["code"] == "REQUEST_INVALID"
+    assert "Private phrase" not in response["body"]
+    assert records.search_query is None
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    (
+        ("rawQueryString", "search=private"),
+        ("isBase64Encoded", True),
+        ("pathParameters", {"extra": "private"}),
+    ),
+)
+def test_search_rejects_non_body_search_values_and_base64(field: str, value: Any) -> None:
+    request = search_event()
+    request[field] = value
+    assert search_controller().handle(request, now=NOW)["statusCode"] == 400
+
+
+def test_search_requires_json_cookie_auth_and_live_session() -> None:
+    request = search_event()
+    request["headers"]["content-type"] = "text/plain"
+    assert search_controller().handle(request, now=NOW)["statusCode"] == 400
+    assert search_controller(expired=True).handle(search_event(), now=NOW)["statusCode"] == 401
+    request = search_event()
+    request["cookies"] = []
+    request["headers"]["authorization"] = "Bearer " + "x" * 43
+    assert search_controller().handle(request, now=NOW)["statusCode"] == 401
+    request = search_event()
+    request["cookies"] = [f"{SESSION_COOKIE_NAME}=session-token"]
+    assert search_controller().handle(request, now=NOW)["statusCode"] == 403
+
+
+def test_requester_route_is_authenticated_and_accepts_only_cursor() -> None:
+    records = FakeRecords()
+    controller = search_controller(records)
+    request = event(
+        "GET /api/v1/records/requesters",
+        query="cursor=opaque",
+        cookies=[f"{SESSION_COOKIE_NAME}=session-token"],
+    )
+    response = controller.handle(request, now=NOW)
+    assert response["statusCode"] == 200
+    assert records.requester_cursor == "opaque"
+    assert json.loads(response["body"]) == {"schemaVersion": 1, "items": [], "nextCursor": None}
+    request["rawQueryString"] = "limit=250"
+    assert controller.handle(request, now=NOW)["statusCode"] == 400
+    assert controller.handle(event("GET /api/v1/records/requesters"), now=NOW)["statusCode"] == 401
+
+
+def test_search_http_to_archive_finds_text_beyond_card_preview() -> None:
+    from tests.test_read_api import PagedSearchReader, service
+
+    reader = PagedSearchReader(15)
+    reader.rows[0]["question"] = "prefix " * 30 + "complete question ending"
+    records, _ = service(reader)
+    controller = ReadHttpController(
+        store=cast(Any, FakeSessionStore(session())),
+        session_key=SESSION_KEY,
+        allowed_origin="https://records.example.invalid",
+        records=records,
+    )
+    response = controller.handle(search_event('{"search":"complete question ending"}'), now=NOW)
+    assert response["statusCode"] == 200
+    payload = json.loads(response["body"])
+    assert [item["recordId"] for item in payload["items"]] == [reader.rows[0]["record_id"]]
+    assert payload["nextCursor"] is None
+    assert "complete question ending" not in payload["items"][0]["questionPreview"]

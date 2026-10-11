@@ -432,3 +432,30 @@ def test_shared_core_store_serializes_image_decoding(monkeypatch) -> None:
 
     result = asyncio.run(run())
     assert len(result) == 2 and maximum == 1
+
+
+def test_image_archive_is_searchable_without_loading_or_signing_image_bytes() -> None:
+    from shittim_records.contracts import RecordSearchRequest
+    from shittim_records.read_api import ArchivePage
+
+    reader = FakeReader()
+    source = replace(
+        completed_snapshot(), question="Fictional image search needle", attachments=(image(),)
+    )
+    projection = project_completed_debate(
+        source, identity_hmac_key=HMAC_KEY, presentation=presentation(), projected_at=NOW
+    )
+    reader.record_id, reader.items = projection.record_id, projection.items
+    reader.page = ArchivePage((projection.items[0],), None, "gsi1")
+    cast(Any, reader).attachment_url = lambda *_args, **_kwargs: pytest.fail(
+        "Search must not sign or load private images"
+    )
+    service = RecordsReadService(reader=reader, cursor_codec=CursorCodec(SESSION_KEY))
+    result = service.search_records(
+        query=RecordSearchRequest(search="image search needle"), now=NOW
+    )
+    assert [record.record_id for record in result.items] == [projection.record_id]
+    assert "attachments" not in result.model_dump_json(by_alias=True)
+    requesters = service.list_requesters(cursor=None, now=NOW)
+    assert len(requesters.items) == 1
+    assert "attachments" not in requesters.model_dump_json(by_alias=True)

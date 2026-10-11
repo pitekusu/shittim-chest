@@ -3858,6 +3858,43 @@
       "title": "RecordListResponse",
       "type": "object"
     },
+    "RecordRequestersResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/RequesterSummary"
+          },
+          "title": "Items",
+          "type": "array"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nextcursor"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "items"
+      ],
+      "title": "RecordRequestersResponse",
+      "type": "object"
+    },
     "RecordResultSummary": {
       "additionalProperties": false,
       "properties": {
@@ -3945,6 +3982,80 @@
         "tieBreakApplied"
       ],
       "title": "RecordResultSummary",
+      "type": "object"
+    },
+    "RecordSearchRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cursor"
+        },
+        "limit": {
+          "default": 12,
+          "maximum": 50,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        },
+        "requester": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "pattern": "\\S",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requester"
+        },
+        "search": {
+          "default": "",
+          "maxLength": 1000,
+          "title": "Search",
+          "type": "string"
+        },
+        "sort": {
+          "default": "newest",
+          "enum": [
+            "newest",
+            "oldest"
+          ],
+          "title": "Sort",
+          "type": "string"
+        },
+        "winner": {
+          "anyOf": [
+            {
+              "enum": [
+                "participant-a",
+                "participant-b",
+                "participant-c"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Winner"
+        }
+      },
+      "title": "RecordSearchRequest",
       "type": "object"
     },
     "RecordSyncIndexResponse": {
@@ -4336,6 +4447,9 @@
     },
     {
       "$ref": "#/$defs/RecordListResponse"
+    },
+    {
+      "$ref": "#/$defs/RecordRequestersResponse"
     },
     {
       "$ref": "#/$defs/RecordSyncIndexResponse"

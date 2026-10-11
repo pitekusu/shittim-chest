@@ -2221,6 +2221,16 @@ export class RecordsApplicationStack extends Stack {
       integration: readIntegration,
     });
     api.addRoutes({
+      path: "/api/v1/records/search",
+      methods: [apigatewayv2.HttpMethod.POST],
+      integration: readIntegration,
+    });
+    api.addRoutes({
+      path: "/api/v1/records/requesters",
+      methods: [apigatewayv2.HttpMethod.GET],
+      integration: readIntegration,
+    });
+    api.addRoutes({
       path: "/api/v1/records/sync-index",
       methods: [apigatewayv2.HttpMethod.GET],
       integration: readIntegration,
