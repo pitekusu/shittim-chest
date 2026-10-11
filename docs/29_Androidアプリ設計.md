@@ -783,6 +783,15 @@ Android Gradle Plugin標準の`release` build typeへupload keyの署名設定�
 
 合成テスト鍵によるAAB署名と、秘密入力なしでの失敗を確認する。実upload keyの発行・管理、Play app signing証明書によるApp Links、実Discordログイン・本人向け配布は後続の別工程とする。署名済み成果物はGitや通常CI artifactへ保存しない。
 
+
+releaseはAGP標準の`optimization { enable = true }`でR8のコード縮小・最適化・難読化とリソース縮小を有効にする。標準および採用ライブラリ同梱の保持ルールを使い、追加は実際に必要な範囲に限定する。ライブラリ全体や全DTOを一律に保持せず、debugは最適化を有効にしない。
+
+最適化済みAABには`BUNDLE-METADATA/com.android.tools/r8.json`と難読化のmappingが自動同梱される。配布版のAABを保持して最適化指標とクラッシュの復元に使う。設定は[AGP標準の有効化手順](https://developer.android.com/topic/performance/app-optimization/enable-app-optimization)、確認は[最適化の検証ガイド](https://developer.android.com/topic/performance/app-optimization/troubleshoot-the-optimization)に従う。
+
+instrumentationは既存のdebug設定を維持する。`RuntimeDiscoveryTest`でNavigation 3の全5種の経路のSavedState保存・復元、WorkManager標準factoryによる3種のWorker生成と保存済みWorkManager DBが使うクラス名の保持、Room生成クラスのreflection生成を確認する。実Activityの表示・再作成は既存の`BootstrapCircuitTest`（`@ScreenTest`）で必要時だけ確認する。Workerの`doWork()`は呼ばず、Activity再作成をプロセス破棄・復元の確認とは扱わない。
+
+最適化済み本体から削除された共有ライブラリをテストランナーが参照すると、release instrumentation自体が起動できない場合がある。テストのために本体へ保持ルールを追加しない。最適化済みAPKを未認証の専用エミュレーターへ導入し、ログイン前画面の表示・表示切替・回転後の表示を確認する。暗号化保存・再読込、認証API、閲覧の既存関連試験はdebugで別途実行し、最適化済みreleaseの実行検証とは区別する。合成テスト鍵でのローカル検証は、本番通信・実署名・実機ログイン・Play配布の確認を含めない。
+
 ## C19：App Linksと記録への復帰
 
 `dev.pitekusu.shittim.records`のPlayアプリ署名証明書を、`/.well-known/assetlinks.json`で公開する。
