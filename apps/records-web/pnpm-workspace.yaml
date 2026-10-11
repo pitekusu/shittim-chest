@@ -5,6 +5,10 @@ packages:
 # Keep a single lockfile document until GitHub static dependency parsing supports pnpm 12.
 pmOnFail: ignore
 
+lockfile:
+  includeResolutionSettings: true
+autoDedupe: true
+
 # Explicitly requested stable release; the age exception covers only this version.
 minimumReleaseAgeExclude:
   - fast-uri@4.2.2

@@ -1514,6 +1514,38 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         raise WorkflowPolicyError(
             "Records CI must verify the pinned pnpm version before the frozen install"
         )
+    signature_step_name = "Verify Records web dependency signatures"
+    if f"name: {signature_step_name}" not in records_web:
+        raise WorkflowPolicyError("Records CI must retain the dependency signature audit")
+    signatures = _workflow_step_block(records_web, signature_step_name)
+    signature_condition = "if: needs.records-changes.outputs.records_web_dependencies == 'true'"
+    if (
+        signature_condition not in signatures
+        or "run: pnpm audit signatures" not in signatures
+        or "continue-on-error:" in signatures
+        or records_web.index(signature_step_name)
+        < records_web.index("Install locked Records web dependencies")
+    ):
+        raise WorkflowPolicyError("Records CI must fail closed on dependency signature errors")
+    changes = _workflow_job_block(records_text, "records-changes")
+    dependency_output = (
+        "records_web_dependencies: ${{ steps.classify.outputs.records_web_dependencies }}"
+    )
+    dependency_classification = _workflow_step_block(changes, "Classify Records changes")
+    required_dependency_inputs = (
+        'if [ "${FULL_CHECK}" = true ] ||',
+        '! git diff --quiet "${base_sha}...${GITHUB_SHA}" --',
+        ".npmrc apps/records-web/.npmrc",
+        "apps/records-web/package.json",
+        "apps/records-web/pnpm-lock.yaml",
+        "apps/records-web/pnpm-workspace.yaml",
+        "echo 'records_web_dependencies=true'",
+        "echo 'records_web_dependencies=false'",
+    )
+    if dependency_output not in changes or any(
+        marker not in dependency_classification for marker in required_dependency_inputs
+    ):
+        raise WorkflowPolicyError("Records CI must classify dependency signature audit inputs")
     required_records_web = (
         "vp install --frozen-lockfile",
         "pnpm exec vp check",

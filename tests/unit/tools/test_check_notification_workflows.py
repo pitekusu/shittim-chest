@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import textwrap
@@ -549,6 +550,104 @@ def test_records_install_requires_the_actual_pinned_pnpm_version(
 
     with pytest.raises(WorkflowPolicyError, match="verify the pinned pnpm version"):
         validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "before,after",
+    (
+        ("run: pnpm audit signatures", "run: true"),
+        (
+            "if: needs.records-changes.outputs.records_web_dependencies == 'true'",
+            "if: false",
+        ),
+        (
+            "run: pnpm audit signatures",
+            "continue-on-error: true\n        run: pnpm audit signatures",
+        ),
+        ("apps/records-web/pnpm-lock.yaml", "apps/records-web/unused-lock.yaml"),
+    ),
+)
+def test_records_dependency_signature_audit_cannot_be_bypassed(
+    directory: Path, before: str, after: str
+) -> None:
+    _replace(directory / RECORDS_CI_WORKFLOW, before, after, 1)
+
+    with pytest.raises(WorkflowPolicyError, match="dependency signature"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "changed_path,full_check,required",
+    (
+        ("apps/records-web/package.json", False, True),
+        ("apps/records-web/pnpm-lock.yaml", False, True),
+        ("apps/records-web/pnpm-workspace.yaml", False, True),
+        (".npmrc", False, True),
+        ("apps/records-web/.npmrc", False, True),
+        ("apps/records-web/src/RecordsHome.tsx", False, False),
+        ("apps/records-web/src/RecordsHome.tsx", True, True),
+    ),
+)
+def test_records_dependency_signature_audit_follows_actual_changes(
+    directory: Path, tmp_path: Path, changed_path: str, full_check: bool, required: bool
+) -> None:
+    job = _workflow_job_block((directory / RECORDS_CI_WORKFLOW).read_text(), "records-changes")
+    block = _workflow_step_block(job, "Classify Records changes")
+    script = textwrap.dedent(block.split("        run: |\n", 1)[1])
+    repository = tmp_path / "repository"
+    (repository / "tools").mkdir(parents=True)
+    shutil.copy(
+        WORKFLOW_DIRECTORY.parent.parent / "tools/classify_ci_paths.py", repository / "tools"
+    )
+    changed_file = repository / changed_path
+    changed_file.parent.mkdir(parents=True, exist_ok=True)
+    changed_file.write_text("before\n")
+
+    git_executable = shutil.which("git")
+    assert git_executable is not None
+
+    def git(*args: str) -> str:
+        return subprocess.check_output(  # noqa: S603 - fixed Git and fixture arguments.
+            [
+                git_executable,
+                "-c",
+                "user.name=Policy Test",
+                "-c",
+                "user.email=policy-test.invalid",
+                "-c",
+                "commit.gpgSign=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+                *args,
+            ],
+            cwd=repository,
+            text=True,
+        ).strip()
+
+    git("init", "--quiet")
+    git("add", ".")
+    git("commit", "--quiet", "-m", "baseline")
+    base = git("rev-parse", "HEAD")
+    changed_file.write_text("after\n")
+    git("add", ".")
+    git("commit", "--quiet", "-m", "change")
+    output = tmp_path / "github-output"
+    subprocess.run(  # noqa: S603 - script comes from the tracked workflow; isolated fixture repo.
+        ["/usr/bin/bash", "-euo", "pipefail", "-c", script],
+        cwd=repository,
+        env={
+            **os.environ,
+            "BASE_SHA": base,
+            "GITHUB_SHA": git("rev-parse", "HEAD"),
+            "FULL_CHECK": str(full_check).lower(),
+            "GITHUB_OUTPUT": str(output),
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert f"records_web_dependencies={str(required).lower()}" in output.read_text().splitlines()
 
 
 def test_records_ci_requires_the_web_gates(directory: Path) -> None:
