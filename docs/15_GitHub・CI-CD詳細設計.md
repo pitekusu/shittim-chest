@@ -187,6 +187,13 @@ cache hitでも選択対象のinstrumentation testを実行する。cache miss�
 
 Records WebのCIとReleaseは完全SHA固定の`voidzero-dev/setup-vp`でNode・Vite+・pnpmを設定し、
 Actionのpnpm依存キャッシュを使う。CIのキャッシュ保存はmainのみとし、依存は`vp install --frozen-lockfile`で固定する。
+pnpm 12の環境用lock documentは[GitHubの静的依存検出に未対応の報告](https://github.com/dependabot/dependabot-core/issues/15904)があるため、
+`pmOnFail: ignore`でproject依存の単一documentを維持する。pnpm自身によるversion切替・検査は無効になるので、
+ローカルもVite+経由で実行する。CIとRecords Releaseはinstall直前に実行中のpnpmと`packageManager`の完全一致を検査し、
+不一致は停止する。この検査を既存のworkflow方針検証でも必須とする。
+公開直後のfast-uriを明示更新する際のrelease-age例外は、要求されたexact versionだけに限定する。
+fast-uriはAjvのschema生成用依存であり、Ajvの指定範囲を超えるmajor overrideでは全21validatorのbyte照合と
+全Web試験・build・auditで互換性を確認する。ブラウザーの実行依存として新たに取り込まない。
 Playwrightの2並列と全画面試験は維持し、変更分類でWeb対象外の実行だけを省く。
 Dependabotの通常更新は設定順に09:00から15分間隔で開始し、既存の日次／週次頻度とセキュリティ更新方針は変えない。
 初回成功とC03のマージを確認し、`android-gate`をmainの必須チェックへ登録済み。

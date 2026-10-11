@@ -91,7 +91,7 @@
       "files": {".github/workflows/*.yml": "UV_VERSION: \"?([0-9.]+)"}
     },
     "pnpm": {
-      "repository": "pnpm/pnpm", "tag_prefix": "v", "release_prefix": "v11.",
+      "repository": "pnpm/pnpm", "tag_prefix": "v", "release_prefix": "v12.",
       "files": {"apps/records-web/package.json": "\"packageManager\": \"pnpm@([0-9.]+)"}
     },
     "temurin": {
@@ -121,7 +121,7 @@
     "fast-uri": {
       "repository": "fastify/fast-uri",
       "tag_prefix": "v",
-      "release_prefix": "v3.",
+      "release_prefix": "v4.",
       "files": {
         "apps/records-web/pnpm-workspace.yaml": "fast-uri: \"([0-9.]+)"
       }

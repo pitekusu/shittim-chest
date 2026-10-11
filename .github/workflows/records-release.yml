@@ -72,6 +72,7 @@ jobs:
           npm ci --ignore-scripts
           (
             cd apps/records-web
+            test "$(pnpm --version)" = "$(node -p 'require("./package.json").packageManager.slice("pnpm@".length)')"
             vp install --frozen-lockfile
           )
       - name: Re-run Records release-critical gates

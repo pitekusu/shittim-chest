@@ -541,6 +541,16 @@ def test_records_ci_excludes_local_workspace_paths_from_hashed_audit(directory: 
         validate_notification_workflows(directory)
 
 
+@pytest.mark.parametrize("workflow", (RECORDS_CI_WORKFLOW, RECORDS_RELEASE_WORKFLOW))
+def test_records_install_requires_the_actual_pinned_pnpm_version(
+    directory: Path, workflow: str
+) -> None:
+    _replace(directory / workflow, 'test "$(pnpm --version)" =', "true #", 1)
+
+    with pytest.raises(WorkflowPolicyError, match="verify the pinned pnpm version"):
+        validate_notification_workflows(directory)
+
+
 def test_records_ci_requires_the_web_gates(directory: Path) -> None:
     _replace(directory / RECORDS_CI_WORKFLOW, "pnpm exec vp check", "npm run check", 1)
 
