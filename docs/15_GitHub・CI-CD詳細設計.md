@@ -191,6 +191,12 @@ pnpm 12の環境用lock documentは[GitHubの静的依存検出に未対応の�
 `pmOnFail: ignore`でproject依存の単一documentを維持する。pnpm自身によるversion切替・検査は無効になるので、
 ローカルもVite+経由で実行する。CIとRecords Releaseはinstall直前に実行中のpnpmと`packageManager`の完全一致を検査し、
 不一致は停止する。この検査を既存のworkflow方針検証でも必須とする。
+`lockfile.includeResolutionSettings`で依存解決設定をlockへ記録し、設定が違うfrozen installを拒否する。
+`autoDedupe`を有効にし、互換範囲の重複版を通常install時に集約する。直接依存の固定とfrozen CIは維持する。
+Webのpackage・lock・workspace設定またはroot/Webの`.npmrc`変更時は、固定install直後に
+`pnpm audit signatures`でlockのintegrityとregistry署名を照合する。手動の全検証でも実行する。
+署名の不正・欠落・取得失敗はCIを失敗させる。脆弱性監査用のnpm障害時skipは署名監査へ流用しない。
+Webソースだけの変更では署名監査を省き、既存の脆弱性監査・Web試験・buildは継続する。
 公開直後のfast-uriを明示更新する際のrelease-age例外は、要求されたexact versionだけに限定する。
 fast-uriはAjvのschema生成用依存であり、Ajvの指定範囲を超えるmajor overrideでは全21validatorのbyte照合と
 全Web試験・build・auditで互換性を確認する。ブラウザーの実行依存として新たに取り込まない。
