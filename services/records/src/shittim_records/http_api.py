@@ -20,6 +20,8 @@ from shittim_records.auth import (
     AuthStore,
     authenticate_browser_session,
     csrf_token_matches,
+    require_csrf_submission,
+    require_same_origin,
 )
 from shittim_records.contracts import (
     AnonymousSession,
@@ -28,6 +30,7 @@ from shittim_records.contracts import (
     ErrorResponse,
     ImageAvatarRef,
     PlaceholderAvatarRef,
+    RecordSearchRequest,
     SessionResponse,
     SessionUser,
 )
@@ -56,6 +59,7 @@ REDIRECT_HEADERS = {
 MOBILE_READ_ROUTES = frozenset(
     {"GET /api/v1/records", "GET /api/v1/records/{recordId}", "GET /api/v1/records/sync-index"}
 )
+MAX_SEARCH_BODY_BYTES = 16 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +198,7 @@ class ReadHttpController:
         momotalk: Any | None = None,
         mobile_store: MobileSessionReader | None = None,
         clock: Callable[[], datetime] | None = None,
+        allowed_origin: str | None = None,
     ) -> None:
         self._store = store
         self._session_key = session_key
@@ -201,11 +206,13 @@ class ReadHttpController:
         self._momotalk = momotalk
         self._mobile_store = mobile_store
         self._clock = clock if clock is not None else lambda: datetime.now(UTC)
+        self._allowed_origin = allowed_origin
 
     def handle(self, event: Mapping[str, Any], *, now: datetime) -> dict[str, Any]:
         request = parse_request(event)
         try:
             include_affection_reasons = False
+            session = None
             raw_token = _read_bearer_token(
                 event.get("headers") or {}, has_cookies=bool(event.get("cookies"))
             )
@@ -251,6 +258,28 @@ class ReadHttpController:
                 if not set(query).issubset({"cursor"}):
                     raise ReadFailure("REQUEST_INVALID", 400)
                 result = self._records.get_sync_index(
+                    cursor=_optional_single(query, "cursor"), now=now
+                )
+            elif request.route_key == "POST /api/v1/records/search":
+                if session is None:
+                    raise AuthFailure("session_required")
+                require_same_origin(
+                    origin=request.headers.get("origin"), allowed_origin=self._allowed_origin or ""
+                )
+                require_csrf_submission(
+                    session=session,
+                    session_key=self._session_key,
+                    raw_csrf=request.cookies.get(CSRF_COOKIE_NAME),
+                    csrf_header=request.headers.get("x-csrf-token"),
+                )
+                if request.raw_query or request.path_parameters:
+                    raise ReadFailure("REQUEST_INVALID", 400)
+                result = self._records.search_records(query=_search_body(event, request), now=now)
+            elif request.route_key == "GET /api/v1/records/requesters":
+                query = _query(request.raw_query)
+                if not set(query).issubset({"cursor"}) or request.path_parameters:
+                    raise ReadFailure("REQUEST_INVALID", 400)
+                result = self._records.list_requesters(
                     cursor=_optional_single(query, "cursor"), now=now
                 )
             elif request.route_key == "GET /api/v1/records/{recordId}":
@@ -303,7 +332,12 @@ class ReadHttpController:
                 _omit_zero_reset_counts(payload)
             return json_response(200, payload)
         except AuthFailure as error:
-            status = {"oauth_request_invalid": 400, "session_required": 401}.get(error.code, 503)
+            status = {
+                "oauth_request_invalid": 400,
+                "session_required": 401,
+                "origin_invalid": 403,
+                "csrf_invalid": 403,
+            }.get(error.code, 503)
             response = error_response(status, _public_error_code(error.code), request.request_id)
             if status == 401 and "authorization" in request.headers:
                 response["headers"] = {**JSON_HEADERS, "WWW-Authenticate": "Bearer"}
@@ -343,6 +377,34 @@ class ReadHttpController:
         except Exception:
             # Storage and validation exceptions can contain generated/private text.
             raise ReadFailure("MOMOTALK_UNAVAILABLE", 503) from None
+
+
+def _search_body(event: Mapping[str, Any], request: Request) -> RecordSearchRequest:
+    raw = event.get("body")
+    if (
+        event.get("isBase64Encoded")
+        or not isinstance(raw, str)
+        or not raw
+        or len(raw.encode("utf-8")) > MAX_SEARCH_BODY_BYTES
+        or request.headers.get("content-type", "").partition(";")[0].strip().lower()
+        != "application/json"
+    ):
+        raise ReadFailure("REQUEST_INVALID", 400)
+    try:
+        payload = json.loads(raw, object_pairs_hook=_unique_search_fields)
+        return RecordSearchRequest.model_validate(payload)
+    except ValueError:
+        # Validation exceptions contain input text; expose only the stable public failure.
+        raise ReadFailure("REQUEST_INVALID", 400) from None
+
+
+def _unique_search_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for name, value in pairs:
+        if name in payload:
+            raise ValueError("duplicate search field")
+        payload[name] = value
+    return payload
 
 
 def _read_bearer_token(headers: Mapping[str, str], *, has_cookies: bool) -> str | None:

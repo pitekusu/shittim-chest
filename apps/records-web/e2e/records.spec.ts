@@ -849,6 +849,48 @@ async function mockAuthenticatedApi(
     authenticated = false;
     return route.fulfill({ status: 204 });
   });
+  await page.route("**/api/v1/records/requesters*", (route) =>
+    route.fulfill({
+      json: { schemaVersion: 1, items: [recordDetail.requester], nextCursor: null },
+    }),
+  );
+  await page.route("**/api/v1/records/search", (route) => {
+    const body = route.request().postDataJSON() as {
+      search: string;
+      requester?: string;
+      winner?: string;
+    };
+    const winnerName =
+      recordDetail.participants.find(
+        (participant) => participant.slot === recordDetail.result.winner,
+      )?.displayName ?? "";
+    const matches =
+      (!body.search ||
+        [recordDetail.question, winnerName].some((value) =>
+          value.toLocaleLowerCase("ja-JP").includes(body.search.toLocaleLowerCase("ja-JP")),
+        )) &&
+      (!body.requester || body.requester === recordDetail.requester.displayName) &&
+      (!body.winner || body.winner === recordDetail.result.winner);
+    return route.fulfill({
+      json: {
+        schemaVersion: 1,
+        items: matches
+          ? [
+              {
+                schemaVersion: 1,
+                recordId: recordDetail.recordId,
+                completedAt: recordDetail.completedAt,
+                questionPreview: recordDetail.question.slice(0, 160),
+                requester: recordDetail.requester,
+                participants: recordDetail.participants,
+                result: recordDetail.result,
+              },
+            ]
+          : [],
+        nextCursor: null,
+      },
+    });
+  });
   await page.route("**/api/v1/records?*", (route) =>
     route.fulfill({
       json: {
@@ -1636,6 +1678,7 @@ test("English login product name keeps the approved two-line break at narrow wid
 test("loads the next archive page automatically near the end of the loaded cards", async ({
   page,
 }) => {
+  await mockAuthenticatedApi(page);
   const firstPage = Array.from({ length: 12 }, (_, index) => ({
     schemaVersion: 1,
     recordId: String.fromCharCode(65 + index).repeat(43),
@@ -2956,6 +2999,9 @@ test("archive restores its in-memory filters, focus and reading position", async
   await page.route("**/api/v1/records?*", (route) =>
     route.fulfill({ json: { schemaVersion: 1, items, nextCursor: null } }),
   );
+  await page.route("**/api/v1/records/search", (route) =>
+    route.fulfill({ json: { schemaVersion: 1, items, nextCursor: null } }),
+  );
   await page.goto("/");
   const search = page.getByRole("searchbox", { name: "フリーワード検索" });
   await search.fill("休日");
@@ -3208,4 +3254,105 @@ test("accessibility preferences keep account surfaces opaque and keyboard action
   await page.keyboard.down("Space");
   await expect(button).toHaveCSS("transform", "none");
   await page.keyboard.up("Space");
+});
+
+test("archive search reaches a full-question match after empty server segments without loading all cards", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockAuthenticatedApi(page);
+  const bodies: { search: string; cursor?: string }[] = [];
+  let finish!: () => void;
+  const finalSegment = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  await page.route("**/api/v1/records/search", async (route) => {
+    expect(route.request().method()).toBe("POST");
+    expect(route.request().headers()["x-csrf-token"]).toBe("csrf-token");
+    const body = route.request().postDataJSON() as { search: string; cursor?: string };
+    bodies.push(body);
+    if (!body.cursor)
+      return route.fulfill({ json: { schemaVersion: 1, items: [], nextCursor: "second" } });
+    if (body.cursor === "second")
+      return route.fulfill({ json: { schemaVersion: 1, items: [], nextCursor: "last" } });
+    await finalSegment;
+    return route.fulfill({
+      json: {
+        schemaVersion: 1,
+        items: [
+          {
+            schemaVersion: 1,
+            recordId: RECORD_ID,
+            completedAt: detail.completedAt,
+            questionPreview: "先頭160文字に検索語がない記録",
+            requester: detail.requester,
+            participants,
+            result: detail.result,
+          },
+        ],
+        nextCursor: null,
+      },
+    });
+  });
+  await page.goto("/");
+  await expect(page.getByRole("article")).toHaveCount(1);
+  const search = page.getByRole("searchbox", { name: "フリーワード検索" });
+  await search.fill("質問全文の後半の検索語");
+  await expect.poll(() => bodies.length).toBe(3);
+  await expect(page.getByText("該当する記録はありません")).toHaveCount(0);
+  await expect(page.getByText("全記録から探しています。")).toBeVisible();
+  finish();
+  await expect(page.getByText("先頭160文字に検索語がない記録")).toBeVisible();
+  expect(bodies.map((body) => body.cursor)).toEqual([undefined, "second", "last"]);
+  expect(new URL(page.url()).search).toBe("");
+  expect(
+    await page.evaluate(() =>
+      JSON.stringify({ localStorage, sessionStorage, history: history.state }),
+    ),
+  ).not.toContain("質問全文の後半の検索語");
+});
+
+test("archive requester options cover unloaded records and preserve selection through sort and empty matches", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockAuthenticatedApi(page);
+  const otherRequester = {
+    displayName: "まだカードを読み込んでいない依頼者",
+    avatar: placeholder("まだカードを読み込んでいない依頼者", "pink"),
+  };
+  const candidateReads: string[] = [];
+  await page.route("**/api/v1/records/requesters*", (route) => {
+    const cursor = new URL(route.request().url()).searchParams.get("cursor");
+    candidateReads.push(cursor ?? "first");
+    return route.fulfill({
+      json: {
+        schemaVersion: 1,
+        items: cursor ? [otherRequester] : [detail.requester],
+        nextCursor: cursor ? null : "next-requesters",
+      },
+    });
+  });
+  const bodies: { requester?: string; sort: string }[] = [];
+  await page.route("**/api/v1/records/search", (route) => {
+    bodies.push(route.request().postDataJSON() as { requester?: string; sort: string });
+    return route.fulfill({ json: { schemaVersion: 1, items: [], nextCursor: null } });
+  });
+  await page.goto("/");
+  await expect.poll(() => candidateReads.length).toBe(2);
+  await page.getByRole("combobox", { name: "依頼者" }).click();
+  await page.getByRole("option", { name: otherRequester.displayName }).click();
+  await expect(page.getByText("該当する記録はありません")).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "依頼者" })).toContainText(
+    otherRequester.displayName,
+  );
+  await page.locator("[data-sort]").getByText("古い順", { exact: true }).click();
+  await expect.poll(() => bodies.at(-1)?.sort).toBe("oldest");
+  expect(bodies.at(-1)?.requester).toBe(otherRequester.displayName);
+  await expect(page.getByRole("combobox", { name: "依頼者" })).toContainText(
+    otherRequester.displayName,
+  );
+  await page.getByRole("button", { name: "絞り込みを解除" }).click();
+  await expect(page.getByRole("radio", { name: "古い順" })).toBeChecked();
+  await expect(page.getByRole("article")).toHaveCount(1);
 });

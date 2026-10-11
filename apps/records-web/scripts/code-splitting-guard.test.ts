@@ -12,7 +12,10 @@ const root = "/workspace/apps/records-web";
 
 function canonicalChunks(): GuardChunk[] {
   const routeModules = {
-    RecordsHome: ["generated/record-list-response-validator.mjs"],
+    RecordsHome: [
+      "generated/record-list-response-validator.mjs",
+      "generated/record-requesters-response-validator.mjs",
+    ],
     RecordDetail: ["generated/record-detail-response-validator.mjs", "components/VoteGraph.tsx"],
     RankingsPage: [
       "generated/rankings-response-validator.mjs",

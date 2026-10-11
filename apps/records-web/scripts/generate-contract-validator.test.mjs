@@ -53,6 +53,11 @@ const samples = [
   ["SessionResponse", "session", authenticatedSession()],
   ["RecordListResponse", "record-list", listResponse()],
   [
+    "RecordRequestersResponse",
+    "record-requesters",
+    { schemaVersion: 1, items: [detail.requester], nextCursor: null },
+  ],
+  [
     "RecordSyncIndexResponse",
     "record-sync-index",
     {

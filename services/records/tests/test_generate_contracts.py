@@ -99,3 +99,20 @@ def test_documented_login_return_path_rejects_external_redirects() -> None:
         "/\n/evil.example",
     ):
         assert re.search(pattern, unsafe) is None
+
+
+def test_archive_search_keeps_private_criteria_in_body_and_uses_browser_auth() -> None:
+    openapi = json.loads(expected_documents()["openapi.json"])
+    search = openapi["paths"]["/api/v1/records/search"]["post"]
+    assert search["security"] == [{"sessionCookie": []}]
+    assert search["requestBody"]["required"]
+    assert search["requestBody"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/RecordSearchRequest"
+    }
+    assert {parameter["name"] for parameter in search["parameters"]} == {"Origin", "X-CSRF-Token"}
+    assert all(
+        parameter["in"] == "header" and parameter["required"] for parameter in search["parameters"]
+    )
+    requesters = openapi["paths"]["/api/v1/records/requesters"]["get"]
+    assert requesters["security"] == [{"sessionCookie": []}]
+    assert [parameter["name"] for parameter in requesters["parameters"]] == ["cursor"]

@@ -13,6 +13,8 @@ describe("protected query lifecycle", () => {
     const queries = client();
     queries.setQueryData(SESSION_QUERY_KEY, { authenticated: true });
     queries.setQueryData(["costs", "week"], { snapshot: "cost fixture" });
+    queries.setQueryData(["records", "search", "question fixture"], { snapshot: "search fixture" });
+    queries.setQueryData(["records", "requesters"], { snapshot: "requester fixture" });
     queries.setQueryData(["admin", "prompts"], { snapshot: "prompt fixture" });
     queries.setQueryData(["memorial", "memory", 1], { snapshot: "memory fixture" });
     queries.setQueryData(["momotalk", "weeks"], { snapshot: "week fixture" });

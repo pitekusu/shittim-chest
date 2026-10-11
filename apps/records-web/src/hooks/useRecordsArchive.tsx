@@ -23,6 +23,7 @@ interface ArchiveReturnTarget {
 
 interface ArchiveViewState {
   readonly filters: ArchiveFilters;
+  readonly requestedCount: number;
   readonly returnTarget: ArchiveReturnTarget | null;
 }
 
@@ -31,9 +32,19 @@ interface ArchiveActions {
   readonly rememberRecord: (recordId: string) => void;
   readonly clearReturnTarget: () => void;
   readonly reset: () => void;
+  readonly showMore: () => void;
 }
 
 type RecordsArchiveState = ArchiveViewState & ArchiveActions;
+
+interface ArchiveCriteriaState {
+  readonly filters: ArchiveFilters;
+  readonly requestedCounts: ReadonlyMap<string, number>;
+}
+
+function criteriaKey(filters: ArchiveFilters): string {
+  return JSON.stringify([filters.winner, filters.sort, filters.search.trim(), filters.requester]);
+}
 
 const INITIAL_FILTERS: ArchiveFilters = { winner: "", sort: "newest", search: "", requester: "" };
 const ArchiveViewContext = createContext<ArchiveViewState | null>(null);
@@ -42,23 +53,43 @@ const ArchiveActionsContext = createContext<ArchiveActions | null>(null);
 // Search can contain question text. Keep it outside the remounted route scene,
 // exclusively in React memory; history state and browser storage can persist it.
 export function RecordsArchiveProvider({ children }: PropsWithChildren): React.JSX.Element {
-  const [filters, setFilters] = useState(INITIAL_FILTERS);
+  const [criteria, setCriteria] = useState<ArchiveCriteriaState>(() => ({
+    filters: INITIAL_FILTERS,
+    requestedCounts: new Map(),
+  }));
+  const { filters, requestedCounts } = criteria;
+  const requestedCount = requestedCounts.get(criteriaKey(filters)) ?? 12;
   const [returnTarget, setReturnTarget] = useState<ArchiveReturnTarget | null>(null);
   const updateFilters = useCallback((changes: Partial<ArchiveFilters>) => {
-    setFilters((current) => ({ ...current, ...changes }));
+    setCriteria((current) => ({ ...current, filters: { ...current.filters, ...changes } }));
+  }, []);
+  const showMore = useCallback(() => {
+    setCriteria((current) => {
+      const key = criteriaKey(current.filters);
+      return {
+        ...current,
+        requestedCounts: new Map(current.requestedCounts).set(
+          key,
+          (current.requestedCounts.get(key) ?? 12) + 12,
+        ),
+      };
+    });
   }, []);
   const rememberRecord = useCallback((recordId: string) => {
     setReturnTarget({ recordId, scrollY: window.scrollY });
   }, []);
   const clearReturnTarget = useCallback(() => setReturnTarget(null), []);
   const reset = useCallback(() => {
-    setFilters(INITIAL_FILTERS);
+    setCriteria({ filters: INITIAL_FILTERS, requestedCounts: new Map() });
     setReturnTarget(null);
   }, []);
-  const view = useMemo(() => ({ filters, returnTarget }), [filters, returnTarget]);
+  const view = useMemo(
+    () => ({ filters, requestedCount, returnTarget }),
+    [filters, requestedCount, returnTarget],
+  );
   const actions = useMemo(
-    () => ({ updateFilters, rememberRecord, clearReturnTarget, reset }),
-    [updateFilters, rememberRecord, clearReturnTarget, reset],
+    () => ({ updateFilters, rememberRecord, clearReturnTarget, reset, showMore }),
+    [updateFilters, rememberRecord, clearReturnTarget, reset, showMore],
   );
   return (
     <ArchiveActionsContext.Provider value={actions}>
