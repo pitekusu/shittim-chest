@@ -30,6 +30,7 @@ from shittim_chest.adapters.dynamodb.transaction_errors import classified_transa
 from shittim_chest.application.discord import (
     MAX_OUTBOX_DELIVERY_ATTEMPTS,
     OUTBOX_CLAIM_SECONDS,
+    DiscordBotSlot,
     OutboxOperation,
     OutboxStatus,
 )
@@ -47,7 +48,8 @@ from shittim_chest.application.ports import (
     RepositoryUnavailable,
 )
 from shittim_chest.application.scale_to_zero import OutboxActivity
-from shittim_chest.domain import AttemptId, DebateId
+from shittim_chest.domain import AttemptId, DebateId, DebatePhase
+from shittim_chest.domain.attachments import MAX_DEBATE_IMAGES
 
 OUTBOX_ACTIVITY_LIMIT = 100_000
 OUTBOX_ACTIVITY_RECORD_SCHEMA_VERSION = 1
@@ -701,17 +703,9 @@ class DynamoDbOutboxRepository:
             persisted = by_operation_id.get(operation.operation_id)
             if persisted != operation:
                 raise RepositoryConflict("outbox operation changed during ordered claim")
-        sequence = (
-            operation.chunk_sequence
-            if operation.delivery_sequence is None
-            else operation.delivery_sequence
-        )
+        sequence = _delivery_order(operation)
         for candidate in operations:
-            candidate_sequence = (
-                candidate.chunk_sequence
-                if candidate.delivery_sequence is None
-                else candidate.delivery_sequence
-            )
+            candidate_sequence = _delivery_order(candidate)
             if candidate_sequence >= sequence:
                 continue
             if candidate.plan_id == operation.plan_id:
@@ -746,21 +740,13 @@ class DynamoDbOutboxRepository:
             if not start_key:
                 break
         operations = [deserialize_outbox(item) for item in items]
-        sequences = [
-            item.chunk_sequence if item.delivery_sequence is None else item.delivery_sequence
-            for item in operations
-        ]
+        sequences = [_delivery_order(item) for item in operations]
         if len(sequences) != len(set(sequences)):
             raise RepositoryConflict("outbox delivery sequence is duplicated")
         return tuple(
             sorted(
                 operations,
-                key=lambda item: (
-                    item.chunk_sequence
-                    if item.delivery_sequence is None
-                    else item.delivery_sequence,
-                    item.operation_id,
-                ),
+                key=lambda item: (_delivery_order(item), item.operation_id),
             )
         )
 
@@ -1111,6 +1097,33 @@ def outbox_activity_action(
             "ExpressionAttributeValues": marshal_item(values),
         }
     }
+
+
+def _delivery_order(operation: OutboxOperation) -> tuple[int, int]:
+    """Order input images before text without rewriting persisted plan identities.
+
+    Older image plans already use 0..2, overlapping initial opinions. Keep those
+    receipts and CAS values intact, and reserve a separate comparison group.
+    """
+
+    sequence = (
+        operation.chunk_sequence
+        if operation.delivery_sequence is None
+        else operation.delivery_sequence
+    )
+    if operation.plan_id != "input-images":
+        return 1, sequence
+    if (
+        operation.record_schema_version != 2
+        or operation.phase is not DebatePhase.SCORING_AFFECTION
+        or operation.bot_slot is not DiscordBotSlot.MODERATOR
+        or len(operation.attachments) != 1
+        or operation.operation_id != f"input-image-{operation.attachments[0].attachment_id}"
+        or operation.chunk_sequence != sequence
+        or not 0 <= sequence < MAX_DEBATE_IMAGES
+    ):
+        raise RepositoryConflict("image outbox ordering identity is invalid")
+    return 0, sequence
 
 
 def _require_same_attempt(expected: DebateSnapshot, operation: OutboxOperation) -> None:
