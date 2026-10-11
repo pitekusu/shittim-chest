@@ -45,6 +45,14 @@ def png(*, width=12, height=8, mode="RGBA") -> bytes:
     return out.getvalue()
 
 
+def jpeg() -> bytes:
+    out = io.BytesIO()
+    exif = Image.Exif()
+    exif[274] = 6
+    Image.new("RGB", (12, 8), "red").save(out, format="JPEG", exif=exif)
+    return out.getvalue()
+
+
 def image(attachment_id=ID) -> DebateImage:
     content = png()
     return DebateImage(
@@ -438,6 +446,99 @@ def pending_discord_image(*, url="https://cdn.discordapp.com/attachments/456/123
     return PendingDiscordImage(ID, "123", "image/png", len(png()), url)
 
 
+@pytest.mark.parametrize("reported_delta", [-17, 17], ids=["cdn-larger", "cdn-smaller"])
+def test_discord_jpeg_uses_received_size_checksum_and_original_bytes(
+    monkeypatch, reported_delta
+) -> None:
+    content = jpeg()
+    s3 = S3()
+    store = S3DebateImageStore(cast(Any, s3), media_bucket_name="media")
+    requests = mock_discord_cdn(monkeypatch, content)
+    pending = PendingDiscordImage(
+        ID,
+        "123",
+        "image/jpeg",
+        len(content) + reported_delta,
+        "https://cdn.discordapp.com/attachments/456/123/image.jpeg",
+    )
+    imported = asyncio.run(store.import_discord_attachment(pending))
+    assert len(requests) == 1
+    assert imported.size_bytes == len(content) != pending.size_bytes
+    assert imported.sha256 == hashlib.sha256(content).hexdigest()
+    assert (imported.width, imported.height) == (12, 8)
+    assert asyncio.run(store.load_original(imported)) == content
+    with Image.open(
+        io.BytesIO(asyncio.run(store.load_vision_images((imported,)))[0].content)
+    ) as vision:
+        assert vision.format == "WEBP" and vision.size == (8, 12)
+        assert not vision.getexif()
+
+
+def test_discord_actual_stream_limit_does_not_trust_reported_size(monkeypatch) -> None:
+    from shittim_chest.adapters.assets import images as module
+
+    s3 = S3()
+    store = S3DebateImageStore(cast(Any, s3), media_bucket_name="media")
+    mock_discord_cdn(monkeypatch, b"x" * (module.MAX_IMAGE_BYTES + 1))
+    monkeypatch.setattr(
+        module, "validate_image", lambda *_args, **_kwargs: pytest.fail("oversized stream decoded")
+    )
+    with pytest.raises(DebateImageFailure, match="ATTACHMENT_INVALID"):
+        asyncio.run(store.import_discord_attachment(pending_discord_image()))
+    assert not s3.writes
+
+
+@pytest.mark.parametrize("invalid_kind", ["mime", "frames"])
+def test_discord_size_tolerance_keeps_mime_and_static_frame_checks(
+    monkeypatch, invalid_kind
+) -> None:
+    if invalid_kind == "mime":
+        content, content_type = jpeg(), "image/png"
+    else:
+        out = io.BytesIO()
+        Image.new("RGB", (2, 2), "red").save(
+            out,
+            format="WEBP",
+            save_all=True,
+            append_images=[Image.new("RGB", (2, 2), "blue")],
+            duration=100,
+        )
+        content, content_type = out.getvalue(), "image/webp"
+    s3 = S3()
+    store = S3DebateImageStore(cast(Any, s3), media_bucket_name="media")
+    mock_discord_cdn(monkeypatch, content)
+    pending = PendingDiscordImage(
+        ID,
+        "123",
+        content_type,
+        len(content) + 17,
+        "https://cdn.discordapp.com/attachments/456/123/image.fixture",
+    )
+    with pytest.raises(DebateImageFailure, match="ATTACHMENT_INVALID"):
+        asyncio.run(store.import_discord_attachment(pending))
+    assert not s3.writes
+
+
+@pytest.mark.parametrize("mismatch", ["size", "sha256"])
+def test_native_upload_still_requires_exact_reserved_size_and_checksum(mismatch) -> None:
+    content = jpeg()
+    s3 = S3()
+    key = "debate-uploads/fixture.bin"
+    s3.objects[key] = {"content": content, "ContentLength": len(content)}
+    store = S3DebateImageStore(
+        cast(Any, s3), media_bucket_name="media", upload_bucket_name="staging"
+    )
+    with pytest.raises(DebateImageFailure, match="ATTACHMENT_INVALID"):
+        store.import_upload(
+            attachment_id=ID,
+            key=key,
+            content_type="image/jpeg",
+            size_bytes=len(content) + (1 if mismatch == "size" else 0),
+            sha256="a" * 64 if mismatch == "sha256" else hashlib.sha256(content).hexdigest(),
+        )
+    assert not s3.writes
+
+
 @pytest.mark.parametrize("missing_code", ["AccessDenied", "403"])
 def test_discord_cache_miss_without_list_permission_saves_private_images(
     monkeypatch, missing_code
@@ -513,17 +614,17 @@ def test_required_image_read_denial_still_fails(monkeypatch, kind, code) -> None
 )
 def test_discord_import_recovers_partial_private_original_without_cdn(monkeypatch, url) -> None:
     from shittim_chest.adapters.assets import images as module
-    from shittim_chest.application.models import PendingDiscordImage
 
     s3 = S3()
     store = S3DebateImageStore(cast(Any, s3), media_bucket_name="media")
-    original = validate_image(png(), content_type="image/png")
+    original = validate_image(jpeg(), content_type="image/jpeg")
     store._put(
-        f"debate-images/{ID}/original.png",
+        f"debate-images/{ID}/original.jpg",
         original.original,
-        "image/png",
+        "image/jpeg",
         source_sha256=original.sha256,
     )
+    persisted_original = dict(s3.objects[f"debate-images/{ID}/original.jpg"])
     monkeypatch.setattr(
         module.httpx2,
         "AsyncClient",
@@ -532,12 +633,15 @@ def test_discord_import_recovers_partial_private_original_without_cdn(monkeypatc
     pending = PendingDiscordImage(
         ID,
         "123",
-        "image/png",
-        len(original.original),
+        "image/jpeg",
+        len(original.original) + 17,
         url,
     )
     recovered = asyncio.run(store.import_discord_attachment(pending))
     assert recovered.sha256 == original.sha256
+    assert recovered.size_bytes == len(original.original) != pending.size_bytes
+    assert asyncio.run(store.load_original(recovered)) == original.original
+    assert s3.objects[f"debate-images/{ID}/original.jpg"] == persisted_original
     assert f"debate-images/{ID}/vision.webp" in s3.objects
 
 

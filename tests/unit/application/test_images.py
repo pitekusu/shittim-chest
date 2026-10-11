@@ -198,6 +198,124 @@ async def test_image_import_and_post_precede_all_model_calls_and_retry_reuses_re
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("declared_size", [100, 200], ids=["actual-larger", "actual-smaller"])
+async def test_discord_size_difference_preserves_validated_image_through_completed_debate(
+    dependencies: Dependencies, declared_size: int
+) -> None:
+    events: list[str] = []
+    store = ImageStore(events)
+    openai = ImageOpenAI(dependencies[5], events)
+    values = list(dependencies)
+    values[5] = cast(FakeOpenAI, openai)
+    outbox = ImageOutbox(dependencies[6], events)
+    app = make_application(
+        cast(Dependencies, tuple(values)),
+        image_store=store,
+        image_outbox=cast(DiscordOutboxRepository, outbox),
+        outbox_recovery=cast(Any, outbox),
+    )
+    pending = PendingDiscordImage(
+        IMAGE_ID,
+        "123",
+        "image/png",
+        declared_size,
+        "https://cdn.discordapp.com/attachments/101/123/image.png",
+    )
+    accepted = await app.accept_debate(
+        replace(
+            request(),
+            question="Which synthetic plan should be selected?",
+            requester_username="fixture-user",
+            requester_display_name="Fixture User",
+            pending_attachments=(pending,),
+        )
+    )
+    await app.bind_discord_context(
+        BindDiscordContextCommand(accepted.debate_id, "101", "102", "103")
+    )
+    await app.run_debate(accepted.debate_id)
+
+    completed = dependencies[6].current[accepted.debate_id]
+    assert completed.state.phase is DebatePhase.COMPLETED
+    assert completed.error_code is None
+    assert completed.attachments == (image(),)
+    assert completed.attachments[0].size_bytes != declared_size
+    assert completed.pending_attachments == ()
+    assert completed.attachment_message_ids == ((IMAGE_ID, "999"),)
+    delivered = [
+        operation
+        for operation in dependencies[6].terminal_operations.values()
+        if operation.plan_id == "input-images"
+    ]
+    assert len(delivered) == 1
+    assert delivered[0].attachments == completed.attachments
+    assert delivered[0].status is OutboxStatus.SENT
+    assert store.imports == outbox.image_posts == 1
+    assert events.index("import") < events.index("publish") < events.index("provider")
+    assert {"score_affection", "generate_initial_opinion", "generate_decision"} <= set(openai.calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mismatch", ["attachment-id", "content-type"])
+async def test_imported_discord_identity_mismatch_still_stops_before_model_calls(
+    dependencies: Dependencies, mismatch: str
+) -> None:
+    events: list[str] = []
+
+    class MismatchedStore(ImageStore):
+        async def import_discord_attachment(self, pending: PendingDiscordImage) -> DebateImage:
+            imported = await super().import_discord_attachment(pending)
+            if mismatch == "attachment-id":
+                return image("22345678-1234-5678-9234-abcdefabcdef")
+            return replace(
+                imported,
+                content_type="image/jpeg",
+                asset_key=f"debate-images/{IMAGE_ID}/original.jpg",
+            )
+
+    store = MismatchedStore(events)
+    openai = ImageOpenAI(dependencies[5], events)
+    values = list(dependencies)
+    values[5] = cast(FakeOpenAI, openai)
+    outbox = ImageOutbox(dependencies[6], events)
+    app = make_application(
+        cast(Dependencies, tuple(values)),
+        image_store=store,
+        image_outbox=cast(DiscordOutboxRepository, outbox),
+        outbox_recovery=cast(Any, outbox),
+    )
+    pending = PendingDiscordImage(
+        IMAGE_ID,
+        "123",
+        "image/png",
+        123,
+        "https://cdn.discordapp.com/attachments/101/123/image.png",
+    )
+    accepted = await app.accept_debate(
+        replace(
+            request(),
+            question="Which synthetic plan should be selected?",
+            requester_username="fixture-user",
+            requester_display_name="Fixture User",
+            pending_attachments=(pending,),
+        )
+    )
+    await app.bind_discord_context(
+        BindDiscordContextCommand(accepted.debate_id, "101", "102", "103")
+    )
+    await app.run_debate(accepted.debate_id)
+
+    failed = dependencies[6].current[accepted.debate_id]
+    assert failed.state.phase is DebatePhase.FAILED
+    assert failed.error_code == "attachment_preparation_failed"
+    assert failed.attachments == failed.attachment_message_ids == ()
+    assert failed.pending_attachments == (pending,)
+    assert store.imports == 1
+    assert openai.calls == dependencies[4].calls == []
+    assert outbox.image_posts == 0
+
+
+@pytest.mark.asyncio
 async def test_invalid_image_stops_before_any_model_calls(dependencies: Dependencies) -> None:
     events: list[str] = []
     store = ImageStore(events, fail=True)

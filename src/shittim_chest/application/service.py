@@ -832,7 +832,6 @@ class DebateApplication:
             if (
                 imported.attachment_id != pending.attachment_id
                 or imported.content_type != pending.content_type
-                or imported.size_bytes != pending.size_bytes
             ):
                 raise _ImagePreparationFailed
             # Persist each validated image before importing the next one. A crash
