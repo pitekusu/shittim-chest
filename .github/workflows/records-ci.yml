@@ -151,7 +151,9 @@ jobs:
           cache: true
           cache-save: ${{ github.ref == 'refs/heads/main' }}
       - name: Install locked Records web dependencies
-        run: vp install --frozen-lockfile
+        run: |
+          test "$(pnpm --version)" = "$(node -p 'require("./package.json").packageManager.slice("pnpm@".length)')"
+          vp install --frozen-lockfile
       - name: Check Records web formatting, lint, and types
         run: pnpm exec vp check
       - name: Test Records web

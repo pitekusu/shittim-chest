@@ -33,6 +33,11 @@ AWS_OR_DEPLOY_CAPABILITY = re.compile(
     re.MULTILINE,
 )
 
+PINNED_PNPM_VERSION_CHECK = (
+    'test "$(pnpm --version)" = "$(node -p \''
+    'require("./package.json").packageManager.slice("pnpm@".length)\')"'
+)
+
 
 class WorkflowPolicyError(RuntimeError):
     """Raised when the target-workflow trust boundary is widened."""
@@ -1504,6 +1509,11 @@ def _validate_ci_path_isolation(directory: Path) -> None:
     )
     if any(marker not in setup for marker in required_setup):
         raise WorkflowPolicyError("Records CI must use the pinned Records Web setup")
+    web_install = _workflow_step_block(records_web, "Install locked Records web dependencies")
+    if f"{PINNED_PNPM_VERSION_CHECK}\n          vp install --frozen-lockfile" not in web_install:
+        raise WorkflowPolicyError(
+            "Records CI must verify the pinned pnpm version before the frozen install"
+        )
     required_records_web = (
         "vp install --frozen-lockfile",
         "pnpm exec vp check",
@@ -1636,9 +1646,14 @@ def _validate_records_workflows(directory: Path) -> None:
     app_local_pnpm = (
         "          (\n"
         "            cd apps/records-web\n"
+        f"            {PINNED_PNPM_VERSION_CHECK}\n"
         "            vp install --frozen-lockfile\n"
         "          )"
     )
+    if PINNED_PNPM_VERSION_CHECK not in install_step:
+        raise WorkflowPolicyError(
+            "Records Release must verify the pinned pnpm version before the frozen install"
+        )
     if install_step.count(app_local_pnpm) != 1:
         raise WorkflowPolicyError(
             "Records Release must resolve pinned pnpm from the Records Web package boundary"

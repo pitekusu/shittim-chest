@@ -1,8 +1,16 @@
 packages:
   - "."
 
+# Vite+ selects the pinned manager; CI/release also verify its exact version.
+# Keep a single lockfile document until GitHub static dependency parsing supports pnpm 12.
+pmOnFail: ignore
+
+# Explicitly requested stable release; the age exception covers only this version.
+minimumReleaseAgeExclude:
+  - fast-uri@4.2.2
+
 overrides:
-  fast-uri: "3.1.8"
+  fast-uri: "4.2.2"
   vite: "npm:@voidzero-dev/vite-plus-core@1.1.0"
   vitest: "5.0.3"
 
