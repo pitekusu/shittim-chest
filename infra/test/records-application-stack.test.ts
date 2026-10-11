@@ -181,6 +181,31 @@ describe("RecordsApplicationStack", () => {
     template.resourceCountIs("AWS::S3::Bucket", 0);
   });
 
+  test("allows only attachment cleanup to check missing objects in the debate image prefix", () => {
+    const policies = Object.entries(fixture.template.findResources("AWS::IAM::Policy"));
+    const cleanup = policies.filter(([id]) => id.startsWith("DebateAttachmentCleanupFunctionRole"));
+    const cleanupStatements = cleanup.flatMap(([, policy]) => policy.Properties.PolicyDocument.Statement) as PolicyStatement[];
+    expect(cleanupStatements.filter(statement => actionsOf(statement).includes("s3:ListBucket"))).toEqual([
+      {
+        Action: "s3:ListBucket",
+        Condition: { StringLike: { "s3:prefix": ["debate-images/*"] } },
+        Effect: "Allow",
+        Resource: { "Fn::Join": ["", [
+          "arn:", { Ref: "AWS::Partition" }, ":s3:::shittim-chest-production-records-media-000000000000",
+        ]] },
+      },
+    ]);
+    for (const [id, policy] of policies) {
+      if (id.startsWith("DebateAttachmentCleanupFunctionRole")) continue;
+      const listStatements = (policy.Properties.PolicyDocument.Statement as PolicyStatement[])
+        .filter(statement => actionsOf(statement).includes("s3:ListBucket"));
+      expect(JSON.stringify(listStatements)).not.toContain("debate-images");
+      if (id.startsWith("ReadFunctionRole") || id.startsWith("MobileDebateFunctionRole")) {
+        expect(listStatements).toEqual([]);
+      }
+    }
+  });
+
   test("isolates mobile notification sending behind a serialized FIFO queue and bounded sweep", () => {
     const { template } = fixture;
     template.hasResourceProperties("AWS::Lambda::Function", {

@@ -2100,6 +2100,10 @@ export class RecordsApplicationStack extends Stack {
         new iam.PolicyStatement({
           actions: ["s3:GetObject", "s3:GetObjectVersion", "s3:DeleteObjectVersion"], resources: [`${mediaBucket.bucketArn}/debate-images/*`],
         }),
+        new iam.PolicyStatement({
+          actions: ["s3:ListBucket"], resources: [mediaBucket.bucketArn],
+          conditions: { StringLike: { "s3:prefix": ["debate-images/*"] } },
+        }),
       ],
     });
     new events.Rule(this, "DebateAttachmentCleanupSchedule", {

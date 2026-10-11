@@ -5,6 +5,7 @@ from dataclasses import replace
 from typing import Any, cast
 
 import pytest
+from botocore.exceptions import ClientError
 
 from shittim_chest.application import (
     BindDiscordContextCommand,
@@ -223,6 +224,49 @@ async def test_invalid_image_stops_before_any_model_calls(dependencies: Dependen
     assert dependencies[5].affection_calls == []
     assert dependencies[4].calls == []
     assert outbox.image_posts == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["import", "vision"])
+async def test_image_storage_denial_stops_before_any_model_calls(
+    dependencies: Dependencies, stage: str
+) -> None:
+    events: list[str] = []
+
+    class DeniedStore(ImageStore):
+        async def import_discord_attachment(self, pending: PendingDiscordImage) -> DebateImage:
+            if stage == "import":
+                raise ClientError({"Error": {"Code": "AccessDenied"}}, "PutObject")
+            return await super().import_discord_attachment(pending)
+
+        async def load_vision_images(
+            self, images: tuple[DebateImage, ...]
+        ) -> tuple[ImageInput, ...]:
+            raise ClientError({"Error": {"Code": "AccessDenied"}}, "GetObject")
+
+    store = DeniedStore(events)
+    outbox = ImageOutbox(dependencies[6], events)
+    app = make_application(
+        dependencies,
+        image_store=store,
+        image_outbox=cast(DiscordOutboxRepository, outbox),
+        outbox_recovery=cast(Any, outbox),
+    )
+    pending = PendingDiscordImage(
+        IMAGE_ID,
+        "123",
+        "image/png",
+        123,
+        "https://cdn.discordapp.com/attachments/101/123/image.png",
+    )
+    accepted = await app.accept_debate(replace(request(), pending_attachments=(pending,)))
+    await app.bind_discord_context(
+        BindDiscordContextCommand(accepted.debate_id, "101", "102", "103")
+    )
+    await app.run_debate(accepted.debate_id)
+    assert dependencies[6].current[accepted.debate_id].state.phase is DebatePhase.FAILED
+    assert dependencies[5].affection_calls == []
+    assert dependencies[4].calls == []
 
 
 @pytest.mark.asyncio

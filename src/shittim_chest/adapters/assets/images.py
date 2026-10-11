@@ -264,7 +264,16 @@ class S3DebateImageStore:
                 maximum=MAX_IMAGE_BYTES,
             )
         except ClientError as error:
-            if error.response.get("Error", {}).get("Code") not in {"NoSuchKey", "404", "NotFound"}:
+            # Without ListBucket, S3 also returns 403 for an absent original.
+            # Only this optional cache probe may fall back to the validated CDN
+            # input; conditional writes and required image reads still fail.
+            if error.response.get("Error", {}).get("Code") not in {
+                "NoSuchKey",
+                "404",
+                "NotFound",
+                "AccessDenied",
+                "403",
+            }:
                 raise DebateImageFailure("ATTACHMENT_UNAVAILABLE") from None
         else:
             if len(cached) != pending.size_bytes:
@@ -346,9 +355,23 @@ class S3DebateImageStore:
             try:
                 response = self._client.head_object(Bucket=self._media_bucket, Key=key)
             except ClientError as error:
-                if error.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
+                code = error.response.get("Error", {}).get("Code")
+                if code in {"404", "NoSuchKey", "NotFound"}:
                     continue
-                raise
+                if code not in {"AccessDenied", "403"}:
+                    raise
+                # HeadObject may hide an absent key behind 403. A listing scoped
+                # to that exact key proves absence without ignoring read denial.
+                # The exact key sorts before any longer key sharing its prefix.
+                try:
+                    listed = self._client.list_objects_v2(
+                        Bucket=self._media_bucket, Prefix=key, MaxKeys=1
+                    )
+                except ClientError:
+                    raise error from None
+                if any(item.get("Key") == key for item in listed.get("Contents", ())):
+                    raise
+                continue
             if response.get("Metadata", {}).get("source-sha256") != sha256:
                 raise DebateImageFailure("ATTACHMENT_CONFLICT")
             version = response.get("VersionId")
