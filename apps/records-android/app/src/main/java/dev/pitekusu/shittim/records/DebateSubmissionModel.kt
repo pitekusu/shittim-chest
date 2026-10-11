@@ -133,7 +133,14 @@ internal class DebateSubmissionModel(
       catch (error: CancellationException) { throw error }
       catch (_: Exception) { RecordImagePresentation(image.descriptor(), failure = RecordImageFailure.STORAGE) }
     }
-    if (authorized() && mutable.value.workspace === workspace) {
+    val current = mutable.value.workspace
+    // Editing the question creates a new workspace while keeping the selected images.
+    // Only a changed ordered image selection makes this asynchronous result obsolete.
+    val sameImages = current != null && current.attachments.size == workspace.attachments.size &&
+      current.attachments.zip(workspace.attachments).all { (selected, original) ->
+        selected.descriptor().sameImage(original.descriptor())
+      }
+    if (authorized() && sameImages) {
       mutableImages.value.forEach { it.bytes?.fill(0) }
       mutableImages.value = loaded
     } else loaded.forEach { it.bytes?.fill(0) }

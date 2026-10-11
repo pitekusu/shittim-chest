@@ -2248,9 +2248,11 @@ async def test_daily_quota_condition_fails_closed(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("profile_schema", (9, 10, CURRENT_SCHEMA_VERSION))
 async def test_affection_settlement_is_atomic_idempotent_and_reapplies_after_profile_cas(
     dynamodb_client: DynamoDBClient,
     dynamodb_table: str,
+    profile_schema: int,
 ) -> None:
     repository = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
     first = await repository.create(
@@ -2309,10 +2311,10 @@ async def test_affection_settlement_is_atomic_idempotent_and_reapplies_after_pro
     )
     assert raw_profile["scores"] == [510, 480, 600]
     assert raw_profile["version"] == 1
-    # Exercise a real v9 profile written before this release, including concurrent CAS.
+    # Preserve each readable opaque profile schema through concurrent settlement.
     dynamodb_client.put_item(
         TableName=dynamodb_table,
-        Item=marshal_item({**raw_profile, "schema_version": 9}),
+        Item=marshal_item({**raw_profile, "schema_version": profile_schema}),
     )
 
     second = await repository.create(
@@ -2590,9 +2592,11 @@ async def test_unavailable_affection_does_not_migrate_the_v8_raw_profile(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("profile_schema", (9, 10, CURRENT_SCHEMA_VERSION))
 async def test_unavailable_affection_assessment_does_not_rewrite_an_existing_profile(
     dynamodb_client: DynamoDBClient,
     dynamodb_table: str,
+    profile_schema: int,
 ) -> None:
     repository = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
     applied = await repository.create(
@@ -2615,6 +2619,10 @@ async def test_unavailable_affection_assessment_does_not_rewrite_an_existing_pro
         Key=marshal_item(profile_key),
         ConsistentRead=True,
     )["Item"]
+    profile_before = marshal_item(
+        {**unmarshal_item(profile_before), "schema_version": profile_schema}
+    )
+    dynamodb_client.put_item(TableName=dynamodb_table, Item=profile_before)
 
     snapshots: list[DebateSnapshot] = []
     for index in range(2):

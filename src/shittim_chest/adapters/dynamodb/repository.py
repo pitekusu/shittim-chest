@@ -31,6 +31,7 @@ from shittim_chest.adapters.dynamodb.outbox import outbox_activity_action
 from shittim_chest.adapters.dynamodb.serializer import (
     CURRENT_SCHEMA_VERSION,
     LEGACY_AFFECTION_SCHEMA_VERSION,
+    OPAQUE_AFFECTION_SCHEMA_VERSIONS,
     DynamoItem,
     DynamoValue,
     PersistenceFormatError,
@@ -3090,19 +3091,22 @@ class DynamoDbDebateRepository:
         *,
         expected_version: int,
     ) -> TransactWriteItemTypeDef:
+        schema_values: DynamoItem = {
+            f":opaque_schema_{schema}": schema
+            for schema in sorted(OPAQUE_AFFECTION_SCHEMA_VERSIONS)
+        }
         return {
             "Put": {
                 "TableName": self._table_name,
                 "Item": marshal_item(serialize_affection_profile(profile)),
                 "ConditionExpression": (
-                    "record_type=:type AND schema_version IN (:opaque_schema, :schema) "
+                    f"record_type=:type AND schema_version IN ({', '.join(schema_values)}) "
                     "AND version=:version AND requester_key=:requester"
                 ),
                 "ExpressionAttributeValues": marshal_item(
                     {
                         ":type": "affection_profile",
-                        ":opaque_schema": 9,
-                        ":schema": CURRENT_SCHEMA_VERSION,
+                        **schema_values,
                         ":version": expected_version,
                         ":requester": profile.requester_key,
                     }
@@ -3114,6 +3118,10 @@ class DynamoDbDebateRepository:
         self,
         profile: AffectionProfile,
     ) -> TransactWriteItemTypeDef:
+        schema_values: DynamoItem = {
+            f":opaque_schema_{schema}": schema
+            for schema in sorted(OPAQUE_AFFECTION_SCHEMA_VERSIONS)
+        }
         return {
             "ConditionCheck": {
                 "TableName": self._table_name,
@@ -3124,14 +3132,13 @@ class DynamoDbDebateRepository:
                     }
                 ),
                 "ConditionExpression": (
-                    "record_type=:type AND schema_version IN (:opaque_schema, :schema) "
+                    f"record_type=:type AND schema_version IN ({', '.join(schema_values)}) "
                     "AND version=:version AND requester_key=:requester"
                 ),
                 "ExpressionAttributeValues": marshal_item(
                     {
                         ":type": "affection_profile",
-                        ":opaque_schema": 9,
-                        ":schema": CURRENT_SCHEMA_VERSION,
+                        **schema_values,
                         ":version": profile.version,
                         ":requester": profile.requester_key,
                     }
