@@ -17,6 +17,7 @@ from shittim_chest.domain import (
     InitialOpinion,
     ParticipantSlot,
 )
+from shittim_chest.domain.attachments import ImageInput
 from shittim_chest.domain.composite_voting import CandidateAssessment, CompositeBallot
 
 if TYPE_CHECKING:
@@ -88,6 +89,7 @@ async def score_composite_ballot(
     evidence: EvidenceBundle,
     candidates: tuple[FinalProposal, ...],
     initial_opinions: tuple[InitialOpinion, ...] = (),
+    images: tuple[ImageInput, ...] = (),
 ) -> CompositeBallot:
     if (
         not isinstance(voter, ParticipantSlot)
@@ -126,6 +128,7 @@ async def score_composite_ballot(
         + COMPOSITE_RUBRIC,
         input_text=json.dumps(payload, ensure_ascii=False),
         settings=replace(service.config.vote, max_output_tokens=2_400),
+        images=images,
     )
     return CompositeBallot(
         voter,

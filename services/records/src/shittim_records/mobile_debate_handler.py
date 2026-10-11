@@ -7,13 +7,18 @@ from collections.abc import Mapping
 from typing import Any
 
 import boto3
+from shittim_chest.adapters.assets.images import S3DebateImageStore
 from shittim_chest.adapters.aws import SsmParameterReader
 from shittim_chest.application.discord import DiscordBotSlot
 from shittim_chest.config import parse_discord_runtime_config
 
 from shittim_records.auth import AuthFailure
+from shittim_records.debate_attachments import (
+    DebateAttachmentService,
+    DynamoDebateAttachmentRepository,
+)
 from shittim_records.http_api import JSON_HEADERS, _read_bearer_token, error_response, parse_request
-from shittim_records.lambda_handlers import SDK_CONFIG
+from shittim_records.lambda_handlers import S3_SDK_CONFIG, SDK_CONFIG
 from shittim_records.mobile_auth_adapters import DynamoMobileAuthStore
 from shittim_records.mobile_debate import MobileDebateService
 from shittim_records.mobile_debate_adapters import (
@@ -72,6 +77,12 @@ async def _controller() -> MobileDebateHttpController:
     if enabled and channel_id not in runtime.allowed_channel_ids:
         raise ValueError("mobile_debate_configuration_invalid")
     client = boto3.client("dynamodb", config=SDK_CONFIG)
+    attachments = DynamoDebateAttachmentRepository(client, os.environ["SOURCE_TABLE_NAME"])
+    assets = S3DebateImageStore(
+        boto3.client("s3", config=S3_SDK_CONFIG),
+        media_bucket_name=os.environ["MEDIA_BUCKET_NAME"],
+        upload_bucket_name=os.environ["MEMORIAL_UPLOAD_BUCKET_NAME"],
+    )
     service = MobileDebateService(
         sessions=DynamoMobileAuthStore(client, os.environ["SESSION_TABLE_NAME"]),
         repository=DynamoMobileDebateRepository(
@@ -80,6 +91,7 @@ async def _controller() -> MobileDebateHttpController:
             session_table=os.environ["SESSION_TABLE_NAME"],
             archive_table=os.environ["ARCHIVE_TABLE_NAME"],
             identity_key=identity_key,
+            attachments=attachments,
         ),
         permissions=DiscordDebatePermissionGuard(
             bot_token=values[names[3]],
@@ -92,5 +104,26 @@ async def _controller() -> MobileDebateHttpController:
         enabled=enabled,
         session_key=session_key,
         identity_key=identity_key,
+        attachments=attachments,
     )
-    return MobileDebateHttpController(service, allowed_origin=os.environ["PUBLIC_ORIGIN"])
+    return MobileDebateHttpController(
+        service,
+        allowed_origin=os.environ["PUBLIC_ORIGIN"],
+        attachments=DebateAttachmentService(attachments, assets),
+    )
+
+
+def cleanup_handler(_event: Mapping[str, Any], _context: object) -> dict[str, int]:
+    """Expire only fenced, unconsumed uploads; accepted debate images have no TTL."""
+    from datetime import UTC, datetime
+
+    client = boto3.client("dynamodb", config=SDK_CONFIG)
+    repository = DynamoDebateAttachmentRepository(client, os.environ["SOURCE_TABLE_NAME"])
+    assets = S3DebateImageStore(
+        boto3.client("s3", config=S3_SDK_CONFIG), media_bucket_name=os.environ["MEDIA_BUCKET_NAME"]
+    )
+    try:
+        return {"expired": DebateAttachmentService(repository, assets).cleanup(datetime.now(UTC))}
+    except Exception:
+        LOGGER.warning("debate_attachment_cleanup_unavailable")
+        raise RuntimeError("debate_attachment_cleanup_unavailable") from None

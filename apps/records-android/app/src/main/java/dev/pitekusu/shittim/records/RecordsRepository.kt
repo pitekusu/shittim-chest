@@ -2,6 +2,7 @@ package dev.pitekusu.shittim.records
 
 import android.content.Context
 import dev.pitekusu.shittim.records.storage.CachedRecordPart
+import dev.pitekusu.shittim.records.storage.EncryptedRecordImageStore
 import dev.pitekusu.shittim.records.storage.EncryptedRecordStore
 import dev.pitekusu.shittim.records.storage.EncryptedRecordRow
 import dev.pitekusu.shittim.records.storage.EncryptedRecordsDatabase
@@ -32,6 +33,7 @@ internal class RecordsRepository(
   private val account: RecordCacheAccount,
   private val isActiveAccount: (String) -> Boolean,
   private val activateOwner: Boolean = true,
+  private val imageStore: EncryptedRecordImageStore? = null,
 ) : Closeable {
   private val json = Json { encodeDefaults = true }
   private val memoLock = Any()
@@ -67,7 +69,7 @@ internal class RecordsRepository(
       accountLock.withLock {
         prepare(accountId)
         save(accountId, recordId, CachedRecordPart.DETAIL) {
-          json.encodeToString(CachedDetail(1, result.preview))
+          json.encodeToString(CachedDetail(1, result.preview.cachedImages()))
         }
         result.listEntry?.let { entry ->
           val savedEntry = RecordListEntry(entry.recordId, entry.questionPreview, entry.requesterName,
@@ -79,6 +81,38 @@ internal class RecordsRepository(
       }
     }
     return result
+  }
+
+  suspend fun cachedAttachment(accountId: String, recordId: String, image: RecordAttachment): ByteArray? = accountLock.withLock {
+    prepareRead(accountId)
+    val bytes = imageStore?.read(accountId, recordId, image)
+    try { requireActive(accountId) } catch (error: Exception) { bytes?.fill(0); throw error }
+    bytes
+  }
+
+  suspend fun cacheAttachment(token: String, accountId: String, recordId: String, image: RecordAttachment): ByteArray {
+    requireActive(accountId)
+    // Renew the authorization and URL immediately before download, without changing the saved body.
+    val detail = remote.firstRecord(token, "/records/$recordId") as? RecordReadResult.Found
+      ?: throw RecordImageException(RecordImageFailure.INVALID)
+    val current = detail.preview.attachments.singleOrNull { it.attachmentId == image.attachmentId && it.sameImage(image) }
+      ?: throw RecordImageException(RecordImageFailure.INVALID)
+    requireActive(accountId)
+    val bytes = remote.attachment(current)
+    try {
+      accountLock.withLock {
+        prepareRead(accountId)
+        (imageStore ?: throw RecordImageException(RecordImageFailure.STORAGE)).save(accountId, recordId, image, bytes)
+        requireActive(accountId)
+      }
+      return bytes
+    } catch (error: Exception) { bytes.fill(0); throw error }
+  }
+
+  suspend fun pruneAttachments(accountId: String, recordId: String, images: List<RecordAttachment>) = accountLock.withLock {
+    prepareRead(accountId)
+    imageStore?.retain(accountId, recordId, images)
+    requireActive(accountId)
   }
 
   suspend fun cachedRecordIds(accountId: String): Set<String> = accountLock.withLock {
@@ -280,8 +314,12 @@ internal class RecordsRepository(
 
   suspend fun removeRecords(accountId: String, recordIds: Set<String>): Unit = accountLock.withLock {
     prepareRead(accountId)
-    try { cache.deleteRecords(accountId, recordIds) }
+    try {
+      recordIds.forEach { imageStore?.retain(accountId, it, emptyList()) }
+      cache.deleteRecords(accountId, recordIds)
+    }
     catch (_: RecordCacheException) { throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE) }
+    catch (_: RecordImageException) { throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE) }
     requireActive(accountId)
   }
 
@@ -449,7 +487,7 @@ internal class RecordsRepository(
         val privateKeys = KeystorePrivateKeyStore(context)
         val cache = EncryptedRecordStore(database, RecordDataKeyProtector(privateKeys))
         return RecordsRepository(RecordsReadClient(), cache, database,
-          RecordCacheAccount(context, privateKeys, database), isActiveAccount, activateOwner)
+          RecordCacheAccount(context, privateKeys, database), isActiveAccount, activateOwner, EncryptedRecordImageStore(context))
       } catch (error: Exception) {
         database.close()
         throw error

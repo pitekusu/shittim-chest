@@ -407,6 +407,38 @@ class AffectionView(PublicModel):
         return self
 
 
+AttachmentId = Annotated[
+    str, Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+]
+
+
+class DebateAttachmentImage(PublicModel):
+    attachment_id: AttachmentId
+    content_type: MemorialUploadContentType
+    size_bytes: int = Field(ge=1, le=10 * 1024 * 1024)
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    width: int = Field(ge=1)
+    height: int = Field(ge=1)
+
+    @model_validator(mode="after")
+    def bounded_pixels(self) -> DebateAttachmentImage:
+        if self.width * self.height > 40_000_000:
+            raise ValueError("image dimensions exceed the supported limit")
+        return self
+
+
+class RecordAttachmentImage(DebateAttachmentImage):
+    url: str = Field(
+        max_length=4096,
+        pattern=r"^https://shittim-chest-production-records-media-[0-9]{12}\.s3\.ap-northeast-1\.amazonaws\.com/debate-images/",
+    )
+    thumbnail_url: str = Field(
+        max_length=4096,
+        pattern=r"^https://shittim-chest-production-records-media-[0-9]{12}\.s3\.ap-northeast-1\.amazonaws\.com/debate-images/",
+    )
+    url_expires_at: AwareDatetime
+
+
 class RecordDetailResponse(PublicModel):
     schema_version: Literal[2]
     record_id: RecordId
@@ -420,6 +452,7 @@ class RecordDetailResponse(PublicModel):
     result: RecordResultSummary
     final_decision: FinalDecisionView
     affection: AffectionView | None
+    attachments: Annotated[tuple[RecordAttachmentImage, ...], Field(max_length=3)] | None = None
     voting: VotingSummary | None = None
     og_image_url: (
         Annotated[
@@ -431,6 +464,9 @@ class RecordDetailResponse(PublicModel):
 
     @model_validator(mode="after")
     def require_consistent_participants_and_winner(self) -> RecordDetailResponse:
+        images = self.attachments or ()
+        if len({image.attachment_id for image in images}) != len(images):
+            raise ValueError("attachment IDs must be unique")
         _require_complete_slots(tuple(item.slot for item in self.participants), "participants")
         _require_complete_slots(
             tuple(item.participant for item in self.initial_opinions),
@@ -951,6 +987,38 @@ class DebateStartRequest(PublicModel):
 
     request_id: DebateRequestId
     question: Annotated[str, Field(min_length=1, max_length=1000, pattern=r"\S", repr=False)]
+    attachment_ids: list[AttachmentId] = Field(default_factory=list, max_length=3)
+
+    @model_validator(mode="after")
+    def unique_attachments(self) -> DebateStartRequest:
+        if len(set(self.attachment_ids)) != len(self.attachment_ids):
+            raise ValueError("attachment IDs must be unique")
+        return self
+
+
+class DebateAttachmentUploadRequest(PublicModel):
+    request_id: DebateRequestId
+    attachment_id: DebateRequestId
+    content_type: MemorialUploadContentType
+    size_bytes: int = Field(ge=1, le=10 * 1024 * 1024)
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class DebateAttachmentUploadResponse(PublicModel):
+    schema_version: Literal[1]
+    attachment_id: AttachmentId
+    method: Literal["POST"]
+    upload_url: str = Field(pattern=r"^https://")
+    fields: dict[str, str]
+    expires_at: AwareDatetime
+
+
+class DebateAttachmentStatusResponse(PublicModel):
+    schema_version: Literal[1]
+    attachment_id: AttachmentId
+    request_id: DebateRequestId
+    status: Literal["reserved", "promoting", "ready", "consumed", "expired"]
+    image: DebateAttachmentImage | None
 
 
 class DebateRequestResponse(PublicModel):
@@ -974,6 +1042,7 @@ class DebateRequestResponse(PublicModel):
     )
 
     request_id: DebateRequestId
+    attachment_ids: list[AttachmentId] = Field(default_factory=list, max_length=3)
     question: Annotated[str, Field(min_length=1, max_length=1000, pattern=r"\S", repr=False)]
     status: DebateRequestStatus
     phase: str | None
@@ -1050,6 +1119,8 @@ class MomotalkRoomResponse(PublicModel):
 
 
 PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
+    DebateAttachmentUploadResponse,
+    DebateAttachmentStatusResponse,
     DebateRequestResponse,
     DebateRequestsResponse,
     RecordListResponse,
@@ -1074,6 +1145,7 @@ PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
 )
 
 PUBLIC_REQUEST_MODELS: tuple[type[BaseModel], ...] = (
+    DebateAttachmentUploadRequest,
     DebateStartRequest,
     MemorialUploadRequest,
     MemorialGenerateRequest,

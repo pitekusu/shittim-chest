@@ -23,6 +23,29 @@ class DebateSubmissionModelTest {
     while (!condition()) delay(10)
   }
 
+  @Test fun attachmentIdsRemainFrozenAcrossAmbiguousSubmissionAndTextEdits() = runBlocking<Unit> {
+    val image = DraftAttachment("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "image/png", 2, "a".repeat(64), 1, 2)
+    var saved = DebateWorkspace(draft = "架空の議題", attachments = listOf(image))
+    var postedIds: List<String>? = null
+    val model = DebateSubmissionModel({ true }, { saved }, { saved = it }, { _, _ -> error("legacy text sender") },
+      { null }, {}, sendWithImages = { request, question, attachments ->
+        assertEquals(request, saved.requestId)
+        assertEquals(question, saved.frozenQuestion)
+        postedIds = attachments.map { it.attachmentId }
+        throw DebateRequestException(DebateFailure.UNAVAILABLE)
+      })
+    withContext(Dispatchers.Main) { model.restore() }
+    await { model.state.value.workspace != null }
+    withContext(Dispatchers.Main) { model.edit("架空の編集"); model.submit() }
+    await { !model.state.value.busy }
+    assertEquals(listOf(image.attachmentId), postedIds)
+    assertEquals(listOf(image.attachmentId), saved.attachments.map { it.attachmentId })
+    withContext(Dispatchers.Main) { model.removeImage(image.attachmentId); model.edit("変更不可") }
+    assertEquals("架空の編集", saved.frozenQuestion)
+    assertEquals(1, model.state.value.workspace!!.attachments.size)
+    withContext(Dispatchers.Main) { ViewModelStore().apply { put("images", model); clear() } }
+  }
+
   @Test fun storageFailurePreventsAnyPost() = runBlocking<Unit> {
     var calls = 0
     val model = DebateSubmissionModel({ true }, { DebateWorkspace(draft = "架空の議題") },

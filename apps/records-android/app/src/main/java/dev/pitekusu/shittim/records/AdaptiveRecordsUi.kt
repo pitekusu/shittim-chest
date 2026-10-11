@@ -231,6 +231,10 @@ internal fun AdaptiveRecordsUi(
             onRetry = { state.eventSink(BootstrapScreen.Event.RetryDebate) },
             onReauth = { state.eventSink(BootstrapScreen.Event.ReauthenticateDebate) },
             onNew = { state.eventSink(BootstrapScreen.Event.NewDebateDraft) },
+            images = state.debateImages,
+            onImagesSelected = { state.eventSink(BootstrapScreen.Event.AddDebateImages(it)) },
+            onRemoveImage = { state.eventSink(BootstrapScreen.Event.RemoveDebateImage(it)) },
+            onDiscardMissing = { state.eventSink(BootstrapScreen.Event.DiscardMissingDebate) },
             modifier = Modifier.widthIn(max = 760.dp).align(Alignment.TopCenter))
         }
       }

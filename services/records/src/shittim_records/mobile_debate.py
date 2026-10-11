@@ -29,6 +29,7 @@ from shittim_records.contracts import (
     DebateRequestStatus,
     DebateStartRequest,
 )
+from shittim_records.debate_attachments import DynamoDebateAttachmentRepository
 from shittim_records.mobile_auth import MobileSessionRecord
 from shittim_records.mobile_session import MobileSessionStore, authenticate_mobile_session
 
@@ -169,7 +170,9 @@ class MobileDebateService:
         session_key: bytes,
         identity_key: bytes,
         clock: Callable[[], datetime] | None = None,
+        attachments: DynamoDebateAttachmentRepository | None = None,
     ) -> None:
+        self._attachments = attachments
         self._sessions = sessions
         self._repository = repository
         self._permissions = permissions
@@ -196,6 +199,29 @@ class MobileDebateService:
         if self._authenticate(token) != expected:
             raise AuthFailure("session_required")
 
+    async def authenticate_upload(self, token: str | None) -> MobileSessionRecord:
+        session = self._authenticate(token)
+        if not self._enabled:
+            raise DebateRequestFailure("DEBATE_START_DISABLED", 503)
+        if session.discord_user_id is None or session.discord_username is None:
+            raise DebateRequestFailure("DEBATE_START_REAUTH_REQUIRED", 403)
+        if not hmac.compare_digest(
+            derive_requester_key(self._identity_key, session.discord_user_id), session.requester_key
+        ):
+            raise AuthFailure("session_required")
+        if self._channel_id not in self._runtime.allowed_channel_ids:
+            raise DebateRequestFailure("DEBATE_START_DISABLED", 503)
+        try:
+            await self._permissions.check(requester_id=session.discord_user_id)
+        except DebateRequestFailure as error:
+            if error.code == "GUILD_MEMBERSHIP_REQUIRED":
+                self._sessions.delete_session(
+                    session_hash=_digest(self._session_key, "mobile-session", token or "")
+                )
+            raise
+        self._still_authorized(token, session)
+        return session
+
     async def start(
         self,
         *,
@@ -210,7 +236,9 @@ class MobileDebateService:
             request_id=payload.request_id,
         )
         if existing is not None:
-            if existing.question != payload.question:
+            if existing.question != payload.question or tuple(
+                image.attachment_id for image in existing.attachments
+            ) != tuple(payload.attachment_ids):
                 raise DebateRequestFailure("REQUEST_ID_CONFLICT", 409)
             response = self._view(existing)
             self._still_authorized(token, session)
@@ -239,6 +267,13 @@ class MobileDebateService:
             raise
         self._still_authorized(token, session)
         now = self._clock()
+        images = ()
+        if payload.attachment_ids:
+            if self._attachments is None:
+                raise DebateRequestFailure("ATTACHMENT_UNAVAILABLE", 503)
+            images = self._attachments.ready_images(
+                session.requester_key, payload.request_id, tuple(payload.attachment_ids), now
+            )
         request = IngressRequest.mobile_debate(
             request_id=payload.request_id,
             owner_key=session.requester_key,
@@ -250,6 +285,7 @@ class MobileDebateService:
             guild_id=self._runtime.guild_id,
             channel_id=self._channel_id,
             created_at=now,
+            attachments=images,
         )
         try:
             result = await self._repository.enqueue(
@@ -266,7 +302,11 @@ class MobileDebateService:
             existing = await self._repository.get(
                 owner_key=session.requester_key, request_id=payload.request_id
             )
-            if existing is None or existing.question != payload.question:
+            if existing is None or (
+                existing.question != payload.question
+                or tuple(image.attachment_id for image in existing.attachments)
+                != tuple(payload.attachment_ids)
+            ):
                 raise DebateRequestFailure("REQUEST_ID_CONFLICT", 409) from None
             response = self._view(existing)
             self._still_authorized(token, session)
@@ -355,6 +395,7 @@ class MobileDebateService:
         else:
             status = "queued"
         return DebateRequestResponse(
+            attachment_ids=[image.attachment_id for image in request.attachments],
             request_id=request.mobile_request_id,
             question=request.question,
             status=status,

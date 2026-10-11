@@ -184,6 +184,7 @@ class BootstrapConfig:
     runtime_prompt_revision: str | None = None
     system_prompt: str | None = field(default=None, repr=False)
     moderator_prompt: str | None = field(default=None, repr=False)
+    debate_media_bucket: str | None = None
 
     def with_identity_hmac_key(self, raw_value: str) -> BootstrapConfig:
         """Attach the decrypted Records identity key without retaining plaintext text."""
@@ -275,6 +276,11 @@ def load_bootstrap_config(environ: Mapping[str, str]) -> BootstrapConfig:
         table_name = _required(environ, "SHITTIM_DYNAMODB_TABLE")
         if re.fullmatch(r"[A-Za-z0-9_.-]{3,255}", table_name) is None:
             raise ValueError("invalid DynamoDB table name")
+        debate_media_bucket = environ.get("SHITTIM_DEBATE_MEDIA_BUCKET")
+        if debate_media_bucket is not None and not re.fullmatch(
+            r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", debate_media_bucket
+        ):
+            raise ValueError("invalid debate image bucket")
         status_publisher_function = _required(
             environ,
             "SHITTIM_STATUS_PUBLISHER_FUNCTION",
@@ -333,6 +339,7 @@ def load_bootstrap_config(environ: Mapping[str, str]) -> BootstrapConfig:
             environment=environment,
             aws_region=aws_region,
             table_name=table_name,
+            debate_media_bucket=debate_media_bucket,
             status_publisher_function=status_publisher_function,
             records_memorial_url=records_memorial_url,
             log_level=log_level,

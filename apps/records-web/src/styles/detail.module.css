@@ -783,3 +783,96 @@
     background: var(--records-panel-background);
   }
 }
+
+.attachments {
+  padding-block: var(--records-space-4);
+}
+
+.attachmentGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
+  gap: 1rem;
+  max-width: 42rem;
+}
+
+.attachmentItem {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.attachmentButton {
+  display: grid;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 44px;
+  padding: 0.75rem;
+  border: 1px solid var(--records-line);
+  border-radius: 1rem;
+  background: var(--records-surface-strong);
+  color: inherit;
+  cursor: pointer;
+}
+
+.attachmentButton img {
+  width: 100%;
+  height: 9rem;
+  object-fit: contain;
+}
+
+.imageDialog {
+  box-sizing: border-box;
+  width: min(72rem, calc(100vw - 2rem));
+  max-width: calc(100vw - 2rem);
+  max-height: calc(100dvh - 2rem);
+  padding: 1rem;
+  border: 1px solid var(--records-line);
+  border-radius: 1rem;
+  background: var(--records-surface-strong);
+  color: var(--records-ink-900);
+}
+
+.imageDialog::backdrop {
+  background: rgb(0 0 0 / 65%);
+}
+
+.imageActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-bottom: 1rem;
+}
+
+.imageActions button,
+.imageError button,
+.attachmentItem > button {
+  min-height: 44px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--records-line);
+  border-radius: 0.5rem;
+  background: var(--records-surface-strong);
+  color: inherit;
+  cursor: pointer;
+}
+
+.imageViewport {
+  overflow: auto;
+  max-height: calc(100dvh - 9rem);
+  overscroll-behavior: contain;
+}
+
+.imageViewport img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: calc(100dvh - 9rem);
+  margin-inline: auto;
+  object-fit: contain;
+}
+
+.imageViewport[data-original-size="true"] img {
+  max-width: none;
+  max-height: none;
+}

@@ -22,7 +22,7 @@ internal data class RecordSyncCheckpoint(
   val needsAvatarPrune: Boolean = false,
 ) {
   fun validate() {
-    check(schemaVersion == 1 && readContractVersion in 0..1 &&
+    check(schemaVersion == 1 && readContractVersion in 0..2 &&
       (cursor == null || validRecordCursor(cursor)))
     check(pendingIds.size <= (if (indexBased) 50 else 12) && pendingIds.distinct().size == pendingIds.size &&
       pendingIds.all(mobileOpaqueValue::matches) && cursorHashes.all(mobileOpaqueValue::matches))

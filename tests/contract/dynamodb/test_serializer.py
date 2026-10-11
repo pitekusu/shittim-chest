@@ -1005,3 +1005,46 @@ def test_panel_retry_and_non_retry_attempt_rules() -> None:
             "requester",
             NOW,
         )
+
+
+def test_original_image_descriptor_and_publication_receipts_roundtrip() -> None:
+    from shittim_chest.domain.attachments import DebateImage
+
+    identity = "12345678-1234-5678-1234-abcdefabcdef"
+    image = DebateImage(
+        identity,
+        "image/png",
+        123,
+        "a" * 64,
+        10,
+        20,
+        f"debate-images/{identity}/original.png",
+        f"debate-images/{identity}/vision.webp",
+        "original-version",
+        "vision-version",
+    )
+    source = replace(snapshot(), attachments=(image,), attachment_message_ids=((identity, "123"),))
+    items = serialize_snapshot(source)
+    assert deserialize_snapshot(items) == source
+    meta = next(item for item in items if item["record_type"] == "debate_meta")
+    assert "attachments" in meta and "pending_attachments" not in meta
+
+
+def test_pending_discord_image_roundtrips_but_legacy_snapshot_defaults_empty() -> None:
+    from shittim_chest.application.models import PendingDiscordImage
+
+    identity = "12345678-1234-5678-1234-abcdefabcdef"
+    source = replace(
+        snapshot(),
+        pending_attachments=(
+            PendingDiscordImage(
+                identity,
+                "123",
+                "image/png",
+                123,
+                "https://cdn.discordapp.com/attachments/101/123/private.png?hm=private",
+            ),
+        ),
+    )
+    assert deserialize_snapshot(serialize_snapshot(source)) == source
+    assert deserialize_snapshot(serialize_snapshot(snapshot())).attachments == ()

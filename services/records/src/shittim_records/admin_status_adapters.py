@@ -74,6 +74,9 @@ ADMIN_STATUS_FUNCTION_NAMES: Mapping[str, str] = MappingProxyType(
         "records_momotalk_announcement": "shittim-chest-production-records-momotalk-announcement",
         "records_mobile_push_worker": "shittim-chest-production-records-mobile-push-worker",
         "records_mobile_debate_api": "shittim-chest-production-records-mobile-debate-api",
+        "records_debate_attachment_cleanup": (
+            "shittim-chest-production-records-debate-attachment-cleanup"
+        ),
         "records_read": "shittim-chest-production-records-read",
         "records_ogp": "shittim-chest-production-records-ogp",
         "records_admin_config": "shittim-chest-production-records-admin-config",

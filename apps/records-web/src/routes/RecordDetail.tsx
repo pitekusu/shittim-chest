@@ -7,6 +7,7 @@ import { getRecord } from "../api/recordDetail";
 import type { ParticipantSlot, RecordDetailResponse } from "../api/types";
 import { Avatar } from "../components/Avatar";
 import { ErrorPanel } from "../components/ErrorPanel";
+import { RecordImages } from "../components/RecordImages";
 import { VoteGraph } from "../components/VoteGraph";
 import { useAuthenticationRecovery } from "../hooks/useAuthenticationRecovery";
 import { formatCompletedDateTime } from "../lib/dateTime";
@@ -228,6 +229,11 @@ export function RecordDocument({
           </aside>
         </div>
       </header>
+      <RecordImages
+        key={record.recordId}
+        recordId={record.recordId}
+        attachments={record.attachments ?? []}
+      />
       <DetailNavigation
         hasAffection={record.affection !== null && record.affection !== undefined}
       />

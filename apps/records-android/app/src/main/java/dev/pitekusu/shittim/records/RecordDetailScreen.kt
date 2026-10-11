@@ -103,6 +103,12 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
     } else {
       val scope = rememberCoroutineScope()
       var questionOpen by remember { mutableStateOf(false) }
+      var imageOpen by remember { mutableStateOf(false) }
+      LaunchedEffect(state.preview.attachments.isEmpty()) {
+        if (state.preview.attachments.isEmpty()) imageOpen = false
+      }
+      if (imageOpen && state.images.isNotEmpty()) AttachmentViewer(state.images, 0, { imageOpen = false },
+        { onEvent(BootstrapScreen.Event.RetryRecordImages) })
       var opinionChoice by rememberSaveable { mutableIntStateOf(0) }
       var affectionChoice by rememberSaveable { mutableIntStateOf(-1) }
       // Playback belongs to this visit, not Bootstrap's lifetime-wide winner animation history.
@@ -199,6 +205,10 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
                   style = MaterialTheme.typography.labelLarge,
                   color = MaterialTheme.colorScheme.primary,
                   modifier = Modifier.weight(1f).testTag("detail-question-label"))
+                if (preview.attachments.isNotEmpty()) TextButton(onClick = { imageOpen = true },
+                  modifier = Modifier.testTag("detail-images-open")) {
+                  Text(stringResource(R.string.attachment_count, preview.attachments.size))
+                }
                 TextButton(onClick = { questionOpen = true },
                   modifier = Modifier.testTag("detail-question-full")) {
                   Text(stringResource(R.string.record_question_full))
@@ -232,7 +242,7 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
           })) {
             HorizontalPager(pager, Modifier.fillMaxSize().testTag("detail-pager"),
               key = { pages[it].let { entry -> "${entry.section}:${entry.person}:${entry.finalOpinion}" } },
-              userScrollEnabled = !questionOpen) { page ->
+              userScrollEnabled = !questionOpen && !imageOpen) { page ->
               val entry = pages[page]
               val section = entry.section
               val selectedPage = pager.settledPage == page

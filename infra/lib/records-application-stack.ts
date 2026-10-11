@@ -43,6 +43,7 @@ const READ_FUNCTION_NAME = "shittim-chest-production-records-read";
 const OGP_FUNCTION_NAME = "shittim-chest-production-records-ogp";
 const MOBILE_PUSH_FUNCTION_NAME = "shittim-chest-production-records-mobile-push-worker";
 const MOBILE_DEBATE_FUNCTION_NAME = "shittim-chest-production-records-mobile-debate-api";
+const DEBATE_ATTACHMENT_CLEANUP_FUNCTION_NAME = "shittim-chest-production-records-debate-attachment-cleanup";
 const FIREBASE_SERVICE_ACCOUNT_PARAMETER_NAME =
   "/shittim-chest/production/records/firebase/service-account";
 const MODERATOR_TOKEN_PARAMETER_NAME =
@@ -915,6 +916,7 @@ export class RecordsApplicationStack extends Stack {
             `${mediaBucket.bucketArn}/participants/*`,
             `${mediaBucket.bucketArn}/requesters/*`,
             `${mediaBucket.bucketArn}/momotalk/images/*`,
+            `${mediaBucket.bucketArn}/debate-images/*`,
           ],
         }),
       ],
@@ -923,10 +925,10 @@ export class RecordsApplicationStack extends Stack {
       Validations.ACKNOWLEDGED_RULES_METADATA_KEY,
       Object.fromEntries(
         ["arn:aws", "arn:<AWS::Partition>"].flatMap((partition) =>
-          ["participants", "requesters", "momotalk/images"].map((prefix) => [
+          ["participants", "requesters", "momotalk/images", "debate-images"].map((prefix) => [
             `AwsSolutions-IAM5[Resource::${partition}:s3:::` +
               `shittim-chest-production-records-media-${nagAccount}/${prefix}/*]`,
-            "Authenticated reads are restricted to avatar and published MomoTalk image prefixes, never generation inputs.",
+            "Authenticated reads are restricted to avatars, published MomoTalk images, and immutable debate attachments.",
           ]),
         ),
       ),
@@ -1121,7 +1123,7 @@ export class RecordsApplicationStack extends Stack {
         }),
         new iam.PolicyStatement({
           actions: ["s3:DeleteObject", "s3:GetObject", "s3:PutObject"],
-          resources: [`${memorialUploadBucket.bucketArn}/*`],
+          resources: [`${memorialUploadBucket.bucketArn}/uploads/*`],
         }),
         new iam.PolicyStatement({
           actions: ["s3:ListBucket"],
@@ -1157,7 +1159,7 @@ export class RecordsApplicationStack extends Stack {
         ["arn:aws", "arn:<AWS::Partition>"].flatMap((partition) => [
           [
             `AwsSolutions-IAM5[Resource::${partition}:s3:::` +
-              `shittim-chest-production-records-memorial-upload-${nagAccount}/*]`,
+              `shittim-chest-production-records-memorial-upload-${nagAccount}/uploads/*]`,
             "The owner-only memorial API can address only opaque, server-generated object keys in the dedicated ephemeral upload bucket.",
           ],
           [
@@ -1207,7 +1209,7 @@ export class RecordsApplicationStack extends Stack {
         }),
         new iam.PolicyStatement({
           actions: ["s3:GetObject", "s3:DeleteObject"],
-          resources: [`${memorialUploadBucket.bucketArn}/*`],
+          resources: [`${memorialUploadBucket.bucketArn}/uploads/*`],
         }),
         new iam.PolicyStatement({
           actions: ["s3:GetObject"],
@@ -1253,7 +1255,7 @@ export class RecordsApplicationStack extends Stack {
         ["arn:aws", "arn:<AWS::Partition>"].flatMap((partition) => [
           [
             `AwsSolutions-IAM5[Resource::${partition}:s3:::` +
-              `shittim-chest-production-records-memorial-upload-${nagAccount}/*]`,
+              `shittim-chest-production-records-memorial-upload-${nagAccount}/uploads/*]`,
             "The worker can read and permanently delete only opaque keys from the dedicated ephemeral upload bucket.",
           ],
           [
@@ -1507,6 +1509,7 @@ export class RecordsApplicationStack extends Stack {
     } as const;
     const statusFunctionNames = {
       records_mobile_debate_api: MOBILE_DEBATE_FUNCTION_NAME,
+      records_debate_attachment_cleanup: DEBATE_ATTACHMENT_CLEANUP_FUNCTION_NAME,
       records_mobile_push_worker: MOBILE_PUSH_FUNCTION_NAME,
       records_momotalk_collector: MOMOTALK_COLLECTOR_FUNCTION_NAME,
       records_momotalk_worker: MOMOTALK_WORKER_FUNCTION_NAME,
@@ -1529,6 +1532,7 @@ export class RecordsApplicationStack extends Stack {
       records_admin_status: ADMIN_STATUS_FUNCTION_NAME,
     } as const;
     const memorialStatusFunctionNames = [
+      DEBATE_ATTACHMENT_CLEANUP_FUNCTION_NAME,
       MOBILE_DEBATE_FUNCTION_NAME,
       MEMORIAL_API_FUNCTION_NAME,
       MEMORIAL_WORKER_FUNCTION_NAME,
@@ -1991,7 +1995,7 @@ export class RecordsApplicationStack extends Stack {
     this.mobileDebateFunction = this.httpFunctionWithRole({
       id: "MobileDebateFunction", functionName: MOBILE_DEBATE_FUNCTION_NAME,
       handler: "shittim_records.mobile_debate_handler.handler", code,
-      timeout: Duration.seconds(29), reservedConcurrentExecutions: 2,
+      timeout: Duration.seconds(29), reservedConcurrentExecutions: 2, memorySize: 1024,
       environment: {
         SOURCE_TABLE_NAME: sourceTable.tableName, SESSION_TABLE_NAME: sessionTable.tableName,
         ARCHIVE_TABLE_NAME: archiveTable.tableName,
@@ -2063,6 +2067,57 @@ export class RecordsApplicationStack extends Stack {
         }),
       ],
     });
+    this.readFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ["s3:GetObjectVersion"], resources: [`${mediaBucket.bucketArn}/debate-images/*`],
+    }));
+    this.mobileDebateFunction.addEnvironment("MEDIA_BUCKET_NAME", mediaBucket.bucketName);
+    this.mobileDebateFunction.addEnvironment("MEMORIAL_UPLOAD_BUCKET_NAME", memorialUploadBucket.bucketName);
+    this.mobileDebateFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:PutItem", "dynamodb:UpdateItem"],
+      resources: [sourceTable.tableArn],
+      conditions: { "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEBATE_UPLOAD#*", "DEBATE_UPLOAD_ID#*"] }, Null: { "dynamodb:LeadingKeys": "false" } },
+    }));
+    this.mobileDebateFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ["s3:GetObject", "s3:PutObject"], resources: [`${memorialUploadBucket.bucketArn}/debate-uploads/*`],
+    }));
+    this.mobileDebateFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject"], resources: [`${mediaBucket.bucketArn}/debate-images/*`],
+    }));
+    const attachmentCleanup = this.httpFunctionWithRole({
+      id: "DebateAttachmentCleanupFunction", functionName: DEBATE_ATTACHMENT_CLEANUP_FUNCTION_NAME,
+      handler: "shittim_records.mobile_debate_handler.cleanup_handler", code,
+      timeout: Duration.minutes(2), reservedConcurrentExecutions: 1,
+      environment: { SOURCE_TABLE_NAME: sourceTable.tableName, MEDIA_BUCKET_NAME: mediaBucket.bucketName },
+      policyStatements: [
+        new iam.PolicyStatement({
+          actions: ["dynamodb:Query"], resources: [`${sourceTable.tableArn}/index/gsi1`],
+          conditions: { "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["ATTACHMENT#EXPIRY"] }, Null: { "dynamodb:LeadingKeys": "false" } },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem", "dynamodb:UpdateItem"], resources: [sourceTable.tableArn],
+          conditions: { "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEBATE_UPLOAD#*", "DEBATE_UPLOAD_ID#*"] }, Null: { "dynamodb:LeadingKeys": "false" } },
+        }),
+        new iam.PolicyStatement({
+          actions: ["s3:GetObject", "s3:GetObjectVersion", "s3:DeleteObjectVersion"], resources: [`${mediaBucket.bucketArn}/debate-images/*`],
+        }),
+      ],
+    });
+    new events.Rule(this, "DebateAttachmentCleanupSchedule", {
+      schedule: events.Schedule.cron({ minute: "47", hour: "3" }),
+      targets: [new eventTargets.LambdaFunction(attachmentCleanup)],
+    });
+    for (const function_ of [this.mobileDebateFunction, attachmentCleanup]) {
+      function_.role!.node.addMetadata(Validations.ACKNOWLEDGED_RULES_METADATA_KEY, Object.fromEntries(
+        ["arn:aws", "arn:<AWS::Partition>"].flatMap((partition) => [
+          [`AwsSolutions-IAM5[Resource::${partition}:s3:::shittim-chest-production-records-media-${nagAccount}/debate-images/*]`,
+            "Only immutable original and vision objects bound to owned debate image reservations are accessible."],
+          ...(function_ === this.mobileDebateFunction ? [[
+            `AwsSolutions-IAM5[Resource::${partition}:s3:::shittim-chest-production-records-memorial-upload-${nagAccount}/debate-uploads/*]`,
+            "Presigned POST and validation address only temporary debate image uploads; memorial uploads are excluded.",
+          ]] : []),
+        ]),
+      ));
+    }
     const mobileDebateVersion = new lambda.Version(this, "MobileDebateVersion", {
       lambda: this.mobileDebateFunction, codeSha256: bundleCodeSha256.valueAsString,
       // Lambda versions freeze configuration. Flag changes must replace the
@@ -2111,6 +2166,9 @@ export class RecordsApplicationStack extends Stack {
     );
     api.addRoutes({ path: "/api/v1/debate-requests", methods: [apigatewayv2.HttpMethod.GET, apigatewayv2.HttpMethod.POST], integration: mobileDebateIntegration });
     api.addRoutes({ path: "/api/v1/debate-requests/{requestId}", methods: [apigatewayv2.HttpMethod.GET], integration: mobileDebateIntegration });
+    api.addRoutes({ path: "/api/v1/debate-attachments/uploads", methods: [apigatewayv2.HttpMethod.POST], integration: mobileDebateIntegration });
+    api.addRoutes({ path: "/api/v1/debate-attachments/uploads/{attachmentId}", methods: [apigatewayv2.HttpMethod.GET], integration: mobileDebateIntegration });
+    api.addRoutes({ path: "/api/v1/debate-attachments/uploads/{attachmentId}/complete", methods: [apigatewayv2.HttpMethod.POST], integration: mobileDebateIntegration });
     const readIntegration = new integrations.HttpLambdaIntegration(
       "ReadIntegration",
       readAlias,

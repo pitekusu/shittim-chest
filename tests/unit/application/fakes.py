@@ -39,6 +39,7 @@ from shittim_chest.domain import (
     VotingResult,
     assess_affection,
 )
+from shittim_chest.domain.attachments import ImageInput
 from shittim_chest.domain.composite_voting import (
     COMPOSITE_VOTING_VERSION,
     CandidateAssessment,
@@ -119,7 +120,9 @@ class FakeEvidence:
     error: Exception | None = None
     called: asyncio.Event = field(default_factory=asyncio.Event)
 
-    async def prepare_evidence(self, *, question: str) -> EvidenceBundle:
+    async def prepare_evidence(
+        self, *, question: str, images: tuple[ImageInput, ...] = ()
+    ) -> EvidenceBundle:
         self.calls.append(question)
         self.called.set()
         if self.delay:
@@ -209,7 +212,7 @@ class FakeOpenAI:
         self.candidate_errors: dict[ParticipantSlot, BaseException] = {}
 
     async def form_preferences(
-        self, *, participant: ParticipantSlot, question: str
+        self, *, participant: ParticipantSlot, question: str, images: tuple[ImageInput, ...] = ()
     ) -> PreferenceFrame:
         self.preference_calls.append(participant)
         if error := self.preference_errors.get(participant):
@@ -221,6 +224,7 @@ class FakeOpenAI:
         *,
         participant: ParticipantSlot,
         question: str,
+        images: tuple[ImageInput, ...] = (),
         evidence: EvidenceBundle,
         preference_frame: PreferenceFrame,
     ) -> CandidatePlan:
@@ -234,6 +238,7 @@ class FakeOpenAI:
         *,
         participant: ParticipantSlot,
         question: str,
+        images: tuple[ImageInput, ...] = (),
     ) -> AffectionQuestionEvaluation:
         del question
         self.affection_calls.append(participant)
@@ -250,6 +255,7 @@ class FakeOpenAI:
         *,
         participant: ParticipantSlot,
         question: str,
+        images: tuple[ImageInput, ...] = (),
         evidence: EvidenceBundle,
         affection_score: int,
         preference_frame: PreferenceFrame | None = None,
@@ -281,6 +287,7 @@ class FakeOpenAI:
         *,
         participant: ParticipantSlot,
         question: str,
+        images: tuple[ImageInput, ...] = (),
         evidence: EvidenceBundle,
         initial_opinions: tuple[InitialOpinion, ...],
         affection_score: int,
@@ -305,6 +312,7 @@ class FakeOpenAI:
         *,
         voter: ParticipantSlot,
         question: str,
+        images: tuple[ImageInput, ...] = (),
         evidence: EvidenceBundle,
         candidates: tuple[FinalProposal, ...],
         preference_frame: PreferenceFrame | None = None,
@@ -349,6 +357,7 @@ class FakeOpenAI:
         self,
         *,
         question: str,
+        images: tuple[ImageInput, ...] = (),
         evidence: EvidenceBundle,
         proposals: tuple[FinalProposal, ...],
         voting_result: VotingResult,
@@ -549,6 +558,22 @@ class FakeRepository:
             ):
                 self.operations[operation_id] = persisted
         return persisted
+
+    async def record_image_receipts(
+        self,
+        *,
+        expected: DebateSnapshot,
+        receipts: tuple[tuple[str, str], ...],
+        at: datetime,
+    ) -> DebateSnapshot:
+        return await self.replace(
+            expected=expected,
+            updated=replace(
+                expected,
+                state=replace(expected.state, updated_at=at),
+                attachment_message_ids=receipts,
+            ),
+        )
 
     async def finalize_phase_delivery(
         self,

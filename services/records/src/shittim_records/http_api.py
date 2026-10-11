@@ -206,6 +206,7 @@ class ReadHttpController:
         request = parse_request(event)
         try:
             include_affection_reasons = False
+            include_attachments = False
             raw_token = _read_bearer_token(
                 event.get("headers") or {}, has_cookies=bool(event.get("cookies"))
             )
@@ -258,9 +259,10 @@ class ReadHttpController:
                 if not set(query).issubset({"contract"}):
                     raise ReadFailure("REQUEST_INVALID", 400)
                 contract = _optional_single(query, "contract")
-                if contract not in {None, "affection-reasons-v1"}:
+                if contract not in {None, "affection-reasons-v1", "record-images-v1"}:
                     raise ReadFailure("REQUEST_INVALID", 400)
-                include_affection_reasons = contract == "affection-reasons-v1"
+                include_affection_reasons = contract in {"affection-reasons-v1", "record-images-v1"}
+                include_attachments = contract == "record-images-v1"
                 result = self._records.get_record(
                     record_id=request.path_parameters.get("recordId", ""),
                     now=now,
@@ -291,6 +293,8 @@ class ReadHttpController:
             else:
                 return error_response(404, "ROUTE_NOT_FOUND", request.request_id)
             payload = result.model_dump(by_alias=True, mode="json")
+            if request.route_key == "GET /api/v1/records/{recordId}" and not include_attachments:
+                payload.pop("attachments", None)
             if (
                 request.route_key == "GET /api/v1/records/{recordId}"
                 and not include_affection_reasons

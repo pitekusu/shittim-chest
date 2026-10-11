@@ -15,7 +15,7 @@ import kotlinx.coroutines.sync.withLock
 
 /** One private key file is shared by the app; callers hold [lock] for lifecycle and cache operations. */
 internal class RecordCacheAccount(
-  context: Context,
+  private val context: Context,
   private val privateKeys: KeystorePrivateKeyStore,
   private val database: EncryptedRecordsDatabase,
 ) {
@@ -56,6 +56,7 @@ internal class RecordCacheAccount(
         throw error
       }
       privateKeys.clear()
+      EncryptedRecordImageStore.clear(context)
       database.records().deleteAll()
       marker.delete()
       check(listOf("", ".new", ".bak").none { File(marker.baseFile.path + it).exists() })

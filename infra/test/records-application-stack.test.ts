@@ -24,6 +24,7 @@ const recordsFunctionNames = [
   "momotalk-announcement",
   "mobile-push-worker",
   "mobile-debate-api",
+  "debate-attachment-cleanup",
 ].map((name) => `shittim-chest-production-records-${name}`);
 
 type PolicyStatement = {
@@ -101,10 +102,17 @@ describe("RecordsApplicationStack", () => {
     const own = policies.filter(policy => JSON.stringify(policy.Properties.Roles).includes("MobileDebateFunctionRole"));
     const statements = own.flatMap(policy => policy.Properties.PolicyDocument.Statement) as PolicyStatement[];
     const database = statements.filter(statement => actionsOf(statement).some(action => action.startsWith("dynamodb:")));
-    expect(database).toHaveLength(7);
+    expect(database).toHaveLength(8);
     for (const statement of database.filter(statement => actionsOf(statement).some(action =>
       ["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:ConditionCheckItem"].includes(action)))) {
-      expect(statement.Condition?.StringEquals).toEqual({ "dynamodb:EnclosingOperation": "TransactWriteItems" });
+      if (JSON.stringify(statement.Condition).includes("DEBATE_UPLOAD#")) {
+        expect(statement.Condition).toEqual({
+          "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["DEBATE_UPLOAD#*", "DEBATE_UPLOAD_ID#*"] },
+          Null: { "dynamodb:LeadingKeys": "false" },
+        });
+      } else {
+        expect(statement.Condition?.StringEquals).toEqual({ "dynamodb:EnclosingOperation": "TransactWriteItems" });
+      }
       expect(JSON.stringify(statement.Condition)).not.toContain("DEBATE#");
       expect(JSON.stringify(statement.Condition)).not.toContain("RECORD#");
     }
@@ -126,13 +134,51 @@ describe("RecordsApplicationStack", () => {
       expect.objectContaining({ Action: "ssm:GetParameters", Resource: expect.any(Array) }),
     ]);
     const serialized = JSON.stringify(own);
-    for (const forbidden of ["dynamodb:Scan", "ecs:", "sqs:", "s3:", "ssm:Put", "openai", "AFFECTION#", "runtime-prompts"]) {
+    for (const forbidden of ["dynamodb:Scan", "ecs:", "sqs:", "ssm:Put", "openai", "AFFECTION#", "runtime-prompts"]) {
       expect(serialized).not.toContain(forbidden);
     }
     const readers = policies.filter(policy => JSON.stringify(policy.Properties.Roles).includes("ReadFunctionRole"));
     const readerActions = readers.flatMap(policy => policy.Properties.PolicyDocument.Statement).flatMap(actionsOf);
     expect(readerActions).not.toContain("dynamodb:PutItem");
     expect(readerActions).not.toContain("dynamodb:UpdateItem");
+  });
+
+  test("keeps debate image uploads, reads and cleanup private and isolated", () => {
+    const { template } = fixture;
+    const routes = Object.values(template.findResources("AWS::ApiGatewayV2::Route"));
+    const images = routes.filter(route => route.Properties.RouteKey.includes("/debate-attachments/"));
+    expect(images.map(route => route.Properties.RouteKey).sort()).toEqual([
+      "GET /api/v1/debate-attachments/uploads/{attachmentId}",
+      "POST /api/v1/debate-attachments/uploads",
+      "POST /api/v1/debate-attachments/uploads/{attachmentId}/complete",
+    ]);
+    expect(new Set(images.map(route => JSON.stringify(route.Properties.Target))).size).toBe(1);
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      FunctionName: "shittim-chest-production-records-debate-attachment-cleanup",
+      Handler: "shittim_records.mobile_debate_handler.cleanup_handler",
+      ReservedConcurrentExecutions: 1, Timeout: 120,
+    });
+    template.hasResourceProperties("AWS::Events::Rule", { ScheduleExpression: "cron(47 3 * * ? *)" });
+    const policies = Object.entries(template.findResources("AWS::IAM::Policy"));
+    const cleanup = policies.filter(([id]) => id.startsWith("DebateAttachmentCleanupFunctionRole"));
+    const cleanupText = JSON.stringify(cleanup);
+    expect(cleanupText).toContain("s3:DeleteObjectVersion");
+    expect(cleanupText).toContain("ATTACHMENT#EXPIRY");
+    expect(cleanupText).toContain("debate-images/*");
+    expect(cleanupText).not.toContain("s3:DeleteObject\"");
+    expect(cleanupText).not.toContain("s3:PutObject");
+    expect(cleanupText).not.toContain("ssm:");
+    const native = policies.filter(([id]) => id.startsWith("MobileDebateFunctionRole"));
+    const nativeText = JSON.stringify(native);
+    expect(nativeText).toContain("debate-uploads/*");
+    expect(nativeText).toContain("debate-images/*");
+    expect(nativeText).not.toContain("/memorials/");
+    const read = policies.filter(([id]) => id.startsWith("ReadFunctionRole"));
+    expect(JSON.stringify(read)).toContain("s3:GetObjectVersion");
+    for (const prefix of ["OgpFunctionRole", "MomotalkWorkerFunctionRole", "MemorialWorkerFunctionRole"]) {
+      expect(JSON.stringify(policies.filter(([id]) => id.startsWith(prefix)))).not.toContain("debate-images/");
+    }
+    template.resourceCountIs("AWS::S3::Bucket", 0);
   });
 
   test("isolates mobile notification sending behind a serialized FIFO queue and bounded sweep", () => {
@@ -376,7 +422,7 @@ describe("RecordsApplicationStack", () => {
           S3ObjectVersion: { Ref: "RecordsBundleObjectVersion" },
         },
         FunctionName: functionName,
-        MemorySize: functionName.endsWith("-worker") ? 1024 : 512,
+        MemorySize: functionName.endsWith("-worker") || functionName.endsWith("-mobile-debate-api") ? 1024 : 512,
         Runtime: "python3.14",
       });
     }
@@ -437,7 +483,7 @@ describe("RecordsApplicationStack", () => {
     template.resourceCountIs("AWS::Lambda::Version", 7);
     template.resourceCountIs("AWS::Lambda::Alias", 7);
     template.resourceCountIs("AWS::ApiGatewayV2::Api", 1);
-    template.resourceCountIs("AWS::ApiGatewayV2::Route", 39);
+    template.resourceCountIs("AWS::ApiGatewayV2::Route", 42);
     template.resourceCountIs("AWS::ApiGatewayV2::Stage", 1);
     template.hasResourceProperties("AWS::ApiGatewayV2::Stage", {
       AutoDeploy: true,
@@ -497,7 +543,7 @@ describe("RecordsApplicationStack", () => {
         },
       },
     });
-    template.resourceCountIs("AWS::Events::Rule", 8);
+    template.resourceCountIs("AWS::Events::Rule", 9);
     template.hasResourceProperties("AWS::Events::Rule", {
       ScheduleExpression: "rate(15 minutes)",
       State: "ENABLED",

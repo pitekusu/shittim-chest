@@ -188,4 +188,19 @@
     <string name="notification_open_settings">Androidの通知設定を開く</string>
     <string name="notification_enable">通知をオンにする</string>
     <string name="notification_disable">通知をオフにする</string>
+    <string name="attachment_add">画像を添付</string>
+    <string name="attachment_remove">削除</string>
+    <string name="attachment_limits">JPEG・PNG・WebP、1枚10 MiBまで、最大3枚。議題を入力して送信してください。</string>
+    <string name="attachment_invalid">画像を添付できません。形式・サイズ・枚数を確認してください。</string>
+    <string name="attachment_expired">画像の受付期限が切れました。受付状況を確認し、未送信の下書きを作り直してください。</string>
+    <string name="attachment_discard_unsent">未送信の画像を削除して下書きに戻る</string>
+    <string name="attachment_count">画像 %1$d枚</string>
+    <string name="attachment_number">画像 %1$d</string>
+    <string name="attachment_image">議題の添付画像</string>
+    <string name="attachment_position">添付画像 %1$d / %2$d</string>
+    <string name="attachment_previous">前の画像</string>
+    <string name="attachment_next">次の画像</string>
+    <string name="attachment_offline">この画像は端末に保存されていません。オンラインで記録を開くと保存できます。</string>
+    <string name="attachment_storage">画像を保存できません。端末の空き容量を確認してください。</string>
+    <string name="attachment_unavailable">画像を開けませんでした。本文は引き続き読むことができます。</string>
 </resources>

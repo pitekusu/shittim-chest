@@ -16,6 +16,7 @@ from shittim_chest.domain import (
     ParticipantAffection,
     ParticipantSlot,
 )
+from shittim_chest.domain.attachments import DebateImage
 from tests.factories import NOW, completed_snapshot, presentation
 
 from shittim_records.archive import project_completed_debate
@@ -120,6 +121,13 @@ class FakeReader:
             )
             for key in requester_keys
         }
+
+    def attachment_url(self, image: DebateImage, *, thumbnail: bool = False) -> str:
+        key = image.vision_asset_key if thumbnail else image.asset_key
+        return (
+            "https://shittim-chest-production-records-media-000000000000"
+            f".s3.ap-northeast-1.amazonaws.com/{key}?signed=fixture"
+        )
 
     def avatar_url(self, *, asset_key: str) -> str:
         return f"https://media.example.invalid/{asset_key}"

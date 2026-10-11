@@ -14,7 +14,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -26,7 +34,20 @@ import dev.pitekusu.shittim.records.ui.ShittimSpacing
 internal fun DebateComposeScreen(state: DebateSubmissionState, online: Boolean,
   onEdit: (String) -> Unit, onSubmit: () -> Unit, onCheck: () -> Unit,
   onRetry: () -> Unit, onReauth: () -> Unit, onNew: () -> Unit,
-  modifier: Modifier = Modifier) {
+  modifier: Modifier = Modifier, images: List<RecordImagePresentation> = emptyList(),
+  onImagesSelected: (List<Uri>) -> Unit = {}, onRemoveImage: (String) -> Unit = {},
+  onDiscardMissing: () -> Unit = {}) {
+  val singlePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+    if (uri != null) onImagesSelected(listOf(uri))
+  }
+  val multiplePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(MAX_ATTACHMENT_COUNT)) {
+    if (it.isNotEmpty()) onImagesSelected(it)
+  }
+  var openedImage by remember { mutableStateOf<Int?>(null) }
+  // Previews are separate transient state; only the current durable draft decides attachment membership.
+  val selectedIds = state.workspace?.attachments.orEmpty().map { it.attachmentId }.toSet()
+  val selectedImages = images.filter { it.image.attachmentId in selectedIds }
+  if (openedImage != null && selectedImages.isNotEmpty()) AttachmentViewer(selectedImages, requireNotNull(openedImage), { openedImage = null })
   Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(ShittimSpacing.Medium)
     .testTag("debate-compose"), verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
     DebateVersusHeader()
@@ -46,6 +67,15 @@ internal fun DebateComposeScreen(state: DebateSubmissionState, online: Boolean,
       supportingText = { Text(stringResource(R.string.debate_characters,
         (workspace.frozenQuestion ?: workspace.draft).codePointCount(0, (workspace.frozenQuestion ?: workspace.draft).length))) },
       minLines = 6, modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp).testTag("debate-question"))
+    if (selectedImages.isNotEmpty()) AttachmentThumbnails(selectedImages, { openedImage = it },
+      onRemove = if (!frozen && !state.busy) onRemoveImage else null)
+    if (!frozen) TextButton(onClick = {
+      val request = PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+      if (workspace.attachments.size == MAX_ATTACHMENT_COUNT - 1) singlePicker.launch(request)
+      else multiplePicker.launch(request)
+    }, enabled = !state.busy && workspace.attachments.size < MAX_ATTACHMENT_COUNT,
+      modifier = Modifier.testTag("debate-add-images")) { Text(stringResource(R.string.attachment_add)) }
+    Text(stringResource(R.string.attachment_limits), style = MaterialTheme.typography.labelSmall)
     if (state.saving) Text(stringResource(R.string.debate_saving), style = MaterialTheme.typography.labelSmall)
     if (!online) Text(stringResource(R.string.debate_offline))
     if (state.failure != null) {
@@ -54,6 +84,8 @@ internal fun DebateComposeScreen(state: DebateSubmissionState, online: Boolean,
         DebateFailure.REAUTH_REQUIRED -> R.string.debate_reauth
         DebateFailure.FORBIDDEN -> R.string.debate_forbidden
         DebateFailure.QUEUE_FULL -> R.string.debate_queue_full
+        DebateFailure.ATTACHMENT_INVALID -> R.string.attachment_invalid
+        DebateFailure.ATTACHMENT_EXPIRED -> R.string.attachment_expired
         else -> R.string.debate_unavailable
       }), color = MaterialTheme.colorScheme.error)
       if (state.failure == DebateFailure.REAUTH_REQUIRED) Button(onClick = onReauth,
@@ -75,6 +107,9 @@ internal fun DebateComposeScreen(state: DebateSubmissionState, online: Boolean,
         if (state.confirmedMissing && receipt == null) Button(onClick = onRetry,
           enabled = online && !state.busy, modifier = Modifier.testTag("debate-retry-same-id")) {
           Text(stringResource(R.string.debate_retry))
+        }
+        if (state.confirmedMissing && receipt == null) TextButton(onClick = onDiscardMissing, enabled = !state.busy && online) {
+          Text(stringResource(R.string.attachment_discard_unsent))
         }
         if (receipt?.terminal == true) TextButton(onClick = onNew, enabled = !state.busy) {
           Text(stringResource(R.string.debate_new))

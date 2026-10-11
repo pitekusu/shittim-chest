@@ -22,6 +22,7 @@ from shittim_chest.domain import (
     ParticipantSlot,
     select_winner,
 )
+from shittim_chest.domain.attachments import DebateImage, validate_images
 
 DISCORD_MESSAGE_LIMIT = 2_000
 DISCORD_CUSTOM_ID_LIMIT = 100
@@ -206,8 +207,16 @@ class OutboxOperation:
     abandon_reason: DeliveryAbandonReason | None = None
     delivery_target: DiscordDeliveryTarget = DiscordDeliveryTarget.THREAD
     channel_id: str | None = None
+    attachments: tuple[DebateImage, ...] = ()
 
     def __post_init__(self) -> None:
+        validate_images(self.attachments)
+        if self.attachments and (
+            len(self.attachments) != 1
+            or self.plan_id != "input-images"
+            or self.bot_slot is not DiscordBotSlot.MODERATOR
+        ):
+            raise ValueError("invalid image delivery operation")
         _require_text(self.operation_id, label="operation ID")
         _require_snowflake(self.thread_id, label="thread ID")
         _require_text(self.content, label="content")
@@ -953,6 +962,14 @@ def _terminal_content(
             (
                 "**討論を完了できませんでした**",
                 f"エラーコード: `{error_code}`",
+                *(
+                    (
+                        "添付画像を取得・検証できませんでした。",
+                        "再試行しても解決しない場合は画像を添付し直してください。",
+                    )
+                    if error_code == "attachment_preparation_failed"
+                    else ()
+                ),
                 "再試行は操作パネルから行えます。",
             )
         )

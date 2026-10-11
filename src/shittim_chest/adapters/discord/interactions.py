@@ -126,15 +126,20 @@ class DiscordInteractionController:
         )
         self._tree.add_command(command, guild=self._guild)
 
-    @app_commands.describe(question=QUESTION_DESCRIPTION)
+    @app_commands.describe(
+        question=QUESTION_DESCRIPTION, image1="参考画像1", image2="参考画像2", image3="参考画像3"
+    )
     async def _http_only_callback(
         self,
         interaction: discord.Interaction[discord.Client],
         question: app_commands.Range[str, 1, 1000],
+        image1: discord.Attachment | None = None,
+        image2: discord.Attachment | None = None,
+        image3: discord.Attachment | None = None,
     ) -> None:
         """Fail closed if Discord unexpectedly delivers the HTTP command via Gateway."""
 
-        del question
+        del question, image1, image2, image3
         await interaction.response.send_message(
             HTTP_ONLY_GATEWAY_MESSAGE,
             ephemeral=True,
@@ -527,7 +532,16 @@ def _command_schema() -> dict[str, object]:
                 "required": True,
                 "min_length": 1,
                 "max_length": 1000,
-            }
+            },
+            *[
+                {
+                    "name": f"image{index}",
+                    "description": f"参考画像{index}",
+                    "type": 11,
+                    "required": False,
+                }
+                for index in range(1, 4)
+            ],
         ],
     }
 

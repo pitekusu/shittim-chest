@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import discord
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
@@ -16,6 +16,7 @@ from shittim_chest.domain import DebatePhase
 
 from shittim_records.archive import ARCHIVE_SCHEMA_VERSION, derive_record_key
 from shittim_records.auth import AuthFailure
+from shittim_records.debate_attachments import DynamoDebateAttachmentRepository
 from shittim_records.mobile_auth import MobileSessionRecord
 from shittim_records.mobile_auth_adapters import _session_item
 from shittim_records.mobile_debate import (
@@ -96,7 +97,9 @@ class DynamoMobileDebateRepository:
         session_table: str,
         archive_table: str,
         identity_key: bytes,
+        attachments: DynamoDebateAttachmentRepository | None = None,
     ) -> None:
+        self._attachments = attachments
         self._client = client
         self._source = source_table
         self._sessions = session_table
@@ -136,7 +139,15 @@ class DynamoMobileDebateRepository:
             }
         }
         try:
-            return await self._ingress.enqueue_mobile(request, session_condition=condition)
+            return await self._ingress.enqueue_mobile(
+                request,
+                session_condition=condition,
+                attachment_actions=()
+                if self._attachments is None
+                else self._attachments.consume_actions(
+                    session.requester_key, request.mobile_request_id or "", request.attachments, now
+                ),
+            )
         except MobileIngressSessionInvalid:
             raise AuthFailure("session_required") from None
 
@@ -197,7 +208,7 @@ class DynamoMobileDebateRepository:
                 record_id = public_id
         return DebateProgress(phase, updated, record_id)
 
-    def _get(self, table: str, pk: str) -> dict | None:
+    def _get(self, table: str, pk: str) -> dict[str, Any] | None:
         # META-only projection is mirrored by IAM's allowed attribute boundary.
         fields = (
             (

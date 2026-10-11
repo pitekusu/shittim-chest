@@ -10,6 +10,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import cast
+from urllib.parse import urlsplit
+from uuid import NAMESPACE_URL, uuid5
 
 from nacl.exceptions import BadSignatureError
 from nacl.signing import VerifyKey
@@ -22,6 +24,7 @@ from shittim_chest.application.discord_http import (
     DiscordHttpPing,
 )
 from shittim_chest.application.ingress import IngressOutcome
+from shittim_chest.application.models import PendingDiscordImage
 from shittim_chest.application.scale_to_zero import IngressKind
 
 DISCORD_SIGNATURE_REPLAY_TOLERANCE = timedelta(minutes=5)
@@ -427,12 +430,66 @@ def _parse_command(
     if command_name != SHITTIM_COMMAND_NAME:
         raise DiscordHttpPayloadError
     options = _sequence(data.get("options"))
-    if len(options) != 1:
+    if not 1 <= len(options) <= 4:
         raise DiscordHttpPayloadError
-    option = _mapping(options[0])
-    if _text(option.get("name")) != "question" or _integer(option.get("type")) != _STRING_OPTION:
+    by_name: dict[str, Mapping[str, object]] = {}
+    for raw_option in options:
+        option = _mapping(raw_option)
+        name = _text(option.get("name"))
+        if name not in {"question", "image1", "image2", "image3"} or name in by_name:
+            raise DiscordHttpPayloadError
+        by_name[name] = option
+    question_option = by_name.get("question")
+    if question_option is None or _integer(question_option.get("type")) != _STRING_OPTION:
         raise DiscordHttpPayloadError
-    question = _text(option.get("value"))
+    question = _text(question_option.get("value"))
+    pending: list[PendingDiscordImage] = []
+    for name in ("image1", "image2", "image3"):
+        option = by_name.get(name)
+        if option is None:
+            continue
+        if _integer(option.get("type")) != 11:
+            raise DiscordHttpPayloadError
+        attachment_id = _text(option.get("value"))
+        resolved = _mapping(_mapping(data.get("resolved")).get("attachments"))
+        attachment = _mapping(resolved.get(attachment_id))
+        if _text(attachment.get("id")) != attachment_id:
+            raise DiscordHttpPayloadError
+        url = _text(attachment.get("url"))
+        try:
+            location = urlsplit(url)
+            parts = location.path.split("/")
+            if (
+                location.scheme != "https"
+                or location.hostname != "cdn.discordapp.com"
+                or location.username is not None
+                or location.password is not None
+                or location.port not in (None, 443)
+                or location.fragment
+                or len(parts) != 5
+                or parts[1] not in {"attachments", "ephemeral-attachments"}
+                or parts[3] != attachment_id
+                or not parts[2].isdecimal()
+                or not parts[4]
+            ):
+                raise ValueError("invalid image source")
+            pending.append(
+                PendingDiscordImage(
+                    attachment_id=str(uuid5(NAMESPACE_URL, "discord-attachment:" + attachment_id)),
+                    discord_attachment_id=attachment_id,
+                    content_type=_text(attachment.get("content_type")),
+                    size_bytes=_integer(attachment.get("size")),
+                    url=url,
+                    width=None
+                    if attachment.get("width") is None
+                    else _integer(attachment.get("width")),
+                    height=None
+                    if attachment.get("height") is None
+                    else _integer(attachment.get("height")),
+                )
+            )
+        except TypeError, ValueError:
+            raise DiscordHttpPayloadError from None
     try:
         return DiscordHttpOperation(
             interaction_id=interaction_id,
@@ -450,6 +507,7 @@ def _parse_command(
             received_at=received_at,
             command_name=command_name,
             question=question,
+            pending_attachments=tuple(pending),
         )
     except TypeError, ValueError:
         raise DiscordHttpPayloadError from None

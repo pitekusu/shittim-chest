@@ -317,6 +317,51 @@ def _mobile_debate_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
         ),
     }
     return {
+        "/api/v1/debate-attachments/uploads": {
+            "post": {
+                **common,
+                "operationId": "reserveDebateAttachment",
+                "requestBody": _request_body("DebateAttachmentUploadRequest"),
+                "responses": {
+                    "200": _response(
+                        "DebateAttachmentUploadResponse", "Owner-bound presigned image POST"
+                    ),
+                    **error_responses,
+                },
+            },
+        },
+        "/api/v1/debate-attachments/uploads/{attachmentId}": {
+            "get": {
+                **common,
+                "operationId": "getDebateAttachmentUpload",
+                "parameters": [
+                    _parameter(
+                        "attachmentId", "path", {"type": "string", "format": "uuid"}, required=True
+                    )
+                ],
+                "responses": {
+                    "200": _response("DebateAttachmentStatusResponse", "Owner-bound upload status"),
+                    **error_responses,
+                },
+            },
+        },
+        "/api/v1/debate-attachments/uploads/{attachmentId}/complete": {
+            "post": {
+                **common,
+                "operationId": "completeDebateAttachmentUpload",
+                "parameters": [
+                    _parameter(
+                        "attachmentId", "path", {"type": "string", "format": "uuid"}, required=True
+                    )
+                ],
+                "responses": {
+                    "200": _response(
+                        "DebateAttachmentStatusResponse", "Validated, immutable image"
+                    ),
+                    **error_responses,
+                },
+            },
+        },
         "/api/v1/debate-requests": {
             "post": {
                 **common,
@@ -542,7 +587,10 @@ def build_openapi() -> dict[str, Any]:
                         _parameter(
                             "contract",
                             "query",
-                            {"type": "string", "enum": ["affection-reasons-v1"]},
+                            {
+                                "type": "string",
+                                "enum": ["affection-reasons-v1", "record-images-v1"],
+                            },
                         ),
                     ],
                     "description": (

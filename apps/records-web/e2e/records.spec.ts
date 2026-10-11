@@ -868,7 +868,7 @@ async function mockAuthenticatedApi(
       },
     }),
   );
-  await page.route(`**/api/v1/records/${RECORD_ID}?contract=affection-reasons-v1`, (route) =>
+  await page.route(`**/api/v1/records/${RECORD_ID}?contract=record-images-v1`, (route) =>
     route.fulfill({ json: recordDetail }),
   );
   await page.route("**/api/v1/insights/rankings", (route) => route.fulfill({ json: rankings }));
@@ -3208,4 +3208,63 @@ test("accessibility preferences keep account surfaces opaque and keyboard action
   await page.keyboard.down("Space");
   await expect(button).toHaveCSS("transform", "none");
   await page.keyboard.up("Space");
+});
+
+test("record attachments open independently and recover expired image URLs", async ({ page }) => {
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jWooAAAAASUVORK5CYII=",
+    "base64",
+  );
+  const images = [1, 2, 3].map((index) => ({
+    attachmentId: `00000000-0000-4000-8000-00000000000${index}`,
+    contentType: "image/png",
+    sizeBytes: png.length,
+    sha256: createHash("sha256").update(png).digest("hex"),
+    width: 1,
+    height: 1,
+    url: `${MEMORIAL_MEDIA_ORIGIN}/debate-images/00000000-0000-4000-8000-00000000000${index}/original.png?revision=old`,
+    thumbnailUrl: `${MEMORIAL_MEDIA_ORIGIN}/debate-images/00000000-0000-4000-8000-00000000000${index}/vision.webp?revision=old`,
+    urlExpiresAt: "2026-10-11T00:05:00Z",
+  }));
+  const imageDetail = { ...detail, attachments: images };
+  await mockAuthenticatedApi(page, imageDetail);
+  await page.route(`${MEMORIAL_MEDIA_ORIGIN}/debate-images/**`, (route) =>
+    route.fulfill({ contentType: "image/png", body: png }),
+  );
+  await page.goto(`/records/${RECORD_ID}`);
+  const trigger = page.getByRole("button", { name: "添付画像 2を拡大" });
+  await trigger.click();
+  let dialog = page.getByRole("dialog", { name: "添付画像 2", exact: true });
+  await expect(dialog.getByRole("img")).toHaveAttribute("src", images[1]!.url);
+  await dialog.getByRole("button", { name: "原寸で見る" }).click();
+  await expect(dialog.getByRole("button", { name: "画面に合わせる" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await page.keyboard.press("Escape");
+  await expect(dialog).not.toBeVisible();
+  await expect(trigger).toBeFocused();
+  await page.route(images[2]!.url, (route) => route.fulfill({ status: 403 }));
+  await page.route(`**/api/v1/records/${RECORD_ID}?contract=record-images-v1`, (route) =>
+    route.fulfill({
+      json: {
+        ...detail,
+        attachments: images.map((image) => ({ ...image, url: image.url.replace("old", "new") })),
+      },
+    }),
+  );
+  await page.getByRole("button", { name: "添付画像 3を拡大" }).click();
+  dialog = page.getByRole("dialog", { name: "添付画像 3", exact: true });
+  await dialog.getByRole("button", { name: "画像を再読込" }).click();
+  await expect(dialog.getByRole("img")).toHaveAttribute(
+    "src",
+    images[2]!.url.replace("old", "new"),
+  );
+  await dialog.getByRole("button", { name: "閉じる", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "最終決定", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  const accessibility = await new AxeBuilder({ page }).analyze();
+  expect(accessibility.violations).toEqual([]);
 });

@@ -10,9 +10,14 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import TypeVar, cast
+from uuid import uuid7
 
 from shittim_chest.application.discord import (
     DiscordBotSlot,
+    OutboxOperation,
+    OutboxStatus,
+    content_sha256,
+    nonce_from_uuid7,
     prepare_final_proposal_outbox_operations,
     prepare_initial_opinion_outbox_operations,
     prepare_terminal_outbox_operations,
@@ -49,9 +54,11 @@ from shittim_chest.application.models import (
 from shittim_chest.application.ports import (
     CandidateOrderer,
     Clock,
+    DebateImageStore,
     DebateRepository,
     DiscordGateway,
     DiscordOutboxDrainer,
+    DiscordOutboxRepository,
     EvidenceService,
     IdGenerator,
     Metrics,
@@ -81,6 +88,7 @@ from shittim_chest.domain import (
     assess_escalation,
     select_winner,
 )
+from shittim_chest.domain.attachments import ImageInput
 from shittim_chest.domain.composite_voting import COMPOSITE_VOTING_VERSION
 
 _T = TypeVar("_T")
@@ -122,6 +130,10 @@ class _TerminalDeliveryConflict(RuntimeError):
         super().__init__("terminal delivery conflict")
 
 
+class _ImagePreparationFailed(RuntimeError):
+    """A content-free import failure before any provider generation can start."""
+
+
 class DebateApplication:
     """Coordinate deterministic debate use cases through injected Protocols."""
 
@@ -140,6 +152,8 @@ class DebateApplication:
         participant_display_names: Mapping[ParticipantSlot, str],
         records_memorial_url: str,
         lease_owner: str,
+        image_store: DebateImageStore | None = None,
+        image_outbox: DiscordOutboxRepository | None = None,
         session_timeout_seconds: float = DEFAULT_SESSION_TIMEOUT_SECONDS,
         phase_timeout_seconds: float = DEFAULT_PHASE_TIMEOUT_SECONDS,
         lease_renewal_seconds: float = 20.0,
@@ -171,6 +185,9 @@ class DebateApplication:
             sanitize_discord_model_text(name)
         if not records_memorial_url.strip():
             raise ValueError("Records Memorial URL must not be empty")
+        self._image_store = image_store
+        self._image_outbox = image_outbox
+        self._image_inputs: dict[tuple[object, ...], tuple[ImageInput, ...]] = {}
         self._clock = clock
         self._ids = ids
         self._metrics = metrics
@@ -212,6 +229,15 @@ class DebateApplication:
                 or existing.guild_id != request.guild_id
                 or existing.channel_id != request.channel_id
                 or existing.question != request.question
+                or tuple(
+                    (image.attachment_id, image.content_type, image.size_bytes)
+                    for image in (*existing.attachments, *existing.pending_attachments)
+                )
+                != tuple(
+                    (image.attachment_id, image.content_type, image.size_bytes)
+                    for image in (*request.attachments, *request.pending_attachments)
+                )
+                or (request.attachments and existing.attachments != request.attachments)
             ):
                 raise InvalidApplicationOperation("operation ID is bound to another request")
             existing = await self._reclaim_ingress_replay(existing, ingress_claim=ingress_claim)
@@ -228,6 +254,8 @@ class DebateApplication:
         snapshot = DebateSnapshot(
             state=DebateState.accepted(debate_id, attempt_id, at=now),
             question=request.question,
+            attachments=request.attachments,
+            pending_attachments=request.pending_attachments,
             requester_id=request.requester_id,
             requester_username=request.requester_username,
             requester_display_name=request.requester_display_name,
@@ -269,6 +297,10 @@ class DebateApplication:
             # Required delivery remains durable and recoverable.  Releasing the
             # lease here would incorrectly make the attempt look complete.
             return
+        finally:
+            for key in tuple(self._image_inputs):
+                if key[0] == debate_id:
+                    del self._image_inputs[key]
 
     async def get_debate(self, debate_id: DebateId) -> DebateSnapshot:
         """Return the current persisted snapshot through an application read boundary."""
@@ -364,6 +396,8 @@ class DebateApplication:
             await self._fail_current(debate_id, error_code="session_deadline_exceeded")
         except OutboxRecoveryFailed as error:
             await self._fail_current(debate_id, error_code=error.delivery_code)
+        except _ImagePreparationFailed:
+            await self._fail_current(debate_id, error_code="attachment_preparation_failed")
         except Exception:
             await self._fail_current(debate_id, error_code="phase_failed")
 
@@ -745,10 +779,18 @@ class DebateApplication:
                     metric_event=MetricEvent.RESUMED,
                 )
 
+            snapshot = await self._ensure_attachments(snapshot)
+            if snapshot.state.phase.is_terminal or snapshot.terminal_delivery is not None:
+                return
             phase = snapshot.state.phase
             self._remaining_generation_seconds(snapshot)
             if phase is DebatePhase.ACCEPTED:
-                await self._advance(snapshot, DebatePhase.SCORING_AFFECTION)
+                if snapshot.attachments and len(snapshot.attachment_message_ids) < len(
+                    snapshot.attachments
+                ):
+                    await self._stage_image_delivery(snapshot)
+                else:
+                    await self._advance(snapshot, DebatePhase.SCORING_AFFECTION)
             elif phase is DebatePhase.SCORING_AFFECTION:
                 await self._score_affection(snapshot)
             elif phase is DebatePhase.PREPARING_EVIDENCE:
@@ -768,15 +810,145 @@ class DebateApplication:
             else:
                 raise InvalidApplicationOperation(f"unsupported active phase: {phase.value}")
 
+    async def _ensure_attachments(self, snapshot: DebateSnapshot) -> DebateSnapshot:
+        while snapshot.pending_attachments:
+            if self._image_store is None:
+                raise _ImagePreparationFailed
+            pending = snapshot.pending_attachments[0]
+            try:
+                imported = await self._image_store.import_discord_attachment(pending)
+            except Exception:
+                raise _ImagePreparationFailed from None
+            current = await self._require_snapshot(snapshot.state.debate_id)
+            if current.state.phase.is_terminal or current.terminal_delivery is not None:
+                return current
+            at = self._clock.now()
+            self._require_owned_active_lease(current, at=at)
+            if (
+                current.pending_attachments != snapshot.pending_attachments
+                or current.attachments != snapshot.attachments
+            ):
+                raise RepositoryConflict("image import lost its current input prefix")
+            if (
+                imported.attachment_id != pending.attachment_id
+                or imported.content_type != pending.content_type
+                or imported.size_bytes != pending.size_bytes
+            ):
+                raise _ImagePreparationFailed
+            # Persist each validated image before importing the next one. A crash
+            # never requires successful prior inputs to be fetched from Discord again.
+            snapshot = await self._repository.replace(
+                expected=current,
+                updated=replace(
+                    current,
+                    state=replace(current.state, updated_at=at),
+                    attachments=(*current.attachments, imported),
+                    pending_attachments=current.pending_attachments[1:],
+                ),
+            )
+        return snapshot
+
+    async def _image_arguments(self, snapshot: DebateSnapshot) -> dict[str, tuple[ImageInput, ...]]:
+        if snapshot.pending_attachments:
+            raise _ImagePreparationFailed
+        if not snapshot.attachments:
+            return {}
+        if self._image_store is None:
+            raise InvalidApplicationOperation("image input is unavailable")
+        key = (snapshot.state.debate_id, *snapshot.attachments)
+        if key not in self._image_inputs:
+            self._image_inputs[key] = await self._image_store.load_vision_images(
+                snapshot.attachments
+            )
+        return {"images": self._image_inputs[key]}
+
+    async def _stage_image_delivery(self, snapshot: DebateSnapshot) -> DebateSnapshot:
+        if self._image_outbox is None or snapshot.thread_id is None:
+            raise InvalidApplicationOperation("image publication is unavailable")
+        at = self._clock.now()
+        sent_ids = {key for key, _ in snapshot.attachment_message_ids}
+        pending = tuple(
+            image for image in snapshot.attachments if image.attachment_id not in sent_ids
+        )
+        operations = tuple(
+            OutboxOperation(
+                operation_id=f"input-image-{image.attachment_id}",
+                debate_id=snapshot.state.debate_id,
+                attempt_id=snapshot.state.attempt_id,
+                bot_slot=DiscordBotSlot.MODERATOR,
+                thread_id=snapshot.thread_id,
+                content=(
+                    f"添付画像 {snapshot.attachments.index(image) + 1}/{len(snapshot.attachments)}"
+                ),
+                content_hash=content_sha256(
+                    f"添付画像 {snapshot.attachments.index(image) + 1}/{len(snapshot.attachments)}"
+                ),
+                nonce=nonce_from_uuid7(uuid7()),
+                chunk_sequence=index,
+                status=OutboxStatus.PREPARED,
+                created_at=at,
+                record_schema_version=2,
+                phase=DebatePhase.SCORING_AFFECTION,
+                plan_id="input-images",
+                delivery_sequence=index,
+                deadline_at=at + timedelta(minutes=15),
+                attachments=(image,),
+            )
+            for index, image in enumerate(pending)
+        )
+        plan = PhaseDeliveryPlan(
+            plan_id="input-images",
+            source_phase=DebatePhase.ACCEPTED,
+            target_phase=DebatePhase.SCORING_AFFECTION,
+            operation_ids=tuple(operation.operation_id for operation in operations),
+            content_hashes=tuple(operation.content_hash for operation in operations),
+            delivery_sequences=tuple(range(len(operations))),
+            staged_at=at,
+            deadline_at=at + timedelta(minutes=15),
+        )
+        staged = replace(
+            snapshot, state=replace(snapshot.state, updated_at=at), terminal_delivery=plan
+        )
+        return await self._repository.stage_terminal_delivery(
+            expected=snapshot, staged=staged, operations=operations
+        )
+
+    async def _record_image_receipts(self, snapshot: DebateSnapshot) -> DebateSnapshot:
+        plan = snapshot.terminal_delivery
+        if not isinstance(plan, PhaseDeliveryPlan) or plan.plan_id != "input-images":
+            return snapshot
+        if self._image_outbox is None:
+            raise InvalidApplicationOperation("image publication is unavailable")
+        receipts = dict(snapshot.attachment_message_ids)
+        for operation_id in plan.operation_ids:
+            operation = await self._image_outbox.get(
+                debate_id=snapshot.state.debate_id,
+                attempt_id=snapshot.state.attempt_id,
+                operation_id=operation_id,
+            )
+            if (
+                operation is not None
+                and operation.status is OutboxStatus.SENT
+                and operation.message_id is not None
+            ):
+                receipts[operation.attachments[0].attachment_id] = operation.message_id
+        if receipts == dict(snapshot.attachment_message_ids):
+            return snapshot
+        return await self._repository.record_image_receipts(
+            expected=snapshot, receipts=tuple(receipts.items()), at=self._clock.now()
+        )
+
     async def _score_affection(self, snapshot: DebateSnapshot) -> None:
         """Score all personas independently and apply only one complete score set."""
 
+        image_arguments = await self._image_arguments(snapshot)
         tasks = tuple(
             asyncio.create_task(
                 self._within_phase(
                     self._openai.score_affection(
                         participant=participant,
                         question=snapshot.question,
+                        **image_arguments,
                     )
                 ),
                 name=f"affection:{participant.value}",
@@ -813,7 +985,9 @@ class DebateApplication:
         evidence = snapshot.evidence
         if evidence is None:
             evidence = await self._within_phase(
-                self._evidence.prepare_evidence(question=snapshot.question)
+                self._evidence.prepare_evidence(
+                    question=snapshot.question, **await self._image_arguments(snapshot)
+                )
             )
         at = self._clock.now()
         if snapshot.deliberation_version >= 1:
@@ -985,6 +1159,7 @@ class DebateApplication:
             return await run_reconsideration(
                 snapshot,
                 coordination=coordination,
+                **await self._image_arguments(snapshot),
                 repository=self._repository,
                 openai=self._openai,
                 clock=self._clock,
@@ -1015,6 +1190,7 @@ class DebateApplication:
                     self._openai.form_preferences(
                         participant=participant,
                         question=snapshot.question,
+                        **await self._image_arguments(snapshot),
                     )
                 )
             else:
@@ -1025,6 +1201,7 @@ class DebateApplication:
                     self._openai.select_candidates(
                         participant=participant,
                         question=snapshot.question,
+                        **await self._image_arguments(snapshot),
                         evidence=self._require_evidence(snapshot),
                         preference_frame=frame,
                     )
@@ -1599,6 +1776,7 @@ class DebateApplication:
             decision = await self._within_phase(
                 self._openai.generate_decision(
                     question=snapshot.question,
+                    **await self._image_arguments(snapshot),
                     evidence=evidence,
                     proposals=snapshot.final_proposals,
                     voting_result=voting_result,
@@ -1750,6 +1928,7 @@ class DebateApplication:
                 self._openai.generate_initial_opinion(
                     participant=participant,
                     question=snapshot.question,
+                    **await self._image_arguments(snapshot),
                     evidence=evidence,
                     affection_score=_affection_score(snapshot, participant),
                     preference_frame=snapshot.preference_for(participant),
@@ -1901,6 +2080,7 @@ class DebateApplication:
                 self._openai.generate_final_proposal(
                     participant=participant,
                     question=snapshot.question,
+                    **await self._image_arguments(snapshot),
                     evidence=evidence,
                     initial_opinions=snapshot.initial_opinions,
                     affection_score=_affection_score(snapshot, participant),
@@ -1993,6 +2173,7 @@ class DebateApplication:
         question: str,
         evidence: EvidenceBundle,
         initial_opinions: tuple[InitialOpinion, ...],
+        images: tuple[ImageInput, ...] = (),
     ) -> tuple[FinalProposal, ...]:
         tasks: dict[ParticipantSlot, asyncio.Task[FinalProposal]] = {}
         async with asyncio.TaskGroup() as task_group:
@@ -2001,6 +2182,7 @@ class DebateApplication:
                     self._openai.generate_final_proposal(
                         participant=participant,
                         question=question,
+                        **({"images": images} if images else {}),
                         evidence=evidence,
                         initial_opinions=initial_opinions,
                         affection_score=DEFAULT_AFFECTION_SCORE,
@@ -2095,6 +2277,7 @@ class DebateApplication:
                 self._openai.cast_vote(
                     voter=participant,
                     question=snapshot.question,
+                    **await self._image_arguments(snapshot),
                     evidence=evidence,
                     candidates=candidates,
                     preference_frame=snapshot.preference_for(participant),
@@ -2446,6 +2629,7 @@ class DebateApplication:
                 retryable=False,
             ) from error
         current = await self._require_snapshot(snapshot.state.debate_id)
+        current = await self._record_image_receipts(current)
         if current.state.phase.is_terminal:
             return current
         if current.terminal_delivery != delivery:
@@ -2541,6 +2725,7 @@ class DebateApplication:
             raise RepositoryConflict("terminating delivery lost its durable stop intent")
         all_sent = await self._outbox_recovery.terminate(expected=snapshot)
         current = await self._require_snapshot(snapshot.state.debate_id)
+        current = await self._record_image_receipts(current)
         current_plan = current.terminal_delivery
         if (
             not isinstance(current_plan, PhaseDeliveryPlan)
@@ -2597,6 +2782,7 @@ class DebateApplication:
         *,
         delivery_code: str | None = None,
     ) -> DebateSnapshot:
+        snapshot = await self._record_image_receipts(snapshot)
         plan = snapshot.terminal_delivery
         if (
             not isinstance(plan, PhaseDeliveryPlan)

@@ -18,6 +18,7 @@ firebase-bom = "34.19.0"
 google-services = "4.5.0"
 play-app-update = "2.1.0"
 coil = "3.6.3"
+telephoto = "0.19.0"
 paging = "3.5.1"
 markdown = "0.45.0"
 room3 = "3.0.3"
@@ -76,6 +77,7 @@ firebase-bom = { module = "com.google.firebase:firebase-bom", version.ref = "fir
 firebase-messaging = { module = "com.google.firebase:firebase-messaging" }
 firebase-installations = { module = "com.google.firebase:firebase-installations" }
 play-app-update = { module = "com.google.android.play:app-update", version.ref = "play-app-update" }
+telephoto-zoomable = { module = "me.saket.telephoto:zoomable", version.ref = "telephoto" }
 coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
 coil-network-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coil" }
 androidx-paging-runtime = { module = "androidx.paging:paging-runtime", version.ref = "paging" }

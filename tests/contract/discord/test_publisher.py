@@ -41,6 +41,7 @@ from shittim_chest.application import (
 )
 from shittim_chest.application.models import DeliveryAbandonReason
 from shittim_chest.application.ports import (
+    DebateImageStore,
     RepositoryCancellationCode,
     RepositoryConflict,
     RepositoryTransactionAction,
@@ -407,6 +408,7 @@ def publisher(
     clock: FakeClock | None = None,
     delivery_timeout_seconds: float = 45.0,
     completion_retry_seconds: float = 0.0,
+    image_store: DebateImageStore | None = None,
 ) -> tuple[DiscordPyPublisher, discord.Thread, AsyncMock, FakeClock]:
     clients, thread, send_mock = clients_and_thread(
         operation,
@@ -419,6 +421,7 @@ def publisher(
             outbox=repository,
             clock=test_clock,
             claim_owner=CLAIM_OWNER,
+            image_store=image_store,
             delivery_timeout_seconds=delivery_timeout_seconds,
             completion_retry_seconds=completion_retry_seconds,
         ),
@@ -1009,3 +1012,115 @@ async def test_cancellation_is_propagated_without_reschedule() -> None:
 
     assert repository.retry_delays == []
     assert send_mock.await_count == 1
+
+
+def image_operation(expected: DebateSnapshot) -> OutboxOperation:
+    import hashlib
+
+    from shittim_chest.domain.attachments import DebateImage
+
+    identity = "12345678-1234-5678-1234-abcdefabcdef"
+    content = b"original image fixture"
+    image = DebateImage(
+        identity,
+        "image/png",
+        len(content),
+        hashlib.sha256(content).hexdigest(),
+        10,
+        20,
+        f"debate-images/{identity}/original.png",
+        f"debate-images/{identity}/vision.webp",
+    )
+    return replace(
+        prepared(expected),
+        operation_id=f"input-image-{identity}",
+        record_schema_version=2,
+        plan_id="input-images",
+        phase=DebatePhase.SCORING_AFFECTION,
+        delivery_sequence=0,
+        deadline_at=NOW + timedelta(minutes=15),
+        attachments=(image,),
+    )
+
+
+def image_message(operation: OutboxOperation) -> discord.Message:
+    received = cast(Any, message(operation))
+    image = operation.attachments[0]
+    received.attachments = [
+        SimpleNamespace(
+            filename=f"{image.attachment_id}-{image.sha256[:16]}.png",
+            size=image.size_bytes,
+            content_type=image.content_type,
+            width=image.width,
+            height=image.height,
+        )
+    ]
+    return cast(discord.Message, received)
+
+
+@pytest.mark.asyncio
+async def test_image_upload_uses_validated_original_and_neutral_filename() -> None:
+    expected = snapshot()
+    operation = image_operation(expected)
+
+    class Store:
+        async def load_original(self, image: object) -> bytes:
+            return b"original image fixture"
+
+    repository = FakeOutboxRepository(operation)
+    subject, thread, send_mock, _ = publisher(
+        operation, repository, image_store=cast(DebateImageStore, Store())
+    )
+    cast(Any, thread).guild = SimpleNamespace(id=int(GUILD_ID), me=object())
+    cast(Any, thread).permissions_for.return_value = SimpleNamespace(attach_files=True)
+    transmitted: list[bytes] = []
+
+    async def send(*args: object, **kwargs: Any) -> discord.Message:
+        files = kwargs["files"]
+        assert len(files) == 1
+        assert files[0].filename.endswith(".png")
+        transmitted.append(files[0].fp.read())
+        return image_message(operation)
+
+    send_mock.side_effect = send
+    sent = await subject.publish_persisted(expected=expected, operation_id=operation.operation_id)
+    assert sent is not None and sent.status is OutboxStatus.SENT
+    assert transmitted == [b"original image fixture"]
+
+
+@pytest.mark.asyncio
+async def test_image_accepted_post_recovers_without_uploading_again() -> None:
+    expected = snapshot()
+    operation = replace(
+        image_operation(expected),
+        status=OutboxStatus.CLAIMED,
+        claim_owner="prior",
+        claim_expires_at=NOW - timedelta(seconds=1),
+        delivery_attempt=1,
+    )
+    repository = FakeOutboxRepository(operation)
+    subject, _, send_mock, _ = publisher(
+        operation, repository, history_messages=(image_message(operation),)
+    )
+    sent = await subject.publish_persisted(expected=expected, operation_id=operation.operation_id)
+    assert sent is not None and sent.status is OutboxStatus.SENT
+    send_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_image_same_nonce_with_changed_attachment_fails_closed() -> None:
+    expected = snapshot()
+    operation = replace(
+        image_operation(expected),
+        status=OutboxStatus.CLAIMED,
+        claim_owner="prior",
+        claim_expires_at=NOW - timedelta(seconds=1),
+        delivery_attempt=1,
+    )
+    received = image_message(operation)
+    cast(Any, received).attachments[0].size += 1
+    repository = FakeOutboxRepository(operation)
+    subject, _, send_mock, _ = publisher(operation, repository, history_messages=(received,))
+    with pytest.raises(DiscordDeliveryConflict):
+        await subject.publish_persisted(expected=expected, operation_id=operation.operation_id)
+    send_mock.assert_not_awaited()

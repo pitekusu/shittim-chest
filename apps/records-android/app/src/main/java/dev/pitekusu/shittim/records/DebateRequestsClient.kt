@@ -48,10 +48,12 @@ internal class DebateRequest(
   val updatedAt: String,
   val recordId: String? = null,
   val errorCode: String? = null,
+  val attachmentIds: List<String> = emptyList(),
 ) {
   val terminal: Boolean get() = status in setOf("published", "failed", "cancelled")
   fun validate() {
     check(validDebateRequestId(requestId) && validDebateQuestion(question))
+    check(attachmentIds.size <= MAX_ATTACHMENT_COUNT && attachmentIds.distinct().size == attachmentIds.size && attachmentIds.all(::validDebateRequestId))
     check(status in setOf("accepted", "queued", "starting", "running", "publishing", "published", "failed", "cancelled"))
     check(createdAt.endsWith("Z") && updatedAt.endsWith("Z"))
     check(Instant.parse(updatedAt) >= Instant.parse(createdAt))
@@ -64,7 +66,7 @@ internal class DebateRequest(
 }
 
 @Serializable internal class DebateRequestPage(val items: List<DebateRequest>, val nextCursor: String? = null)
-internal enum class DebateFailure { AUTH_REQUIRED, REAUTH_REQUIRED, FORBIDDEN, NOT_FOUND, CONFLICT, QUEUE_FULL, UNAVAILABLE, INVALID_RESPONSE, STORAGE }
+internal enum class DebateFailure { AUTH_REQUIRED, REAUTH_REQUIRED, FORBIDDEN, NOT_FOUND, CONFLICT, QUEUE_FULL, UNAVAILABLE, INVALID_RESPONSE, STORAGE, ATTACHMENT_INVALID, ATTACHMENT_EXPIRED, ATTACHMENT_NOT_READY }
 internal class DebateRequestException(val failure: DebateFailure) : Exception("debate_request_${failure.name.lowercase()}")
 
 /** Normal JSON uses Ktor; POST is one-shot so an ambiguous response cannot cause implicit replay. */
@@ -80,10 +82,11 @@ internal class DebateRequestsClient(private val engine: HttpClientEngine = OkHtt
     install(HttpTimeout) { connectTimeoutMillis = 10_000; socketTimeoutMillis = 20_000; requestTimeoutMillis = 20_000 }
   }
 
-  suspend fun submit(token: String, requestId: String, question: String): DebateRequest {
+  suspend fun submit(token: String, requestId: String, question: String, attachmentIds: List<String> = emptyList()): DebateRequest {
     check(validDebateRequestId(requestId) && validDebateQuestion(question))
-    val result = call<DebateRequest>(token, HttpMethod.Post, "", json.encodeToString(Start(requestId, question)))
-    if (result.requestId != requestId || result.question != question) throw DebateRequestException(DebateFailure.INVALID_RESPONSE)
+    check(attachmentIds.size <= MAX_ATTACHMENT_COUNT && attachmentIds.distinct().size == attachmentIds.size && attachmentIds.all(::validDebateRequestId))
+    val result = call<DebateRequest>(token, HttpMethod.Post, "", json.encodeToString(Start(requestId, question, attachmentIds)))
+    if (result.requestId != requestId || result.question != question || result.attachmentIds != attachmentIds) throw DebateRequestException(DebateFailure.INVALID_RESPONSE)
     try { result.validate() }
     catch (_: Exception) { throw DebateRequestException(DebateFailure.INVALID_RESPONSE) }
     return result
@@ -162,7 +165,7 @@ internal class DebateRequestsClient(private val engine: HttpClientEngine = OkHtt
   }
 
   override fun close() { client.close(); engine.close() }
-  @Serializable private class Start(val requestId: String, val question: String)
+  @Serializable private class Start(val requestId: String, val question: String, val attachmentIds: List<String> = emptyList())
   @Serializable private class ErrorEnvelope(val error: ErrorBody)
   @Serializable private class ErrorBody(val code: String)
 }

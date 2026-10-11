@@ -13,6 +13,7 @@ export type DebateRequestStatus =
 export interface DebateStartRequest {
   readonly requestId: string;
   readonly question: string;
+  readonly attachmentIds?: readonly string[];
 }
 
 export interface DebateRequestResponse {
@@ -256,7 +257,20 @@ export interface CostsResponse {
   readonly status: "partial" | "final" | "unavailable";
 }
 
+export interface RecordAttachment {
+  readonly attachmentId: string;
+  readonly contentType: "image/jpeg" | "image/png" | "image/webp";
+  readonly sizeBytes: number;
+  readonly sha256: string;
+  readonly width: number;
+  readonly height: number;
+  readonly url: string;
+  readonly thumbnailUrl?: string | null;
+  readonly urlExpiresAt: string;
+}
+
 export interface RecordDetailResponse {
+  readonly attachments?: readonly RecordAttachment[] | null;
   readonly ogImageUrl?: string | null;
   readonly schemaVersion: 2;
   readonly recordId: string;

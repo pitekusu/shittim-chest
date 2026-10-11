@@ -32,6 +32,7 @@ from shittim_chest.application.models import (
     GenerationCheckpoint,
     GenerationStatus,
     LeaseGrant,
+    PendingDiscordImage,
     PhaseDeliveryPlan,
     PhaseDeliveryStatus,
     ReconsiderationProgress,
@@ -79,17 +80,18 @@ from shittim_chest.domain import (
     SearchRequirement,
     Vote,
 )
+from shittim_chest.domain.attachments import DebateImage
 from shittim_chest.domain.composite_voting import ResolvedVote, resolve_composite_ballot
 
 type DynamoScalar = str | int | bool | None
 type DynamoValue = DynamoScalar | list[DynamoValue] | dict[str, DynamoValue]
 type DynamoItem = dict[str, DynamoValue]
 
-CURRENT_SCHEMA_VERSION = 10
-PREVIOUS_SCHEMA_VERSION = 9
-SUPPORTED_SCHEMA_VERSIONS = frozenset({8, 9, 10})
+CURRENT_SCHEMA_VERSION = 11
+PREVIOUS_SCHEMA_VERSION = 10
+SUPPORTED_SCHEMA_VERSIONS = frozenset({8, 9, 10, 11})
 LEGACY_AFFECTION_SCHEMA_VERSION = 8
-OPAQUE_AFFECTION_SCHEMA_VERSIONS = frozenset({9, 10})
+OPAQUE_AFFECTION_SCHEMA_VERSIONS = frozenset({9, 10, 11})
 MAX_ITEM_BYTES = 400 * 1024
 INGRESS_ACTIVE_POINTER_RECORD_SCHEMA_VERSION = 1
 
@@ -156,6 +158,19 @@ def serialize_snapshot(snapshot: DebateSnapshot) -> tuple[DynamoItem, ...]:
         "current_attempt_id": attempt_id,
         "current_phase": snapshot.state.phase.value,
     }
+    if snapshot.attachments:
+        debate_meta["attachments"] = [
+            serialize_debate_image(image) for image in snapshot.attachments
+        ]
+    if snapshot.pending_attachments:
+        debate_meta["pending_attachments"] = [
+            _serialize_pending_image(image) for image in snapshot.pending_attachments
+        ]
+    if snapshot.attachment_message_ids:
+        debate_meta["attachment_message_ids"] = [
+            {"attachment_id": key, "message_id": message}
+            for key, message in snapshot.attachment_message_ids
+        ]
     _put_optional(debate_meta, "starter_message_id", snapshot.starter_message_id)
     _put_optional(debate_meta, "thread_id", snapshot.thread_id)
     _put_optional(
@@ -586,6 +601,12 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
     return DebateSnapshot(
         state=state,
         question=_text(debate_meta, "question"),
+        attachments=_deserialize_images(debate_meta.get("attachments", [])),
+        pending_attachments=_deserialize_pending_images(debate_meta.get("pending_attachments", [])),
+        attachment_message_ids=tuple(
+            (_text(item, "attachment_id"), _text(item, "message_id"))
+            for item in _image_maps(debate_meta.get("attachment_message_ids", []))
+        ),
         requester_id=_text(debate_meta, "requester_id"),
         requester_username=_text(debate_meta, "requester_username"),
         requester_display_name=_text(debate_meta, "requester_display_name"),
@@ -1008,6 +1029,8 @@ def serialize_outbox(operation: OutboxOperation) -> DynamoItem:
         ),
         "delivery_attempt": operation.delivery_attempt,
     }
+    if operation.attachments:
+        item["attachments"] = [serialize_debate_image(image) for image in operation.attachments]
     _put_optional(item, "claim_owner", operation.claim_owner)
     _put_optional(item, "claim_expiry", _optional_timestamp(operation.claim_expires_at))
     _put_optional(item, "next_retry_at", _optional_timestamp(operation.next_retry_at))
@@ -1068,6 +1091,7 @@ _OUTBOX_DELIVERY_OPTIONAL_FIELDS = frozenset(
         "next_retry_at",
         "message_id",
         "sent_at",
+        "attachments",
     }
 )
 _OUTBOX_V1_OPTIONAL_FIELDS = _OUTBOX_DELIVERY_OPTIONAL_FIELDS | {"record_schema_version"}
@@ -1124,6 +1148,7 @@ def deserialize_outbox(raw_item: Mapping[str, DynamoValue]) -> OutboxOperation:
     try:
         return OutboxOperation(
             operation_id=operation_id,
+            attachments=_deserialize_images(item.get("attachments", [])),
             debate_id=DebateId.parse(debate_id_text),
             attempt_id=AttemptId.parse(attempt_id_text),
             bot_slot=DiscordBotSlot(_text(item, "bot_slot")),
@@ -1329,6 +1354,13 @@ def serialize_ingress_request(request: IngressRequest) -> DynamoItem:
         ("ttl", request.ttl),
     ):
         _put_optional(item, field, value)
+    if request.attachments:
+        item["attachments"] = [serialize_debate_image(image) for image in request.attachments]
+    if request.pending_attachments:
+        item["pending_attachments"] = [
+            _serialize_pending_image(image, include_url=request.status.counts_toward_queue_limit)
+            for image in request.pending_attachments
+        ]
     # Omit additive fields for Discord so legacy records and CAS bytes stay unchanged.
     if request.source is IngressSource.MOBILE:
         item["source"] = request.source.value
@@ -1364,6 +1396,8 @@ def deserialize_ingress_request(raw_item: Mapping[str, DynamoValue]) -> IngressR
             command_name=_optional_text(item, "command_name"),
             custom_id=_optional_text(item, "custom_id"),
             question=_optional_text(item, "question"),
+            attachments=_deserialize_images(item.get("attachments", [])),
+            pending_attachments=_deserialize_pending_images(item.get("pending_attachments", [])),
             parent_channel_id=_optional_text(item, "parent_channel_id"),
             source_message_id=_optional_text(item, "source_message_id"),
             source_thread_id=_optional_text(item, "source_thread_id"),
@@ -2411,3 +2445,85 @@ def _optional_phase(item: Mapping[str, DynamoValue], field: str) -> DebatePhase 
 def _put_optional(item: DynamoItem, field: str, value: DynamoValue) -> None:
     if value is not None:
         item[field] = value
+
+
+def serialize_debate_image(image: DebateImage) -> DynamoItem:
+    """Share one validated immutable descriptor across Core and Records."""
+    item: DynamoItem = {
+        "attachment_id": image.attachment_id,
+        "content_type": image.content_type,
+        "size_bytes": image.size_bytes,
+        "sha256": image.sha256,
+        "width": image.width,
+        "height": image.height,
+        "asset_key": image.asset_key,
+        "vision_asset_key": image.vision_asset_key,
+    }
+    _put_optional(item, "asset_version_id", image.asset_version_id)
+    _put_optional(item, "vision_asset_version_id", image.vision_asset_version_id)
+    return item
+
+
+def deserialize_debate_image(item: Mapping[str, DynamoValue]) -> DebateImage:
+    try:
+        return DebateImage(
+            attachment_id=_text(item, "attachment_id"),
+            content_type=_text(item, "content_type"),
+            size_bytes=_integer(item, "size_bytes"),
+            sha256=_text(item, "sha256"),
+            width=_integer(item, "width"),
+            height=_integer(item, "height"),
+            asset_key=_text(item, "asset_key"),
+            vision_asset_key=_text(item, "vision_asset_key"),
+            asset_version_id=_optional_text(item, "asset_version_id"),
+            vision_asset_version_id=_optional_text(item, "vision_asset_version_id"),
+        )
+    except (TypeError, ValueError) as error:
+        raise PersistenceFormatError("invalid image descriptor") from error
+
+
+def _image_maps(value: DynamoValue) -> tuple[DynamoItem, ...]:
+    if (
+        not isinstance(value, list)
+        or len(value) > 3
+        or any(not isinstance(item, dict) for item in value)
+    ):
+        raise PersistenceFormatError("invalid image collection")
+    return cast(tuple[DynamoItem, ...], tuple(value))
+
+
+def _deserialize_images(value: DynamoValue) -> tuple[DebateImage, ...]:
+    return tuple(deserialize_debate_image(item) for item in _image_maps(value))
+
+
+def _serialize_pending_image(image: PendingDiscordImage, *, include_url: bool = True) -> DynamoItem:
+    item: DynamoItem = {
+        "attachment_id": image.attachment_id,
+        "discord_attachment_id": image.discord_attachment_id,
+        "content_type": image.content_type,
+        "size_bytes": image.size_bytes,
+        "width": image.width,
+        "height": image.height,
+    }
+
+    if include_url and image.url is not None:
+        item["url"] = image.url
+    return item
+
+
+def _deserialize_pending_images(value: DynamoValue) -> tuple[PendingDiscordImage, ...]:
+    try:
+        return tuple(
+            PendingDiscordImage(
+                attachment_id=_text(item, "attachment_id"),
+                discord_attachment_id=_text(item, "discord_attachment_id"),
+                content_type=_text(item, "content_type"),
+                size_bytes=_integer(item, "size_bytes"),
+                url=_optional_text(item, "url"),
+                width=None if item.get("width") is None else _integer(item, "width"),
+                height=None if item.get("height") is None else _integer(item, "height"),
+            )
+            for item in _image_maps(value)
+        )
+    except (TypeError, ValueError) as error:
+        raise PersistenceFormatError("invalid pending image descriptor") from error

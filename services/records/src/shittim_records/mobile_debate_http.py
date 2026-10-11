@@ -3,12 +3,18 @@
 import asyncio
 import json
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from shittim_records.auth import AuthFailure
-from shittim_records.contracts import DebateStartRequest
+from shittim_records.contracts import (
+    AttachmentId,
+    DebateAttachmentUploadRequest,
+    DebateStartRequest,
+)
+from shittim_records.debate_attachments import AttachmentFailure, DebateAttachmentService
 from shittim_records.http_api import (
     JSON_HEADERS,
     _query,
@@ -25,7 +31,14 @@ PREFIX = "/api/v1/debate-requests"
 
 
 class MobileDebateHttpController:
-    def __init__(self, service: MobileDebateService, *, allowed_origin: str) -> None:
+    def __init__(
+        self,
+        service: MobileDebateService,
+        *,
+        allowed_origin: str,
+        attachments: DebateAttachmentService | None = None,
+    ) -> None:
+        self._attachments = attachments
         self._service = service
         self._origin = allowed_origin
 
@@ -42,6 +55,43 @@ class MobileDebateHttpController:
             if len(request.raw_query.encode()) > 4096:
                 raise DebateRequestFailure("REQUEST_INVALID", 400)
             query = _query(request.raw_query)
+            upload_prefix = "/api/v1/debate-attachments/uploads"
+            if request.route_key.partition(" ")[2].startswith(upload_prefix):
+                if self._attachments is None:
+                    raise AttachmentFailure("ATTACHMENT_UNAVAILABLE", 503)
+                if query:
+                    raise DebateRequestFailure("REQUEST_INVALID", 400)
+                session = asyncio.run(self._service.authenticate_upload(token))
+                now = datetime.now(UTC)
+                if request.route_key == f"POST {upload_prefix}":
+                    raw = event.get("body")
+                    if (
+                        event.get("isBase64Encoded") is True
+                        or not isinstance(raw, str)
+                        or len(raw.encode()) > 4096
+                        or request.headers.get("content-type", "").partition(";")[0].strip().lower()
+                        != "application/json"
+                    ):
+                        raise DebateRequestFailure("REQUEST_INVALID", 400)
+                    payload = DebateAttachmentUploadRequest.model_validate(
+                        json.loads(raw, object_pairs_hook=_unique_fields), strict=True
+                    )
+                    result = self._attachments.reserve(session.requester_key, payload, now)
+                else:
+                    _empty_body(event)
+                    attachment_id = TypeAdapter(AttachmentId).validate_python(
+                        request.path_parameters.get("attachmentId"), strict=True
+                    )
+                    if request.route_key == f"GET {upload_prefix}/{{attachmentId}}":
+                        result = self._attachments.status(session.requester_key, attachment_id, now)
+                    elif request.route_key == f"POST {upload_prefix}/{{attachmentId}}/complete":
+                        result = self._attachments.complete(
+                            session.requester_key, attachment_id, now
+                        )
+                    else:
+                        return error_response(404, "ROUTE_NOT_FOUND", request.request_id)
+                self._service._still_authorized(token, session)
+                return json_response(200, result)
             if request.route_key == f"POST {PREFIX}":
                 if query:
                     raise DebateRequestFailure("REQUEST_INVALID", 400)
@@ -55,7 +105,11 @@ class MobileDebateHttpController:
                 ):
                     raise DebateRequestFailure("REQUEST_INVALID", 400)
                 data = json.loads(raw, object_pairs_hook=_unique_fields)
-                if not isinstance(data, dict) or set(data) != {"requestId", "question"}:
+                if (
+                    not isinstance(data, dict)
+                    or not {"requestId", "question"} <= set(data)
+                    or not set(data) <= {"requestId", "question", "attachmentIds"}
+                ):
                     raise DebateRequestFailure("REQUEST_INVALID", 400)
                 payload = DebateStartRequest.model_validate(data, strict=True)
                 response, _created = asyncio.run(self._service.start(token=token, payload=payload))
@@ -81,6 +135,8 @@ class MobileDebateHttpController:
             else:
                 return error_response(404, "ROUTE_NOT_FOUND", request.request_id)
             return json_response(200, response.model_dump(by_alias=True, mode="json"))
+        except AttachmentFailure as error:
+            return error_response(error.status, error.code, request.request_id)
         except DebateRequestFailure as error:
             return error_response(error.status, error.code, request.request_id)
         except AuthFailure as error:

@@ -1,6 +1,12 @@
 package dev.pitekusu.shittim.records
 
 import android.content.Context
+import android.net.Uri
+import android.graphics.BitmapFactory
+import java.util.UUID
+import dev.pitekusu.shittim.records.storage.EncryptedRecordImageStore
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import dev.pitekusu.shittim.records.storage.CachedRecordPart
 import dev.pitekusu.shittim.records.storage.EncryptedRecordStore
 import dev.pitekusu.shittim.records.storage.EncryptedRecordsDatabase
@@ -16,20 +22,23 @@ import kotlinx.serialization.json.Json
 @Serializable
 internal class DebateWorkspace(val schemaVersion: Int = 1, val draft: String = "",
   val requestId: String? = null, val frozenQuestion: String? = null,
-  val receipt: DebateRequest? = null) {
+  val receipt: DebateRequest? = null, val attachments: List<DraftAttachment> = emptyList()) {
   fun validate() {
     check(schemaVersion == 1 && draft.codePointCount(0, draft.length) <= 1000)
     check((requestId == null) == (frozenQuestion == null))
     check(requestId == null || validDebateRequestId(requestId))
     check(frozenQuestion == null || validDebateQuestion(frozenQuestion))
-    receipt?.let { it.validate(); check(it.requestId == requestId && it.question == frozenQuestion) }
+    check(attachments.size <= MAX_ATTACHMENT_COUNT && attachments.map { it.attachmentId }.distinct().size == attachments.size)
+    attachments.forEach(DraftAttachment::validate)
+    receipt?.let { it.validate(); check(it.requestId == requestId && it.question == frozenQuestion && it.attachmentIds == attachments.map { image -> image.attachmentId }) }
   }
   override fun toString(): String = "DebateWorkspace(<redacted>)"
 }
 
 internal class DebateWorkspaceStore(private val database: EncryptedRecordsDatabase,
   private val cache: EncryptedRecordStore, private val owner: RecordCacheAccount,
-  private val authorized: (String) -> Boolean) : Closeable {
+  private val authorized: (String) -> Boolean,
+  private val context: Context, private val images: EncryptedRecordImageStore) : Closeable {
   private val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }
 
   suspend fun load(accountId: String): DebateWorkspace = RecordCacheAccount.lock.withLock {
@@ -38,6 +47,7 @@ internal class DebateWorkspaceStore(private val database: EncryptedRecordsDataba
     val result = if (bytes == null) DebateWorkspace() else try {
       json.decodeFromString<DebateWorkspace>(bytes.decodeToString()).also { it.validate() }
     } finally { bytes.fill(0) }
+    pruneDraft(accountId, result)
     guard(accountId)
     result
   }
@@ -48,7 +58,61 @@ internal class DebateWorkspaceStore(private val database: EncryptedRecordsDataba
     val bytes = json.encodeToString(value).encodeToByteArray()
     try { cache.save(accountId, WORKSPACE_ID, CachedRecordPart.DEBATE_WORKSPACE, bytes) }
     finally { bytes.fill(0) }
+    pruneDraft(accountId, value)
     guard(accountId)
+  }
+
+  suspend fun importImage(accountId: String, uri: Uri): DraftAttachment {
+    RecordCacheAccount.lock.withLock { guard(accountId) }
+    val bytes = try { withContext(Dispatchers.IO) {
+      check(uri.scheme == "content")
+      context.contentResolver.openInputStream(uri)?.use { input ->
+        val buffer = ByteArray(MAX_ATTACHMENT_BYTES + 1)
+        try {
+          var count = 0
+          while (count < buffer.size) {
+            val next = input.read(buffer, count, buffer.size - count)
+            if (next <= 0) break
+            count += next
+          }
+          check(count in 1..MAX_ATTACHMENT_BYTES)
+          buffer.copyOf(count)
+        } finally { buffer.fill(0) }
+      } ?: throw RecordImageException(RecordImageFailure.INVALID)
+    } } catch (error: kotlin.coroutines.cancellation.CancellationException) { throw error }
+    catch (_: Exception) { throw RecordImageException(RecordImageFailure.INVALID) }
+    try {
+      val (width, height) = validateAttachmentBytes(bytes)
+      val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+      BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+      val image = DraftAttachment(UUID.randomUUID().toString(), checkNotNull(bounds.outMimeType),
+        bytes.size, attachmentDigest(bytes), width, height)
+      RecordCacheAccount.lock.withLock {
+        guard(accountId)
+        images.save(accountId, "debate-draft", image.descriptor(), bytes)
+        guard(accountId)
+      }
+      return image
+    } catch (error: kotlin.coroutines.cancellation.CancellationException) { throw error }
+    catch (error: RecordImageException) { throw error }
+    catch (_: Exception) { throw RecordImageException(RecordImageFailure.INVALID) }
+    finally { bytes.fill(0) }
+  }
+
+  suspend fun image(accountId: String, image: DraftAttachment): ByteArray = RecordCacheAccount.lock.withLock {
+    guard(accountId)
+    val bytes = images.read(accountId, "debate-draft", image.descriptor())
+      ?: throw RecordImageException(RecordImageFailure.STORAGE)
+    try { guard(accountId) } catch (error: Exception) { bytes.fill(0); throw error }
+    bytes
+  }
+
+  private suspend fun pruneDraft(accountId: String, value: DebateWorkspace) {
+    try { images.retain(accountId, "debate-draft", value.attachments.map { it.descriptor() }) }
+    catch (error: kotlin.coroutines.cancellation.CancellationException) { throw error }
+    catch (_: RecordImageException) {
+      // The workspace is already committed; failed orphan cleanup must not claim that save failed.
+    }
   }
 
   private suspend fun guard(accountId: String) {
@@ -65,7 +129,7 @@ internal class DebateWorkspaceStore(private val database: EncryptedRecordsDataba
       try {
         val keys = KeystorePrivateKeyStore(context)
         return DebateWorkspaceStore(database, EncryptedRecordStore(database, RecordDataKeyProtector(keys)),
-          RecordCacheAccount(context, keys, database), authorized)
+          RecordCacheAccount(context, keys, database), authorized, context.applicationContext, EncryptedRecordImageStore(context))
       } catch (error: Exception) { database.close(); throw error }
     }
   }

@@ -321,3 +321,33 @@ def test_ingress_serializer_rejects_records_larger_than_400_kb() -> None:
 
     with pytest.raises(ItemTooLarge, match="400 KB"):
         serialize_ingress_request(oversized)
+
+
+def test_accepted_ingress_scrubs_signed_image_url_and_preserves_replay_identity() -> None:
+    from shittim_chest.adapters.dynamodb.ingress import _assert_exact_identity
+    from shittim_chest.application.models import PendingDiscordImage
+
+    pending = PendingDiscordImage(
+        "12345678-1234-5678-1234-abcdefabcdef",
+        "123",
+        "image/png",
+        123,
+        "https://cdn.discordapp.com/attachments/101/123/private.png?hm=transient-signature",
+    )
+    queued = replace(request(), pending_attachments=(pending,))
+    active_item = serialize_ingress_request(queued)
+    assert "transient-signature" in str(active_item)
+    accepted = replace(
+        queued,
+        status=IngressStatus.ACCEPTED,
+        status_message_state=StatusMessageState.ACCEPTED,
+        accepted_debate_id=DebateId.new(),
+        accepted_attempt_id=AttemptId.new(),
+    )
+    accepted_item = serialize_ingress_request(accepted)
+    assert "transient-signature" not in str(accepted_item)
+    restored = deserialize_ingress_request(accepted_item)
+    assert restored.pending_attachments[0].url is None
+    _assert_exact_identity(queued, restored)
+    with pytest.raises(ValueError, match="source URL"):
+        replace(restored, status=IngressStatus.PENDING)

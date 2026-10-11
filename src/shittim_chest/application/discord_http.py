@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from shittim_chest.application.discord import PanelAction, PanelCustomId
+from shittim_chest.application.models import PendingDiscordImage
 from shittim_chest.application.scale_to_zero import IngressKind
 from shittim_chest.domain import AttemptId, DebateId
 
@@ -58,11 +59,14 @@ class DiscordHttpOperation:
     expected_attempt_id: AttemptId | None = None
     command_name: str | None = None
     question: str | None = field(default=None, repr=False)
+    pending_attachments: tuple[PendingDiscordImage, ...] = field(default=(), repr=False)
     custom_id: str | None = None
     source_message_id: str | None = None
     source_thread_id: str | None = None
 
     def __post_init__(self) -> None:
+        if any(image.url is None for image in self.pending_attachments):
+            raise ValueError("new image input requires its source URL")
         _require_snowflake(self.interaction_id, label="interaction ID")
         _require_text(self.operation_id, label="operation ID")
         for label, value in (
@@ -96,6 +100,12 @@ class DiscordHttpOperation:
         if self.source_thread_id is not None and self.source_thread_id != self.channel_id:
             raise ValueError("source thread must match the interaction channel")
 
+        if len(self.pending_attachments) > 3 or len(
+            {image.attachment_id for image in self.pending_attachments}
+        ) != len(self.pending_attachments):
+            raise ValueError("invalid image collection")
+        if self.kind is not IngressKind.NEW_DEBATE and self.pending_attachments:
+            raise ValueError("control operation cannot carry images")
         if self.kind is IngressKind.NEW_DEBATE:
             if self.operation_id != self.interaction_id:
                 raise ValueError("new debate operation must use its interaction ID")

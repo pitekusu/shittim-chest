@@ -15,7 +15,9 @@ from openai import AsyncOpenAI
 if TYPE_CHECKING:
     from mypy_boto3_dynamodb.client import DynamoDBClient
     from mypy_boto3_lambda.client import LambdaClient
+    from mypy_boto3_s3.client import S3Client
 
+from shittim_chest.adapters.assets.images import S3DebateImageStore
 from shittim_chest.adapters.aws import (
     LambdaStatusPublicationTrigger,
     SsmParameterReader,
@@ -23,6 +25,7 @@ from shittim_chest.adapters.aws import (
     create_startup_ssm_client,
     ecs_task_instance_id,
 )
+from shittim_chest.adapters.aws.clients import create_s3_client
 from shittim_chest.adapters.discord import (
     DiscordClientSupervisor,
     DiscordFarewellSender,
@@ -98,6 +101,7 @@ class ProductionRuntime:
     dynamodb_client: DynamoDBClient
     lambda_client: LambdaClient
     telemetry: ContentFreeTelemetry
+    image_client: S3Client | None = None
     operational_metrics: RuntimeMetricsReporter | None = None
     client_close_timeout_seconds: float = DEFAULT_CLIENT_CLOSE_TIMEOUT_SECONDS
     heartbeat: EventLoopHeartbeat = field(default_factory=EventLoopHeartbeat)
@@ -135,6 +139,7 @@ class ProductionRuntime:
                     self.openai_client.close(),
                     _close_sync_client(self.dynamodb_client.close),
                     _close_sync_client(self.lambda_client.close),
+                    *([_close_sync_client(self.image_client.close)] if self.image_client else []),
                     return_exceptions=True,
                 )
         except TimeoutError as error:
@@ -195,6 +200,14 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
     ids = Uuid7IdGenerator()
     telemetry = ContentFreeTelemetry(logger=_LOGGER, environment=config.environment)
     owner_id = ecs_task_instance_id()
+    image_client = (
+        create_s3_client(region_name=config.aws_region) if config.debate_media_bucket else None
+    )
+    image_store = (
+        S3DebateImageStore(image_client, media_bucket_name=config.debate_media_bucket)
+        if image_client is not None and config.debate_media_bucket is not None
+        else None
+    )
 
     dynamodb_client = create_dynamodb_client(region_name=config.aws_region)
     ingress_repository = DynamoDbIngressRepository(
@@ -278,6 +291,7 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
         outbox=outbox,
         clock=clock,
         claim_owner=owner_id,
+        image_store=image_store,
     )
     recovery = DiscordOutboxRecovery(
         outbox=outbox,
@@ -298,6 +312,8 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
         participant_display_names=participant_display_names,
         records_memorial_url=config.records_memorial_url,
         lease_owner=owner_id,
+        image_store=image_store,
+        image_outbox=outbox,
     )
     interactions = DiscordInteractionController(
         clients=clients,
@@ -349,6 +365,7 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
         dynamodb_client=dynamodb_client,
         lambda_client=lambda_client,
         telemetry=telemetry,
+        image_client=image_client,
         operational_metrics=RuntimeMetricsReporter(
             metrics=CloudWatchEmfMetrics(
                 logger=_EMF_LOGGER,

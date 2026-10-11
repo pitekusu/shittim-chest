@@ -46,6 +46,7 @@ from shittim_chest.adapters.openai.errors import (
     OpenAIRefusal,
     OpenAIUnavailable,
 )
+from shittim_chest.adapters.openai.image_inputs import IMAGE_INPUT_RULES, responses_image_input
 from shittim_chest.adapters.openai.limiter import OpenAIRequestLimiter
 from shittim_chest.adapters.openai.observability import (
     NullOpenAIUsageRecorder,
@@ -61,6 +62,7 @@ from shittim_chest.domain import (
     EvidenceSearchStatus,
     SearchRequirement,
 )
+from shittim_chest.domain.attachments import ImageInput
 
 
 class _EvidenceStage(StrEnum):
@@ -177,9 +179,11 @@ class OpenAIWebEvidenceService:
     system_prompt: str | None = field(default=None, repr=False)
     moderator_prompt: str | None = field(default=None, repr=False)
 
-    async def prepare_evidence(self, *, question: str) -> EvidenceBundle:
+    async def prepare_evidence(
+        self, *, question: str, images: tuple[ImageInput, ...] = ()
+    ) -> EvidenceBundle:
         try:
-            return await self._search(question)
+            return await self._search(question, images)
         except asyncio.CancelledError:
             raise
         except OpenAIAdapterError:
@@ -194,6 +198,7 @@ class OpenAIWebEvidenceService:
     async def _search(
         self,
         question: str,
+        images: tuple[ImageInput, ...] = (),
     ) -> EvidenceBundle:
         started = monotonic()
         operation = "evidence_search"
@@ -205,12 +210,16 @@ class OpenAIWebEvidenceService:
                     instructions=evidence_instructions(
                         system_prompt=self.system_prompt,
                         moderator_prompt=self.moderator_prompt,
-                    ),
-                    input=json.dumps(
-                        {"question": question},
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                        sort_keys=True,
+                    )
+                    + (IMAGE_INPUT_RULES if images else ""),
+                    input=responses_image_input(
+                        json.dumps(
+                            {"question": question},
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ),
+                        images,
                     ),
                     text_format=EvidenceDigestOutputV2,
                     include=["web_search_call.action.sources"],

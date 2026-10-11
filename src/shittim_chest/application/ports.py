@@ -20,6 +20,7 @@ from shittim_chest.application.models import (
     DeliveryAbandonReason,
     LeaseGrant,
     MetricEvent,
+    PendingDiscordImage,
     RetryDebateCommand,
 )
 from shittim_chest.application.scale_to_zero import (
@@ -53,6 +54,7 @@ from shittim_chest.domain import (
     Vote,
     VotingResult,
 )
+from shittim_chest.domain.attachments import DebateImage, ImageInput
 from shittim_chest.domain.composite_voting import ResolvedVote
 
 
@@ -676,10 +678,24 @@ class DiscordOutboxRepository(Protocol):
     ) -> tuple[OutboxOperation, ...]: ...
 
 
+class DebateImageStore(Protocol):
+    """Import and read immutable image objects without exposing provider SDKs."""
+
+    async def import_discord_attachment(self, pending: PendingDiscordImage) -> DebateImage: ...
+
+    async def load_vision_images(
+        self, images: tuple[DebateImage, ...]
+    ) -> tuple[ImageInput, ...]: ...
+
+    async def load_original(self, image: DebateImage) -> bytes: ...
+
+
 class EvidenceService(Protocol):
     """Prepare one immutable evidence bundle shared by all participants."""
 
-    async def prepare_evidence(self, *, question: str) -> EvidenceBundle: ...
+    async def prepare_evidence(
+        self, *, question: str, images: tuple[ImageInput, ...] = ()
+    ) -> EvidenceBundle: ...
 
 
 class CandidateOrderer(Protocol):
@@ -700,6 +716,7 @@ class OpenAIService(Protocol):
         self,
         *,
         question: str,
+        images: tuple[ImageInput, ...] = (),
         positions: tuple[InitialOpinion, ...],
         rotation: int,
         coordination: bool,
@@ -709,6 +726,7 @@ class OpenAIService(Protocol):
         self,
         *,
         question: str,
+        images: tuple[ImageInput, ...] = (),
         frame: PreferenceFrame,
         plan: CandidatePlan,
         peers: tuple[InitialOpinion, ...],
@@ -719,6 +737,7 @@ class OpenAIService(Protocol):
         self,
         *,
         question: str,
+        images: tuple[ImageInput, ...] = (),
         frame: PreferenceFrame,
         plan: CandidatePlan,
         peers: tuple[InitialOpinion, ...],
@@ -730,6 +749,7 @@ class OpenAIService(Protocol):
         self,
         *,
         question: str,
+        images: tuple[ImageInput, ...] = (),
         frame: PreferenceFrame,
         plan: CandidatePlan,
         opinions: tuple[InitialOpinion, ...],
@@ -742,6 +762,7 @@ class OpenAIService(Protocol):
         *,
         participant: ParticipantSlot,
         question: str,
+        images: tuple[ImageInput, ...] = (),
     ) -> AffectionQuestionEvaluation: ...
 
     async def form_preferences(
@@ -749,6 +770,7 @@ class OpenAIService(Protocol):
         *,
         participant: ParticipantSlot,
         question: str,
+        images: tuple[ImageInput, ...] = (),
     ) -> PreferenceFrame: ...
 
     async def select_candidates(
@@ -756,6 +778,7 @@ class OpenAIService(Protocol):
         *,
         participant: ParticipantSlot,
         question: str,
+        images: tuple[ImageInput, ...] = (),
         evidence: EvidenceBundle,
         preference_frame: PreferenceFrame,
     ) -> CandidatePlan: ...
@@ -765,6 +788,7 @@ class OpenAIService(Protocol):
         *,
         participant: ParticipantSlot,
         question: str,
+        images: tuple[ImageInput, ...] = (),
         evidence: EvidenceBundle,
         affection_score: int,
         preference_frame: PreferenceFrame | None = None,
@@ -776,6 +800,7 @@ class OpenAIService(Protocol):
         *,
         participant: ParticipantSlot,
         question: str,
+        images: tuple[ImageInput, ...] = (),
         evidence: EvidenceBundle,
         initial_opinions: tuple[InitialOpinion, ...],
         affection_score: int,
@@ -788,6 +813,7 @@ class OpenAIService(Protocol):
         *,
         voter: ParticipantSlot,
         question: str,
+        images: tuple[ImageInput, ...] = (),
         evidence: EvidenceBundle,
         candidates: tuple[FinalProposal, ...],
         preference_frame: PreferenceFrame | None = None,
@@ -800,6 +826,7 @@ class OpenAIService(Protocol):
         self,
         *,
         question: str,
+        images: tuple[ImageInput, ...] = (),
         evidence: EvidenceBundle,
         proposals: tuple[FinalProposal, ...],
         voting_result: VotingResult,
@@ -862,6 +889,14 @@ class DebateRepository(Protocol):
         *,
         expected: DebateSnapshot,
         updated: DebateSnapshot,
+    ) -> DebateSnapshot: ...
+
+    async def record_image_receipts(
+        self,
+        *,
+        expected: DebateSnapshot,
+        receipts: tuple[tuple[str, str], ...],
+        at: datetime,
     ) -> DebateSnapshot: ...
 
     async def finalize_phase_delivery(
