@@ -36,6 +36,7 @@ from shittim_records.admin_adapters import DynamoPromptAuditStore
 from shittim_records.archive import project_completed_debate
 from shittim_records.auth import AuthFailure, OAuthState, SessionRecord
 from shittim_records.auth_adapters import DynamoAuthStore
+from shittim_records.contracts import RecordSearchRequest
 from shittim_records.cost_adapters import DynamoCostLedgerStore
 from shittim_records.costs import ProviderDailyCost, ProviderDailyRate
 from shittim_records.inspector_translation_adapters import DynamoInspectorTranslationStore
@@ -63,6 +64,104 @@ from shittim_records.ranking_adapters import DynamoRankingSnapshotStore, DynamoR
 from shittim_records.rankings import RankingService
 from shittim_records.read_adapters import DynamoRecordsReader
 from shittim_records.read_api import CursorCodec, RecordsReadService
+
+
+def test_search_and_requester_candidates_roundtrip_real_gsi_pagination(
+    dynamodb_client: DynamoDBClient,
+    table_names: tuple[str, str, str],
+) -> None:
+    session_table, archive_table, statistics_table = table_names
+    repository = ArchiveRepository(dynamodb_client, archive_table)
+    record_ids: list[str] = []
+    requester_keys: dict[str, str] = {}
+    for number in range(7):
+        snapshot = completed_snapshot()
+        assert snapshot.terminal_delivery is not None
+        owner = "other" if number == 6 else "teacher"
+        completed_at = NOW + timedelta(seconds=number)
+        projection = project_completed_debate(
+            replace(
+                snapshot,
+                state=replace(snapshot.state, updated_at=completed_at),
+                question="prefix " * 30 + "searchable ending" if number != 5 else "unrelated",
+                requester_id=owner,
+                requester_display_name=f"Stored {owner}",
+                terminal_delivery=replace(snapshot.terminal_delivery, completed_at=completed_at),
+            ),
+            identity_hmac_key=b"records-test-key-that-is-longer-than-32-bytes",
+            presentation=presentation(),
+            projected_at=completed_at,
+        )
+        assert repository.put_projection(projection)
+        record_ids.append(projection.record_id)
+        meta = next(item for item in projection.items if item["SK"] == "META")
+        requester_keys[owner] = cast(str, meta["requester_key"])
+    for owner, key in requester_keys.items():
+        dynamodb_client.put_item(
+            TableName=session_table,
+            Item=marshal_item(
+                {
+                    "PK": "PROFILE#REQUESTER",
+                    "SK": key,
+                    "schema_version": 1,
+                    "record_type": "requester_profile",
+                    "display_name": "Renamed teacher" if owner == "teacher" else "Other requester",
+                    "avatar_asset_key": f"requesters/{owner}.webp",
+                    "updated_at": NOW.isoformat(),
+                }
+            ),
+        )
+    reader = DynamoRecordsReader(
+        dynamodb_client,
+        cast(Any, _NoopS3()),
+        archive_table_name=archive_table,
+        statistics_table_name=statistics_table,
+        session_table_name=session_table,
+        media_bucket_name="media",
+    )
+    for _attempt in range(20):
+        indexed = reader.list_meta(
+            limit=50, sort="newest", winner="participant-b", exclusive_start_key=None
+        )
+        all_records = reader.list_meta(
+            limit=50, sort="newest", winner=None, exclusive_start_key=None
+        )
+        if len(indexed.items) == 7 and len(all_records.items) == 7:
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("DynamoDB Local GSI did not expose every search record")
+    records = RecordsReadService(reader=reader, cursor_codec=CursorCodec(b"s" * 32))
+    query = RecordSearchRequest(
+        search="SEARCHABLE ENDING", requester="Renamed teacher", winner="participant-b", limit=2
+    )
+    first = records.search_records(query=query, now=NOW)
+    assert [item.record_id for item in first.items] == [record_ids[4], record_ids[3]]
+    assert first.next_cursor is not None
+    second = records.search_records(
+        query=query.model_copy(update={"cursor": first.next_cursor}), now=NOW
+    )
+    assert [item.record_id for item in second.items] == [record_ids[2], record_ids[1]]
+    assert second.next_cursor is not None
+    third = records.search_records(
+        query=query.model_copy(update={"cursor": second.next_cursor}), now=NOW
+    )
+    assert [item.record_id for item in third.items] == [record_ids[0]]
+    assert third.next_cursor is None
+    assert all("searchable ending" not in item.question_preview for item in first.items)
+    requesters = records.list_requesters(cursor=None, now=NOW)
+    assert [item.display_name for item in requesters.items] == [
+        "Other requester",
+        "Renamed teacher",
+    ]
+    assert all(item.avatar.kind == "image" for item in requesters.items)
+    assert requesters.next_cursor is None
+    assert (
+        records.search_records(
+            query=query.model_copy(update={"winner": "participant-a"}), now=NOW
+        ).items
+        == ()
+    )
 
 
 @pytest.mark.parametrize("reasons_recorded", (False, True))

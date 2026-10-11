@@ -20,7 +20,10 @@ const ROUTES = {
   },
   RecordsHome: {
     facade: "/src/routes/RecordsHome.tsx",
-    ownedModules: ["/src/generated/record-list-response-validator.mjs"],
+    ownedModules: [
+      "/src/generated/record-list-response-validator.mjs",
+      "/src/generated/record-requesters-response-validator.mjs",
+    ],
   },
   RecordDetail: {
     facade: "/src/routes/RecordDetail.tsx",

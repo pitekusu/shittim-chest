@@ -510,6 +510,57 @@ def build_openapi() -> dict[str, Any]:
                     },
                 }
             },
+            "/api/v1/records/search": {
+                "post": {
+                    "operationId": "searchRecords",
+                    "security": [{"sessionCookie": []}],
+                    "parameters": [
+                        _parameter(
+                            "Origin",
+                            "header",
+                            {"type": "string", "format": "uri"},
+                            required=True,
+                        ),
+                        _parameter(
+                            "X-CSRF-Token",
+                            "header",
+                            {"type": "string", "minLength": 1},
+                            required=True,
+                        ),
+                    ],
+                    "requestBody": _request_body("RecordSearchRequest"),
+                    "description": (
+                        "Read-only full-question and winning-participant-name substring search. "
+                        "Requester and winner filters are combined with the search condition. "
+                        "Search criteria stay in the request body. An empty items array with a "
+                        "nextCursor means the search must continue; private, no-store."
+                    ),
+                    "responses": {
+                        "200": _response("RecordListResponse", "Matching completed debate records"),
+                        **error_responses,
+                    },
+                }
+            },
+            "/api/v1/records/requesters": {
+                "get": {
+                    "operationId": "listRecordRequesters",
+                    "security": [{"sessionCookie": []}],
+                    "parameters": [
+                        _parameter(
+                            "cursor", "query", {"type": "string", "minLength": 1, "maxLength": 4096}
+                        ),
+                    ],
+                    "description": (
+                        "Requester names and avatars across the completed archive, independent "
+                        "of loaded cards and search criteria; private, no-store. "
+                        "Merge equal display names across pages until nextCursor is null."
+                    ),
+                    "responses": {
+                        "200": _response("RecordRequestersResponse", "Completed-record requesters"),
+                        **error_responses,
+                    },
+                }
+            },
             "/api/v1/records/sync-index": {
                 "get": {
                     "operationId": "getRecordSyncIndex",

@@ -5,7 +5,7 @@ import { getCosts } from "./costs";
 import { getMomotalkRoom, getMomotalkRooms, getMomotalkWeeks } from "./momotalk";
 import { getRankings } from "./rankings";
 import { getRecord } from "./recordDetail";
-import { getRecords } from "./recordList";
+import { getRecordRequesters, getRecords, searchRecords } from "./recordList";
 import { getSession, logout } from "./session";
 
 afterEach(() => {
@@ -24,6 +24,8 @@ describe("read cancellation", () => {
     const reads = [
       getSession(controller.signal),
       getRecords({ sort: "newest" }, controller.signal),
+      searchRecords({ search: "質問", sort: "newest" }, "csrf-token", controller.signal),
+      getRecordRequesters(undefined, controller.signal),
       getRecord("r".repeat(43), controller.signal),
       getRankings(controller.signal),
       getCosts("week", controller.signal),

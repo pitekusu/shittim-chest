@@ -232,7 +232,7 @@ export function mockApi(
   let currentSession = session;
   vi.stubGlobal(
     "fetch",
-    vi.fn((input: RequestInfo | URL) => {
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const path =
         typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       requests.push(path);
@@ -248,6 +248,32 @@ export function mockApi(
           csrfToken: null,
         };
         return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      if (path.startsWith("/api/v1/records/requesters")) {
+        return Promise.resolve(
+          response({
+            schemaVersion: 1,
+            items: [listResponse().items[0]!.requester],
+            nextCursor: null,
+          }),
+        );
+      }
+      if (path === "/api/v1/records/search") {
+        const criteria = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
+          search: string;
+          requester?: string;
+        };
+        const item = listResponse().items[0]!;
+        const winnerName =
+          item.participants.find((participant) => participant.slot === item.result.winner)
+            ?.displayName ?? "";
+        const matches =
+          (!criteria.search ||
+            [recordDetail().question, winnerName].some((value) =>
+              value.toLocaleLowerCase("ja-JP").includes(criteria.search.toLocaleLowerCase("ja-JP")),
+            )) &&
+          (!criteria.requester || criteria.requester === item.requester.displayName);
+        return Promise.resolve(response({ ...listResponse(), items: matches ? [item] : [] }));
       }
       if (path.startsWith("/api/v1/records?")) return Promise.resolve(response(listResponse()));
       if (path === `/api/v1/records/${RECORD_ID}?contract=affection-reasons-v1`) {

@@ -104,7 +104,7 @@ function AuthenticatedRoutes({
         <RouteChunkBoundary key={location.pathname}>
           <Suspense fallback={<RouteLoadingFallback />}>
             <Routes>
-              <Route path="/" element={<RecordsHome />} />
+              <Route path="/" element={<RecordsHome csrfToken={session.csrfToken} />} />
               <Route path="/records/:recordId" element={<RecordDetail />} />
               <Route path="/insights" element={<RankingsPage />} />
               <Route path="/momotalk" element={<MomotalkPage />} />

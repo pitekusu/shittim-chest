@@ -425,7 +425,7 @@ describe("App shell", () => {
     if (!(client instanceof QueryClient)) throw new Error("App query client was not created");
     client.setQueryData(["costs", "week"], { fixture: "private costs" });
     client.setQueryData(["admin", "prompts"], { fixture: "private configuration" });
-    expect(client.getQueryCache().findAll({ queryKey: ["records"] })).toHaveLength(1);
+    expect(client.getQueryCache().findAll({ queryKey: ["records"] })).toHaveLength(2);
     const search = screen.getByRole("searchbox");
     fireEvent.change(search, { target: { value: "local-only query" } });
     vi.spyOn(Date, "now").mockReturnValue(Date.now() + 31_000);

@@ -6,8 +6,10 @@ import base64
 import hashlib
 import hmac
 import json
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
+from time import monotonic
 from typing import Any, Literal, Protocol, cast
 
 from pydantic import AwareDatetime, TypeAdapter, ValidationError
@@ -30,8 +32,11 @@ from shittim_records.contracts import (
     RecordDetailResponse,
     RecordListItem,
     RecordListResponse,
+    RecordRequestersResponse,
+    RecordSearchRequest,
     RecordSyncIndexResponse,
     RecordSyncReference,
+    RequesterSummary,
 )
 from shittim_records.costs import (
     CostDataInvalid,
@@ -43,6 +48,9 @@ from shittim_records.ogp import RecordPreview
 
 CURSOR_TTL = timedelta(hours=1)
 RECORD_ID_LENGTH = 43
+SEARCH_MAX_EVALUATED = 250
+SEARCH_MAX_QUERY_PAGES = 5
+SEARCH_WORK_SECONDS = 5.0
 PARTICIPANT_SLOTS: tuple[ParticipantSlot, ...] = (
     "participant-a",
     "participant-b",
@@ -220,6 +228,81 @@ class CursorCodec:
             raise ReadFailure("CURSOR_INVALID", 400) from None
         return expected_index, key
 
+    def encode_filtered(
+        self,
+        *,
+        kind: Literal["search", "requesters"],
+        criteria: dict[str, Any],
+        index_name: str,
+        last_evaluated_key: DynamoItem,
+        now: datetime,
+    ) -> str:
+        try:
+            key = _validate_cursor_key(last_evaluated_key, index_name=index_name)
+        except ValueError:
+            raise ReadFailure("ARCHIVE_UNAVAILABLE", 503) from None
+        payload = {
+            "version": 1,
+            "kind": kind,
+            "index": index_name,
+            "criteria": self._criteria_fingerprint(criteria),
+            "expires_at": int((_utc(now) + CURSOR_TTL).timestamp()),
+            "last_evaluated_key": key,
+        }
+        encoded = _base64url(_canonical(payload))
+        signature = _base64url(
+            hmac.new(
+                self._key, f"records:filtered-cursor:{encoded}".encode(), hashlib.sha256
+            ).digest()
+        )
+        return f"{encoded}.{signature}"
+
+    def decode_filtered(
+        self,
+        *,
+        kind: Literal["search", "requesters"],
+        criteria: dict[str, Any],
+        index_name: str,
+        cursor: str,
+        now: datetime,
+    ) -> DynamoItem:
+        if not cursor or len(cursor) > 4096:
+            raise ReadFailure("CURSOR_INVALID", 400)
+        try:
+            encoded, signature = cursor.split(".", 1)
+            expected = _base64url(
+                hmac.new(
+                    self._key, f"records:filtered-cursor:{encoded}".encode(), hashlib.sha256
+                ).digest()
+            )
+            if not hmac.compare_digest(signature, expected):
+                raise ValueError
+            payload = json.loads(_decode_base64url(encoded))
+            if (
+                not isinstance(payload, dict)
+                or set(payload)
+                != {"version", "kind", "index", "criteria", "expires_at", "last_evaluated_key"}
+                or payload["version"] != 1
+                or payload["kind"] != kind
+                or payload["index"] != index_name
+                or payload["criteria"] != self._criteria_fingerprint(criteria)
+                or isinstance(payload["expires_at"], bool)
+                or not isinstance(payload["expires_at"], int)
+                or payload["expires_at"] <= int(_utc(now).timestamp())
+            ):
+                raise ValueError
+            return _validate_cursor_key(payload["last_evaluated_key"], index_name=index_name)
+        except UnicodeDecodeError, ValueError, json.JSONDecodeError:
+            raise ReadFailure("CURSOR_INVALID", 400) from None
+
+    def _criteria_fingerprint(self, criteria: dict[str, Any]) -> str:
+        # A keyed fingerprint prevents readable cursors exposing names or low-entropy terms.
+        return _base64url(
+            hmac.new(
+                self._key, b"records:search-criteria:" + _canonical(criteria), hashlib.sha256
+            ).digest()
+        )
+
     def encode_affection(
         self,
         *,
@@ -304,11 +387,17 @@ class RecordsReadService:
     """Map immutable Archive v1 items to the public Records API."""
 
     def __init__(
-        self, *, reader: RecordsReader, cursor_codec: CursorCodec, public_origin: str | None = None
+        self,
+        *,
+        reader: RecordsReader,
+        cursor_codec: CursorCodec,
+        public_origin: str | None = None,
+        search_clock: Callable[[], float] = monotonic,
     ) -> None:
         self._reader = reader
         self._cursor_codec = cursor_codec
         self._public_origin = public_origin
+        self._search_clock = search_clock
 
     def list_records(self, *, query: ListQuery, now: datetime) -> RecordListResponse:
         query = validate_list_query(query)
@@ -348,6 +437,141 @@ class RecordsReadService:
                 now=now,
             )
         return RecordListResponse(schema_version=1, items=items, next_cursor=next_cursor)
+
+    def search_records(self, *, query: RecordSearchRequest, now: datetime) -> RecordListResponse:
+        query = query.model_copy(update={"search": query.search.strip().lower()})
+        criteria = query.model_dump(exclude={"cursor"})
+        index_name = "gsi2" if query.winner else "gsi1"
+        start_key = (
+            self._cursor_codec.decode_filtered(
+                kind="search",
+                criteria=criteria,
+                index_name=index_name,
+                cursor=query.cursor,
+                now=now,
+            )
+            if query.cursor
+            else None
+        )
+        began = self._search_clock()
+        items: list[RecordListItem] = []
+        profiles: dict[str, RequesterProfile] = {}
+        loaded_keys: set[str] = set()
+        evaluated = 0
+        batch_limit = query.limit
+        for _page_index in range(SEARCH_MAX_QUERY_PAGES):
+            page = self._reader.list_meta(
+                limit=min(batch_limit, SEARCH_MAX_EVALUATED - evaluated),
+                sort=query.sort,
+                winner=query.winner,
+                exclusive_start_key=start_key,
+            )
+            if page.index_name != index_name:
+                raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+            candidates: list[DynamoItem] = []
+            for item in page.items:
+                _validate_list_projection(item, index_name=index_name, winner=query.winner)
+                participants = item.get("participants")
+                winner = _required_text(item, "winner")
+                if not isinstance(participants, dict) or not isinstance(
+                    participants.get(winner), dict
+                ):
+                    raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+                winner_name = _required_text(cast(DynamoItem, participants[winner]), "display_name")
+                question = " ".join(_required_text(item, "question").split()).lower()
+                if not query.search or any(
+                    query.search in text for text in (question, winner_name.lower())
+                ):
+                    candidates.append(item)
+            missing_keys = tuple(
+                dict.fromkeys(
+                    _required_text(item, "requester_key")
+                    for item in candidates
+                    if _required_text(item, "requester_key") not in loaded_keys
+                )
+            )
+            profiles.update(self._reader.load_profiles(requester_keys=missing_keys))
+            loaded_keys.update(missing_keys)
+            matching_ids = {_required_text(item, "record_id") for item in candidates}
+            for position, item in enumerate(page.items):
+                evaluated += 1
+                if _required_text(item, "record_id") in matching_ids:
+                    profile = profiles.get(_required_text(item, "requester_key"))
+                    name = (
+                        profile.display_name
+                        if profile
+                        else _required_text(item, "requester_display_name")
+                    )
+                    if query.requester is None or query.requester == name:
+                        items.append(self._list_item(item, profiles))
+                if len(items) == query.limit:
+                    # Resume at the consumed item, not the fetched batch's end: its tail is unread.
+                    start_key = (
+                        _meta_cursor_key(item, index_name=index_name)
+                        if position < len(page.items) - 1
+                        else page.last_evaluated_key
+                    )
+                    break
+            else:
+                start_key = page.last_evaluated_key
+            if (
+                start_key is None
+                or len(items) == query.limit
+                or evaluated >= SEARCH_MAX_EVALUATED
+                or self._search_clock() - began >= SEARCH_WORK_SECONDS
+            ):
+                break
+            batch_limit = min(50, batch_limit * 2)
+        return RecordListResponse(
+            schema_version=1,
+            items=tuple(items),
+            next_cursor=self._cursor_codec.encode_filtered(
+                kind="search",
+                criteria=criteria,
+                index_name=index_name,
+                last_evaluated_key=start_key,
+                now=now,
+            )
+            if start_key is not None
+            else None,
+        )
+
+    def list_requesters(self, *, cursor: str | None, now: datetime) -> RecordRequestersResponse:
+        start_key = (
+            self._cursor_codec.decode_filtered(
+                kind="requesters", criteria={}, index_name="gsi1", cursor=cursor, now=now
+            )
+            if cursor
+            else None
+        )
+        page = self._reader.list_meta(
+            limit=250, sort="newest", winner=None, exclusive_start_key=start_key
+        )
+        if page.index_name != "gsi1":
+            raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+        for item in page.items:
+            _validate_list_projection(item, index_name="gsi1", winner=None)
+        keys = tuple(dict.fromkeys(_required_text(item, "requester_key") for item in page.items))
+        profiles = self._reader.load_profiles(requester_keys=keys)
+        requesters: dict[str, RequesterSummary] = {}
+        for item in page.items:
+            requester = RequesterSummary.model_validate(
+                self._requester(item, profiles.get(_required_text(item, "requester_key")))
+            )
+            requesters.setdefault(requester.display_name, requester)
+        return RecordRequestersResponse(
+            schema_version=1,
+            items=tuple(requesters.values()),
+            next_cursor=self._cursor_codec.encode_filtered(
+                kind="requesters",
+                criteria={},
+                index_name="gsi1",
+                last_evaluated_key=page.last_evaluated_key,
+                now=now,
+            )
+            if page.last_evaluated_key is not None
+            else None,
+        )
 
     def get_sync_index(self, *, cursor: str | None, now: datetime) -> RecordSyncIndexResponse:
         # Enumerate the complete index, not "completed_at > last_sync": late Archive
@@ -970,6 +1194,10 @@ def _validate_cursor_key(value: Any, *, index_name: str) -> DynamoItem:
     ):
         raise ValueError("cursor key is invalid")
     return dict(value)
+
+
+def _meta_cursor_key(item: DynamoItem, *, index_name: str) -> DynamoItem:
+    return {field: item[field] for field in ("PK", "SK", f"{index_name}pk", f"{index_name}sk")}
 
 
 def _validate_meta_item(item: DynamoItem) -> None:

@@ -1,9 +1,9 @@
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { RecordsApiError } from "../api/http";
-import { getRecords } from "../api/recordList";
-import type { ParticipantSlot } from "../api/types";
+import { getRecordRequesters, getRecords, searchRecords } from "../api/recordList";
+import type { ParticipantSlot, RequesterSummary } from "../api/types";
 import { AvatarSelect, type AvatarSelectOption } from "../components/AvatarSelect";
 import { DebateCard } from "../components/DebateCard";
 import { ErrorPanel } from "../components/ErrorPanel";
@@ -14,32 +14,96 @@ import commonStyles from "../styles/common.module.css";
 import styles from "../styles/home.module.css";
 import routeStyles from "../styles/routeMotion.module.css";
 
-export default function RecordsHome(): React.JSX.Element {
-  const { filters, updateFilters, rememberRecord } = useRecordsArchive();
+export default function RecordsHome({
+  csrfToken,
+}: {
+  readonly csrfToken: string;
+}): React.JSX.Element {
+  const client = useQueryClient();
+  const { filters, requestedCount, showMore, updateFilters, rememberRecord } = useRecordsArchive();
   const { winner, sort, search, requester } = filters;
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const observedPageCountRef = useRef<number | undefined>(undefined);
   const [appendMotionIds, setAppendMotionIds] = useState<ReadonlySet<string>>(() => new Set());
-  const localFiltersActive = search.trim().length > 0 || requester !== "";
-  const localFiltersActiveRef = useRef(localFiltersActive);
-  localFiltersActiveRef.current = localFiltersActive;
-
+  const [composing, setComposing] = useState(false);
+  const normalizedSearch = search.trim();
+  const [debouncedSearch, setDebouncedSearch] = useState(normalizedSearch);
+  useEffect(() => {
+    if (composing) return;
+    if (!normalizedSearch) {
+      setDebouncedSearch("");
+      return;
+    }
+    const timeout = window.setTimeout(() => setDebouncedSearch(normalizedSearch), 300);
+    return () => window.clearTimeout(timeout);
+  }, [composing, normalizedSearch]);
+  const criteriaReady = !composing && normalizedSearch === debouncedSearch;
+  const searchActive = debouncedSearch !== "" || requester !== "";
+  const queryKey = useMemo(
+    () => ["records", searchActive ? "search" : "list", winner, sort, debouncedSearch, requester],
+    [searchActive, winner, sort, debouncedSearch, requester],
+  );
   const records = useInfiniteQuery({
-    queryKey: ["records", winner, sort],
+    queryKey,
+    enabled: criteriaReady,
     initialPageParam: undefined as string | undefined,
-    queryFn: ({ pageParam, signal }) =>
-      getRecords(
-        {
-          cursor: pageParam,
-          sort,
-          winner: winner || undefined,
-        },
-        signal,
-      ),
+    queryFn: ({ pageParam, signal }) => {
+      const filters = { cursor: pageParam, sort, winner: winner || undefined };
+      return searchActive
+        ? searchRecords(
+            { ...filters, search: debouncedSearch, requester: requester || undefined },
+            csrfToken,
+            signal,
+          )
+        : getRecords(filters, signal);
+    },
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+  });
+  const candidates = useInfiniteQuery({
+    queryKey: ["records", "requesters"],
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam, signal }) => getRecordRequesters(pageParam, signal),
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
   });
   const { fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError } = records;
   useAuthenticationRecovery(records.error);
+  useAuthenticationRecovery(candidates.error);
+
+  useEffect(() => {
+    if (!criteriaReady) void client.cancelQueries({ queryKey, exact: true });
+  }, [client, criteriaReady, queryKey]);
+
+  useEffect(() => {
+    if (candidates.hasNextPage && !candidates.isFetching && !candidates.isError) {
+      void candidates.fetchNextPage();
+    }
+  }, [candidates]);
+
+  useEffect(() => {
+    if (
+      records.error instanceof RecordsApiError &&
+      records.error.code === "CURSOR_INVALID" &&
+      records.data !== undefined &&
+      criteriaReady
+    ) {
+      void client.resetQueries({ queryKey, exact: true });
+    }
+    if (
+      candidates.error instanceof RecordsApiError &&
+      candidates.error.code === "CURSOR_INVALID" &&
+      candidates.data !== undefined
+    ) {
+      void client.resetQueries({ queryKey: ["records", "requesters"], exact: true });
+    }
+  }, [
+    candidates.data,
+    candidates.error,
+    client,
+    criteriaReady,
+    queryKey,
+    records.data,
+    records.error,
+  ]);
 
   const loadedRecords = useMemo(
     () => records.data?.pages.flatMap((page) => page.items) ?? [],
@@ -49,7 +113,7 @@ export default function RecordsHome(): React.JSX.Element {
   useLayoutEffect(() => {
     observedPageCountRef.current = undefined;
     setAppendMotionIds(new Set());
-  }, [sort, winner]);
+  }, [sort, winner, debouncedSearch, requester]);
 
   useLayoutEffect(() => {
     const pages = records.data?.pages;
@@ -83,21 +147,31 @@ export default function RecordsHome(): React.JSX.Element {
   }, []);
 
   const requesterOptions = useMemo<readonly AvatarSelectOption<string>[]>(() => {
-    const requesters = new Map(
-      loadedRecords.map((record) => [record.requester.displayName, record.requester] as const),
-    );
+    const requesters = new Map<string, RequesterSummary>();
+    for (const page of candidates.data?.pages ?? []) {
+      for (const item of page.items) {
+        if (!requesters.has(item.displayName)) requesters.set(item.displayName, item);
+      }
+    }
+    // A chosen name remains available while candidates refresh or return no records.
+    if (requester && !requesters.has(requester)) {
+      requesters.set(requester, {
+        displayName: requester,
+        avatar: {
+          kind: "placeholder",
+          url: null,
+          alt: `${requester}のアバター`,
+          fallbackVariant: "cyan",
+        },
+      });
+    }
     return [
       { value: "", label: "すべて", avatar: null },
       ...Array.from(requesters.values())
         .sort((a, b) => a.displayName.localeCompare(b.displayName, "ja-JP"))
         .map((item) => ({ value: item.displayName, label: item.displayName, avatar: item.avatar })),
     ];
-  }, [loadedRecords]);
-
-  const requesterNames = useMemo(
-    () => requesterOptions.filter((option) => option.value).map((option) => option.value),
-    [requesterOptions],
-  );
+  }, [candidates.data, requester]);
 
   const winnerOptions = useMemo<readonly AvatarSelectOption<ParticipantSlot | "">[]>(() => {
     const participants = new Map(
@@ -129,25 +203,20 @@ export default function RecordsHome(): React.JSX.Element {
     ];
   }, [loadedRecords]);
 
-  useEffect(() => {
-    if (requester && !records.isPending && !requesterNames.includes(requester)) {
-      updateFilters({ requester: "" });
-    }
-  }, [records.isPending, requester, requesterNames, updateFilters]);
+  const visibleRecords = useMemo(
+    () => (criteriaReady ? loadedRecords.slice(0, requestedCount) : []),
+    [criteriaReady, loadedRecords, requestedCount],
+  );
+  const needsMore =
+    (searchActive || requestedCount > 12) && loadedRecords.length < requestedCount && hasNextPage;
+  const searching = !criteriaReady || records.isPending || (needsMore && !records.isError);
+  const canShowMore = criteriaReady && (hasNextPage || loadedRecords.length > requestedCount);
 
-  const visibleRecords = useMemo(() => {
-    const needle = search.trim().toLocaleLowerCase("ja-JP");
-    return loadedRecords.filter((record) => {
-      if (requester && record.requester.displayName !== requester) return false;
-      if (!needle) return true;
-      const winnerName = record.participants.find(
-        (participant) => participant.slot === record.result.winner,
-      )?.displayName;
-      return [record.questionPreview, winnerName]
-        .filter(Boolean)
-        .some((value) => value?.toLocaleLowerCase("ja-JP").includes(needle));
-    });
-  }, [loadedRecords, requester, search]);
+  useEffect(() => {
+    if (criteriaReady && needsMore && !records.isFetching && !records.isError) {
+      void fetchNextPage();
+    }
+  }, [criteriaReady, fetchNextPage, needsMore, records.isError, records.isFetching]);
 
   useLayoutEffect(() => {
     const visibleRecordIds = new Set(visibleRecords.map((record) => record.recordId));
@@ -161,25 +230,24 @@ export default function RecordsHome(): React.JSX.Element {
     const sentinel = loadMoreRef.current;
     if (
       !sentinel ||
-      !hasNextPage ||
-      isFetchingNextPage ||
-      isFetchNextPageError ||
-      localFiltersActive ||
+      !canShowMore ||
+      searching ||
+      records.isFetching ||
+      records.isError ||
       !("IntersectionObserver" in window)
-    ) {
+    )
       return;
-    }
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (!entry?.isIntersecting || localFiltersActiveRef.current) return;
+        if (!entry?.isIntersecting) return;
         observer.unobserve(sentinel);
-        void fetchNextPage();
+        showMore();
       },
       { rootMargin: "320px 0px", threshold: 0 },
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [fetchNextPage, hasNextPage, isFetchingNextPage, isFetchNextPageError, localFiltersActive]);
+  }, [canShowMore, records.isError, records.isFetching, requestedCount, searching, showMore]);
 
   const error = records.error instanceof RecordsApiError ? records.error : undefined;
 
@@ -187,7 +255,7 @@ export default function RecordsHome(): React.JSX.Element {
     <div className={styles.archivePage}>
       <header
         className={`${commonStyles.pageHeader} ${routeStyles.routeMotionItem}`}
-        data-route-motion-ready={records.isPending ? undefined : ""}
+        data-route-motion-ready={searching ? undefined : ""}
         style={routeMotionDelay(0)}
       >
         <p className={commonStyles.eyebrow} lang="en">
@@ -202,9 +270,7 @@ export default function RecordsHome(): React.JSX.Element {
       </header>
       <section
         className={`${styles.filters} ${routeStyles.routeMotionItem}`}
-        data-route-motion-terminal={
-          !records.isPending && visibleRecords.length === 0 ? "" : undefined
-        }
+        data-route-motion-terminal={!searching && visibleRecords.length === 0 ? "" : undefined}
         style={routeMotionDelay(40)}
         aria-label="記録の絞り込み"
       >
@@ -214,6 +280,12 @@ export default function RecordsHome(): React.JSX.Element {
             type="search"
             value={search}
             onChange={(event) => updateFilters({ search: event.target.value })}
+            onCompositionStart={() => setComposing(true)}
+            onCompositionEnd={(event) => {
+              updateFilters({ search: event.currentTarget.value });
+              setComposing(false);
+            }}
+            maxLength={1000}
             placeholder="質問文などを入力"
             aria-describedby="archive-search-scope"
           />
@@ -258,17 +330,34 @@ export default function RecordsHome(): React.JSX.Element {
           </div>
         </fieldset>
       </section>
+      {candidates.isFetching && (
+        <p className={styles.loadingLine} aria-live="polite">
+          依頼者の候補を読み込んでいます。
+        </p>
+      )}
+      {candidates.isError && (
+        <ErrorPanel
+          title="依頼者の候補を読み込めませんでした"
+          message="通信状態を確認してください。"
+          onRetry={() =>
+            void (candidates.isFetchNextPageError
+              ? candidates.fetchNextPage()
+              : candidates.refetch())
+          }
+        />
+      )}
       <div className={styles.archiveResults}>
         <p id="archive-search-scope" className={styles.searchScope} aria-live="polite">
-          読み込み済み <strong>{loadedRecords.length}</strong> 件から検索
-          {localFiltersActive && (
+          {normalizedSearch || requester ? "全記録の質問文・勝者名を検索" : "完了した議論を表示"}
+          {criteriaReady && visibleRecords.length > 0 && (
             <>
               {" "}
-              · <strong>{visibleRecords.length}</strong> 件が一致
+              · <strong>{visibleRecords.length}</strong> 件を表示
             </>
           )}
+          {searching ? " · 検索中" : !hasNextPage && !records.isError ? " · すべて確認済み" : ""}
         </p>
-        {(localFiltersActive || winner !== "") && (
+        {(normalizedSearch !== "" || requester !== "" || winner !== "") && (
           <button
             className={styles.clearFilters}
             type="button"
@@ -278,34 +367,30 @@ export default function RecordsHome(): React.JSX.Element {
           </button>
         )}
       </div>
-      {records.isPending && (
+      {searching && (
         <p className={styles.loadingLine} aria-live="polite">
-          記録を読み込んでいます。
+          {normalizedSearch || requester ? "全記録から探しています。" : "記録を読み込んでいます。"}
         </p>
       )}
-      {records.isError && (
+      {criteriaReady && records.isError && (
         <ErrorPanel
           title="記録を読み込めませんでした"
           message={error?.message ?? "通信状態を確認してください。"}
           requestId={error?.requestId}
-          onRetry={() => void records.refetch()}
+          onRetry={() => void (isFetchNextPageError ? fetchNextPage() : records.refetch())}
         />
       )}
-      {!records.isPending && !records.isError && visibleRecords.length === 0 && (
+      {!searching && !records.isError && !hasNextPage && visibleRecords.length === 0 && (
         <section className={commonStyles.emptyState}>
           <span aria-hidden="true">◇</span>
           <h2>該当する記録はありません</h2>
-          <p>
-            {records.hasNextPage
-              ? "読み込み済みの記録に一致しません。検索対象を追加するか、条件を変更してください。"
-              : "条件を変更して、もう一度探してみてください。"}
-          </p>
+          <p>条件を変更して、もう一度探してみてください。</p>
         </section>
       )}
       <section
         className={styles.cardGrid}
         aria-label="完了した議論"
-        data-archive-ready={!records.isPending && !records.isFetching ? "" : undefined}
+        data-archive-ready={!searching && !records.isFetching ? "" : undefined}
       >
         {visibleRecords.map((record, index) => (
           <DebateCard
@@ -319,14 +404,14 @@ export default function RecordsHome(): React.JSX.Element {
           />
         ))}
       </section>
-      {records.hasNextPage && (
+      {canShowMore && (
         <div
           className={styles.loadMore}
           ref={loadMoreRef}
           aria-busy={isFetchingNextPage}
           aria-live="polite"
         >
-          {isFetchingNextPage ? (
+          {searching || isFetchingNextPage ? (
             <span>次の記録を読み込んでいます。</span>
           ) : isFetchNextPageError ? (
             <button
@@ -336,22 +421,10 @@ export default function RecordsHome(): React.JSX.Element {
             >
               次の記録をもう一度読み込む
             </button>
-          ) : localFiltersActive ? (
-            <button
-              className={commonStyles.secondaryButton}
-              type="button"
-              onClick={() => void fetchNextPage()}
-            >
-              検索対象をさらに読み込む
-            </button>
           ) : "IntersectionObserver" in window ? (
             <span>この位置までスクロールすると、次の記録を自動で読み込みます。</span>
           ) : (
-            <button
-              className={commonStyles.secondaryButton}
-              type="button"
-              onClick={() => void fetchNextPage()}
-            >
+            <button className={commonStyles.secondaryButton} type="button" onClick={showMore}>
               さらに読み込む
             </button>
           )}

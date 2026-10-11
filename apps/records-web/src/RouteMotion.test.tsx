@@ -77,7 +77,7 @@ function CachedArchiveFocusHarness() {
       </button>
       <BrandedRouteStage>
         <Routes>
-          <Route path="/" element={<RecordsHome />} />
+          <Route path="/" element={<RecordsHome csrfToken="csrf-token" />} />
           <Route
             path="/records/:recordId"
             element={
@@ -192,8 +192,12 @@ describe("BrandedRouteStage", () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },
     });
-    const queryKey = ["records", "", "newest"];
+    const queryKey = ["records", "list", "", "newest", "", ""];
     client.setQueryData(queryKey, { pages: [cached], pageParams: [undefined] });
+    client.setQueryData(["records", "requesters"], {
+      pages: [{ schemaVersion: 1, items: [record.requester], nextCursor: null }],
+      pageParams: [undefined],
+    });
     let completeRefresh!: (value: Response) => void;
     const refreshed = new Promise<Response>((resolve) => {
       completeRefresh = resolve;
