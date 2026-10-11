@@ -14,7 +14,8 @@ from typing import Any, Literal, Protocol, cast
 
 from pydantic import AwareDatetime, TypeAdapter, ValidationError
 from shittim_chest.adapters.dynamodb.composite_ballot import decode_composite_ballot
-from shittim_chest.adapters.dynamodb.serializer import DynamoItem
+from shittim_chest.adapters.dynamodb.serializer import DynamoItem, deserialize_debate_image
+from shittim_chest.domain.attachments import DebateImage, validate_images
 
 from shittim_records.contracts import (
     AffectionRankingEntry,
@@ -133,6 +134,8 @@ class RecordsReader(Protocol):
     def load_profiles(self, *, requester_keys: tuple[str, ...]) -> dict[str, RequesterProfile]: ...
 
     def avatar_url(self, *, asset_key: str) -> str: ...
+
+    def attachment_url(self, image: DebateImage, *, thumbnail: bool = False) -> str: ...
 
 
 class CursorCodec:
@@ -644,7 +647,7 @@ class RecordsReadService:
             by_key[sk] = item
         meta = by_key.get("META")
         archive_version = meta.get("schema_version") if isinstance(meta, dict) else None
-        if archive_version not in {1, 2, 3}:
+        if archive_version not in {1, 2, 3, 4}:
             raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
         expected = {
             "META",
@@ -712,7 +715,7 @@ class RecordsReadService:
                     "candidate": _required_text(by_key[f"VOTE#{slot}"], "candidate"),
                     "reason": _required_text(by_key[f"VOTE#{slot}"], "reason"),
                     "assessments": _composite_assessments(by_key[f"VOTE#{slot}"])
-                    if archive_version == 3
+                    if "voting_rules_version" in meta
                     else None,
                 }
                 for slot in PARTICIPANT_SLOTS
@@ -725,16 +728,40 @@ class RecordsReadService:
                 "actions": _required_text_list(by_key["DECISION"], "actions"),
                 "caveats": _required_text_list(by_key["DECISION"], "caveats"),
             },
-            "affection": self._affection(meta)
-            if archive_version == 2 or (archive_version == 3 and "affection" in meta)
-            else None,
+            "affection": self._affection(meta) if "affection" in meta else None,
             "voting": {
                 "rulesVersion": _required_text(meta, "voting_rules_version"),
                 "decidedBy": _required_text(meta, "voting_decided_by"),
             }
-            if archive_version == 3
+            if "voting_rules_version" in meta
             else None,
         }
+        attachments = meta.get("attachments", [])
+        if not isinstance(attachments, list) or any(
+            not isinstance(item, dict) for item in attachments
+        ):
+            raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+        try:
+            images = tuple(
+                deserialize_debate_image(item) for item in cast(list[DynamoItem], attachments)
+            )
+            validate_images(images)
+        except ValueError, TypeError:
+            raise ReadFailure("ARCHIVE_UNAVAILABLE", 503) from None
+        payload["attachments"] = tuple(
+            {
+                "attachmentId": image.attachment_id,
+                "contentType": image.content_type,
+                "sizeBytes": image.size_bytes,
+                "sha256": image.sha256,
+                "width": image.width,
+                "height": image.height,
+                "url": self._reader.attachment_url(image),
+                "thumbnailUrl": self._reader.attachment_url(image, thumbnail=True),
+                "urlExpiresAt": (_utc(now) + timedelta(seconds=300)).isoformat(),
+            }
+            for image in images
+        )
         try:
             result = RecordDetailResponse.model_validate(payload)
         except ValidationError as error:
@@ -1203,7 +1230,7 @@ def _meta_cursor_key(item: DynamoItem, *, index_name: str) -> DynamoItem:
 def _validate_meta_item(item: DynamoItem) -> None:
     record_id = item.get("record_id")
     if (
-        item.get("schema_version") not in {1, 2, 3}
+        item.get("schema_version") not in {1, 2, 3, 4}
         or item.get("record_type") != "archive_meta"
         or not isinstance(record_id, str)
         or not _is_record_id(record_id)
@@ -1251,7 +1278,9 @@ def _validate_list_projection(
 
 def _validate_archive_items(items: dict[str, DynamoItem], *, record_id: str) -> None:
     meta_version = items["META"].get("schema_version")
-    if meta_version not in {1, 2, 3}:
+    if meta_version not in {1, 2, 3, 4}:
+        raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+    if (meta_version == 4) != bool(items["META"].get("attachments")):
         raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
     expected_types = {
         "META": "archive_meta",

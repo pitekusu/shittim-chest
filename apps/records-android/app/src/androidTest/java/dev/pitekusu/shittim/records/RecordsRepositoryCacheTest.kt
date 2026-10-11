@@ -1,5 +1,8 @@
 package dev.pitekusu.shittim.records
 
+import android.graphics.Bitmap
+import java.io.ByteArrayOutputStream
+import dev.pitekusu.shittim.records.storage.EncryptedRecordImageStore
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.room3.Room
@@ -68,6 +71,27 @@ class RecordsRepositoryCacheTest {
     privateKeys.clear()
     app.deleteDatabase(databaseName)
     directory.deleteRecursively()
+  }
+
+  @Test fun discordUuid5OriginalAndMetadataRemainReadableAfterOfflineReopen() = runBlocking {
+    val discordId = "11111111-2222-5333-8444-abcdefabcdef"
+    val bitmap = Bitmap.createBitmap(24, 16, Bitmap.Config.ARGB_8888)
+    val bytes = try { ByteArrayOutputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it); it.toByteArray() } }
+    finally { bitmap.recycle() }
+    val image = RecordAttachment(discordId, "image/png", bytes.size, attachmentDigest(bytes), 24, 16)
+    saveDetail(firstId, RecordPreview("架空のDiscord画像付き議題", "架空の結論", "架空の参加者", attachments = listOf(image)))
+    RecordCacheAccount.lock.withLock {
+      EncryptedRecordImageStore(privateContext, RecordDataKeyProtector(privateKeys)).save(accountId, firstId, image, bytes)
+    }
+    repeat(2) {
+      // The reader's MockEngine rejects every HTTP call: reopening must use authenticated local data only.
+      repository().use { records ->
+        val cached = records.cachedRecord(accountId, firstId)!!.attachments.single()
+        assertEquals(discordId, cached.attachmentId)
+        assertNull(cached.url)
+        assertArrayEquals(bytes, records.cachedAttachment(accountId, firstId, cached))
+      }
+    }
   }
 
   @Test fun completeIdsRequireBothPartsWithoutReadingTheirPlaintextAndHonorAuthorization() = runBlocking {
@@ -228,7 +252,8 @@ class RecordsRepositoryCacheTest {
     val readerDatabase = openDatabase()
     return RecordsRepository(RecordsReadClient(MockEngine { error("offline_must_not_request_network") }),
       EncryptedRecordStore(readerDatabase, RecordDataKeyProtector(privateKeys)), readerDatabase,
-      RecordCacheAccount(privateContext, privateKeys, readerDatabase), { it == activeAccountId }, activateOwner = false)
+      RecordCacheAccount(privateContext, privateKeys, readerDatabase), { it == activeAccountId }, activateOwner = false,
+      imageStore = EncryptedRecordImageStore(privateContext, RecordDataKeyProtector(privateKeys)))
   }
 
   private suspend fun assertReadFailure(expected: RecordReadFailure, operation: suspend () -> Any?) {

@@ -10,7 +10,9 @@ from datetime import datetime, timedelta
 from enum import StrEnum, unique
 from uuid import UUID
 
+from shittim_chest.application.models import PendingDiscordImage
 from shittim_chest.domain import AttemptId, DebateId
+from shittim_chest.domain.attachments import DebateImage, validate_images
 
 INGRESS_QUEUE_LIMIT = 20
 INGRESS_CLAIM_SECONDS = 120
@@ -215,6 +217,8 @@ class IngressRequest:
     command_name: str | None = None
     custom_id: str | None = None
     question: str | None = None
+    attachments: tuple[DebateImage, ...] = ()
+    pending_attachments: tuple[PendingDiscordImage, ...] = ()
     parent_channel_id: str | None = None
     source_message_id: str | None = None
     source_thread_id: str | None = None
@@ -239,6 +243,17 @@ class IngressRequest:
     history_after_snowflake: str | None = None
 
     def __post_init__(self) -> None:
+        validate_images(self.attachments)
+        if self.status.counts_toward_queue_limit and any(
+            image.url is None for image in self.pending_attachments
+        ):
+            raise ValueError("queued image input requires its source URL")
+        if len(self.pending_attachments) > 3 or (self.attachments and self.pending_attachments):
+            raise ValueError("invalid ingress image collection")
+        if self.kind is not IngressKind.NEW_DEBATE and (
+            self.attachments or self.pending_attachments
+        ):
+            raise ValueError("control ingress cannot replace debate images")
         if self.source is IngressSource.MOBILE:
             if self.owner_key is None or self.mobile_request_id is None:
                 raise ValueError("mobile ingress requires owner and public request ID")
@@ -372,6 +387,8 @@ class IngressRequest:
         guild_id: str,
         channel_id: str,
         created_at: datetime,
+        attachments: tuple[DebateImage, ...] = (),
+        pending_attachments: tuple[PendingDiscordImage, ...] = (),
     ) -> IngressRequest:
         """Reuse debate admission without fabricating a Discord HTTP interaction."""
 
@@ -382,6 +399,8 @@ class IngressRequest:
                 operation_id=operation_id,
                 application_id=application_id,
                 question=question,
+                attachments=attachments,
+                pending_attachments=pending_attachments,
                 requester_id=requester_id,
                 requester_username=requester_username,
                 requester_display_name=requester_display_name,
@@ -410,6 +429,8 @@ class IngressRequest:
         channel_id: str,
         command_name: str,
         created_at: datetime,
+        attachments: tuple[DebateImage, ...] = (),
+        pending_attachments: tuple[PendingDiscordImage, ...] = (),
     ) -> IngressRequest:
         """Construct one pending command using per-request deadline anchors."""
 
@@ -433,6 +454,8 @@ class IngressRequest:
             terminal_deadline_at=created_at + TERMINAL_TIMEOUT,
             command_name=command_name,
             question=question,
+            attachments=attachments,
+            pending_attachments=pending_attachments,
         )
 
     @classmethod

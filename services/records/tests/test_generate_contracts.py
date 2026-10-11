@@ -41,6 +41,9 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
         if {"mobileBearer": []} in operation.get("security", [])
     }
     assert bearer_routes == {
+        ("post", "/api/v1/debate-attachments/uploads"),
+        ("get", "/api/v1/debate-attachments/uploads/{attachmentId}"),
+        ("post", "/api/v1/debate-attachments/uploads/{attachmentId}/complete"),
         ("post", "/api/v1/debate-requests"),
         ("get", "/api/v1/debate-requests"),
         ("get", "/api/v1/debate-requests/{requestId}"),

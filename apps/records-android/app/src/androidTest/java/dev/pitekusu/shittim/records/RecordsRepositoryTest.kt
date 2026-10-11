@@ -346,7 +346,7 @@ class RecordsRepositoryTest {
         calls += if (id == "sync-index") "index:${cursor ?: "head"}" else id
         if (id == ids[1] && failMiddle) throw IOException("synthetic_failure")
         val body = if (id != "sync-index") {
-          assertEquals("affection-reasons-v1", request.url.parameters["contract"])
+          assertEquals("record-images-v1", request.url.parameters["contract"])
           detailWithReasons(id)
         } else when (cursor) {
           null -> index(listOf(ids[0]), "middle.signature")
@@ -361,7 +361,7 @@ class RecordsRepositoryTest {
         catch (error: RecordReadException) { assertEquals(RecordReadFailure.UNAVAILABLE, error.failure) }
         assertEquals(listOf("index:head", ids[0], "index:middle.signature", ids[1]), calls)
         val checkpoint = records.syncCheckpoint(accountId)!!
-        assertEquals(1, checkpoint.readContractVersion)
+        assertEquals(2, checkpoint.readContractVersion)
         assertEquals(setOf(ids[0]), checkpoint.committedRevisions.keys)
         if (!wasComplete) {
           assertTrue(ids[1] in checkpoint.pendingAvatars)
@@ -376,7 +376,7 @@ class RecordsRepositoryTest {
         records.synchronize(token, accountId)
         assertEquals(listOf("index:head", ids[1], "index:tail.signature", ids[2]), calls)
         assertTrue(records.syncCheckpoint(accountId)!!.complete)
-        assertEquals(1, records.syncCheckpoint(accountId)!!.readContractVersion)
+        assertEquals(2, records.syncCheckpoint(accountId)!!.readContractVersion)
         for (id in ids) assertEquals("架空の率直な感想",
           records.cachedRecord(accountId, id)!!.affection!!.changes.first().reason)
         calls.clear()
@@ -452,7 +452,7 @@ class RecordsRepositoryTest {
       // Detail already exists, so the restart will enumerate it but must not request it again.
       repository(MockEngine { respond(detail(), headers = headersOf(HttpHeaders.ContentType, "application/json")) })
         .use { it.record(token, accountId, recordId) }
-      records.saveSyncCheckpoint(accountId, RecordSyncCheckpoint(readContractVersion = 1,
+      records.saveSyncCheckpoint(accountId, RecordSyncCheckpoint(readContractVersion = 2,
         cursor = "old.signature", removalCandidates = emptySet(), indexBased = true,
         committedRevisions = mapOf(recordId to "z".repeat(43))))
       try { records.synchronize(token, accountId); fail("a second invalid cursor must stop sync") }

@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from mypy_boto3_dynamodb.client import DynamoDBClient
     from mypy_boto3_ecs.client import ECSClient
     from mypy_boto3_lambda.client import LambdaClient
+    from mypy_boto3_s3.client import S3Client
     from mypy_boto3_ssm.client import SSMClient
 
 DISCORD_INITIAL_RESPONSE_DEADLINE_SECONDS = 3.0
@@ -42,6 +43,12 @@ RECONCILER_TOTAL_MAX_ATTEMPTS = 3
 CONTROL_RECORDS_CONNECT_TIMEOUT_SECONDS = 0.5
 CONTROL_RECORDS_READ_TIMEOUT_SECONDS = 2.0
 CONTROL_RECORDS_TOTAL_MAX_ATTEMPTS = 2
+
+
+def create_s3_client(*, region_name: str) -> S3Client:
+    """Reuse one bounded process-level image client, including immutable version reads."""
+
+    return boto3.client("s3", region_name=region_name, config=startup_sdk_config())
 
 
 class IngressSdkCancellationGate:

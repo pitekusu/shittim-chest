@@ -31,6 +31,7 @@ from shittim_chest.adapters.dynamodb.outbox import outbox_activity_action
 from shittim_chest.adapters.dynamodb.serializer import (
     CURRENT_SCHEMA_VERSION,
     LEGACY_AFFECTION_SCHEMA_VERSION,
+    OPAQUE_AFFECTION_SCHEMA_VERSIONS,
     DynamoItem,
     DynamoValue,
     PersistenceFormatError,
@@ -262,6 +263,15 @@ class DynamoDbDebateRepository:
         updated: DebateSnapshot,
     ) -> DebateSnapshot:
         return await asyncio.to_thread(self._finalize_terminal, expected, updated)
+
+    async def record_image_receipts(
+        self,
+        *,
+        expected: DebateSnapshot,
+        receipts: tuple[tuple[str, str], ...],
+        at: datetime,
+    ) -> DebateSnapshot:
+        return await asyncio.to_thread(self._record_image_receipts, expected, receipts, at)
 
     async def finalize_phase_delivery(
         self,
@@ -1395,6 +1405,86 @@ class DynamoDbDebateRepository:
             (persisted_bot_slot, sequence) for sequence in range(len(persisted_operations))
         )
 
+    def _record_image_receipts(
+        self,
+        expected: DebateSnapshot,
+        receipts: tuple[tuple[str, str], ...],
+        at: datetime,
+    ) -> DebateSnapshot:
+        plan = expected.terminal_delivery
+        if (
+            not isinstance(plan, PhaseDeliveryPlan)
+            or plan.plan_id != "input-images"
+            or expected.state.phase.is_terminal
+            or expected.lease is None
+        ):
+            raise RepositoryConflict("image receipt requires its active fenced plan")
+        before, after = dict(expected.attachment_message_ids), dict(receipts)
+        if len(after) != len(receipts) or any(
+            after.get(key) != value for key, value in before.items()
+        ):
+            raise RepositoryConflict("image receipt identity cannot change")
+        if any(key not in {image.attachment_id for image in expected.attachments} for key in after):
+            raise RepositoryConflict("image receipt has an unrelated asset")
+        if receipts == expected.attachment_message_ids:
+            return expected
+        if at < expected.state.updated_at:
+            raise RepositoryConflict("image receipt timestamp moved backwards")
+        updated = replace(
+            expected, state=replace(expected.state, updated_at=at), attachment_message_ids=receipts
+        )
+        old_items = _items_by_key(serialize_snapshot(expected))
+        new_items = _items_by_key(serialize_snapshot(updated))
+        attempt = _attempt_key(expected.state.debate_id, expected.state.attempt_id)
+        attempt_tuple = (_text(attempt, "PK"), _text(attempt, "SK"))
+        actions = [
+            self._update_expected_attempt(
+                previous=old_items[attempt_tuple],
+                updated=new_items[attempt_tuple],
+                expected=expected,
+                write_at=at,
+            )
+        ]
+        for attachment_id, message_id in receipts:
+            if attachment_id in before:
+                continue
+            operation_id = f"input-image-{attachment_id}"
+            if operation_id not in plan.operation_ids:
+                raise RepositoryConflict("image receipt does not belong to its current plan")
+            index = plan.operation_ids.index(operation_id)
+            actions.append(
+                _sent_outbox_check(
+                    self._table_name,
+                    expected,
+                    operation_id=operation_id,
+                    content_hash=plan.content_hashes[index],
+                    chunk_sequence=plan.delivery_sequences[index],
+                    bot_slot=DiscordBotSlot.MODERATOR,
+                    delivery_phase=plan.target_phase,
+                    plan_id=plan.plan_id,
+                    delivery_sequence=plan.delivery_sequences[index],
+                    message_id=message_id,
+                )
+            )
+        meta_key = (f"DEBATE#{expected.state.debate_id}", "META")
+        actions.append(self._put(new_items[meta_key]))
+        # Phase plans carry the aggregate update timestamp. Keep that row in the
+        # same CAS transaction, so finalization can verify its complete version.
+        plan_key = (
+            f"DEBATE#{expected.state.debate_id}",
+            f"ATTEMPT#{expected.state.attempt_id}#DELIVERY#{plan.plan_id}",
+        )
+        actions.append(
+            self._put_phase_plan(previous=old_items[plan_key], updated=new_items[plan_key])
+        )
+        self._transact(
+            actions,
+            token=_client_token(
+                f"image-receipt:{expected.state.debate_id}:{expected.state.attempt_id}:{at.isoformat()}"
+            ),
+        )
+        return updated
+
     def _finalize_phase_delivery(
         self,
         expected: DebateSnapshot,
@@ -1439,11 +1529,14 @@ class DynamoDbDebateRepository:
             delivery.delivery_sequences,
             strict=True,
         ):
-            bot_slot, chunk_sequence = _participant_phase_operation_identity(
-                delivery,
-                operation_id=operation_id,
-                delivery_sequence=delivery_sequence,
-            )
+            if delivery.plan_id == "input-images":
+                bot_slot, chunk_sequence = DiscordBotSlot.MODERATOR, delivery_sequence
+            else:
+                bot_slot, chunk_sequence = _participant_phase_operation_identity(
+                    delivery,
+                    operation_id=operation_id,
+                    delivery_sequence=delivery_sequence,
+                )
             actions.append(
                 _sent_outbox_check(
                     self._table_name,
@@ -2998,19 +3091,22 @@ class DynamoDbDebateRepository:
         *,
         expected_version: int,
     ) -> TransactWriteItemTypeDef:
+        schema_values: DynamoItem = {
+            f":opaque_schema_{schema}": schema
+            for schema in sorted(OPAQUE_AFFECTION_SCHEMA_VERSIONS)
+        }
         return {
             "Put": {
                 "TableName": self._table_name,
                 "Item": marshal_item(serialize_affection_profile(profile)),
                 "ConditionExpression": (
-                    "record_type=:type AND schema_version IN (:opaque_schema, :schema) "
+                    f"record_type=:type AND schema_version IN ({', '.join(schema_values)}) "
                     "AND version=:version AND requester_key=:requester"
                 ),
                 "ExpressionAttributeValues": marshal_item(
                     {
                         ":type": "affection_profile",
-                        ":opaque_schema": 9,
-                        ":schema": CURRENT_SCHEMA_VERSION,
+                        **schema_values,
                         ":version": expected_version,
                         ":requester": profile.requester_key,
                     }
@@ -3022,6 +3118,10 @@ class DynamoDbDebateRepository:
         self,
         profile: AffectionProfile,
     ) -> TransactWriteItemTypeDef:
+        schema_values: DynamoItem = {
+            f":opaque_schema_{schema}": schema
+            for schema in sorted(OPAQUE_AFFECTION_SCHEMA_VERSIONS)
+        }
         return {
             "ConditionCheck": {
                 "TableName": self._table_name,
@@ -3032,14 +3132,13 @@ class DynamoDbDebateRepository:
                     }
                 ),
                 "ConditionExpression": (
-                    "record_type=:type AND schema_version IN (:opaque_schema, :schema) "
+                    f"record_type=:type AND schema_version IN ({', '.join(schema_values)}) "
                     "AND version=:version AND requester_key=:requester"
                 ),
                 "ExpressionAttributeValues": marshal_item(
                     {
                         ":type": "affection_profile",
-                        ":opaque_schema": 9,
-                        ":schema": CURRENT_SCHEMA_VERSION,
+                        **schema_values,
                         ":version": profile.version,
                         ":requester": profile.requester_key,
                     }
@@ -3704,6 +3803,12 @@ def _require_terminal_stage(
         raise RepositoryConflict(
             "non-cancellation terminal staging requires its exact ingress claim"
         )
+    image_delivery = (
+        isinstance(plan, PhaseDeliveryPlan)
+        and plan.plan_id == "input-images"
+        and plan.source_phase is DebatePhase.ACCEPTED
+        and plan.target_phase is DebatePhase.SCORING_AFFECTION
+    )
     initial_opinion_delivery = (
         isinstance(plan, PhaseDeliveryPlan)
         and plan.plan_id == "initial-opinions"
@@ -3754,7 +3859,18 @@ def _require_terminal_stage(
     terminal_notice_chunk_sequences: list[int] = []
     for sequence, operation in enumerate(operations):
         affection_result = False
-        if participant_phase_delivery:
+        if image_delivery:
+            expected_bot_slot = DiscordBotSlot.MODERATOR
+            expected_chunk_sequence = sequence
+            expected_phase = plan.target_phase
+            expected_delivery_sequence = sequence
+            if (
+                len(operation.attachments) != 1
+                or operation.attachments[0] not in staged.attachments
+                or operation.operation_id != f"input-image-{operation.attachments[0].attachment_id}"
+            ):
+                raise RepositoryConflict("image delivery identity changed")
+        elif participant_phase_delivery:
             if operation.delivery_sequence is None:
                 raise RepositoryConflict("participant phase delivery sequence is missing")
             if not isinstance(plan, PhaseDeliveryPlan):  # pragma: no cover - derived above
@@ -3828,6 +3944,7 @@ def _require_terminal_stage(
             or operation.channel_id != expected_channel_id
             or (
                 not participant_phase_delivery
+                and not image_delivery
                 and plan.target_phase is not DebatePhase.COMPLETED
                 and not affection_result
                 and operation.operation_id != f"terminal-{plan.target_phase.value}-{sequence:04d}"
@@ -4077,6 +4194,7 @@ def _sent_outbox_check(
     delivery_phase: DebatePhase,
     plan_id: str | None,
     delivery_sequence: int,
+    message_id: str | None = None,
 ) -> TransactWriteItemTypeDef:
     thread_id = expected.thread_id
     if thread_id is None:  # pragma: no cover - staged delivery invariant narrows this
@@ -4104,6 +4222,9 @@ def _sent_outbox_check(
         ":content_hash": content_hash,
         ":one": 1,
     }
+    if message_id is not None:
+        condition += " AND message_id=:image_message"
+        values[":image_message"] = message_id
     if plan_id is not None:
         delivery = expected.terminal_delivery
         if not isinstance(delivery, PhaseDeliveryPlan) or delivery.plan_id != plan_id:

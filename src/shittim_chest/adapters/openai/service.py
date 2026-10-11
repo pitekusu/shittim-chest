@@ -40,6 +40,7 @@ from shittim_chest.adapters.openai.errors import (
     OpenAIRefusal,
     OpenAIUnavailable,
 )
+from shittim_chest.adapters.openai.image_inputs import IMAGE_INPUT_RULES, responses_image_input
 from shittim_chest.adapters.openai.limiter import OpenAIRequestLimiter
 from shittim_chest.adapters.openai.observability import (
     AffectionReasonKind,
@@ -89,6 +90,7 @@ from shittim_chest.domain import (
     Vote,
     VotingResult,
 )
+from shittim_chest.domain.attachments import ImageInput
 from shittim_chest.domain.composite_voting import (
     COMPOSITE_VOTING_VERSION,
     ResolvedVote,
@@ -145,8 +147,11 @@ class OpenAIResponsesService:
         positions: tuple[InitialOpinion, ...],
         rotation: int,
         coordination: bool,
+        images: tuple[ImageInput, ...] = (),
     ) -> tuple[ParticipantSlot, ...]:
-        return await reconsideration.classify(self, question, positions, rotation, coordination)
+        return await reconsideration.classify(
+            self, question, positions, rotation, coordination, images=images
+        )
 
     async def explore_alternatives(
         self,
@@ -156,9 +161,12 @@ class OpenAIResponsesService:
         plan: CandidatePlan,
         peers: tuple[InitialOpinion, ...],
         evidence: EvidenceBundle,
+        images: tuple[ImageInput, ...] = (),
     ) -> tuple[Candidate, ...]:
         _validate_frame_owner(frame, plan.participant, plan)
-        return await reconsideration.explore(self, question, frame, plan, peers, evidence)
+        return await reconsideration.explore(
+            self, question, frame, plan, peers, evidence, images=images
+        )
 
     async def select_alternative(
         self,
@@ -169,10 +177,18 @@ class OpenAIResponsesService:
         peers: tuple[InitialOpinion, ...],
         evidence: EvidenceBundle,
         alternatives: tuple[Candidate, ...],
+        images: tuple[ImageInput, ...] = (),
     ) -> CandidatePlan:
         _validate_frame_owner(frame, plan.participant, plan)
         return await reconsideration.select(
-            self, question, frame, plan, peers, evidence, alternatives
+            self,
+            question,
+            frame,
+            plan,
+            peers,
+            evidence,
+            alternatives,
+            images=images,
         )
 
     async def revise_initial_opinion(
@@ -184,6 +200,7 @@ class OpenAIResponsesService:
         opinions: tuple[InitialOpinion, ...],
         evidence: EvidenceBundle,
         affection_score: int,
+        images: tuple[ImageInput, ...] = (),
     ) -> InitialOpinion:
         _validate_frame_owner(frame, plan.participant, plan)
         return await reconsideration.revise_opinion(
@@ -194,6 +211,7 @@ class OpenAIResponsesService:
             {x.participant: x for x in opinions},
             evidence,
             affection_score,
+            images=images,
         )
 
     async def score_affection(
@@ -201,6 +219,7 @@ class OpenAIResponsesService:
         *,
         participant: ParticipantSlot,
         question: str,
+        images: tuple[ImageInput, ...] = (),
     ) -> AffectionQuestionEvaluation:
         """Score one question and validate its public reaction independently."""
 
@@ -212,6 +231,7 @@ class OpenAIResponsesService:
             ),
             input_text=affection_scoring_input(question),
             settings=self.config.affection,
+            images=images,
         )
         reason, _kind = _sanitize_affection_reason(
             output.reason, protected_prompts=self._affection_protected_prompts()
@@ -234,6 +254,7 @@ class OpenAIResponsesService:
         *,
         participant: ParticipantSlot,
         question: str,
+        images: tuple[ImageInput, ...] = (),
     ) -> PreferenceFrame:
         output = await self._parse_with_token_limit_retry(
             operation="preferences",
@@ -245,6 +266,7 @@ class OpenAIResponsesService:
             ),
             input_text=preferences_input(question),
             settings=self.config.policy.preferences,
+            images=images,
         )
         return PreferenceFrame(
             participant, output.priorities, output.avoidances, output.compromise_condition
@@ -257,6 +279,7 @@ class OpenAIResponsesService:
         question: str,
         evidence: EvidenceBundle,
         preference_frame: PreferenceFrame | None = None,
+        images: tuple[ImageInput, ...] = (),
     ) -> CandidatePlan:
         _validate_frame_owner(preference_frame, participant)
         output = await self._parse_with_token_limit_retry(
@@ -270,6 +293,7 @@ class OpenAIResponsesService:
             ),
             input_text=candidates_input(question, evidence, preference_frame),
             settings=self.config.policy.candidates,
+            images=images,
         )
         return CandidatePlan(
             participant,
@@ -285,6 +309,7 @@ class OpenAIResponsesService:
         affection_score: int = DEFAULT_AFFECTION_SCORE,
         preference_frame: PreferenceFrame | None = None,
         candidate_plan: CandidatePlan | None = None,
+        images: tuple[ImageInput, ...] = (),
     ) -> InitialOpinion:
         _validate_frame_owner(preference_frame, participant, candidate_plan)
         output = await self._parse_with_token_limit_retry(
@@ -300,6 +325,7 @@ class OpenAIResponsesService:
             ),
             input_text=initial_opinion_input(question, evidence, preference_frame, candidate_plan),
             settings=self.config.initial_opinion,
+            images=images,
         )
         return InitialOpinion(participant, output.summary, output.proposal)
 
@@ -313,6 +339,7 @@ class OpenAIResponsesService:
         affection_score: int = DEFAULT_AFFECTION_SCORE,
         preference_frame: PreferenceFrame | None = None,
         candidate_plan: CandidatePlan | None = None,
+        images: tuple[ImageInput, ...] = (),
     ) -> FinalProposal:
         _validate_frame_owner(preference_frame, participant, candidate_plan)
         output = await self._parse(
@@ -335,6 +362,7 @@ class OpenAIResponsesService:
                 participant=participant,
             ),
             settings=self.config.final_proposal,
+            images=images,
         )
         return FinalProposal(participant, output.title, output.proposal)
 
@@ -349,6 +377,7 @@ class OpenAIResponsesService:
         voting_rules_version: str = "legacy-v1",
         debate_key: str | None = None,
         initial_opinions: tuple[InitialOpinion, ...] = (),
+        images: tuple[ImageInput, ...] = (),
     ) -> Vote | ResolvedVote:
         _validate_frame_owner(preference_frame, voter)
         if voting_rules_version == COMPOSITE_VOTING_VERSION:
@@ -361,6 +390,7 @@ class OpenAIResponsesService:
                 evidence=evidence,
                 candidates=candidates,
                 initial_opinions=initial_opinions,
+                images=images,
             )
             return resolve_composite_ballot(ballot, debate_key=debate_key)
         if voting_rules_version != "legacy-v1":
@@ -374,6 +404,7 @@ class OpenAIResponsesService:
             ),
             input_text=vote_input(question, evidence, candidates, preference_frame),
             settings=self.config.vote,
+            images=images,
         )
         return Vote(
             voter,
@@ -393,6 +424,7 @@ class OpenAIResponsesService:
         voting_result: VotingResult,
         affection_score: int = DEFAULT_AFFECTION_SCORE,
         preference_frame: PreferenceFrame | None = None,
+        images: tuple[ImageInput, ...] = (),
     ) -> FinalDecision:
         _validate_frame_owner(preference_frame, voting_result.winner)
         output = await self._parse(
@@ -410,6 +442,7 @@ class OpenAIResponsesService:
                 question, evidence, proposals, voting_result, preference_frame
             ),
             settings=self.config.decision,
+            images=images,
         )
         return FinalDecision(
             voting_result.winner,
@@ -427,6 +460,7 @@ class OpenAIResponsesService:
         instructions: str,
         input_text: str,
         settings: PhaseSettings,
+        images: tuple[ImageInput, ...] = (),
     ) -> _OutputT:
         """Retry a confirmed token limit once inside the caller's deadline.
 
@@ -441,6 +475,7 @@ class OpenAIResponsesService:
                 instructions=instructions,
                 input_text=input_text,
                 settings=settings,
+                images=images,
             )
         except OpenAIIncompleteResponse as error:
             if (
@@ -454,6 +489,7 @@ class OpenAIResponsesService:
             instructions=instructions,
             input_text=input_text,
             settings=replace(settings, max_output_tokens=settings.max_output_tokens * 2),
+            images=images,
         )
 
     async def _parse(
@@ -464,6 +500,7 @@ class OpenAIResponsesService:
         instructions: str,
         input_text: str,
         settings: PhaseSettings,
+        images: tuple[ImageInput, ...] = (),
     ) -> _OutputT:
         started = monotonic()
         response: Response | None = None
@@ -474,8 +511,8 @@ class OpenAIResponsesService:
                     reasoning["mode"] = "pro"
                 response = await self.client.responses.create(
                     model=self.config.model,
-                    instructions=instructions,
-                    input=input_text,
+                    instructions=instructions + (IMAGE_INPUT_RULES if images else ""),
+                    input=responses_image_input(input_text, images),
                     text={
                         "format": {
                             "type": "json_schema",

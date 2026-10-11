@@ -43,6 +43,8 @@ from shittim_chest.application.models import (
     PhaseDeliveryStatus,
 )
 from shittim_chest.application.ports import (
+    DebateImageStore,
+    DiscordOutboxRepository,
     RepositoryCancellationCode,
     RepositoryConflict,
     RepositoryTransactionAction,
@@ -112,6 +114,8 @@ def make_application(
     participant_display_names: dict[ParticipantSlot, str] | None = None,
     records_memorial_url: str = "https://records.example.invalid/memorial",
     lease_owner: str = "worker-1",
+    image_store: DebateImageStore | None = None,
+    image_outbox: DiscordOutboxRepository | None = None,
     terminal_delivery_conflict_retry_seconds: float = 0.0,
 ) -> DebateApplication:
     clock, ids, metrics, discord, evidence, openai, repository, orderer = dependencies
@@ -136,6 +140,8 @@ def make_application(
         ),
         records_memorial_url=records_memorial_url,
         lease_owner=lease_owner,
+        image_store=image_store,
+        image_outbox=image_outbox,
         session_timeout_seconds=session_timeout,
         phase_timeout_seconds=phase_timeout,
         lease_renewal_seconds=lease_renewal,

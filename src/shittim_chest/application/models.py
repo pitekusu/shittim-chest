@@ -23,6 +23,14 @@ from shittim_chest.domain import (
     PreferenceFrame,
     Vote,
 )
+from shittim_chest.domain.attachments import (
+    IMAGE_CONTENT_TYPES,
+    MAX_IMAGE_BYTES,
+    MAX_IMAGE_PIXELS,
+    DebateImage,
+    validate_attachment_id,
+    validate_images,
+)
 from shittim_chest.domain.composite_voting import COMPOSITE_VOTING_VERSION, ResolvedVote
 
 
@@ -44,6 +52,44 @@ def _require_utc(value: datetime, *, label: str) -> None:
 
 
 @dataclass(frozen=True, slots=True)
+class PendingDiscordImage:
+    """Signed Discord metadata retained only until a controlled import succeeds."""
+
+    attachment_id: str
+    discord_attachment_id: str
+    content_type: str
+    size_bytes: int
+    url: str | None = field(repr=False)
+    width: int | None = None
+    height: int | None = None
+
+    def __post_init__(self) -> None:
+        validate_attachment_id(self.attachment_id)
+        if (
+            not self.discord_attachment_id.isdecimal()
+            or not 0 < int(self.discord_attachment_id) < 2**64
+        ):
+            raise ValueError("invalid Discord attachment identifier")
+        if (
+            self.content_type not in IMAGE_CONTENT_TYPES
+            or type(self.size_bytes) is not int
+            or not 1 <= self.size_bytes <= MAX_IMAGE_BYTES
+        ):
+            raise ValueError("invalid Discord image metadata")
+        if self.url is not None and (not self.url or len(self.url) > 4096):
+            raise ValueError("invalid Discord image location")
+        if (
+            self.width is not None
+            and self.height is not None
+            and self.width * self.height > MAX_IMAGE_PIXELS
+        ):
+            raise ValueError("invalid Discord image dimensions")
+        for dimension in (self.width, self.height):
+            if dimension is not None and (type(dimension) is not int or dimension < 1):
+                raise ValueError("invalid Discord image dimensions")
+
+
+@dataclass(frozen=True, slots=True)
 class AcceptDebateRequest:
     """A validated Discord-independent request to accept a debate."""
 
@@ -54,8 +100,17 @@ class AcceptDebateRequest:
     guild_id: str
     channel_id: str
     operation_id: str
+    attachments: tuple[DebateImage, ...] = ()
+    pending_attachments: tuple[PendingDiscordImage, ...] = field(default=(), repr=False)
 
     def __post_init__(self) -> None:
+        validate_images(self.attachments)
+        if any(image.url is None for image in self.pending_attachments):
+            raise ValueError("new image input requires its source URL")
+        if len(self.attachments) + len(self.pending_attachments) > 3 or (
+            self.attachments and self.pending_attachments
+        ):
+            raise ValueError("invalid image request")
         if not 1 <= len(self.question) <= 1000 or not self.question.strip():
             raise ValueError("question must contain between 1 and 1000 characters")
         _require_identifier(self.requester_id, label="requester ID")
@@ -763,6 +818,9 @@ class DebateSnapshot:
     channel_id: str
     created_at: datetime
     attempt_created_at: datetime
+    attachments: tuple[DebateImage, ...] = ()
+    pending_attachments: tuple[PendingDiscordImage, ...] = field(default=(), repr=False)
+    attachment_message_ids: tuple[tuple[str, str], ...] = ()
     origin_ingress_interaction_id: str | None = None
     starter_message_id: str | None = None
     thread_id: str | None = None
@@ -794,6 +852,24 @@ class DebateSnapshot:
     opinion_reconsideration: ReconsiderationProgress | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
+        validate_images(self.attachments)
+        if any(image.url is None for image in self.pending_attachments):
+            raise ValueError("pending debate image requires its source URL")
+        image_ids = tuple(
+            image.attachment_id for image in (*self.attachments, *self.pending_attachments)
+        )
+        if len(image_ids) > 3 or len(set(image_ids)) != len(image_ids):
+            raise ValueError("invalid pending image collection")
+        if len(set(key for key, _ in self.attachment_message_ids)) != len(
+            self.attachment_message_ids
+        ):
+            raise ValueError("duplicate image publication receipt")
+        if any(
+            key not in {image.attachment_id for image in self.attachments}
+            or not message.isdecimal()
+            for key, message in self.attachment_message_ids
+        ):
+            raise ValueError("invalid image publication receipt")
         if self.voting_rules_version not in ("legacy-v1", COMPOSITE_VOTING_VERSION):
             raise ValueError("unknown voting rules version")
         if any(

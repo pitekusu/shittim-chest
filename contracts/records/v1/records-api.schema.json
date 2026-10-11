@@ -1696,6 +1696,197 @@
       "title": "CostsResponse",
       "type": "object"
     },
+    "DebateAttachmentImage": {
+      "additionalProperties": false,
+      "properties": {
+        "attachmentId": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Attachmentid",
+          "type": "string"
+        },
+        "contentType": {
+          "enum": [
+            "image/jpeg",
+            "image/png",
+            "image/webp"
+          ],
+          "title": "Contenttype",
+          "type": "string"
+        },
+        "height": {
+          "minimum": 1,
+          "title": "Height",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "sizeBytes": {
+          "maximum": 10485760,
+          "minimum": 1,
+          "title": "Sizebytes",
+          "type": "integer"
+        },
+        "width": {
+          "minimum": 1,
+          "title": "Width",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "attachmentId",
+        "contentType",
+        "sizeBytes",
+        "sha256",
+        "width",
+        "height"
+      ],
+      "title": "DebateAttachmentImage",
+      "type": "object"
+    },
+    "DebateAttachmentStatusResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "attachmentId": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Attachmentid",
+          "type": "string"
+        },
+        "image": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DebateAttachmentImage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requestId": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Requestid",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "reserved",
+            "promoting",
+            "ready",
+            "consumed",
+            "expired"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "attachmentId",
+        "requestId",
+        "status",
+        "image"
+      ],
+      "title": "DebateAttachmentStatusResponse",
+      "type": "object"
+    },
+    "DebateAttachmentUploadRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "attachmentId": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Attachmentid",
+          "type": "string"
+        },
+        "contentType": {
+          "enum": [
+            "image/jpeg",
+            "image/png",
+            "image/webp"
+          ],
+          "title": "Contenttype",
+          "type": "string"
+        },
+        "requestId": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Requestid",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "sizeBytes": {
+          "maximum": 10485760,
+          "minimum": 1,
+          "title": "Sizebytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "requestId",
+        "attachmentId",
+        "contentType",
+        "sizeBytes",
+        "sha256"
+      ],
+      "title": "DebateAttachmentUploadRequest",
+      "type": "object"
+    },
+    "DebateAttachmentUploadResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "attachmentId": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Attachmentid",
+          "type": "string"
+        },
+        "expiresAt": {
+          "format": "date-time",
+          "title": "Expiresat",
+          "type": "string"
+        },
+        "fields": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Fields",
+          "type": "object"
+        },
+        "method": {
+          "const": "POST",
+          "title": "Method",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "uploadUrl": {
+          "pattern": "^https://",
+          "title": "Uploadurl",
+          "type": "string"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "attachmentId",
+        "method",
+        "uploadUrl",
+        "fields",
+        "expiresAt"
+      ],
+      "title": "DebateAttachmentUploadResponse",
+      "type": "object"
+    },
     "DebateRequestResponse": {
       "additionalProperties": false,
       "allOf": [
@@ -1730,6 +1921,15 @@
         }
       ],
       "properties": {
+        "attachmentIds": {
+          "items": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "maxItems": 3,
+          "title": "Attachmentids",
+          "type": "array"
+        },
         "createdAt": {
           "format": "date-time",
           "title": "Createdat",
@@ -1851,6 +2051,15 @@
     "DebateStartRequest": {
       "additionalProperties": false,
       "properties": {
+        "attachmentIds": {
+          "items": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "maxItems": 3,
+          "title": "Attachmentids",
+          "type": "array"
+        },
         "question": {
           "maxLength": 1000,
           "minLength": 1,
@@ -3077,6 +3286,76 @@
       "title": "RankingsResponse",
       "type": "object"
     },
+    "RecordAttachmentImage": {
+      "additionalProperties": false,
+      "properties": {
+        "attachmentId": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Attachmentid",
+          "type": "string"
+        },
+        "contentType": {
+          "enum": [
+            "image/jpeg",
+            "image/png",
+            "image/webp"
+          ],
+          "title": "Contenttype",
+          "type": "string"
+        },
+        "height": {
+          "minimum": 1,
+          "title": "Height",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "sizeBytes": {
+          "maximum": 10485760,
+          "minimum": 1,
+          "title": "Sizebytes",
+          "type": "integer"
+        },
+        "thumbnailUrl": {
+          "maxLength": 4096,
+          "pattern": "^https://shittim-chest-production-records-media-[0-9]{12}\\.s3\\.ap-northeast-1\\.amazonaws\\.com/debate-images/",
+          "title": "Thumbnailurl",
+          "type": "string"
+        },
+        "url": {
+          "maxLength": 4096,
+          "pattern": "^https://shittim-chest-production-records-media-[0-9]{12}\\.s3\\.ap-northeast-1\\.amazonaws\\.com/debate-images/",
+          "title": "Url",
+          "type": "string"
+        },
+        "urlExpiresAt": {
+          "format": "date-time",
+          "title": "Urlexpiresat",
+          "type": "string"
+        },
+        "width": {
+          "minimum": 1,
+          "title": "Width",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "attachmentId",
+        "contentType",
+        "sizeBytes",
+        "sha256",
+        "width",
+        "height",
+        "url",
+        "thumbnailUrl",
+        "urlExpiresAt"
+      ],
+      "title": "RecordAttachmentImage",
+      "type": "object"
+    },
     "RecordDetailResponse": {
       "additionalProperties": false,
       "properties": {
@@ -3089,6 +3368,22 @@
               "type": "null"
             }
           ]
+        },
+        "attachments": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/RecordAttachmentImage"
+              },
+              "maxItems": 3,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attachments"
         },
         "completedAt": {
           "format": "date-time",
@@ -4138,6 +4433,12 @@
   "$id": "https://shittim-chest.invalid/contracts/records/v1/records-api.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "oneOf": [
+    {
+      "$ref": "#/$defs/DebateAttachmentUploadResponse"
+    },
+    {
+      "$ref": "#/$defs/DebateAttachmentStatusResponse"
+    },
     {
       "$ref": "#/$defs/DebateRequestResponse"
     },

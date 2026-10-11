@@ -163,6 +163,7 @@ def _request_from_operation(operation: DiscordHttpOperation) -> IngressRequest:
             operation_id=operation.operation_id,
             application_id=operation.application_id,
             question=operation.question,
+            pending_attachments=operation.pending_attachments,
             requester_id=operation.requester_id,
             requester_username=operation.requester_username,
             requester_display_name=operation.requester_display_name,

@@ -17,6 +17,7 @@ from shittim_chest.adapters.dynamodb.serializer import (
     SUPPORTED_SCHEMA_VERSIONS,
     DynamoItem,
     DynamoValue,
+    serialize_debate_image,
 )
 from shittim_chest.application import DebateSnapshot
 from shittim_chest.domain import (
@@ -30,7 +31,7 @@ from shittim_chest.domain import (
 from shittim_chest.domain.composite_voting import COMPOSITE_VOTING_VERSION, ResolvedVote
 from shittim_chest.domain.debate_content import Vote
 
-ARCHIVE_SCHEMA_VERSION = 3
+ARCHIVE_SCHEMA_VERSION = 4
 ARCHIVE_V1_SOURCE_SCHEMA_VERSION = 7
 
 
@@ -135,7 +136,9 @@ def project_completed_debate(
     highest_votes = max(vote_counts.values())
     tie_break_applied = sum(count == highest_votes for count in vote_counts.values()) > 1
     archive_schema_version = (
-        ARCHIVE_SCHEMA_VERSION
+        4
+        if snapshot.attachments
+        else 3
         if snapshot.voting_rules_version == COMPOSITE_VOTING_VERSION
         else 2
         if snapshot.affection_assessment is not None
@@ -230,6 +233,10 @@ def project_completed_debate(
     }
     if affection is not None:
         canonical_source["affection"] = affection
+    if snapshot.attachments:
+        canonical_source["attachments"] = [
+            serialize_debate_image(image) for image in snapshot.attachments
+        ]
     fingerprint = hashlib.sha256(_canonical_json(canonical_source)).hexdigest()
     pk = f"RECORD#{record_id}"
     common: DynamoItem = {
@@ -257,6 +264,8 @@ def project_completed_debate(
         "gsi3pk": f"REQUESTER#{requester_key}",
         "gsi3sk": f"{completed_at}#{record_id}",
     }
+    if snapshot.attachments:
+        meta_item["attachments"] = [serialize_debate_image(image) for image in snapshot.attachments]
     if affection is not None:
         meta_item["affection"] = affection
     if snapshot.voting_rules_version == COMPOSITE_VOTING_VERSION:

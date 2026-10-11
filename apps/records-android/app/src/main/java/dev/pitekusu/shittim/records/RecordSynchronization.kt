@@ -19,10 +19,10 @@ internal suspend fun RecordsRepository.synchronize(token: String, accountId: Str
       readContractVersion = stored?.readContractVersion ?: 0,
       pendingAvatars = stored?.pendingAvatars.orEmpty(), needsAvatarPrune = stored?.needsAvatarPrune ?: false)
   val completeIds = cachedCompleteRecordIds(accountId).toMutableSet()
-  // Older clients saved a projection without reasons under the same server revision.
+  // Older clients saved a projection without reasons or attachments under the same server revision.
   // Restart every index page once; retain readable bodies and pending icon work.
-  if (progress.readContractVersion != 1) {
-    progress = progress.copy(readContractVersion = 1, cursor = null, pendingIds = emptyList(),
+  if (progress.readContractVersion != 2) {
+    progress = progress.copy(readContractVersion = 2, cursor = null, pendingIds = emptyList(),
       pendingReferences = emptyList(), pageLoaded = false, cursorHashes = emptySet(), complete = false,
       committedRevisions = emptyMap(), removalCandidates = cachedRecordIds(accountId), indexBased = true)
     saveSyncCheckpoint(accountId, progress)

@@ -18,12 +18,14 @@ from shittim_chest.application.ports import (
     RepositoryConflict,
 )
 from shittim_chest.domain import PARTICIPANTS, InitialOpinion
+from shittim_chest.domain.attachments import ImageInput
 
 
 async def run_reconsideration(
     snapshot: DebateSnapshot,
     *,
     coordination: bool,
+    images: tuple[ImageInput, ...] = (),
     repository: DebateRepository,
     openai: OpenAIService,
     clock: Clock,
@@ -62,7 +64,7 @@ async def run_reconsideration(
                 snapshot, **{field: claimed}, state=replace(snapshot.state, updated_at=clock.now())
             ),
         )
-        proposed = await within(_step(snapshot, claimed, coordination, rotation, openai))
+        proposed = await within(_step(snapshot, claimed, coordination, rotation, openai, images))
         current = await repository.get(snapshot.state.debate_id)
         if current is None or (
             current.state.attempt_id != snapshot.state.attempt_id
@@ -93,6 +95,7 @@ async def _step(
     coordination: bool,
     rotation: int,
     openai: OpenAIService,
+    images: tuple[ImageInput, ...] = (),
 ) -> DebateSnapshot:
     field = "candidate_coordination" if coordination else "opinion_reconsideration"
     positions = (
@@ -106,6 +109,7 @@ async def _step(
     if progress.step == "classify":
         targets = await openai.find_overlap_targets(
             question=snapshot.question,
+            **({"images": images} if images else {}),
             positions=positions,
             rotation=rotation,
             coordination=coordination,
@@ -123,7 +127,12 @@ async def _step(
     next_progress = progress
     if progress.step == "explore":
         alternatives = await openai.explore_alternatives(
-            question=snapshot.question, frame=frame, plan=plan, peers=peers, evidence=evidence
+            question=snapshot.question,
+            **({"images": images} if images else {}),
+            frame=frame,
+            plan=plan,
+            peers=peers,
+            evidence=evidence,
         )
         if alternatives:
             next_progress = replace(
@@ -134,6 +143,7 @@ async def _step(
     elif progress.step == "select":
         selected = await openai.select_alternative(
             question=snapshot.question,
+            **({"images": images} if images else {}),
             frame=frame,
             plan=plan,
             peers=peers,
@@ -157,6 +167,7 @@ async def _step(
         )
         opinion = await openai.revise_initial_opinion(
             question=snapshot.question,
+            **({"images": images} if images else {}),
             frame=frame,
             plan=plan,
             opinions=snapshot.initial_opinions,

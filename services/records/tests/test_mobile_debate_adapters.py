@@ -149,7 +149,8 @@ def test_session_condition_uses_canonical_payload_and_revocation_is_not_accepted
     )
     seen = []
 
-    async def enqueue_mobile(_request, *, session_condition):
+    async def enqueue_mobile(_request, *, session_condition, attachment_actions=()):
+        assert not attachment_actions
         seen.append(session_condition)
         raise MobileIngressSessionInvalid()
 

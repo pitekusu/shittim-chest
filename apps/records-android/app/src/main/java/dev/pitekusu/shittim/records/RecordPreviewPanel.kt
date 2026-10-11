@@ -13,7 +13,8 @@ internal sealed interface RecordPreviewState {
   data object Loading : RecordPreviewState
   data object Empty : RecordPreviewState
   class Ready(val preview: RecordPreview, val saved: Boolean = false,
-    val updating: Boolean = false, val refreshFailure: RecordReadFailure? = null) : RecordPreviewState
+    val updating: Boolean = false, val refreshFailure: RecordReadFailure? = null,
+    val images: List<RecordImagePresentation> = emptyList()) : RecordPreviewState
   class Error(val reason: RecordReadFailure) : RecordPreviewState
 }
 

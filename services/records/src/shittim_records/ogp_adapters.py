@@ -77,7 +77,7 @@ class AwsPreviewStore:
             return None
         if (
             meta.get("record_type") != "archive_meta"
-            or meta.get("schema_version") not in {1, 2, 3}
+            or meta.get("schema_version") not in {1, 2, 3, 4}
             or meta.get("record_id") != record_id
         ):
             raise ValueError("invalid preview metadata")

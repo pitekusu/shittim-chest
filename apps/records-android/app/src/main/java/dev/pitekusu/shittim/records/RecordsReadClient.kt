@@ -49,7 +49,11 @@ internal class RecordPreview(
   val caveats: List<String> = emptyList(),
   val affection: RecordAffection? = null,
   val winnerSlot: String? = null,
-)
+  val attachments: List<RecordAttachment> = emptyList(),
+) {
+  fun cachedImages() = RecordPreview(question, decision, winnerName, opinions, voting, victoryMessage,
+    actions, caveats, affection, winnerSlot, attachments.map { it.cached() })
+}
 
 @Serializable
 internal class RecordOpinion(
@@ -195,7 +199,7 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
       requested
     }
     val detail: RecordDetail = read("/api/v1/records/$recordId", accessToken,
-      contract = "affection-reasons-v1")
+      contract = "record-images-v1")
     if (detail.schemaVersion != 2 || detail.recordId != recordId ||
       detail.question.isBlank() || detail.finalDecision.decision.isBlank() ||
       detail.result.winner != detail.finalDecision.winner ||
@@ -216,6 +220,7 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     }
     val winner = detail.participants.first { it.slot == detail.result.winner }
     if (winner.displayName.isBlank()) throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+    validateAttachments(detail.attachments)
     val voting = mapVoting(detail)
     return RecordReadResult.Found(
       RecordPreview(detail.question, detail.finalDecision.decision, winner.displayName,
@@ -225,7 +230,7 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
           RecordOpinion(participant.displayName, initial.summary, initial.proposal,
             final.title, final.proposal, participant.slot)
         }, voting, detail.finalDecision.victoryMessage, detail.finalDecision.actions,
-        detail.finalDecision.caveats, mapAffection(detail), winner.slot),
+        detail.finalDecision.caveats, mapAffection(detail), winner.slot, detail.attachments),
       if (detail.requester != null && detail.completedAt != null) {
         try {
           val question = detail.question.replace(Regex("[\\s\\p{Z}]+"), " ").trim()
@@ -289,6 +294,30 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     catch (error: RecordReadException) { throw error }
     catch (_: IOException) { throw RecordReadException(RecordReadFailure.UNAVAILABLE) }
     catch (_: Exception) { throw RecordReadException(RecordReadFailure.INVALID_RESPONSE) }
+  }
+
+  private fun validateAttachments(images: List<RecordAttachment>) {
+    try {
+      check(images.size <= MAX_ATTACHMENT_COUNT && images.map { it.attachmentId }.distinct().size == images.size)
+      images.forEach { it.validate(); check(it.url != null) }
+    } catch (_: Exception) { throw RecordReadException(RecordReadFailure.INVALID_RESPONSE) }
+  }
+
+  suspend fun attachment(image: RecordAttachment): ByteArray {
+    if (image.url == null || !validAttachmentS3Url(image.url, image.attachmentId))
+      throw RecordImageException(RecordImageFailure.INVALID)
+    return try {
+      client.prepareGet(image.url) { header(HttpHeaders.CacheControl, "no-store") }.execute { response ->
+        if (response.status.value != 200) throw RecordImageException(RecordImageFailure.UNAVAILABLE)
+        if (response.contentType()?.withoutParameters()?.toString() != image.contentType)
+          throw RecordImageException(RecordImageFailure.INVALID)
+        val bytes = response.bodyAsChannel().readBuffer((MAX_ATTACHMENT_BYTES + 1).toLong()).readByteArray()
+        try { validateAttachmentBytes(bytes, image); bytes }
+        catch (_: Exception) { bytes.fill(0); throw RecordImageException(RecordImageFailure.INVALID) }
+      }
+    } catch (error: CancellationException) { throw error }
+    catch (error: RecordImageException) { throw error }
+    catch (_: Exception) { throw RecordImageException(RecordImageFailure.UNAVAILABLE) }
   }
 
   private fun mapAffection(detail: RecordDetail): RecordAffection? {
@@ -542,6 +571,7 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     val finalDecision: FinalDecision,
     val affection: AffectionRef?,
     val voting: VotingRef? = null,
+    val attachments: List<RecordAttachment> = emptyList(),
   )
   @Serializable private class RecordParticipant(val slot: String, val displayName: String)
   @Serializable private class InitialOpinion(val participant: String, val summary: String, val proposal: String)

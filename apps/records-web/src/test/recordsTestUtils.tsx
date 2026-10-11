@@ -276,7 +276,7 @@ export function mockApi(
         return Promise.resolve(response({ ...listResponse(), items: matches ? [item] : [] }));
       }
       if (path.startsWith("/api/v1/records?")) return Promise.resolve(response(listResponse()));
-      if (path === `/api/v1/records/${RECORD_ID}?contract=affection-reasons-v1`) {
+      if (path === `/api/v1/records/${RECORD_ID}?contract=record-images-v1`) {
         return Promise.resolve(response(recordDetail()));
       }
       if (path === "/api/v1/insights/rankings") {

@@ -111,6 +111,7 @@ class DynamoDbIngressRepository:
         request: IngressRequest,
         *,
         session_condition: TransactWriteItemTypeDef | None = None,
+        attachment_actions: tuple[TransactWriteItemTypeDef, ...] = (),
     ) -> EnqueuedIngress:
         """Atomically store owned admission and, optionally, its live session fence."""
 
@@ -118,7 +119,12 @@ class DynamoDbIngressRepository:
             raise ValueError("mobile admission requires a mobile request")
         if session_condition is not None and set(session_condition) != {"ConditionCheck"}:
             raise ValueError("mobile session fence must be one ConditionCheck")
-        return await self._run(self._enqueue, request, session_condition=session_condition)
+        return await self._run(
+            self._enqueue,
+            request,
+            session_condition=session_condition,
+            attachment_actions=attachment_actions,
+        )
 
     async def get_mobile_request(self, *, owner_key: str, request_id: str) -> IngressRequest | None:
         return await self._run(self._get_mobile_request, owner_key, request_id)
@@ -450,6 +456,7 @@ class DynamoDbIngressRepository:
         request: IngressRequest,
         *,
         session_condition: TransactWriteItemTypeDef | None = None,
+        attachment_actions: tuple[TransactWriteItemTypeDef, ...] = (),
     ) -> EnqueuedIngress:
         if request.status is not IngressStatus.PENDING:
             raise ValueError("new ingress request must be pending")
@@ -484,6 +491,8 @@ class DynamoDbIngressRepository:
         if session_condition is not None:
             session_index = len(actions)
             actions.append(session_condition)
+        attachment_indices = tuple(range(len(actions), len(actions) + len(attachment_actions)))
+        actions.extend(attachment_actions)
         try:
             wrote_items = self._transact(
                 actions,
@@ -492,8 +501,14 @@ class DynamoDbIngressRepository:
                 ),
                 aggregate_write_floor=write_floor,
                 session_condition_index=session_index,
+                attachment_condition_indices=attachment_indices,
             )
         except MobileIngressSessionInvalid:
+            raise
+        except RepositoryIdentityConflict:
+            replay = self._replay(request)
+            if replay is not None:
+                return replay
             raise
         except RepositoryConflict:
             replay, active_count = self._resolve_enqueue_conflict(request)
@@ -2655,6 +2670,7 @@ class DynamoDbIngressRepository:
         token: str,
         aggregate_write_floor: int | None = None,
         session_condition_index: int | None = None,
+        attachment_condition_indices: tuple[int, ...] = (),
     ) -> bool:
         action_list = list(actions)
         if not 1 <= len(action_list) <= 99:
@@ -2675,6 +2691,14 @@ class DynamoDbIngressRepository:
         except self._client.exceptions.TransactionCanceledException as error:
             if is_condition_only_cancellation(error):
                 reasons = error.response.get("CancellationReasons", [])
+                if any(
+                    len(reasons) > index + 1
+                    and reasons[index + 1].get("Code") == "ConditionalCheckFailed"
+                    for index in attachment_condition_indices
+                ):
+                    raise RepositoryIdentityConflict(
+                        "image reservation admission conflict"
+                    ) from None
                 # The deployment-lock check is prepended above. Only this known
                 # session condition miss is authentication failure, not all conflicts.
                 if (
@@ -2960,6 +2984,11 @@ def _assert_common_identity(
         incoming.command_name,
         incoming.custom_id,
         incoming.question,
+        incoming.attachments,
+        tuple(
+            (image.attachment_id, image.content_type, image.size_bytes)
+            for image in incoming.pending_attachments
+        ),
         incoming.source_message_id,
         incoming.source_thread_id,
         incoming.target_debate_id,
@@ -2981,6 +3010,11 @@ def _assert_common_identity(
         persisted.command_name,
         persisted.custom_id,
         persisted.question,
+        persisted.attachments,
+        tuple(
+            (image.attachment_id, image.content_type, image.size_bytes)
+            for image in persisted.pending_attachments
+        ),
         persisted.source_message_id,
         persisted.source_thread_id,
         persisted.target_debate_id,

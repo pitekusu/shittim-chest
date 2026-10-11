@@ -233,7 +233,7 @@ describe("Records API endpoint validation", () => {
     );
     await expect(getRecord(RECORD_ID)).resolves.toEqual(recordDetail());
     expect(fetch).toHaveBeenCalledWith(
-      `/api/v1/records/${RECORD_ID}?contract=affection-reasons-v1`,
+      `/api/v1/records/${RECORD_ID}?contract=record-images-v1`,
       expect.objectContaining({ credentials: "same-origin" }),
     );
   });

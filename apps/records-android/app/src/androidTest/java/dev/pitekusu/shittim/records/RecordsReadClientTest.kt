@@ -1,5 +1,7 @@
 package dev.pitekusu.shittim.records
 
+import android.graphics.Bitmap
+import java.io.ByteArrayOutputStream
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -19,6 +21,41 @@ class RecordsReadClientTest {
   private val id = "r".repeat(43)
   private val token = "t".repeat(43)
   private val jsonHeader = headersOf(HttpHeaders.ContentType, "application/json")
+
+  @Test fun discordUuid5AttachmentCanBeReadDownloadedAndProjectedForOfflineStorage() = runBlocking {
+    val discordId = "11111111-2222-5333-8444-abcdefabcdef"
+    val bitmap = Bitmap.createBitmap(24, 16, Bitmap.Config.ARGB_8888)
+    val bytes = try { ByteArrayOutputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it); it.toByteArray() } }
+    finally { bitmap.recycle() }
+    val digest = attachmentDigest(bytes)
+    val url = "https://shittim-chest-production-records-media-000000000000.s3.ap-northeast-1.amazonaws.com/debate-images/$discordId/original.png?signature=synthetic"
+    val payload = detail(id).replace("\"affection\":null", """"affection":null,"attachments":[{
+      "attachmentId":"$discordId","contentType":"image/png","sizeBytes":${bytes.size},
+      "sha256":"$digest","width":24,"height":16,"url":"$url","urlExpiresAt":"2026-10-11T00:05:00Z"}]""")
+    var calls = 0
+    RecordsReadClient(MockEngine { request ->
+      calls++
+      if (request.url.host == "shittim.pitekusu.dev") {
+        assertEquals("record-images-v1", request.url.parameters["contract"])
+        respond(payload, headers = jsonHeader)
+      } else {
+        assertFalse(request.headers.contains(HttpHeaders.Authorization))
+        assertFalse(request.headers.contains(HttpHeaders.Cookie))
+        respond(bytes, headers = headersOf(HttpHeaders.ContentType, "image/png"))
+      }
+    }).use { client ->
+      val preview = (client.firstRecord(token, "/records/$id") as RecordReadResult.Found).preview
+      val image = preview.attachments.single()
+      assertEquals(discordId, image.attachmentId)
+      org.junit.Assert.assertArrayEquals(bytes, client.attachment(image))
+      val cached = preview.cachedImages().attachments.single()
+      assertEquals(discordId, cached.attachmentId)
+      assertEquals(null, cached.url)
+      assertEquals(null, cached.urlExpiresAt)
+      cached.validate()
+    }
+    assertEquals(2, calls)
+  }
 
   @Test fun avatarTransportNeverSendsCredentialsAndRejectsOversizeOrRedirectedImages() = runBlocking {
     val url = "https://fictional.s3.ap-northeast-1.amazonaws.com/requesters/fictional/avatar.webp?signature=sample"
@@ -70,7 +107,7 @@ class RecordsReadClientTest {
       assertTrue(result.preview.actions.isEmpty())
     }
     assertEquals(listOf("/api/v1/records?limit=1&sort=newest",
-      "/api/v1/records/$id?contract=affection-reasons-v1"), paths)
+      "/api/v1/records/$id?contract=record-images-v1"), paths)
   }
 
   @Test
@@ -173,7 +210,7 @@ class RecordsReadClientTest {
   fun affectionReasonsKeepScoresWhenOnlyFeelingsAreUnavailableAndUseUnicodeLimits() = runBlocking {
     for (reason in listOf("具体的な感想", "😀".repeat(500))) {
       RecordsReadClient(MockEngine { request ->
-        assertEquals("affection-reasons-v1", request.url.parameters["contract"])
+        assertEquals("record-images-v1", request.url.parameters["contract"])
         respond(detail(id).replace("\"affection\":null",
           "\"affection\":${affectionWithReasons(reason)}"), headers = jsonHeader)
       }).use { client ->

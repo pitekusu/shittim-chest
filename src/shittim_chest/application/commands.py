@@ -126,6 +126,8 @@ def command_from_ingress(request: IngressRequest) -> IngressDebateCommand:
             raise InvalidApplicationOperation("new debate ingress is missing its question")
         return AcceptDebateRequest(
             question=request.question,
+            attachments=request.attachments,
+            pending_attachments=request.pending_attachments,
             requester_id=request.requester_id,
             requester_username=request.requester_username,
             requester_display_name=request.requester_display_name,

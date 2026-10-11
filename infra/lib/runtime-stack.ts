@@ -252,6 +252,17 @@ export class RuntimeStack extends Stack {
     const executionRole = this.executionRole();
     const normalTaskRole = this.taskRole("NormalTaskRole", "ShittimChest-Prod-Task");
     this.grantApplicationData(normalTaskRole, props.debateTable);
+    normalTaskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject"],
+        resources: [
+          Fn.join("", [
+            "arn:", this.partition, ":s3:::shittim-chest-production-records-media-",
+            this.account, "/debate-images/*",
+          ]),
+        ],
+      }),
+    );
     const statusPublisherArn = this.formatArn({
       resource: "function",
       resourceName: DISCORD_STATUS_PUBLISHER_FUNCTION_NAME,
@@ -264,6 +275,14 @@ export class RuntimeStack extends Stack {
       }),
     );
     this.grantRuntimePromptRead(normalTaskRole);
+    for (const partition of ["arn:aws", "arn:<AWS::Partition>"]) {
+      const nagAccount = Token.isUnresolved(this.account) ? "<AWS::AccountId>" : this.account;
+      Validations.of(normalTaskRole).acknowledge({
+        id: `AwsSolutions-IAM5[Resource::${partition}:s3:::shittim-chest-production-records-media-${nagAccount}/debate-images/*]`,
+        reason:
+          "The runtime reads immutable validated debate images and writes imported Discord images only in the dedicated debate-images prefix; it cannot list or delete media or access memorial assets.",
+      });
+    }
     normalTaskRole.addToPrincipalPolicy(
       new iam.PolicyStatement({
         actions: ["ssm:GetParameters"],
@@ -1084,6 +1103,9 @@ export class RuntimeStack extends Stack {
         AWS_REGION: "ap-northeast-1",
         IDENTITY_HMAC_PARAMETER_NAME: RECORDS_IDENTITY_HMAC_PARAMETER,
         SHITTIM_DYNAMODB_TABLE: "shittim-chest-production",
+        SHITTIM_DEBATE_MEDIA_BUCKET: Fn.join("", [
+          "shittim-chest-production-records-media-", this.account,
+        ]),
         SHITTIM_ENVIRONMENT: "production",
         SHITTIM_LOG_LEVEL: "INFO",
         SHITTIM_RECORDS_MEMORIAL_URL: Fn.join("", [

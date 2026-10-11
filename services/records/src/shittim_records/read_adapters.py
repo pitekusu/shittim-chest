@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.serializer import DynamoItem
+from shittim_chest.domain.attachments import DebateImage
 
 from shittim_records.auth import AuthFailure
 from shittim_records.cost_adapters import parse_stored_costs, parse_stored_rates
@@ -278,6 +279,19 @@ class DynamoRecordsReader:
                 updated_at=updated_at,
             )
         return profiles
+
+    def attachment_url(self, image: DebateImage, *, thumbnail: bool = False) -> str:
+        key = image.vision_asset_key if thumbnail else image.asset_key
+        version = image.vision_asset_version_id if thumbnail else image.asset_version_id
+        params = {
+            "Bucket": self._media_bucket,
+            "Key": key,
+            "ResponseContentType": "image/webp" if thumbnail else image.content_type,
+            "ResponseCacheControl": "private, no-store",
+        }
+        if version:
+            params["VersionId"] = version
+        return self._s3.generate_presigned_url("get_object", Params=params, ExpiresIn=300)
 
     def avatar_url(self, *, asset_key: str) -> str:
         if not asset_key.startswith(("participants/", "requesters/")):

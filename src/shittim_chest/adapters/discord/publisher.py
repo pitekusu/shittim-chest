@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import io
 import math
 from collections.abc import Mapping
 from datetime import timedelta
@@ -34,10 +36,12 @@ from shittim_chest.application.errors import OutboxRecoveryAbandoned
 from shittim_chest.application.models import DebateSnapshot, DeliveryAbandonReason
 from shittim_chest.application.ports import (
     Clock,
+    DebateImageStore,
     DiscordOutboxRepository,
     RepositoryTransactionConflict,
     RepositoryUnavailable,
 )
+from shittim_chest.domain.attachments import DebateImage
 
 DEFAULT_HISTORY_LIMIT = 500
 DEFAULT_RETRY_DELAY_SECONDS = 30.0
@@ -57,6 +61,7 @@ class DiscordPyPublisher:
         outbox: DiscordOutboxRepository,
         clock: Clock,
         claim_owner: str,
+        image_store: DebateImageStore | None = None,
         history_limit: int = DEFAULT_HISTORY_LIMIT,
         retry_delay_seconds: float = DEFAULT_RETRY_DELAY_SECONDS,
         delivery_timeout_seconds: float = DEFAULT_DELIVERY_TIMEOUT_SECONDS,
@@ -90,6 +95,7 @@ class DiscordPyPublisher:
             raise ValueError("completion retries must be an integer between 1 and 10")
         if completion_retry_seconds < 0:
             raise ValueError("completion retry delay must not be negative")
+        self._image_store = image_store
         self._clients = dict(clients)
         self._outbox = outbox
         self._clock = clock
@@ -281,6 +287,7 @@ class DiscordPyPublisher:
             inspected += 1
             if message.author.id != user.id or str(message.nonce) != operation.nonce:
                 continue
+            self._validate_attachments(message, operation)
             if message.content != operation.content:
                 raise DiscordDeliveryConflict
             if content_sha256(message.content) != operation.content_hash:
@@ -298,6 +305,7 @@ class DiscordPyPublisher:
         message: discord.Message,
         operation: OutboxOperation,
     ) -> None:
+        self._validate_attachments(message, operation)
         user = client.user
         if user is None:
             raise DiscordIdentityUnavailable
@@ -310,18 +318,58 @@ class DiscordPyPublisher:
         ):
             raise DiscordDeliveryConflict
 
+    @staticmethod
+    def _validate_attachments(message: discord.Message, operation: OutboxOperation) -> None:
+        if not operation.attachments:
+            return
+        actual = message.attachments
+        if len(actual) != len(operation.attachments):
+            raise DiscordDeliveryConflict
+        for received, expected in zip(actual, operation.attachments, strict=True):
+            if (
+                received.filename != _image_filename(expected)
+                or received.size != expected.size_bytes
+                or received.content_type != expected.content_type
+            ):
+                raise DiscordDeliveryConflict
+
     async def _send(
         self,
         client: discord.Client,
         target: discord.Thread | discord.TextChannel,
         operation: OutboxOperation,
     ) -> int:
-        message = await target.send(
-            operation.content,
-            nonce=operation.nonce,
-            allowed_mentions=discord.AllowedMentions.none(),
-            suppress_embeds=True,
-        )
+        files: list[discord.File] = []
+        if operation.attachments:
+            if self._image_store is None:
+                raise DiscordDeliveryRejected
+            if not target.permissions_for(target.guild.me).attach_files:
+                raise DiscordPermissionDenied
+            for image in operation.attachments:
+                content = await self._image_store.load_original(image)
+                if (
+                    len(content) != image.size_bytes
+                    or hashlib.sha256(content).hexdigest() != image.sha256
+                ):
+                    raise DiscordDeliveryConflict
+                files.append(
+                    discord.File(
+                        io.BytesIO(content),
+                        filename=_image_filename(image),
+                        description="討論の参考画像",
+                    )
+                )
+        try:
+            message = await target.send(
+                operation.content,
+                nonce=operation.nonce,
+                allowed_mentions=discord.AllowedMentions.none(),
+                suppress_embeds=True,
+                **({"files": files} if files else {}),
+            )
+        finally:
+            for file in files:
+                file.close()
         self._validate_message(client, message, operation)
         return message.id
 
@@ -381,3 +429,9 @@ class DiscordPyPublisher:
         if not math.isfinite(parsed) or parsed <= 0:
             return self._retry_delay_seconds
         return max(1.0, parsed)
+
+
+def _image_filename(image: DebateImage) -> str:
+    # IDs and checksum are opaque; do not publish the original private filename.
+    extension = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}[image.content_type]
+    return f"{image.attachment_id}-{image.sha256[:16]}.{extension}"

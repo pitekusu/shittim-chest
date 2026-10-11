@@ -12,7 +12,7 @@ export async function getRecord(
   signal?: AbortSignal,
 ): Promise<RecordDetailResponse> {
   return requestJson(
-    `/api/v1/records/${encodeURIComponent(recordId)}?contract=affection-reasons-v1`,
+    `/api/v1/records/${encodeURIComponent(recordId)}?contract=record-images-v1`,
     isRecordDetailResponse,
     { signal },
   );

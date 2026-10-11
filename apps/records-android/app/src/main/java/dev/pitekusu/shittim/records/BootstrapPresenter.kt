@@ -1,6 +1,8 @@
 package dev.pitekusu.shittim.records
 
 import android.content.ActivityNotFoundException
+import android.net.Uri
+import kotlin.coroutines.cancellation.CancellationException
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -64,6 +66,7 @@ internal data object BootstrapScreen : Screen {
     val debateStatus: DebateStatusState = DebateStatusState(),
     val debateHistory: DebateHistoryState = DebateHistoryState(),
     val debateOnline: Boolean = session is SessionState.SignedIn,
+    val debateImages: List<RecordImagePresentation> = emptyList(),
     val eventSink: (Event) -> Unit,
   ) : CircuitUiState
 
@@ -73,6 +76,7 @@ internal data object BootstrapScreen : Screen {
     data object Logout : Event
     data object Retry : Event
     data object RetryRecord : Event
+    data object RetryRecordImages : Event
     data object RefreshRecords : Event
     data object RecordsAuthRequired : Event
     data class OpenRecord(val recordId: String) : Event
@@ -86,6 +90,9 @@ internal data object BootstrapScreen : Screen {
     class EditDebate(val question: String) : Event {
       override fun toString(): String = "EditDebate(<redacted>)"
     }
+    class AddDebateImages(val uris: List<Uri>) : Event { override fun toString() = "AddDebateImages(<redacted>)" }
+    class RemoveDebateImage(val attachmentId: String) : Event
+    data object DiscardMissingDebate : Event
     data object SubmitDebate : Event
     data object CheckDebate : Event
     data object RetryDebate : Event
@@ -151,6 +158,7 @@ internal class BootstrapPresenter(
       cacheAccountId?.let { owner ->
         val factory = viewModelFactory { initializer {
           val client = DebateRequestsClient()
+          val uploads = DebateAttachmentsClient()
           // Kotlin lazy retries an initializer that throws; a transient open failure
           // must not permanently disable this account's retained model.
           val store = lazy { DebateWorkspaceStore.open(context.applicationContext, session::isCacheAuthorized) }
@@ -167,10 +175,18 @@ internal class BootstrapPresenter(
               val result = session.withAuthorizedToken { Lookup(client.find(it, id)) }
                 ?: throw DebateRequestException(DebateFailure.AUTH_REQUIRED)
               result.value
-            }, { if (store.isInitialized()) store.value.close(); client.close() },
+            }, { if (store.isInitialized()) store.value.close(); client.close(); uploads.close() },
             { cursor -> session.withAuthorizedToken { client.list(it, cursor) }
               ?: throw DebateRequestException(DebateFailure.AUTH_REQUIRED) },
-            authenticationRequired = session::onAuthenticationRequired)
+            authenticationRequired = session::onAuthenticationRequired,
+            importImage = { store.value.importImage(owner, it) },
+            readImage = { store.value.image(owner, it) },
+            sendWithImages = { id, question, images -> session.withAuthorizedToken { token ->
+              if (!hasValidatedDebateNetwork(context)) throw DebateRequestException(DebateFailure.UNAVAILABLE)
+              uploads.prepare(token, id, images) { store.value.image(owner, it) }
+              if (!session.isCacheAuthorized(owner)) throw DebateRequestException(DebateFailure.AUTH_REQUIRED)
+              client.submit(token, id, question, images.map { it.attachmentId })
+            } ?: throw DebateRequestException(DebateFailure.AUTH_REQUIRED) })
         } }
         ViewModelProvider(modelOwner, factory)["debate-$owner", DebateSubmissionModel::class.java]
       }
@@ -182,6 +198,7 @@ internal class BootstrapPresenter(
     }
     LaunchedEffect(debateModel) { debateModel?.restore() }
     val debate = debateModel?.state?.collectAsState()?.value ?: DebateSubmissionState()
+    val debateImages = debateModel?.images?.collectAsState()?.value.orEmpty()
     val debateStatus = debateModel?.status?.collectAsState()?.value ?: DebateStatusState()
     val debateHistory = debateModel?.history?.collectAsState()?.value ?: DebateHistoryState()
     LaunchedEffect(debate.failure, debateStatus.failure, debateHistory.failure) {
@@ -363,13 +380,66 @@ internal class BootstrapPresenter(
         }
       }
     }
+    var recordImages by remember(cacheAccountId, selectedRecordId) {
+      mutableStateOf<List<RecordImagePresentation>>(emptyList())
+    }
+    var imageRetry by remember { mutableStateOf(0) }
+    val currentImages by rememberUpdatedState(recordImages)
+    DisposableEffect(cacheAccountId, selectedRecordId) {
+      onDispose { currentImages.forEach { it.bytes?.fill(0) } }
+    }
+    val imageReferences = (record as? RecordPreviewState.Ready)?.preview?.attachments.orEmpty()
+    val imageIdentity = imageReferences.joinToString("|") { "${it.attachmentId}:${it.sha256}" }
+    LaunchedEffect(cacheAccountId, selectedRecordId, imageIdentity, signedIn, imageRetry) {
+      val owner = cacheAccountId ?: return@LaunchedEffect
+      val id = selectedRecordId ?: return@LaunchedEffect
+      if (!session.isCacheAuthorized(owner)) return@LaunchedEffect
+      val previous = recordImages.associateBy { it.image.attachmentId }
+      var loaded = imageReferences.map { image ->
+        previous[image.attachmentId]?.takeIf { it.image.sameImage(image) && it.bytes != null }
+          ?: RecordImagePresentation(image, loading = true)
+      }
+      recordImages = loaded
+      for (index in imageReferences.indices) {
+        if (loaded[index].bytes != null) continue
+        val image = imageReferences[index]
+        var bytes: ByteArray? = null
+        val next = try {
+          bytes = try { records?.cachedAttachment(owner, id, image) }
+          catch (error: RecordImageException) { if (!signedIn) throw error else null }
+          if (bytes == null) {
+            if (!signedIn) throw RecordImageException(RecordImageFailure.OFFLINE)
+            bytes = session.withAuthorizedToken { token ->
+              records?.cacheAttachment(token, owner, id, image)
+                ?: throw RecordImageException(RecordImageFailure.STORAGE)
+            } ?: throw RecordReadException(RecordReadFailure.AUTH_REQUIRED)
+          }
+          if (!session.isCacheAuthorized(owner)) { bytes?.fill(0); return@LaunchedEffect }
+          RecordImagePresentation(image, bytes)
+        } catch (error: CancellationException) { bytes?.fill(0); throw error }
+        catch (error: RecordImageException) { RecordImagePresentation(image, failure = error.failure) }
+        catch (error: RecordReadException) {
+          if (error.failure == RecordReadFailure.AUTH_REQUIRED) session.onAuthenticationRequired()
+          RecordImagePresentation(image, failure = RecordImageFailure.UNAVAILABLE)
+        } catch (_: Exception) { RecordImagePresentation(image, failure = RecordImageFailure.STORAGE) }
+        if (!session.isCacheAuthorized(owner)) { next.bytes?.fill(0); return@LaunchedEffect }
+        loaded = loaded.toMutableList().also { it[index] = next }
+        recordImages = loaded
+      }
+      try { records?.pruneAttachments(owner, id, imageReferences) }
+      catch (error: CancellationException) { throw error }
+      catch (_: Exception) { /* Retain completed originals if cleanup fails. */ }
+    }
+    val visibleRecord = (record as? RecordPreviewState.Ready)?.let {
+      RecordPreviewState.Ready(it.preview, it.saved, it.updating, it.refreshFailure, recordImages)
+    } ?: record
     val visibleList = if (cacheAccountId != null && listOwner == cacheAccountId) recordList else RecordListState.Idle
-    return BootstrapScreen.State(themeChoice, sessionState, visibleList, record, selectedRecordId, syncState,
+    return BootstrapScreen.State(themeChoice, sessionState, visibleList, visibleRecord, selectedRecordId, syncState,
       canReadRecords = cacheAccountId != null, listQuery = listQuery, searching = searching,
       requesters = if (cacheAccountId != null) requesters else emptyList(),
       loginCompletion = loginCompletion, backStack = backStack.toList(), recordOwner = cacheAccountId,
       debate = debate, debateStatus = debateStatus, debateHistory = debateHistory,
-      debateOnline = debateOnline) { event ->
+      debateOnline = debateOnline, debateImages = debateImages) { event ->
       when (event) {
         is BootstrapScreen.Event.SelectTheme -> themeChoice = event.choice
         BootstrapScreen.Event.Login -> if (session.beginLogin(
@@ -389,6 +459,7 @@ internal class BootstrapPresenter(
           session.logout()
         }
         BootstrapScreen.Event.Retry -> session.retry()
+        BootstrapScreen.Event.RetryRecordImages -> imageRetry++
         BootstrapScreen.Event.RetryRecord -> {
           recordRetry++
           if (!signedIn) session.retry() else RecordSyncScheduler.syncNow(context)
@@ -427,6 +498,9 @@ internal class BootstrapPresenter(
           backStack.add(DebateCompose)
         }
         is BootstrapScreen.Event.EditDebate -> debateModel?.edit(event.question)
+        is BootstrapScreen.Event.AddDebateImages -> if (backStack.lastOrNull() == DebateCompose) debateModel?.addImages(event.uris)
+        is BootstrapScreen.Event.RemoveDebateImage -> if (backStack.lastOrNull() == DebateCompose) debateModel?.removeImage(event.attachmentId)
+        BootstrapScreen.Event.DiscardMissingDebate -> if (signedIn && hasValidatedDebateNetwork(context)) debateModel?.discardMissing()
         BootstrapScreen.Event.SubmitDebate -> if (signedIn && hasValidatedDebateNetwork(context)) debateModel?.submit()
         BootstrapScreen.Event.CheckDebate -> if (signedIn && hasValidatedDebateNetwork(context)) debateModel?.reconcile()
         BootstrapScreen.Event.RetryDebate -> if (debateModel?.state?.value?.workspace == null) {

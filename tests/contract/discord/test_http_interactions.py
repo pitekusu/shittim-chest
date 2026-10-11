@@ -463,3 +463,66 @@ def test_sensitive_signed_values_are_excluded_from_repr_and_logs(
     assert restored.signature_hex not in repr(restored)
     assert "handler-only-value" not in caplog.text
     assert restored.signature_hex not in caplog.text
+
+
+def image_command_payload() -> dict[str, object]:
+    payload = command_payload()
+    data = cast(dict[str, object], payload["data"])
+    attachment = str(10**17 + 1)
+    data["options"] = [
+        {"name": "image1", "type": 11, "value": attachment},
+        {"name": "question", "type": 3, "value": "この写真について相談したい"},
+    ]
+    data["resolved"] = {
+        "attachments": {
+            attachment: {
+                "id": attachment,
+                "content_type": "image/png",
+                "size": 100,
+                "url": f"https://cdn.discordapp.com/ephemeral-attachments/101/{attachment}/private.png?ex=ffff&hm=private-signature",
+                "width": 10,
+                "height": 10,
+            }
+        }
+    }
+    return payload
+
+
+def test_signed_image_command_resolves_stable_identity_without_leaking_url(
+    signing_key: SigningKey,
+) -> None:
+    first = receive(signing_key, image_command_payload())
+    second = receive(signing_key, image_command_payload())
+    assert isinstance(first.interaction, DiscordHttpOperation)
+    assert isinstance(second.interaction, DiscordHttpOperation)
+    assert first.interaction.pending_attachments == second.interaction.pending_attachments
+    assert len(first.interaction.pending_attachments) == 1
+    assert "private-signature" not in repr(first.interaction.pending_attachments)
+    assert "private.png" not in repr(first.interaction)
+
+
+@pytest.mark.parametrize(
+    "mutation", ["missing", "other_host", "too_large", "wrong_id", "duplicate"]
+)
+def test_invalid_signed_image_command_is_rejected_before_acceptance(
+    signing_key: SigningKey, mutation: str
+) -> None:
+    payload = image_command_payload()
+    data = cast(dict[str, object], payload["data"])
+    resolved = cast(dict[str, object], data["resolved"])
+    attachments = cast(dict[str, object], resolved["attachments"])
+    attachment = cast(dict[str, object], next(iter(attachments.values())))
+    if mutation == "missing":
+        data.pop("resolved")
+    elif mutation == "other_host":
+        attachment["url"] = "https://example.invalid/private.png"
+    elif mutation == "too_large":
+        attachment["size"] = 10 * 1024 * 1024 + 1
+    elif mutation == "wrong_id":
+        attachment["id"] = "999"
+    else:
+        options = cast(list[object], data["options"])
+        options.append(options[0])
+    reception = receive(signing_key, payload)
+    assert reception.response is not None
+    assert reception.response.status_code == 400

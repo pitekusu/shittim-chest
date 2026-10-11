@@ -23,6 +23,75 @@ class DebateSubmissionModelTest {
     while (!condition()) delay(10)
   }
 
+  @Test fun editingQuestionDuringPreviewRestoreKeepsSelectedImagesAndRemovalAvailable() = runBlocking<Unit> {
+    val image = DraftAttachment("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "image/png", 2, "a".repeat(64), 1, 2)
+    var saved = DebateWorkspace(draft = "架空の議題", attachments = listOf(image))
+    val reading = CompletableDeferred<Unit>()
+    val release = CompletableDeferred<Unit>()
+    val model = DebateSubmissionModel({ true }, { saved }, { saved = it }, { _, _ -> null }, { null }, {},
+      readImage = { reading.complete(Unit); release.await(); byteArrayOf(1, 2) })
+    try {
+      withContext(Dispatchers.Main) { model.restore() }
+      reading.await()
+      withContext(Dispatchers.Main) { model.edit("架空の編集済み議題") }
+      release.complete(Unit)
+      await { model.images.value.size == 1 }
+      assertEquals("架空の編集済み議題", model.state.value.workspace!!.draft)
+      assertEquals(image.attachmentId, model.images.value.single().image.attachmentId)
+      assertArrayEquals(byteArrayOf(1, 2), model.images.value.single().bytes)
+      withContext(Dispatchers.Main) { model.removeImage(image.attachmentId) }
+      await { model.images.value.isEmpty() && !model.state.value.saving }
+      assertTrue(saved.attachments.isEmpty())
+    } finally {
+      withContext(Dispatchers.Main) { ViewModelStore().apply { put("preview-edit", model); clear() } }
+    }
+  }
+
+  @Test fun removedSelectionRejectsAndErasesAnOlderPreviewRestore() = runBlocking<Unit> {
+    val image = DraftAttachment("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "image/png", 2, "a".repeat(64), 1, 2)
+    var saved = DebateWorkspace(draft = "架空の議題", attachments = listOf(image))
+    val reading = CompletableDeferred<Unit>()
+    val release = CompletableDeferred<Unit>()
+    val obsoleteBytes = byteArrayOf(1, 2)
+    val model = DebateSubmissionModel({ true }, { saved }, { saved = it }, { _, _ -> null }, { null }, {},
+      readImage = { reading.complete(Unit); release.await(); obsoleteBytes })
+    try {
+      withContext(Dispatchers.Main) { model.restore() }
+      reading.await()
+      withContext(Dispatchers.Main) { model.removeImage(image.attachmentId) }
+      await { saved.attachments.isEmpty() && !model.state.value.saving }
+      release.complete(Unit)
+      await { obsoleteBytes.all { it == 0.toByte() } }
+      assertTrue(model.images.value.isEmpty())
+      assertTrue(model.state.value.workspace!!.attachments.isEmpty())
+    } finally {
+      withContext(Dispatchers.Main) { ViewModelStore().apply { put("preview-remove", model); clear() } }
+    }
+  }
+
+  @Test fun attachmentIdsRemainFrozenAcrossAmbiguousSubmissionAndTextEdits() = runBlocking<Unit> {
+    val image = DraftAttachment("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "image/png", 2, "a".repeat(64), 1, 2)
+    var saved = DebateWorkspace(draft = "架空の議題", attachments = listOf(image))
+    var postedIds: List<String>? = null
+    val model = DebateSubmissionModel({ true }, { saved }, { saved = it }, { _, _ -> error("legacy text sender") },
+      { null }, {}, sendWithImages = { request, question, attachments ->
+        assertEquals(request, saved.requestId)
+        assertEquals(question, saved.frozenQuestion)
+        postedIds = attachments.map { it.attachmentId }
+        throw DebateRequestException(DebateFailure.UNAVAILABLE)
+      })
+    withContext(Dispatchers.Main) { model.restore() }
+    await { model.state.value.workspace != null }
+    withContext(Dispatchers.Main) { model.edit("架空の編集"); model.submit() }
+    await { !model.state.value.busy }
+    assertEquals(listOf(image.attachmentId), postedIds)
+    assertEquals(listOf(image.attachmentId), saved.attachments.map { it.attachmentId })
+    withContext(Dispatchers.Main) { model.removeImage(image.attachmentId); model.edit("変更不可") }
+    assertEquals("架空の編集", saved.frozenQuestion)
+    assertEquals(1, model.state.value.workspace!!.attachments.size)
+    withContext(Dispatchers.Main) { ViewModelStore().apply { put("images", model); clear() } }
+  }
+
   @Test fun storageFailurePreventsAnyPost() = runBlocking<Unit> {
     var calls = 0
     val model = DebateSubmissionModel({ true }, { DebateWorkspace(draft = "架空の議題") },
