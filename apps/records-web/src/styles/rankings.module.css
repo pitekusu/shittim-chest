@@ -648,7 +648,6 @@
   grid-template-columns: minmax(200px, 0.65fr) minmax(0, 1fr);
   gap: 18px 40px;
   padding-top: 24px;
-  background: var(--records-reading-surface);
 }
 
 .costSummary {
