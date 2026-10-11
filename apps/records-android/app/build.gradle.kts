@@ -73,6 +73,7 @@ android {
     }
     release {
       signingConfig = signingConfigs.getByName("upload")
+      optimization { enable = true }
     }
   }
 

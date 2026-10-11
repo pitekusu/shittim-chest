@@ -210,10 +210,27 @@ CIで全試験を確認する場合は、手動実行の`android_screen_tests`�
 ## C18のRelease設定
 
 - debug版は従来どおり`.dev`付きでビルドする。release版は本来のapplication IDを使用する。
+- releaseはAGP標準の`optimization { enable = true }`でR8のコード縮小・最適化・難読化とリソース縮小を有効にする。保持ルールは標準とライブラリ同梱のものを使い、実際に必要な範囲だけ追加する。
+- 最適化済みAABには`BUNDLE-METADATA/com.android.tools/r8.json`と難読化のmappingが同梱される。配布版のAABを保持し、最適化指標の確認とクラッシュの復元に使う。
 - `shittimAndroidVersionCode`（正の整数、既定`1`）と`shittimAndroidVersionName`（`major.minor.patch`、既定`0.0.1`）をGradleプロパティで指定できる。更新時はPlayに提出済みのcodeより大きくする。
 - 署名には環境変数`SHITTIM_ANDROID_UPLOAD_KEYSTORE`、`SHITTIM_ANDROID_UPLOAD_STORE_PASSWORD`、`SHITTIM_ANDROID_UPLOAD_KEY_ALIAS`、`SHITTIM_ANDROID_UPLOAD_KEY_PASSWORD`を使用する。秘密値をコマンド行、`gradle.properties`、Git、ログへ書かない。
 - いずれかの入力またはkeystoreファイルが欠ければ、`assembleRelease`・`bundleRelease`は成果物作成前に失敗する。実際のupload keyの発行・管理、Play署名証明書とApp Linksの接続はC19以降の運用で扱う。
 - 合成テスト鍵でのAAB署名確認は実施するが、配布版の署名や端末ログインの確認とは区別する。C39の配布Workflowは同一AABの検証・提出を別途実装する。
+
+最適化済みreleaseの確認では、署名用環境変数を用意して次を実行する。ローカル検証にはリポジトリ外の合成テスト鍵を使い、Play配布版と区別する。
+
+```sh
+uv run --frozen python -m tools.run_android_build -- \
+  :app:assembleRelease :app:bundleRelease :app:lintRelease
+```
+
+生成したAPKを未認証の専用エミュレーターへ導入し、ログイン前画面の表示、表示切替、回転後の表示を確認する。本番通信・実署名・Play配布はこの確認に含めない。
+
+instrumentationは既存のdebug設定を維持する。`RuntimeDiscoveryTest`でNavigation 3の全5種の経路のSavedState保存・復元、WorkManager標準factoryによる3種のWorker生成と名前保持、Room生成クラスのreflection生成を確認する。実Activityの表示・再作成は既存の`BootstrapCircuitTest`（`@ScreenTest`）で必要時だけ確認する。Workerの`doWork()`は呼ばず、Activityの再作成を実際のプロセス破棄・復元とは扱わない。
+
+最適化済み本体から削除された共有ライブラリをテストランナーが参照すると、release instrumentation自体が起動できない場合がある。テストのために本体へ保持ルールを追加せず、debugの境界試験と最適化済みAPKの動作確認を分ける。
+
+導入時は既存の暗号化保存・再読込、認証API、記録閲覧の関連試験も実行する。debugの合格は最適化済みreleaseの合格と区別し、実署名・実機ログイン・Play配布の確認は別途行う。
 
 ## C19のApp Links
 
