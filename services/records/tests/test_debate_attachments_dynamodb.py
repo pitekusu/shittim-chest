@@ -133,7 +133,7 @@ def test_promotion_lease_and_expiry_fence_stale_workers(dynamodb_client, attachm
     assert repository.ready_images("owner", REQUEST, (ID,), NOW + timedelta(minutes=4)) == (
         image(),
     )
-    expired = repository.expire(NOW + timedelta(days=2))
+    expired = tuple(repository.expire(NOW + timedelta(days=2)))
     assert len(expired) == 1
     with pytest.raises(AttachmentFailure, match="ATTACHMENT_EXPIRED"):
         repository.ready_images("owner", REQUEST, (ID,), NOW + timedelta(days=2))
@@ -201,7 +201,7 @@ def test_live_session_and_ready_images_are_consumed_with_queue_atomically(
         persisted = asyncio.run(repository.get(owner_key=session.requester_key, request_id=REQUEST))
         assert persisted.attachments == (image(),)
         assert attachments.get(session.requester_key, ID)["state"] == "consumed"
-        assert not attachments.expire(NOW + timedelta(days=30))
+        assert not tuple(attachments.expire(NOW + timedelta(days=30)))
         assert not asyncio.run(
             repository.enqueue(
                 request, session_hash=session_hash, session=session, now=NOW + timedelta(seconds=3)
@@ -216,7 +216,7 @@ def test_cleanup_fence_prevents_partial_enqueue(
         dynamodb_client, attachment_source_table, table_names, (image(),)
     )
     prepare(attachments, session.requester_key)
-    assert len(attachments.expire(NOW + timedelta(days=2))) == 1
+    assert len(tuple(attachments.expire(NOW + timedelta(days=2)))) == 1
     with pytest.raises(RepositoryIdentityConflict):
         asyncio.run(
             repository.enqueue(
@@ -257,7 +257,7 @@ def test_consumption_cleanup_race_has_one_durable_winner(
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         acceptance = pool.submit(enqueue)
-        expiry = pool.submit(attachments.expire, NOW + timedelta(days=2))
+        expiry = pool.submit(lambda: tuple(attachments.expire(NOW + timedelta(days=2))))
         accepted, expired = acceptance.result(), expiry.result()
     state = attachments.get(session.requester_key, ID)["state"]
     exists = asyncio.run(repository.get(owner_key=session.requester_key, request_id=REQUEST))
@@ -265,3 +265,25 @@ def test_consumption_cleanup_race_has_one_durable_winner(
         (True, "consumed", True, False),
         (False, "expired", False, True),
     }
+
+
+def test_expiry_paginator_continues_after_cleaned_items_leave_index(
+    dynamodb_client, attachment_source_table
+):
+    attachments = DynamoDebateAttachmentRepository(dynamodb_client, attachment_source_table)
+    ids = [str(uuid.uuid4()) for _ in range(3)]
+    for attachment_id in ids:
+        prepare(attachments, "owner", attachment_id)
+    cleaned = []
+    # A one-item SDK page exercises real LastEvaluatedKey continuation while each
+    # successful item is removed from that same index before the next page loads.
+    for item in attachments.expire(NOW + timedelta(days=2), limit=1):
+        cleaned.append(item["attachment_id"])
+        attachments.cleaned(item)
+    assert set(cleaned) == set(ids)
+    assert len(cleaned) == 3
+    assert not tuple(attachments.expire(NOW + timedelta(days=2), limit=1))
+    for attachment_id in ids:
+        stored = attachments.get("owner", attachment_id)
+        assert stored is not None and stored["state"] == "expired"
+        assert "gsi1pk" not in stored and "gsi1sk" not in stored

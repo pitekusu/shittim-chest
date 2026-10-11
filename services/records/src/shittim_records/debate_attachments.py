@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import secrets
+from collections.abc import Iterator
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -323,50 +324,49 @@ class DynamoDebateAttachmentRepository:
             for image in images
         )
 
-    def expire(self, now: datetime, *, limit: int = 100) -> tuple[dict[str, Any], ...]:
-        response = self.client.query(
+    def expire(self, now: datetime, *, limit: int = 100) -> Iterator[dict[str, Any]]:
+        pages = self.client.get_paginator("query").paginate(
             TableName=self.table_name,
             IndexName="gsi1",
             KeyConditionExpression="gsi1pk = :pk AND gsi1sk <= :cutoff",
             ExpressionAttributeValues=marshal_item(
                 {":pk": "ATTACHMENT#EXPIRY", ":cutoff": f"{int(now.timestamp()):020d}#~"}
             ),
-            Limit=limit,
+            PaginationConfig={"PageSize": limit},
         )
-        expired = []
-        for raw in response.get("Items", []):
-            candidate = unmarshal_item(raw)
-            owner, attachment_id = candidate.get("owner_key"), candidate.get("attachment_id")
-            if not isinstance(owner, str) or not isinstance(attachment_id, str):
-                raise AttachmentFailure("ATTACHMENT_UNAVAILABLE", 503)
-            item = self.get(owner, attachment_id)
-            if item is None:
-                continue
-            try:
-                self.client.update_item(
-                    TableName=self.table_name,
-                    Key=marshal_item({"PK": item["PK"], "SK": item["SK"]}),
-                    UpdateExpression="SET #state = :expired",
-                    ConditionExpression=(
-                        "expires_at <= :now AND (#state = :reserved OR #state = "
-                        ":ready OR #state = :expired OR (#state = :promoting AND "
-                        "claim_until <= :now))"
-                    ),
-                    ExpressionAttributeNames={"#state": "state"},
-                    ExpressionAttributeValues=marshal_item(
-                        {
-                            ":expired": "expired",
-                            ":reserved": "reserved",
-                            ":ready": "ready",
-                            ":promoting": "promoting",
-                            ":now": int(now.timestamp()),
-                        }
-                    ),
-                )
-            except self.client.exceptions.ConditionalCheckFailedException:
-                continue
-            expired.append(item)
-        return tuple(expired)
+        for page in pages:
+            for raw in page.get("Items", []):
+                candidate = unmarshal_item(raw)
+                owner, attachment_id = candidate.get("owner_key"), candidate.get("attachment_id")
+                if not isinstance(owner, str) or not isinstance(attachment_id, str):
+                    raise AttachmentFailure("ATTACHMENT_UNAVAILABLE", 503)
+                item = self.get(owner, attachment_id)
+                if item is None:
+                    continue
+                try:
+                    self.client.update_item(
+                        TableName=self.table_name,
+                        Key=marshal_item({"PK": item["PK"], "SK": item["SK"]}),
+                        UpdateExpression="SET #state = :expired",
+                        ConditionExpression=(
+                            "expires_at <= :now AND (#state = :reserved OR #state = "
+                            ":ready OR #state = :expired OR (#state = :promoting AND "
+                            "claim_until <= :now))"
+                        ),
+                        ExpressionAttributeNames={"#state": "state"},
+                        ExpressionAttributeValues=marshal_item(
+                            {
+                                ":expired": "expired",
+                                ":reserved": "reserved",
+                                ":ready": "ready",
+                                ":promoting": "promoting",
+                                ":now": int(now.timestamp()),
+                            }
+                        ),
+                    )
+                except self.client.exceptions.ConditionalCheckFailedException:
+                    continue
+                yield item
 
     def cleaned(self, item: dict[str, Any]) -> None:
         self.client.update_item(
