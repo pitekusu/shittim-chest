@@ -276,8 +276,6 @@ class S3DebateImageStore:
             }:
                 raise DebateImageFailure("ATTACHMENT_UNAVAILABLE") from None
         else:
-            if len(cached) != pending.size_bytes:
-                raise DebateImageFailure("ATTACHMENT_CONFLICT")
             return await self._normalize_discord(pending, cached)
         if pending.url is None:
             raise DebateImageFailure()
@@ -309,8 +307,9 @@ class S3DebateImageStore:
                     if len(chunks) + len(chunk) > MAX_IMAGE_BYTES:
                         raise DebateImageFailure()
                     chunks.extend(chunk)
-            if len(chunks) != pending.size_bytes:
-                raise DebateImageFailure()
+            # Discord's declared size may differ from the CDN representation.
+            # Bound and decode the received bytes, then persist their actual
+            # size/checksum. Native uploads still require their reserved values.
             return await self._normalize_discord(pending, bytes(chunks))
         except httpx2.HTTPError, TimeoutError:
             raise DebateImageFailure("ATTACHMENT_UNAVAILABLE") from None
