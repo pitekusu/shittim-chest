@@ -33,6 +33,12 @@ internal class RecordsRuntime(
     launch(page)
   }
 
+  fun openWebPage(page: RecordsWebPage, launch: (RecordsWebPage) -> Unit) {
+    // A retained normal menu must not launch browser features after entering the isolated demo.
+    if (!active || demo != null || !productionAllowed()) return
+    launch(page)
+  }
+
   fun isActive(accountId: String): Boolean = active && when {
     demo != null -> accountId == DEMO_ACCOUNT_ID && demo.isActive()
     else -> productionAllowed() && session?.isCacheAuthorized(accountId) == true

@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -20,6 +22,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,6 +37,7 @@ import androidx.compose.ui.window.DialogProperties
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.CachePolicy
+import kotlinx.coroutines.launch
 import me.saket.telephoto.zoomable.ZoomableContentLocation
 import me.saket.telephoto.zoomable.rememberZoomableState
 import me.saket.telephoto.zoomable.zoomable
@@ -64,9 +68,9 @@ internal fun AttachmentThumbnails(images: List<RecordImagePresentation>,
 internal fun AttachmentViewer(images: List<RecordImagePresentation>, initial: Int,
   onClose: () -> Unit, onRetry: () -> Unit = {}) {
   if (images.isEmpty()) return
-  var selected by remember { mutableIntStateOf(initial.coerceIn(images.indices)) }
-  selected = selected.coerceIn(images.indices)
-  val image = images[selected]
+  val pager = rememberPagerState(initialPage = initial.coerceIn(images.indices), pageCount = { images.size })
+  val selected = pager.currentPage.coerceIn(images.indices)
+  val scope = rememberCoroutineScope()
   Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false,
     decorFitsSystemWindows = false)) {
     Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
@@ -77,32 +81,42 @@ internal fun AttachmentViewer(images: List<RecordImagePresentation>, initial: In
             Text(stringResource(R.string.detail_close))
           }
         }
-        Box(Modifier.weight(1f).fillMaxWidth().testTag("attachment-viewer"), contentAlignment = Alignment.Center) {
-          if (image.bytes != null) {
-            androidx.compose.runtime.key(image.image.attachmentId) {
+        HorizontalPager(pager, Modifier.weight(1f).fillMaxWidth().testTag("attachment-viewer"),
+          key = { images[it].image.attachmentId }) { page ->
+          val image = images[page]
+          Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            if (image.bytes != null) {
               var contentSize by remember { mutableStateOf(Size(image.image.width.toFloat(), image.image.height.toFloat())) }
               val zoom = rememberZoomableState().apply {
                 setContentLocation(ZoomableContentLocation.scaledInsideAndCenterAligned(contentSize))
               }
+              // Match the drawn bounds to Telephoto's content location. Its default Fit
+              // performs the initial upscaling; a second Fit here would crop small images.
               AttachmentImage(image, Modifier.fillMaxSize().zoomable(zoom), maximum = 4096,
-                onSize = { contentSize = it })
-            }
-          } else if (image.loading) CircularProgressIndicator()
-          else Column(horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(stringResource(when (image.failure) {
-              RecordImageFailure.OFFLINE -> R.string.attachment_offline
-              RecordImageFailure.STORAGE -> R.string.attachment_storage
-              else -> R.string.attachment_unavailable
-            }))
-            if (image.failure != RecordImageFailure.OFFLINE) Button(onClick = onRetry) {
-              Text(stringResource(R.string.session_retry))
+                contentScale = ContentScale.Inside, onSize = { contentSize = it })
+            } else if (image.loading) CircularProgressIndicator()
+            else Column(horizontalAlignment = Alignment.CenterHorizontally,
+              verticalArrangement = Arrangement.spacedBy(12.dp)) {
+              Text(stringResource(when (image.failure) {
+                RecordImageFailure.OFFLINE -> R.string.attachment_offline
+                RecordImageFailure.STORAGE -> R.string.attachment_storage
+                else -> R.string.attachment_unavailable
+              }))
+              if (image.failure != RecordImageFailure.OFFLINE) Button(onClick = onRetry) {
+                Text(stringResource(R.string.session_retry))
+              }
             }
           }
         }
         if (images.size > 1) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-          TextButton(onClick = { selected-- }, enabled = selected > 0) { Text(stringResource(R.string.attachment_previous)) }
-          TextButton(onClick = { selected++ }, enabled = selected < images.lastIndex) { Text(stringResource(R.string.attachment_next)) }
+          TextButton(onClick = { scope.launch { pager.animateScrollToPage(selected - 1) } },
+            enabled = selected > 0, modifier = Modifier.testTag("attachment-previous")) {
+            Text(stringResource(R.string.attachment_previous))
+          }
+          TextButton(onClick = { scope.launch { pager.animateScrollToPage(selected + 1) } },
+            enabled = selected < images.lastIndex, modifier = Modifier.testTag("attachment-next")) {
+            Text(stringResource(R.string.attachment_next))
+          }
         }
       }
     }
@@ -111,7 +125,7 @@ internal fun AttachmentViewer(images: List<RecordImagePresentation>, initial: In
 
 @Composable
 private fun AttachmentImage(image: RecordImagePresentation, modifier: Modifier, maximum: Int,
-  onSize: (Size) -> Unit = {}) {
+  contentScale: ContentScale = ContentScale.Fit, onSize: (Size) -> Unit = {}) {
   val context = LocalContext.current
   var failed by remember(image.bytes, maximum) { mutableStateOf(false) }
   var attempt by remember(image.bytes, maximum) { mutableIntStateOf(0) }
@@ -122,7 +136,7 @@ private fun AttachmentImage(image: RecordImagePresentation, modifier: Modifier, 
       Text(stringResource(R.string.attachment_unavailable))
       TextButton(onClick = { attempt++; failed = false }) { Text(stringResource(R.string.session_retry)) }
     } else AsyncImage(request, contentDescription = stringResource(R.string.attachment_image),
-      modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit,
+      modifier = Modifier.fillMaxSize(), contentScale = contentScale,
       onSuccess = { success -> onSize(Size(success.result.image.width.toFloat(), success.result.image.height.toFloat())) },
       onError = { failed = true })
   }

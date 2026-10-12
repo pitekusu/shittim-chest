@@ -102,13 +102,17 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
       }
     } else {
       val scope = rememberCoroutineScope()
-      var questionOpen by remember { mutableStateOf(false) }
-      var imageOpen by remember { mutableStateOf(false) }
-      LaunchedEffect(state.preview.attachments.isEmpty()) {
-        if (state.preview.attachments.isEmpty()) imageOpen = false
+      var questionOpen by rememberSaveable { mutableStateOf(false) }
+      var imageIndex by rememberSaveable { mutableIntStateOf(-1) }
+      val imageOpen = imageIndex >= 0
+      // Preserve attachment order and make unavailable images reachable without dropping a page.
+      val recordImages = state.preview.attachments.map { attachment ->
+        state.images.firstOrNull { it.image.attachmentId == attachment.attachmentId }
+          ?: RecordImagePresentation(attachment)
       }
-      if (imageOpen && state.images.isNotEmpty()) AttachmentViewer(state.images, 0, { imageOpen = false },
-        { onEvent(BootstrapScreen.Event.RetryRecordImages) })
+      LaunchedEffect(state.preview.attachments.isEmpty()) {
+        if (state.preview.attachments.isEmpty()) imageIndex = -1
+      }
       var opinionChoice by rememberSaveable { mutableIntStateOf(0) }
       var affectionChoice by rememberSaveable { mutableIntStateOf(-1) }
       // Playback belongs to this visit, not Bootstrap's lifetime-wide winner animation history.
@@ -193,7 +197,8 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
         // the answer remains reachable. The reading sheet always contains the full question.
         val questionMaximumHeight = maxHeight * 0.35f
         Column(Modifier.fillMaxSize()) {
-          Surface(color = MaterialTheme.colorScheme.surfaceContainer,
+          Surface(onClick = { questionOpen = true },
+            color = MaterialTheme.colorScheme.surfaceContainer,
             shape = MaterialTheme.shapes.large,
             modifier = Modifier.fillMaxWidth().heightIn(max = questionMaximumHeight)
               .padding(horizontal = ShittimSpacing.Medium, vertical = ShittimSpacing.Small)
@@ -205,10 +210,6 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
                   style = MaterialTheme.typography.labelLarge,
                   color = MaterialTheme.colorScheme.primary,
                   modifier = Modifier.weight(1f).testTag("detail-question-label"))
-                if (preview.attachments.isNotEmpty()) TextButton(onClick = { imageOpen = true },
-                  modifier = Modifier.testTag("detail-images-open")) {
-                  Text(stringResource(R.string.attachment_count, preview.attachments.size))
-                }
                 TextButton(onClick = { questionOpen = true },
                   modifier = Modifier.testTag("detail-question-full")) {
                   Text(stringResource(R.string.record_question_full))
@@ -219,6 +220,14 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
                 maxLines = 5, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false).fillMaxWidth().clipToBounds()
                   .testTag("detail-question-text"))
+              if (preview.attachments.isNotEmpty()) Row(
+                Modifier.fillMaxWidth().padding(top = ShittimSpacing.Small)
+                  .testTag("detail-images-open"),
+                verticalAlignment = Alignment.CenterVertically) {
+                Text(stringResource(R.string.attachment_count, preview.attachments.size),
+                  style = MaterialTheme.typography.labelMedium,
+                  color = MaterialTheme.colorScheme.primary)
+              }
             }
           }
           if (selected.section == RecordDetailSection.Opinions && opinions.isNotEmpty()) {
@@ -339,10 +348,21 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
           HorizontalDivider()
           LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("detail-question-reader"),
             contentPadding = PaddingValues(ShittimSpacing.Large)) {
+            if (preview.attachments.isNotEmpty()) item(key = "attachments") {
+              Column(Modifier.padding(bottom = ShittimSpacing.Large)) {
+                Text(stringResource(R.string.attachment_count, preview.attachments.size),
+                  style = MaterialTheme.typography.titleMedium,
+                  modifier = Modifier.padding(bottom = ShittimSpacing.Small).semantics { heading() })
+                AttachmentThumbnails(recordImages, onOpen = { imageIndex = it })
+              }
+            }
             item { SelectionContainer { RecordMarkdown(state.preview.question) } }
           }
         }
       }
+      // Compose the viewer last so it stays above the reading sheet after recreation as well.
+      if (imageOpen && recordImages.isNotEmpty()) AttachmentViewer(recordImages, imageIndex,
+        { imageIndex = -1 }, { onEvent(BootstrapScreen.Event.RetryRecordImages) })
     }
   }
 }

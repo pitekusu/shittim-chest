@@ -280,7 +280,7 @@ instrumentationは既存のdebug設定を維持する。`RuntimeDiscoveryTest`�
 - メニューの「デモを終了」は確認後にデモの保存データと表示済み通知を消去してログイン画面へ戻る。「デモを初期化」は同じ消去後に新しいデモを開く。通常に戻った後はDiscordログインを必要とする。途中で終了・再起動した場合は、最後にcommitされたモードから消去を続ける。
 - 「デモの端末内通知」をオンにすると、結果確認時に端末内通知を表示し、タップからデモの詳細を開ける。専用設定・channel・entry ID付きIntentを使い、Firebase登録・実FCM配送は行わない。OSの通知許可だけはpackage単位で通常版と共通であり、拒否しても閲覧・作成を使える。
 - Play公式アプリ内更新は通常・デモ双方で維持する。更新SDKへ本番token・記録・下書き・画像を渡さず、更新確認失敗・未対応・オフラインでもデモ利用を妨げない。デモのデータ操作は端末内で完結するが、Playの更新確認まで通信ゼロとは主張しない。
-- 外部Web機能への5つのメニュー導線は通常・デモ双方の提出版から外す。DemoのMarkdownから外部リンクは開かず、公開ポリシー・削除申請の固定2 URLだけをメニューから確認できることを説明する。Webサービス自体は残るが、このAndroid版の審査対象機能として申告しない。
+- 通常のメニューには、いろいろな記録・モモトーク・メモリアルロビーと、Web管理機能のサービス状態確認・プロンプト管理を表示する。固定のWebページをCustom Tabsで開き、Web側のログイン・管理者認可を使う。Demoではこの5つの導線を表示せず、runtimeでも起動を拒否する。DemoのMarkdownから外部リンクは開かず、公開ポリシー・削除申請の固定2 URLだけをメニューから確認できる。
 
 詳細な境界・機能対応表は[Androidアプリ設計](../../docs/29_Androidアプリ設計.md)の「Play審査用アクセス：端末内デモ」を正とする。2026年10月12日、Debug／テストAPK・Android LintとR8最適化Release APK／Release Lint、標準CI範囲の非画面227件、関連画面18件をローカルで確認した。Releaseは本番upload keyとは別の一時検証鍵で署名し、配布していない。当該ローカル検証時点では実機、実Play更新、本番Discordログイン、実FCM配送、Console設定、Play配布、審査送信は未実施であり、英語Console文案は未記入の草案である。Play配布の成否は正式配布Workflowとreceiptで別途記録する。
 
@@ -304,7 +304,7 @@ instrumentationは既存のdebug設定を維持する。`RuntimeDiscoveryTest`�
 
 `https://shittim.pitekusu.dev/privacy-policy`と`https://shittim.pitekusu.dev/data-deletion`は、ログイン不要の公開ページである。Webの公開後にPlay ConsoleのプライバシーポリシーURLとデータ削除URLへ登録する。削除申請はページのメール窓口で本人確認後に運営者が手動対応し、メールを開くだけで自動削除を完了したとは扱わない。
 
-この導線を含む版では、ログイン画面と通常・デモのメニューから既存Custom Tabsで固定2 URLを開く。資格情報や質問・画像を付加せず、失効したruntime・旧デモentryの操作を拒否する。デモの議論本文内の外部リンク禁止と、5つのWeb機能メニューの非表示は維持する。公開済み41版にはこれらのネイティブ導線はなく、新版のPlay配布はWeb公開と分けて確認する。
+この導線を含む版では、ログイン画面と通常・デモのメニューから既存Custom Tabsで固定2 URLを開く。資格情報や質問・画像を付加せず、失効したruntime・旧デモentryの操作を拒否する。デモの議論本文内の外部リンク禁止と、デモでの5つのWeb機能メニューの非表示は維持する。公開済み41版にはこれらのネイティブ導線はなく、新版のPlay配布はWeb公開と分けて確認する。
 
 ### Play Console「アプリのアクセス権」の英語文案
 
@@ -324,9 +324,11 @@ Password: Not required for the review demo.
    the full question, initial/final opinions, voting and score details,
    result, and affection details. Swipe or use the bottom tabs.
    The sample record containing "ピクニック" includes one image. Tap
-   "画像 1枚" (1 image) in the question panel to open the zoomable viewer.
-   The "工作会" sample has a "画像 3枚" (3 images) button and lets you
-   switch between three attached images.
+   the question card or "全文" (full text) to open the complete question
+   and image thumbnails, then tap a thumbnail to open the zoomable viewer.
+   The "工作会" sample has three images. Swipe left/right or use the
+   previous/next buttons to switch images. Closing the viewer returns
+   to the question sheet.
 3. Return to the list and tap "+" to create a demo discussion. Enter a
    fictional question, such as "Please plan a fictional picnic."
    Tap "架空のサンプル画像を追加" to attach an in-app sample image.
@@ -349,8 +351,12 @@ with fictional records, sample images, and predefined sample results.
 It does not analyze the entered question or images using AI, create AI charges,
 post to Discord, upload to S3, or access or change production records/accounts.
 Notifications are generated locally; remote Firebase/FCM delivery is not used.
-External web menu features are absent from this submitted Android version,
-and external links do not open in demo mode.
+Normal mode also offers browser links to insights, Momotalk, the memorial lobby,
+service status, and prompt management. These use separate web sign-in;
+service status and prompt management also require web administrator access.
+Those five links are absent in demo mode, and links in demo record text do not open.
+The privacy policy and data-deletion pages remain available from the demo menu
+without sign-in. The demo does not provide review access to the authenticated web features.
 The demo has no account expiration or region restriction and works offline.
 Normal Discord sign-in remains separate and is not needed to review the demo.
 ```
@@ -605,10 +611,10 @@ API 36・架空データ。標準のテスト用window／font scale overrideで�
 ## C37：Web機能メニューとログアウト
 
 - 先頭の「依頼した議論」は、時計付きの履歴アイコン・「進行状況・結果を見る」・右向き矢印を備えた強調カードにする。標準Surface／ListItemと既存のシアン配色を使い、カード全体から依頼履歴を開く。新規作成の「＋」とは区別し、狭幅・文字拡大では折り返す。
-- 認証済みの一覧・詳細の上部にメニューを置く。審査デモを含む提出版では、いろいろな記録、モモトーク、メモリアルロビー、サービス状態確認、プロンプト管理への5つの外部Web導線を通常・Demo双方から外す。依頼履歴・通知・表示切替・ログアウトを残し、Demoでは初期化・終了を確認付きで行う。
+- 認証済みの一覧・詳細の上部にメニューを置く。通常版では、いろいろな記録・モモトーク・メモリアルロビーを「Webで開く」、サービス状態確認・プロンプト管理を「Webの管理機能」に分けて表示する。固定のHTTPS URLを既存Custom Tabsで開き、アプリの資格情報・質問・画像は渡さず、Web側で別途ログイン・管理者認可を確認する。Demoでは5つとも非表示にし、失効した通常runtimeやDemoからの起動も拒否する。依頼履歴・公開情報・通知・表示切替・ログアウトを残し、Demoでは初期化・終了を確認付きで行う。
 - ログアウト・自動／ライト／ダーク切替をメニューへ移し、記録一覧にあったログイン状態カードと表示切替を撤去。通信不調によるオフライン閲覧でも同じログアウト操作が可能。
 - ログイン前の常設説明文を削除。期限切れ・取消・失敗・ブラウザー不可の状態表示は残す。C35の短い完了通知は次の起動／ログイン演出PRで置き換える。
-- 架空データの画面試験で依頼履歴・通知・表示切替・ログアウト／Demo終了、外部Web導線がないこと、一覧・詳細のスクロール維持を確認する。通常認証の実機受入とDemoだけの操作確認は区別する。
+- 架空データの画面試験で依頼履歴・通知・表示切替・ログアウト／Demo終了、通常版の5つのWeb導線と下方の公開情報へのスクロール、DemoでのWeb機能非表示、一覧・詳細のスクロール維持を確認する。ブラウザーIntentの固定URL・アプリ資格情報の非付加、旧runtime・DemoからのWeb機能起動拒否は関連非画面試験で確認する。通常認証の実機受入とDemoだけの操作確認は区別する。
 - 依頼履歴カードのプレビュー：[ダーク](screenshots/debate-history-menu-dark.png)、[ライト](screenshots/debate-history-menu-light.png)、[OS設定320dp・文字2倍](screenshots/debate-history-menu-large-text.png)。Bottom Sheetの文字拡大は内容内だけのoverrideではなく、専用AVDのOS設定で確認する。
 
 ## C39：GitHubからの内部テスト配布
@@ -820,7 +826,7 @@ API 36の架空データで、日付境界・議題の4行上限・全人格と�
 
 ## 議論詳細の4画面
 
-- 下部の意見／投票／結果／親愛度で切り替える。6つの意見→投票→結果→3人の親愛度を横スワイプで読み、先頭と末尾は循環しない。意見の切替では本文先頭へ戻り、詳細を開き直すと同じ記録でもアロナ初回から始まる。詳細の状態はNavDisplayのentry単位で分離し、一覧の読位置は変えない。議題はPager外の共通領域へ固定し、タブ切替中も動かさない。議題は最大5行のプレビューと「全文」へ折りたたみ、固定見出し・閉じる操作付きのBottom Sheetで全文を読む。閉じると元の回答の読位置へ戻る。
+- 下部の意見／投票／結果／親愛度で切り替える。6つの意見→投票→結果→3人の親愛度を横スワイプで読み、先頭と末尾は循環しない。意見の切替では本文先頭へ戻り、詳細を開き直すと同じ記録でもアロナ初回から始まる。詳細の状態はNavDisplayのentry単位で分離し、一覧の読位置は変えない。議題はPager外の共通領域へ固定し、タブ切替中も動かさない。議題カードは最大5行のプレビューと画像枚数を表示し、カード全体または「全文」から、固定見出し・閉じる操作付きのBottom Sheetで全文と画像サムネイルを開く。サムネイルから選んだ画像を開き、初期表示は全体を画面内へ収める。ピンチで拡大し、左右スワイプ・前後ボタンで添付順に切り替える。画像を閉じると議題シートへ戻り、シートを閉じると元の回答の読位置へ戻る。
 - 親愛度は顔と実増減のChipまたは横スワイプから1人を選ぶ。直接タブを押した初期人物は勝者とし、選択・人物別の読位置を同期や回転で保持する。スワイプはアロナ→プラナ→安倍晋三AIの順で、安倍晋三AIの先には進まない。人物切替と親愛度画面・記録の開き直しではアニメーションを再生する。
 - 投票画面にアイコンをタップすると投票理由・採点内訳を確認できる案内を表示する。採点のない旧記録では投票理由だけを案内する。投票理由の選択と人物別の読位置も保持し、Androidの戻る1回でシートを閉じる。旧記録の欠損情報を補完しない。
 - 投票図は完全表示時だけ描画1.8秒＋静止0.9秒を繰り返し、親愛度は完全表示時に約1.1秒で一度だけ動かす。非選択ページ・移動中・非表示・シート表示中は停止する。

@@ -78,6 +78,7 @@ internal data object BootstrapScreen : Screen {
     data object ExitDemo : Event
     data object ResetDemo : Event
     data class OpenPublicPage(val page: RecordsPublicPage) : Event
+    data class OpenWebPage(val page: RecordsWebPage) : Event
     data object Login : Event
     data object Logout : Event
     data object Retry : Event
@@ -485,6 +486,9 @@ internal class BootstrapPresenter(
         BootstrapScreen.Event.ResetDemo -> runtime.resetDemo()
         is BootstrapScreen.Event.OpenPublicPage -> runtime.openPublicPage(event.page) {
           publicPageError = !launchRecordsPublicPage(context, it)
+        }
+        is BootstrapScreen.Event.OpenWebPage -> runtime.openWebPage(event.page) {
+          publicPageError = !launchRecordsWebPage(context, it)
         }
         BootstrapScreen.Event.Login -> if (session?.beginLogin(
           session?.pendingDestination?.value?.returnTo ?: selectedRoute?.let { "/records/${it.recordId}" } ?: "/"
