@@ -9,7 +9,7 @@
     <string name="review_demo_preparing">保存データを確認しています</string>
     <string name="review_demo_storage_error">保存データを安全に切り替えられませんでした。再試行してください。</string>
     <string name="review_demo_sample_image">架空のサンプル画像を追加</string>
-    <string name="review_demo_external_links">デモでは外部リンクを開けません。</string>
+    <string name="review_demo_external_links">議論内容内の外部リンクは開けません。プライバシーポリシーとデータ削除申請はこのメニューから確認できます。</string>
     <string name="review_demo_confirm">続ける</string>
     <string name="review_demo_cancel">キャンセル</string>
     <string name="review_demo_progress_hint">画面を閉じてもデモは端末内で進みます。やり直す場合はメニューからデモを初期化してください。</string>

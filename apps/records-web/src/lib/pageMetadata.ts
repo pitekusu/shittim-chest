@@ -20,6 +20,24 @@ function meta(key: string, content: string): void {
   if (!element.isConnected) document.head.append(element);
 }
 
+export function setPublicPageMetadata(title: string, path: string, description: string): void {
+  setPageMetadata();
+  const pageTitle = `${title} | シッテムの箱`;
+  document.title = pageTitle;
+  const url = `${ORIGIN}${path}`;
+  const canonical = document.head.querySelector<HTMLLinkElement>('link[rel="canonical"]');
+  if (canonical) canonical.href = url;
+  for (const [key, value] of Object.entries({
+    description,
+    "og:title": pageTitle,
+    "og:description": description,
+    "og:url": url,
+    "twitter:title": pageTitle,
+    "twitter:description": description,
+  }))
+    meta(key, value);
+}
+
 export function setPageMetadata(record?: RecordDetailResponse): void {
   const preview = record?.ogImageUrl ? record : undefined;
   const question = preview?.question.replace(/\s+/gu, " ").slice(0, 160);

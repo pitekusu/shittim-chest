@@ -68,6 +68,7 @@ internal data object BootstrapScreen : Screen {
     val debateOnline: Boolean = session is SessionState.SignedIn,
     val debateImages: List<RecordImagePresentation> = emptyList(),
     val demoEntryId: String? = null,
+    val publicPageError: Boolean = false,
     val eventSink: (Event) -> Unit,
   ) : CircuitUiState
 
@@ -76,6 +77,7 @@ internal data object BootstrapScreen : Screen {
     data object EnterDemo : Event
     data object ExitDemo : Event
     data object ResetDemo : Event
+    data class OpenPublicPage(val page: RecordsPublicPage) : Event
     data object Login : Event
     data object Logout : Event
     data object Retry : Event
@@ -119,6 +121,7 @@ internal class BootstrapPresenter(
   override fun present(): BootstrapScreen.State {
     // Restore the presentation state, without persisting a device/account preference.
     var themeChoice by rememberSaveable { mutableStateOf(ThemeChoice.System) }
+    var publicPageError by remember { mutableStateOf(false) }
     val session = runtime.session
     val demo = runtime.demo
     val demoSessionPlaceholder = remember { SessionState.SignedOut() }
@@ -473,12 +476,16 @@ internal class BootstrapPresenter(
       requesters = if (cacheAccountId != null) requesters else emptyList(),
       loginCompletion = loginCompletion, backStack = backStack.toList(), recordOwner = cacheAccountId,
       debate = debate, debateStatus = debateStatus, debateHistory = debateHistory,
-      debateOnline = debateOnline, debateImages = debateImages, demoEntryId = runtime.demoEntryId) { event ->
+      debateOnline = debateOnline, debateImages = debateImages, demoEntryId = runtime.demoEntryId,
+      publicPageError = publicPageError) { event ->
       when (event) {
         is BootstrapScreen.Event.SelectTheme -> themeChoice = event.choice
         BootstrapScreen.Event.EnterDemo -> runtime.enterDemo()
         BootstrapScreen.Event.ExitDemo -> runtime.exitDemo()
         BootstrapScreen.Event.ResetDemo -> runtime.resetDemo()
+        is BootstrapScreen.Event.OpenPublicPage -> runtime.openPublicPage(event.page) {
+          publicPageError = !launchRecordsPublicPage(context, it)
+        }
         BootstrapScreen.Event.Login -> if (session?.beginLogin(
           session?.pendingDestination?.value?.returnTo ?: selectedRoute?.let { "/records/${it.recordId}" } ?: "/"
         ) == true) {

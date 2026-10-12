@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import shutil
 import subprocess
@@ -30,6 +31,29 @@ DENY_PATTERNS = {
         rb"(?:\.[A-Za-z0-9-]+)*\.(?:[A-Za-z]{2,63}|xn--[A-Za-z0-9-]{2,59})\b"
     ),
 }
+
+# User-approved public support contact, pinned to its sole Web source and exact bytes.
+# A digest keeps the address literal in that source alone; other emails remain private.
+PUBLIC_CONTACT_EMAIL_SHA256 = {
+    Path("apps/records-web/src/legalContact.ts"): frozenset(
+        {"1009d461a19b6e0c5bb14cdd487b19cceb018d66fabaf20c4304c80ecddac1a1"}
+    ),
+}
+
+
+def denied_labels(relative_path: Path, data: bytes) -> list[str]:
+    """Report denied values, permitting only the explicitly approved public contact."""
+
+    approved_emails = PUBLIC_CONTACT_EMAIL_SHA256.get(relative_path, frozenset())
+    return [
+        label
+        for label, pattern in DENY_PATTERNS.items()
+        if any(
+            label != "email address"
+            or hashlib.sha256(match.group()).hexdigest() not in approved_emails
+            for match in pattern.finditer(data)
+        )
+    ]
 
 
 def repository_paths(root: Path) -> tuple[Path, ...]:
@@ -92,9 +116,9 @@ def main() -> int:
         data = path.read_bytes()
         if b"\0" in data:
             continue
-        for label, pattern in DENY_PATTERNS.items():
-            if pattern.search(data):
-                findings.append(f"{path.relative_to(REPOSITORY_ROOT)}: possible {label}")
+        relative_path = path.relative_to(REPOSITORY_ROOT)
+        for label in denied_labels(relative_path, data):
+            findings.append(f"{relative_path}: possible {label}")
 
     if findings:
         print("public surface check failed:\n- " + "\n- ".join(findings), file=sys.stderr)

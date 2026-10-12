@@ -144,6 +144,8 @@ export function Layout({
             <nav aria-label="アカウント操作">
               <Link to="/admin">サービス状態確認</Link>
               <Link to="/admin/prompts">プロンプト管理</Link>
+              <Link to="/privacy-policy">プライバシーポリシー</Link>
+              <Link to="/data-deletion">データ削除の申請</Link>
             </nav>
             <ThemeSwitch theme={theme} onToggle={onThemeToggle} />
             <button

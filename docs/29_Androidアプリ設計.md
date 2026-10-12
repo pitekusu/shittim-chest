@@ -364,6 +364,7 @@ App Linksの公開証明書と配布版の接続はC19で確定する。C05はAn
 
 C05で定義した以下の契約をC12で公開ルートへ接続する。全応答を`private, no-store`とする。
 JSONはcamelCase、unknown field・余分／重複queryを拒否し、検証例外は固定コードだけへ変換する。
+既存Discord callbackのOAuth応答だけは、[RFC 6749 §4.1.2](https://www.rfc-editor.org/rfc/rfc6749.html#section-4.1.2)に従い未知のquery項目を無視する。`code`・`state`の欠落・空文字・重複とproviderの`error`は拒否する。追加項目から本人・権限・復帰先・tokenを採用しない。
 
 | ルート | 入力／出力 |
 |---|---|
@@ -579,7 +580,7 @@ OpenAPIでは2つのGETだけにCookieまたはopaque Bearerの選択を記載�
 ## C12：モバイル認証のHTTP境界と公開接続
 
 `mobile_http.py`はC07〜C10の処理に薄いHTTP境界を設ける。JSON body・queryはそれぞれ4 KiB以下とし、
-余分な項目、重複JSON field／query、base64 bodyを拒否する。成功・失敗とも`private, no-store`とする。
+ネイティブAPIでは余分な項目、重複JSON field／query、base64 bodyを拒否する。共有Discord callbackのOAuth応答は未知のquery項目を無視し、必須の`code`・`state`だけを一意かつ空でない値として検証する。providerの`error`があれば拒否し、追加項目を認証・保存・遷移に使わない。成功・失敗とも`private, no-store`とする。
 開始・交換はCookie／Authorizationを受け付けず、確認・ログアウトはBearerだけを使用する。
 ネイティブ通信ではOriginを要求しないが、付いていれば設定済みHTTPS originとの完全一致を要求する。
 ブラウザーのCookieに依存する認可・callbackは専用nonceとOAuth stateを照合し、Webセッションとは分離する。
@@ -587,7 +588,7 @@ OpenAPIでは2つのGETだけにCookieまたはopaque Bearerの選択を記載�
 共有Discord callbackは`m.`で始まるstateをモバイルへ振り分ける。この判別自体に認証効果はなく、
 state全体・専用Cookie・期限を既存処理で照合する。重複state・キャンセル・不正CookieでもWebへフォールバックしない。
 失敗時は外部入力を含まないHTMLで再ログインを案内し、モバイルOAuth Cookieだけを消す。
-拒否時は`records_mobile_callback_rejected`へ固定の公開エラー分類と、ブラウザーCookieの有無・形式、provider errorの有無、query項目の形式、Authorization headerの有無だけを記録する。認証URL・query値・Cookie値・認証コード・state・利用者情報・providerの説明・例外本文は記録しない。診断は拒否理由の切り分けに使い、state・Cookie・期限・一回限り交換の検証や公開HTMLを変更しない。
+拒否時は`records_mobile_callback_rejected`へ固定の公開エラー分類と、ブラウザーCookieの有無・形式、provider errorの有無、必須query項目の形式、Authorization headerの有無だけを記録する。認証URL・query値・Cookie値・認証コード・state・利用者情報・providerの説明・例外本文は記録しない。診断は拒否理由の切り分けに使い、state・Cookie・期限・一回限り交換の検証や公開HTMLを変更しない。
 開始→認可→callback→交換→議論閲覧→ログアウトを架空データで通し、コード再使用拒否とWeb認証の維持を確認する。
 
 既存Auth Lambdaの`live` aliasへ5つのHTTP API v2ルートを接続する。Session Table・用途別HMAC・
@@ -844,7 +845,7 @@ Playの初回審査・更新再審査では、審査担当者が継続して利�
 | 通知 | メニューの「デモの端末内通知」をオンにした場合に、結果確認時の端末内通知と通知からの詳細復帰を試す。Firebase登録・実FCM配送・サーバーからのpush受信は行わない。通知を拒否しても他の機能は利用できる |
 | 表示切替 | 同じ自動／ライト／ダーク切替、狭幅・文字拡大・広幅・回転時の画面を使う |
 | Play公式アプリ内更新 | 通常・Demo双方で維持する。SDKへ本番token・記録・下書き・画像を渡さず、更新確認の失敗や未対応・オフラインはDemo利用を妨げない。端末内で完結するのはDemoのデータ操作であり、Playの更新確認まで通信ゼロとは主張しない |
-| 外部Web機能 | いろいろな記録、モモトーク、メモリアルロビー、サービス状態確認、プロンプト管理の5導線は提出版全体のメニューから外す。Webサービス自体は別サービスとして残り、このAndroid版の審査機能として申告しない。DemoのMarkdownからの外部リンクも開かず、制限を表示する |
+| 外部Web機能 | いろいろな記録、モモトーク、メモリアルロビー、サービス状態確認、プロンプト管理の5導線は提出版全体のメニューから外す。Webサービス自体は別サービスとして残り、このAndroid版の審査機能として申告しない。DemoのMarkdownからの外部リンクは開かず、公開ポリシー・削除申請の固定2 URLだけをメニューから確認できることを説明する |
 
 保存先は`StorageNamespace.PRODUCTION`と`DEMO`で分ける。本番の既存ファイル名・暗号化形式を維持し、DemoのRoom DB、所有者・削除予定マーカー、保存用秘密鍵ファイルとKeystore alias、原画像、workspace、依頼進行の保存先は独立させる。画像は同梱・端末内bytesだけを使い、本番S3 URLの検証条件を緩めない。Coilのdisk cacheとMarkdown画像の自動取得禁止も維持する。
 
@@ -875,6 +876,12 @@ Demo通知は専用preferences・通知channelと、entry IDとrecord IDに束�
 Demoの進行中はDiscordでの取消案内を表示せず、メニューからの初期化を案内する。保存画像が欠損した場合は保存エラーとして扱い、オンライン接続へ誘導しない。当該ローカル検証時点では実機、実Play更新、本番Discordログイン、実FCM配送、Console設定、Play配布、審査送信は未実施である。Play配布の成否は正式配布Workflowとreceiptで別途記録する。エミュレーター・検証用署名の成功をその受入の代替にしない。
 
 公式要件との照合では、常時・繰り返し利用できる入口、地域に依存しないアクセス、追加の資格情報やワンタイム手続不要、英語の詳細手順、提出版で有効な機能への到達を確認項目とする。Play Consoleでは通常機能にログイン制限があることを申告し、その代わりに審査担当者が使うDemo入口を説明する。英語のログイン詳細文案は`apps/records-android/README.md`の審査アクセス節を参照する。これは未記入の草案であり、提出予定版の実機受入後に手順と制限を再照合してから使用する。初回審査・更新審査の双方で維持し、内部テストの継続と掲載情報審査を区別する。
+
+### プライバシーとデータ削除の公開導線
+
+ログイン画面と通常・Demo双方のメニューに「プライバシーポリシー」「データ削除申請」を置く。既採用のCustom Tabsを使用し、`https://shittim.pitekusu.dev/privacy-policy`と`https://shittim.pitekusu.dev/data-deletion`の固定2 URLだけを明示操作から開く。認証情報・質問・画像・私的識別子をURIやheadersへ付加せず、旧runtimeや旧Demo entryの操作を拒否する。
+
+DemoのMarkdown外部リンクは禁止したまま、公開ポリシー・削除申請はメニューから開けることを説明する。5つのWeb機能メニューは復活させない。ブラウザーが無い場合は利用者へ表示し、本番認証やAPIへフォールバックしない。公開済み41版にはこの導線がないため、Webページの作成だけで41版のアプリ内要件も完了したとは扱わず、導線を含む新しい版の配布を別途記録する。
 
 ### Play内更新案内
 
