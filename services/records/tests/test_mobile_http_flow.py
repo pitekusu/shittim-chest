@@ -166,8 +166,10 @@ def test_device_login_read_logout_and_replay_do_not_create_web_sessions(flow):
         "wrong_cookie",
         "malformed_cookie",
         "duplicate_state",
+        "duplicate_code",
+        "missing_code",
+        "empty_code",
         "cancel",
-        "extra",
         "authorization_header",
         "oversized_query",
     ],
@@ -183,6 +185,13 @@ def test_failed_mobile_callback_never_falls_back_to_web_or_discloses_input(flow,
         callback["cookies"] = [f"{MOBILE_OAUTH_COOKIE_NAME}={'x' * 43}"]
     elif failure == "malformed_cookie":
         callback["cookies"] = [f"{MOBILE_OAUTH_COOKIE_NAME}=private-invalid-browser-cookie"]
+    elif failure in {"missing_code", "empty_code"}:
+        query = dict(original_query)
+        if failure == "missing_code":
+            query.pop("code")
+        else:
+            query["code"] = [""]
+        callback["rawQueryString"] = urlencode(query, doseq=True)
     elif failure == "authorization_header":
         callback["headers"]["authorization"] = "Bearer private-authorization-header"
     elif failure == "oversized_query":
@@ -190,8 +199,8 @@ def test_failed_mobile_callback_never_falls_back_to_web_or_discloses_input(flow,
     else:
         callback["rawQueryString"] += {
             "duplicate_state": "&state=web-state",
+            "duplicate_code": "&code=private-duplicate-code",
             "cancel": "&error=access_denied&error_description=private-provider-detail",
-            "extra": "&redirect_uri=https://other.invalid",
         }[failure]
     caplog.set_level(logging.WARNING, logger="shittim_records.mobile_http")
     response = auth.handle(callback, now=NOW)
@@ -207,14 +216,30 @@ def test_failed_mobile_callback_never_falls_back_to_web_or_discloses_input(flow,
         "event": "records_mobile_callback_rejected",
         "failure_code": (
             "REQUEST_INVALID"
-            if failure in {"duplicate_state", "extra", "authorization_header", "oversized_query"}
+            if failure
+            in {
+                "duplicate_state",
+                "duplicate_code",
+                "missing_code",
+                "empty_code",
+                "authorization_header",
+                "oversized_query",
+            }
             else "MOBILE_GRANT_INVALID"
         ),
         "browser_cookie_present": failure != "missing_cookie",
         "browser_cookie_valid": failure not in {"missing_cookie", "malformed_cookie"},
         "provider_error_present": failure == "cancel",
         "query_fields_valid": (
-            failure not in {"duplicate_state", "cancel", "extra", "oversized_query"}
+            failure
+            not in {
+                "duplicate_state",
+                "duplicate_code",
+                "missing_code",
+                "empty_code",
+                "cancel",
+                "oversized_query",
+            }
         ),
         "authorization_present": failure == "authorization_header",
     }
@@ -226,10 +251,103 @@ def test_failed_mobile_callback_never_falls_back_to_web_or_discloses_input(flow,
         "x" * 43,
         "private-invalid-browser-cookie",
         "private-provider-detail",
+        "private-duplicate-code",
         "private-authorization-header",
         "https://other.invalid",
     ):
         assert private not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "extra_name,extra_value",
+    [
+        ("scope", "identify guilds.members.read"),
+        ("iss", "https://discord.com"),
+        ("guild_id", "private-untrusted-guild-value"),
+        ("redirect_uri", "https://other.invalid/private-redirect"),
+        ("returnTo", "/records/" + "a" * 43),
+        ("private-attacker-field", "private-untrusted-extra-value"),
+    ],
+)
+def test_mobile_callback_ignores_unrecognized_parameters_without_using_or_disclosing_them(
+    flow, caplog, extra_name, extra_value
+):
+    auth, store, web_store, discord = flow
+    callback = authorize(auth)
+    callback["rawQueryString"] += "&" + urlencode({extra_name: extra_value})
+    caplog.set_level(logging.WARNING, logger="shittim_records.mobile_http")
+
+    completed = auth.handle(callback, now=NOW)
+
+    assert completed["statusCode"] == 302
+    location = urlsplit(completed["headers"]["Location"])
+    origin = urlsplit(configuration().oauth.allowed_origin)
+    assert (location.scheme, location.netloc, location.path) == (
+        origin.scheme,
+        origin.netloc,
+        "/auth/mobile/callback",
+    )
+    grant = parse_qs(location.query)
+    assert set(grant) == {"transaction", "code", "state"}
+    assert grant["state"] == ["s" * 43]
+    assert discord.codes == ["discord-one-time-code"]
+    exchanged = post(
+        auth,
+        "exchange",
+        {
+            "transactionId": grant["transaction"][0],
+            "code": grant["code"][0],
+            "codeVerifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+        },
+    )
+    assert exchanged["statusCode"] == 200
+    assert json.loads(exchanged["body"])["returnTo"] == "/"
+    assert len(store.sessions) == 1 and not web_store.sessions
+    assert not [record for record in caplog.records if record.name == "shittim_records.mobile_http"]
+    for public in (json.dumps(completed), exchanged["body"], caplog.text):
+        assert extra_value not in public
+    for state in store.states.values():
+        assert extra_value not in state.model_dump_json()
+
+
+@pytest.mark.parametrize("failure", ["wrong_cookie", "cancel", "replay"])
+def test_unrecognized_callback_parameters_do_not_bypass_binding_errors_or_replay(
+    flow, caplog, failure
+):
+    auth, store, web_store, discord = flow
+    callback = authorize(auth)
+    private_value = "https://other.invalid/private-extra-value"
+    callback["rawQueryString"] += "&" + urlencode({"redirect_uri": private_value})
+    if failure == "wrong_cookie":
+        callback["cookies"] = [f"{MOBILE_OAUTH_COOKIE_NAME}={'x' * 43}"]
+    elif failure == "cancel":
+        callback["rawQueryString"] += (
+            "&error=access_denied&error_description=private-provider-detail"
+        )
+    else:
+        assert auth.handle(callback, now=NOW)["statusCode"] == 302
+    caplog.set_level(logging.WARNING, logger="shittim_records.mobile_http")
+
+    response = auth.handle(callback, now=NOW)
+
+    assert response["statusCode"] == 400 and "Location" not in response["headers"]
+    assert not store.sessions and not web_store.sessions
+    assert discord.codes == (["discord-one-time-code"] if failure == "replay" else [])
+    records = [record for record in caplog.records if record.name == "shittim_records.mobile_http"]
+    assert len(records) == 1
+    assert json.loads(records[0].getMessage()) == {
+        "event": "records_mobile_callback_rejected",
+        "failure_code": "MOBILE_GRANT_INVALID",
+        "browser_cookie_present": True,
+        "browser_cookie_valid": True,
+        "provider_error_present": failure == "cancel",
+        "query_fields_valid": failure != "cancel",
+        "authorization_present": False,
+    }
+    assert private_value not in json.dumps(response) + caplog.text
+    assert "private-provider-detail" not in json.dumps(response) + caplog.text
+    assert callback["rawQueryString"] not in caplog.text
+    assert SimpleCookie(callback["cookies"][0])[MOBILE_OAUTH_COOKIE_NAME].value not in caplog.text
 
 
 @pytest.mark.parametrize(

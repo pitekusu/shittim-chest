@@ -66,18 +66,17 @@ class MobileAuthHttpController:
             query = _query(request.raw_query)
             if request.route_key == DISCORD_CALLBACK_ROUTE:
                 _empty_body(event)
-                if "authorization" in request.headers or not set(query) <= {
-                    "code",
-                    "state",
-                    "error",
-                    "error_description",
-                }:
+                if "authorization" in request.headers:
                     raise AuthFailure("mobile_request_invalid")
                 # Provider cancellation/details are never echoed or turned into an app grant.
                 if "error" in query:
                     raise AuthFailure("mobile_grant_invalid")
-                if set(query) != {"code", "state"}:
+                if not {"code", "state"} <= query.keys():
                     raise AuthFailure("mobile_request_invalid")
+                # RFC 6749 section 4.1.2: ignore unknown provider response fields.
+                # Authlib's response parser collapses duplicate fields; retain our
+                # singleton and transaction binding checks. Extra fields never select
+                # an identity, return path, or credential.
                 result = self._callback.complete(
                     code=_required_single(query, "code"),
                     state=_required_single(query, "state"),
@@ -211,8 +210,11 @@ def _log_callback_failure(request: Request, query: dict[str, list[str]] | None, 
                 "provider_error_present": query is not None and "error" in query,
                 "query_fields_valid": (
                     query is not None
-                    and set(query) == {"code", "state"}
-                    and all(len(values) == 1 and bool(values[0]) for values in query.values())
+                    and "error" not in query
+                    and {"code", "state"} <= query.keys()
+                    and all(
+                        len(query[name]) == 1 and bool(query[name][0]) for name in ("code", "state")
+                    )
                 ),
                 "authorization_present": "authorization" in request.headers,
             },
