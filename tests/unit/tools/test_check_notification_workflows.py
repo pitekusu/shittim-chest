@@ -1040,11 +1040,12 @@ def test_records_public_html_publish_failure_restores_both_attempted_pages(
             if line.startswith("s3api delete-object ") and f"--key {page}/index.html" in line
         ]
         assert not deleted
-        if previous_public_version or previous_index_version:
+        if previous_public_version:
             assert len(restored) == 1
-            source_key = f"{page}/index.html" if previous_public_version else "index.html"
-            source_version = previous_public_version or previous_index_version
-            assert f"/{source_key}?versionId={quote(source_version, safe='')}" in restored[0]
+            assert (
+                f"/{page}/index.html?versionId={quote(previous_public_version, safe='')}"
+                in restored[0]
+            )
         else:
             assert not restored
             replacement = [

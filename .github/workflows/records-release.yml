@@ -1071,18 +1071,13 @@ jobs:
           for public_page in privacy-policy data-deletion; do
             if [ -f "${RUNNER_TEMP}/records-${public_page}-published" ]; then
               previous_version=$(cat "${RUNNER_TEMP}/records-previous-${public_page}-version")
-              previous_key="${public_page}/index.html"
-              if [ -z "${previous_version}" ]; then
-                previous_version=$(cat "${RUNNER_TEMP}/records-previous-index-version")
-                previous_key=index.html
-              fi
               if [ -n "${previous_version}" ]; then
                 encoded_version=$(jq --null-input --raw-output --arg value "${previous_version}" \
                   '$value | @uri')
                 aws s3api copy-object \
                   --bucket "${web_bucket}" \
                   --key "${public_page}/index.html" \
-                  --copy-source "${web_bucket}/${previous_key}?versionId=${encoded_version}" \
+                  --copy-source "${web_bucket}/${public_page}/index.html?versionId=${encoded_version}" \
                   --cache-control "no-cache" \
                   --content-type "text/html; charset=utf-8" \
                   --metadata-directive REPLACE >/dev/null
