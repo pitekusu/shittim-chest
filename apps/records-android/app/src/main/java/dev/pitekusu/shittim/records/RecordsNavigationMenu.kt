@@ -74,6 +74,22 @@ internal fun RecordsNavigationMenu(state: BootstrapScreen.State, onDismiss: () -
         onDismiss()
         state.eventSink(BootstrapScreen.Event.ShowDebateRequests)
       })
+      if (state.demoEntryId == null) {
+        ShittimSectionHeading(stringResource(R.string.menu_web))
+        RecordsWebPage.entries.filterNot { it.administrator }.forEach { page ->
+          MenuItem(page.title, R.drawable.ic_open_web,
+            modifier = Modifier.testTag("web-page-${page.name}"), onClick = {
+              state.eventSink(BootstrapScreen.Event.OpenWebPage(page))
+            })
+        }
+        ShittimSectionHeading(stringResource(R.string.menu_admin))
+        RecordsWebPage.entries.filter { it.administrator }.forEach { page ->
+          MenuItem(page.title, R.drawable.ic_open_web,
+            modifier = Modifier.testTag("web-page-${page.name}"), onClick = {
+              state.eventSink(BootstrapScreen.Event.OpenWebPage(page))
+            })
+        }
+      }
       ShittimSectionHeading(stringResource(R.string.menu_public_information))
       RecordsPublicPage.entries.forEach { page ->
         MenuItem(page.title, R.drawable.ic_open_web,

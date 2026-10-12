@@ -55,12 +55,29 @@ class RecordsPublicPageTest {
     }
     assertEquals(listOf("https://shittim.pitekusu.dev/privacy-policy",
       "https://shittim.pitekusu.dev/data-deletion"), intents.map { it.dataString })
+    assertBrowserIntentsHaveNoNativeCredentials()
+    runtime.deactivate()
+  }
+
+  @Test fun normalFeaturePagesDispatchOnlyFixedHttpsUrlsWithoutNativeCredentials() {
+    val runtime = RecordsRuntime()
+    RecordsWebPage.entries.forEach { page ->
+      runtime.openWebPage(page) { assertTrue(launchRecordsWebPage(context, it)) }
+    }
+    assertEquals(listOf("https://shittim.pitekusu.dev/insights", "https://shittim.pitekusu.dev/momotalk",
+      "https://shittim.pitekusu.dev/memorial", "https://shittim.pitekusu.dev/admin",
+      "https://shittim.pitekusu.dev/admin/prompts"), intents.map { it.dataString })
+    assertBrowserIntentsHaveNoNativeCredentials()
+    runtime.deactivate()
+  }
+
+  private fun assertBrowserIntentsHaveNoNativeCredentials() {
     intents.forEach { intent ->
       assertEquals(Intent.ACTION_VIEW, intent.action)
       assertNull(intent.data?.query)
       assertNull(intent.data?.fragment)
       // Browser 1.10 adds the locale's Accept-Language header in Builder.build().
-      // Public navigation must not add native credentials alongside those SDK defaults.
+      // Browser navigation must not add native credentials alongside those SDK defaults.
       val headers = intent.getBundleExtra(Browser.EXTRA_HEADERS)
       headers?.let { values ->
         values.keySet().forEach { name ->
@@ -75,7 +92,6 @@ class RecordsPublicPageTest {
         name.substringAfterLast('.').lowercase(Locale.ROOT) in credentialExtras
       })
     }
-    runtime.deactivate()
   }
 
   @Test fun inactiveAndBlockedNormalRuntimeCannotLaunchARetainedPublicPageAction() {
@@ -95,12 +111,33 @@ class RecordsPublicPageTest {
     assertEquals(1, intents.size)
   }
 
+  @Test fun inactiveAndBlockedNormalRuntimeCannotLaunchARetainedFeaturePageAction() {
+    var allowed = true
+    val runtime = RecordsRuntime(productionAllowed = { allowed })
+    val retained = { runtime.openWebPage(RecordsWebPage.Momotalk) {
+      launchRecordsWebPage(context, it)
+    } }
+    retained()
+    assertEquals(1, intents.size)
+    allowed = false
+    retained()
+    assertEquals(1, intents.size)
+    allowed = true
+    runtime.deactivate()
+    retained()
+    assertEquals(1, intents.size)
+  }
+
   @Test fun demoMayLaunchAPublicPageButItsOldEntryCannotLaunchAfterReset() {
     val modes = ReviewDemoModeStore(context)
     val entry = UUID.randomUUID().toString()
     modes.write(ReviewDemoMode(ReviewDemoPhase.DEMO, entry))
     val demo = DemoSandbox(context, entry).also { sandbox = it }
     val runtime = RecordsRuntime(demo = demo, demoEntryId = entry)
+    RecordsWebPage.entries.forEach { page ->
+      runtime.openWebPage(page) { launchRecordsWebPage(context, it) }
+    }
+    assertTrue(intents.isEmpty())
     val retained = { runtime.openPublicPage(RecordsPublicPage.DataDeletion) {
       launchRecordsPublicPage(context, it)
     } }

@@ -15,8 +15,14 @@ internal enum class RecordsPublicPage(@StringRes val title: Int, private val pat
   val url: String get() = "$RECORDS_ORIGIN$path"
 }
 
-internal fun launchRecordsPublicPage(context: Context, page: RecordsPublicPage): Boolean = try {
-  CustomTabsIntent.Builder().setShowTitle(true).build().launchUrl(context, Uri.parse(page.url))
+internal fun launchRecordsPublicPage(context: Context, page: RecordsPublicPage): Boolean =
+  launchRecordsBrowserPage(context, page.url)
+
+internal fun launchRecordsWebPage(context: Context, page: RecordsWebPage): Boolean =
+  launchRecordsBrowserPage(context, page.url)
+
+private fun launchRecordsBrowserPage(context: Context, url: String): Boolean = try {
+  CustomTabsIntent.Builder().setShowTitle(true).build().launchUrl(context, Uri.parse(url))
   true
 } catch (_: ActivityNotFoundException) {
   false

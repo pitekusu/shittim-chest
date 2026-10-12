@@ -34,10 +34,12 @@ class ReviewDemoUiTest {
     enter()
     val question = DemoFixtures.records.first().entry.questionPreview
     compose.onNodeWithText(question).performScrollTo().performClick()
-    compose.waitUntil(10_000) { compose.onAllNodesWithTag("detail-images-open").fetchSemanticsNodes().isNotEmpty() }
-    compose.onNodeWithTag("detail-images-open").performClick()
+    compose.waitUntil(10_000) { compose.onAllNodesWithTag("detail-question-open").fetchSemanticsNodes().isNotEmpty() }
+    compose.onNodeWithTag("detail-question-open").performClick()
+    compose.onNodeWithTag("attachment-0").performClick()
     compose.onNodeWithTag("attachment-viewer").assertIsDisplayed()
     compose.onNodeWithTag("attachment-close").performClick()
+    compose.onNodeWithTag("detail-question-close").performClick()
     back()
     compose.onNodeWithTag("debate-compose-open").performClick()
     val input = "架空の審査用相談：紙で小さな庭を作る手順を考えてください。"
@@ -51,10 +53,12 @@ class ReviewDemoUiTest {
     // No progress screen polling: the retained local sandbox must still publish a record.
     compose.waitUntil(20_000) { compose.onAllNodesWithText(input).fetchSemanticsNodes().isNotEmpty() }
     compose.onNodeWithText(input).performScrollTo().performClick()
-    compose.waitUntil(10_000) { compose.onAllNodesWithTag("detail-images-open").fetchSemanticsNodes().isNotEmpty() }
-    compose.onNodeWithTag("detail-images-open").performClick()
+    compose.waitUntil(10_000) { compose.onAllNodesWithTag("detail-question-open").fetchSemanticsNodes().isNotEmpty() }
+    compose.onNodeWithTag("detail-question-open").performClick()
+    compose.onNodeWithTag("attachment-0").performClick()
     compose.onNodeWithTag("attachment-viewer").assertIsDisplayed()
     compose.onNodeWithTag("attachment-close").performClick()
+    compose.onNodeWithTag("detail-question-close").performClick()
     compose.onNodeWithTag("review-demo-banner").assertIsDisplayed()
   }
 
