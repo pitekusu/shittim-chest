@@ -101,7 +101,7 @@ GitHub-hosted runnerはUbuntu 26.04に固定する。x64は`ubuntu-26.04`、
 | records-gate | 必須チェックとしてRecords全体の結果を集約 |
 
 Records WebのビルドはCI・Records Releaseとも、Webプロジェクト内で`pnpm run build`を実行する。
-フォント原本・分割WOFF2・生成CSSのchecksum、Vite+ build、遅延ルートの所有境界と初期static import closureのgzip上限を一括して検証し、直接`vp build`だけを実行して前後の検証を省かない。
+フォント原本・分割WOFF2・生成CSSのchecksum、Vite+ build、遅延ルートの所有境界と各HTML入口の初期static import closureのgzip上限、公開2ページの初期HTMLメタデータを一括して検証し、直接`vp build`だけを実行して前後の検証を省かない。
 
 Records CIのPlaywrightが失敗した場合だけ、`test-results`内の`*-actual.png`・`*-expected.png`・`*-diff.png`を固定したupload-artifact Actionで7日保持する。
 trace・動画・HTML report・他の添付画像はアップロードしない。比較画像がない失敗では保存を省くが、元のブラウザー試験の失敗は成功に置き換えない。
@@ -455,6 +455,7 @@ CDKを介さず変更セットを直接実行するため、CDKメタデータ�
 
 Webは配信直前にZIPの署名/ハッシュと固定SyftによるSBOMハッシュを再検証する。
 CI用の`records-code-splitting.json`はbuild出力に保持してJS予算・ルート分割を検証し、公開用ZIPからだけ除外する。
+公開ポリシーと削除申請の固定2 HTMLも同じ署名済みZIPから配信し、通常入口・App Linksファイルと合わせてキャッシュ無効化と前版復元へ含める。
 公開ZIPの最上位は`index.html`だけとし、`assets/`と`.well-known/assetlinks.json`の配信、他の余分なファイルを拒否する既存のguardを維持する。
 ハッシュ付きアセットを先に配置し、`index.html`を最後に更新して`/index.html`だけを無効化する。
 過去のハッシュ付きアセットは即削除しない。公開後のスモークが失敗した場合は、直前のバージョン付き

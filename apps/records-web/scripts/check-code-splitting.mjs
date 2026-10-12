@@ -1,7 +1,8 @@
 import { readFile, readdir } from "node:fs/promises";
 import { gzipSync } from "node:zlib";
+import { JSDOM } from "jsdom";
 
-import { staticClosure } from "./code-splitting-guard.ts";
+import { HTML_ENTRY_FILES, staticClosure } from "./code-splitting-guard.ts";
 
 const outputDirectory = new URL("../dist/", import.meta.url);
 const expectedRoutes = [
@@ -23,17 +24,33 @@ if (manifest.schemaVersion !== 1 || !Array.isArray(manifest.chunks)) {
 const chunks = manifest.chunks;
 const byFile = new Map(chunks.map((chunk) => [chunk.fileName, chunk]));
 const entries = chunks.filter((chunk) => chunk.isEntry);
-if (entries.length !== 1) throw new Error("code_splitting_entry_chunk_missing");
-const entry = entries[0];
-const indexHtml = await readFile(new URL("index.html", outputDirectory), "utf8");
-const htmlEntry = indexHtml.match(
-  /<script\b(?=[^>]*\btype=["']module["'])[^>]*\bsrc=["']([^"']+\.js)["'][^>]*>/,
-)?.[1];
-if (!htmlEntry || htmlEntry.replace(/^\//, "") !== entry.fileName) {
-  throw new Error("code_splitting_entry_chunk_mismatch");
+if (entries.length !== HTML_ENTRY_FILES.length)
+  throw new Error("code_splitting_entry_chunk_missing");
+const initialClosures = [];
+for (const file of HTML_ENTRY_FILES) {
+  const matches = entries.filter((entry) => entry.html === file);
+  if (matches.length !== 1) throw new Error(`code_splitting_entry_chunk_count: ${file}`);
+  const html = await readFile(new URL(file, outputDirectory), "utf8");
+  const window = new JSDOM(html).window;
+  const scripts = [...window.document.querySelectorAll('script[type="module"][src]')].map(
+    (script) => script.getAttribute("src")?.replace(/^\//, "") ?? "",
+  );
+  window.close();
+  if (scripts.length === 0 || scripts.some((name) => !byFile.has(name))) {
+    throw new Error(`code_splitting_entry_chunk_mismatch: ${file}`);
+  }
+  const actual = new Set(scripts.flatMap((name) => [...staticClosure(byFile.get(name), byFile)]));
+  const expected = staticClosure(matches[0], byFile);
+  // Vite may inline a pure-import HTML entry into module tags and remove its proxy.
+  // Compare every dependency with the actual emitted HTML rather than only its first tag.
+  if (!actual.has(matches[0].fileName)) expected.delete(matches[0].fileName);
+  if (actual.size !== expected.size || [...expected].some((name) => !actual.has(name))) {
+    throw new Error(`code_splitting_entry_chunk_mismatch: ${file}`);
+  }
+  initialClosures.push(actual);
 }
 
-const initial = staticClosure(entry, byFile);
+const initial = new Set(initialClosures.flatMap((closure) => [...closure]));
 const routeClosures = new Map(
   expectedRoutes.map((route) => {
     const matches = chunks.filter((chunk) => chunk.route === route);
@@ -64,11 +81,15 @@ const styles = new Map(
   ),
 );
 
-const initialGzipBytes = [...initial].reduce((total, fileName) => {
-  const contents = javascript.get(fileName);
-  if (!contents) throw new Error(`code_splitting_static_import_missing: ${fileName}`);
-  return total + gzipSync(contents).byteLength;
-}, 0);
+const initialGzipBytes = Math.max(
+  ...initialClosures.map((closure) =>
+    [...closure].reduce((total, fileName) => {
+      const contents = javascript.get(fileName);
+      if (!contents) throw new Error(`code_splitting_static_import_missing: ${fileName}`);
+      return total + gzipSync(contents).byteLength;
+    }, 0),
+  ),
+);
 if (initialGzipBytes >= maximumEntryGzipBytes) {
   throw new Error(
     `code_splitting_entry_gzip_budget: maximum=${maximumEntryGzipBytes - 1} actual=${initialGzipBytes}`,
@@ -129,5 +150,5 @@ for (const route of expectedRoutes) {
   }
 }
 console.log(
-  `Verified initial static JS closure (${initialGzipBytes} gzip bytes) and ${expectedRoutes.length} lazy routes`,
+  `Verified ${entries.length} initial static JS closures (maximum ${initialGzipBytes} gzip bytes) and ${expectedRoutes.length} lazy routes`,
 );

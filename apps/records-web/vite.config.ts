@@ -1,4 +1,5 @@
 import react from "@vitejs/plugin-react";
+import { resolve } from "node:path";
 import { defineConfig } from "vite-plus";
 import { configDefaults } from "vitest/config";
 
@@ -9,6 +10,15 @@ assertGeneratedValidatorCurrent();
 
 export default defineConfig({
   plugins: [react(), codeSplittingModuleOwnershipGuard()],
+  build: {
+    rolldownOptions: {
+      input: {
+        main: resolve(import.meta.dirname, "index.html"),
+        privacy: resolve(import.meta.dirname, "privacy-policy/index.html"),
+        deletion: resolve(import.meta.dirname, "data-deletion/index.html"),
+      },
+    },
+  },
   fmt: {
     ignorePatterns: [
       "dist/**",
