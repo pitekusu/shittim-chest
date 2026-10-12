@@ -62,6 +62,7 @@ internal class RecordsAppModel @JvmOverloads constructor(application: Applicatio
 
   fun recover() = runTransition {
     val mode = modes.read()
+    if (current != null) stopRuntime()
     when (mode.phase) {
         ReviewDemoPhase.NORMAL -> showNormal()
         ReviewDemoPhase.DEMO -> showDemo(requireNotNull(mode.entryId))

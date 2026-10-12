@@ -244,6 +244,47 @@ class ReviewDemoAppModelTest {
     assertEquals(0, authCalls.get())
   }
 
+  @Test fun retryAfterAModeWriteFailureStopsTheOldDemoAndItsOwnedModels() = runBlocking {
+    val entry = UUID.randomUUID().toString()
+    modes.write(ReviewDemoMode(ReviewDemoPhase.DEMO, entry))
+    val model = start { error("demo_retry_must_not_construct_authentication") }
+    val previous = ready(model, demo = true)
+    val oldDemo = requireNotNull(previous.demo)
+    val draft = "架空の消去失敗回復確認"
+    val child = withContext(Dispatchers.Main) {
+      DebateSubmissionModel({ previous.isActive(DEMO_ACCOUNT_ID) }, oldDemo::load, oldDemo::save,
+        { id, question -> oldDemo.submit(id, question) }, oldDemo::find, {}, oldDemo::list,
+        importImage = oldDemo::importImage, readImage = oldDemo::readImage, sendWithImages = oldDemo::submit)
+        .also { previous.viewModelStore.put("debate", it); it.restore() }
+    }
+    withTimeout(5_000) { child.state.first { it.workspace != null } }
+    withContext(Dispatchers.Main) { child.edit(draft) }
+    withTimeout(5_000) { child.state.first { it.workspace?.draft == draft && !it.saving } }
+
+    // A nonempty directory blocks AtomicFile's next write while its committed DEMO remains readable.
+    val interrupted = File(directory, "review-demo-mode.v1.new")
+    assertTrue(interrupted.mkdir())
+    val blocker = File(interrupted, "write-blocker").apply { writeBytes(byteArrayOf(1)) }
+    withContext(Dispatchers.Main) { model.exitDemo() }
+    withTimeout(5_000) { model.state.first { it == RecordsAppState.StorageError } }
+    assertEquals(ReviewDemoMode(ReviewDemoPhase.DEMO, entry), modes.read())
+    assertTrue(previous.isActive(DEMO_ACCOUNT_ID))
+    assertTrue(blocker.delete())
+    assertTrue(interrupted.delete())
+
+    withContext(Dispatchers.Main) { model.recover() }
+    val restored = ready(model, demo = true, previous = previous)
+    assertEquals(entry, restored.demoEntryId)
+    assertNotSame(oldDemo, restored.demo)
+    assertFalse(previous.isActive(DEMO_ACCOUNT_ID))
+    assertFalse(oldDemo.isActive())
+    assertNull(child.state.value.workspace)
+    assertTrue(child.images.value.isEmpty())
+    // The unsuccessful exit never committed, so only the new runtime may restore the saved draft.
+    assertEquals(draft, requireNotNull(restored.demo).load().draft)
+    assertEquals(0, authCalls.get())
+  }
+
   @Test fun demoNotificationAndWrongAppLinksCannotSwitchANormalSessionOrGrantRecordAccess() = runBlocking {
     val model = start(::fakeSession)
     val normal = ready(model, demo = false)

@@ -128,6 +128,8 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
         }
       }
       if (menuOpen && state.canReadRecords) RecordsNavigationMenu(state, onDismiss = { menuOpen = false })
+      // Keep the approved Play-owned update flow in both modes; it receives no app records or credentials.
+      // Offline/unsupported checks do not gate demo access (see PlayUpdateNotice).
       PlayUpdateNotice()
       BrandIntroOverlay(state.loginCompletion, state.session is SessionState.SignedIn,
         LocalStartupIntro.current)
