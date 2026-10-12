@@ -248,6 +248,14 @@ export function App(): React.JSX.Element {
         <BrowserRouter>
           <Routes>
             <Route
+              path="/privacy-policy/index.html"
+              element={<Navigate to="/privacy-policy" replace />}
+            />
+            <Route
+              path="/data-deletion/index.html"
+              element={<Navigate to="/data-deletion" replace />}
+            />
+            <Route
               path="/privacy-policy"
               element={
                 <Suspense fallback={<RouteLoadingFallback />}>

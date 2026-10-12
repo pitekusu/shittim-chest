@@ -3,6 +3,32 @@ import { expect, test } from "@playwright/test";
 
 import { DATA_DELETION_MAILTO, LEGAL_CONTACT_EMAIL } from "../src/legalContact";
 
+for (const [alias, path, title] of [
+  ["/privacy-policy/index.html", "/privacy-policy", "プライバシーポリシー"],
+  ["/data-deletion/index.html", "/data-deletion", "データ削除の申請"],
+] as const) {
+  test(`public HTML alias ${alias} stays anonymous and canonical after reload`, async ({
+    page,
+  }) => {
+    const apiRequests: string[] = [];
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname.startsWith("/api/")) apiRequests.push(request.url());
+    });
+    await page.route("**/api/**", (route) => route.abort());
+
+    await page.goto(alias);
+    await expect(page).toHaveURL(new URL(path, page.url()).toString());
+    await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
+    await expect(page).toHaveTitle(`${title} | シッテムの箱`);
+    expect(apiRequests).toEqual([]);
+
+    await page.reload();
+    await expect(page).toHaveURL(new URL(path, page.url()).toString());
+    await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
+    expect(apiRequests).toEqual([]);
+  });
+}
+
 for (const width of [320, 960]) {
   for (const colorScheme of ["light", "dark"] as const) {
     test(`public information works without authentication at ${width}px in ${colorScheme}`, async ({

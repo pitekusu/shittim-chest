@@ -65,6 +65,29 @@ describe("App shell", () => {
     );
   });
 
+  it.each([
+    ["/privacy-policy/index.html", "/privacy-policy", "プライバシーポリシー"],
+    ["/data-deletion/index.html", "/data-deletion", "データ削除の申請"],
+  ])(
+    "canonicalizes public HTML alias %s without mounting session lookup",
+    async (alias, path, title) => {
+      window.history.replaceState(null, "", alias);
+      const fetch = vi
+        .fn<typeof globalThis.fetch>()
+        .mockRejectedValue(new Error("API is unavailable"));
+      vi.stubGlobal("fetch", fetch);
+      vi.spyOn(window, "scrollTo").mockImplementation(() => undefined);
+      render(<App />);
+      expect(await screen.findByRole("heading", { name: title })).toBeVisible();
+      expect(window.location.pathname).toBe(path);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(document.querySelector('link[rel="canonical"]')).toHaveAttribute(
+        "href",
+        `https://shittim.pitekusu.dev${path}`,
+      );
+    },
+  );
+
   it("opens the deletion email client without submitting a website form", async () => {
     window.history.replaceState(null, "", "/data-deletion");
     const fetch = vi
