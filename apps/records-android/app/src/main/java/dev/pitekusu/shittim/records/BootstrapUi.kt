@@ -26,6 +26,10 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.UriHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -65,6 +69,8 @@ private fun BootstrapPreview() {
 
 @Composable
 internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modifier) {
+  val platformUriHandler = LocalUriHandler.current
+  val demoUriHandler = remember { object : UriHandler { override fun openUri(uri: String) = Unit } }
   val themeChoice = state.themeChoice
   val darkTheme =
     when (themeChoice) {
@@ -72,6 +78,8 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
       ThemeChoice.Light -> false
       ThemeChoice.Dark -> true
     }
+  CompositionLocalProvider(LocalUriHandler provides
+    (if (state.demoEntryId != null) demoUriHandler else platformUriHandler)) {
   ShittimTheme(darkTheme) {
     ShittimBackdrop(modifier) {
       val pages = (state.records as? RecordListState.Ready)?.pages
@@ -91,6 +99,7 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
       LaunchedEffect(state.canReadRecords) { if (!state.canReadRecords) menuOpen = false }
       Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
         if (state.canReadRecords) RecordsAppBar(onMenuClick = { menuOpen = true })
+        if (state.demoEntryId != null) ReviewDemoBanner()
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
           val listScrollState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
           val transientScrollState = rememberLazyListState()
@@ -123,6 +132,7 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
       BrandIntroOverlay(state.loginCompletion, state.session is SessionState.SignedIn,
         LocalStartupIntro.current)
     }
+  }
   }
 }
 
@@ -172,6 +182,17 @@ private fun BootstrapLoginControls(
       BootstrapHeader(Modifier.fillMaxWidth(), compact = false)
     }
     item(key = "session") { SessionPanel(state.session, state.eventSink, canReadRecords = state.canReadRecords) }
+    if (state.session != SessionState.Browser && state.session != SessionState.SigningOut) {
+      item(key = "review-demo-entry") {
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Small)) {
+          OutlinedButton(onClick = { state.eventSink(BootstrapScreen.Event.EnterDemo) },
+            modifier = Modifier.fillMaxWidth().testTag("review-demo-enter")) {
+            Text(stringResource(R.string.review_demo_enter))
+          }
+          Text(stringResource(R.string.review_demo_entry_hint), style = MaterialTheme.typography.bodySmall)
+        }
+      }
+    }
     if (state.session !is SessionState.SignedIn) item(key = "theme") {
       BootstrapThemeSelector(state.themeChoice) { state.eventSink(BootstrapScreen.Event.SelectTheme(it)) }
     }

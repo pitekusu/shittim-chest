@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="review_demo_enter">デモで試す / Try demo</string>
+    <string name="review_demo_entry_hint">Discordログインなしで、架空の記録と議論作成を試せます。データは端末内で扱い、AI生成・Discord投稿は行いません。</string>
+    <string name="review_demo_banner">端末内デモ · 架空データ／定型結果 · AI生成・Discord投稿なし</string>
+    <string name="review_demo_exit">デモを終了</string>
+    <string name="review_demo_reset">デモを初期化</string>
+    <string name="review_demo_reset_hint">終了・初期化すると、デモの記録、下書き、画像を消去します。通常利用にはDiscordでログインしてください。</string>
+    <string name="review_demo_preparing">保存データを確認しています</string>
+    <string name="review_demo_storage_error">保存データを安全に切り替えられませんでした。再試行してください。</string>
+    <string name="review_demo_sample_image">架空のサンプル画像を追加</string>
+    <string name="review_demo_external_links">デモでは外部リンクを開けません。</string>
+    <string name="review_demo_confirm">続ける</string>
+    <string name="review_demo_cancel">キャンセル</string>
+    <string name="review_demo_progress_hint">画面を閉じてもデモは端末内で進みます。やり直す場合はメニューからデモを初期化してください。</string>
+</resources>

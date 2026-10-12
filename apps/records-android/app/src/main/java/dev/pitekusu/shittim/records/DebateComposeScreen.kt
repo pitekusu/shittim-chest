@@ -36,7 +36,7 @@ internal fun DebateComposeScreen(state: DebateSubmissionState, online: Boolean,
   onRetry: () -> Unit, onReauth: () -> Unit, onNew: () -> Unit,
   modifier: Modifier = Modifier, images: List<RecordImagePresentation> = emptyList(),
   onImagesSelected: (List<Uri>) -> Unit = {}, onRemoveImage: (String) -> Unit = {},
-  onDiscardMissing: () -> Unit = {}) {
+  onDiscardMissing: () -> Unit = {}, demo: Boolean = false) {
   val singlePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
     if (uri != null) onImagesSelected(listOf(uri))
   }
@@ -76,6 +76,11 @@ internal fun DebateComposeScreen(state: DebateSubmissionState, online: Boolean,
     }, enabled = !state.busy && workspace.attachments.size < MAX_ATTACHMENT_COUNT,
       modifier = Modifier.testTag("debate-add-images")) { Text(stringResource(R.string.attachment_add)) }
     Text(stringResource(R.string.attachment_limits), style = MaterialTheme.typography.labelSmall)
+    if (demo && !frozen) TextButton(onClick = { onImagesSelected(listOf(DEMO_SAMPLE_IMAGE_URI)) },
+      enabled = !state.busy && workspace.attachments.size < MAX_ATTACHMENT_COUNT,
+      modifier = Modifier.testTag("review-demo-sample-image")) {
+      Text(stringResource(R.string.review_demo_sample_image))
+    }
     if (state.saving) Text(stringResource(R.string.debate_saving), style = MaterialTheme.typography.labelSmall)
     if (!online) Text(stringResource(R.string.debate_offline))
     if (state.failure != null) {
@@ -100,7 +105,7 @@ internal fun DebateComposeScreen(state: DebateSubmissionState, online: Boolean,
         val receipt = workspace.receipt
         Text(stringResource(if (receipt == null) R.string.debate_unknown else debateStatusLabel(receipt.status)),
           style = MaterialTheme.typography.titleMediumEmphasized)
-        Text(stringResource(R.string.debate_no_cancel))
+        Text(stringResource(if (demo) R.string.review_demo_progress_hint else R.string.debate_no_cancel))
         if (receipt == null) TextButton(onClick = onCheck, enabled = online && !state.busy) {
           Text(stringResource(R.string.debate_check))
         }

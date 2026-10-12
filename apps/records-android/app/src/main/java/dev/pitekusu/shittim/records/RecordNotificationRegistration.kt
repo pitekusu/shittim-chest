@@ -11,6 +11,7 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import androidx.work.await
 import com.google.firebase.messaging.FirebaseMessaging
 import com.google.firebase.installations.FirebaseInstallations
 import dev.pitekusu.shittim.records.auth.KeystoreTokenStore
@@ -34,6 +35,7 @@ internal object RecordNotificationRegistration {
   fun onRegistered(context: Context, installationId: String) {
     val afterCurrent = synchronized(RecordNotifications.lock) {
       try {
+        if (!ReviewDemoModeStore.productionAllowed(context)) return@synchronized null
         val settings = RecordNotificationSettings(context)
         val store = KeystoreTokenStore(context)
         val token = if (store.isLogoutPending()) null else store.read()
@@ -50,25 +52,30 @@ internal object RecordNotificationRegistration {
         }
       } catch (_: Exception) { null }
     }
-    if (afterCurrent == true) {
-      // APPEND would inherit an imminent failure. This independent, durable work
-      // observes the existing chain's terminal state before enqueuing reconciliation.
-      WorkManager.getInstance(context).enqueueUniqueWork(RECOVERY_WORK, ExistingWorkPolicy.KEEP,
-        OneTimeWorkRequestBuilder<RecordNotificationRecoveryWorker>().build())
-    } else if (afterCurrent == false) schedule(context)
+    synchronized(RecordNotifications.lock) {
+      if (!ReviewDemoModeStore.productionAllowed(context)) return
+      if (afterCurrent == true) {
+        // APPEND would inherit an imminent failure. This independent, durable work
+        // observes the existing chain's terminal state before enqueuing reconciliation.
+        WorkManager.getInstance(context).enqueueUniqueWork(RECOVERY_WORK, ExistingWorkPolicy.KEEP,
+          OneTimeWorkRequestBuilder<RecordNotificationRecoveryWorker>().build())
+      } else if (afterCurrent == false) schedule(context)
+    }
   }
 
   fun schedule(context: Context, replace: Boolean = false, afterCurrent: Boolean = false) {
-    if (!RecordNotifications.configured(context)) return
-    WorkManager.getInstance(context).enqueueUniqueWork(WORK,
-      when {
-        replace -> ExistingWorkPolicy.REPLACE
-        afterCurrent -> ExistingWorkPolicy.APPEND_OR_REPLACE
-        else -> ExistingWorkPolicy.KEEP
-      },
-      OneTimeWorkRequestBuilder<RecordNotificationWorker>()
-        .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-        .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build())
+    synchronized(RecordNotifications.lock) {
+      if (!RecordNotifications.configured(context)) return
+      WorkManager.getInstance(context).enqueueUniqueWork(WORK,
+        when {
+          replace -> ExistingWorkPolicy.REPLACE
+          afterCurrent -> ExistingWorkPolicy.APPEND_OR_REPLACE
+          else -> ExistingWorkPolicy.KEEP
+        },
+        OneTimeWorkRequestBuilder<RecordNotificationWorker>()
+          .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+          .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build())
+    }
   }
   fun cancel(context: Context) {
     WorkManager.getInstance(context).also {
@@ -77,14 +84,23 @@ internal object RecordNotificationRegistration {
     }
   }
 
+  suspend fun cancelAndAwait(context: Context) {
+    val manager = WorkManager.getInstance(context)
+    manager.cancelUniqueWork(WORK).await()
+    manager.cancelUniqueWork(RECOVERY_WORK).await()
+    manager.getWorkInfosForUniqueWorkFlow(WORK).first { work -> work.all { it.state.isFinished } }
+    manager.getWorkInfosForUniqueWorkFlow(RECOVERY_WORK).first { work -> work.all { it.state.isFinished } }
+  }
+
   internal suspend fun recover(context: Context) {
+    if (!ReviewDemoModeStore.productionAllowed(context)) return
     WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(WORK).first { work -> work.all { it.state.isFinished } }
     val needed = synchronized(RecordNotifications.lock) {
       val settings = RecordNotificationSettings(context)
       val store = KeystoreTokenStore(context)
       val token = if (store.isLogoutPending()) null else store.read()
       val now = Instant.now()
-      !RecordNotifications.locallyRevoked && settings.optedIn && RecordNotifications.permitted(context) &&
+      ReviewDemoModeStore.productionAllowed(context) && !RecordNotifications.locallyRevoked && settings.optedIn && RecordNotifications.permitted(context) &&
         token != null && token.expiresAt > now && token.cacheAuthorization?.permits(now) == true &&
         ((settings.binding == null && settings.failureStage == null) || settings.failureStage == NotificationRegistrationStage.FIREBASE)
     }
@@ -126,6 +142,8 @@ internal suspend fun registerRecordNotifications(context: Context, attempt: Int,
   clock: () -> Instant = Instant::now,
   firebaseTimeoutMillis: Long = 30_000,
 ): ListenableWorker.Result {
+    val productionEpoch = ReviewDemoModeStore.productionEpoch(context) ?: return ListenableWorker.Result.success()
+    fun productionCurrent() = ReviewDemoModeStore.productionEpoch(context) == productionEpoch
     val store = KeystoreTokenStore(context)
     var active: StoredToken? = null
     var stage = NotificationRegistrationStage.SESSION
@@ -135,29 +153,32 @@ internal suspend fun registerRecordNotifications(context: Context, attempt: Int,
       val stored = if (store.isLogoutPending()) null else store.read()
       active = stored
       val permit = stored?.cacheAuthorization
+      if (!productionCurrent()) return ListenableWorker.Result.success()
       if (stored == null || stored.expiresAt <= clock() || permit?.permits(clock()) != true) {
         RecordNotifications.revoke(context)
         return ListenableWorker.Result.success()
       }
       val enabled = synchronized(RecordNotifications.lock) {
-        !RecordNotifications.locallyRevoked && RecordNotificationSettings(context).optedIn && RecordNotifications.permitted(context)
+        productionCurrent() && !RecordNotifications.locallyRevoked && RecordNotificationSettings(context).optedIn && RecordNotifications.permitted(context)
       }
+      if (!productionCurrent()) return ListenableWorker.Result.success()
       if (!enabled) {
         // OS denial suppresses delivery and unregisters without changing the app's ON/OFF choice.
         val binding = synchronized(RecordNotifications.lock) {
           val settings = RecordNotificationSettings(context)
           // An older worker must not disable a generation explicitly enabled meanwhile.
-          if (!currentNotificationSession(store, stored, clock()) || (settings.optedIn && RecordNotifications.permitted(context))) {
+          if (!productionCurrent() || !currentNotificationSession(store, stored, clock()) || (settings.optedIn && RecordNotifications.permitted(context))) {
             return@synchronized null
           }
           settings.clearRegistration()
           settings.binding.takeIf { settings.sessionFingerprint == notificationSessionFingerprint(stored.accessToken) }
         } ?: return ListenableWorker.Result.success()
         stage = NotificationRegistrationStage.FIREBASE
+        if (!productionCurrent()) return ListenableWorker.Result.success()
         val fcm = withTimeoutOrNull(firebaseTimeoutMillis) { installation(false) }
           ?: throw IOException("notification_firebase_timeout")
         stage = NotificationRegistrationStage.UNREGISTER
-        if (currentNotificationSession(store, stored, clock())) client().use {
+        if (productionCurrent() && currentNotificationSession(store, stored, clock())) client().use {
           it.unregisterNotifications(stored.accessToken, fcm, binding)
         }
         // Local gating and server DELETE suffice; an asynchronous SDK unregister could finish
@@ -165,12 +186,13 @@ internal suspend fun registerRecordNotifications(context: Context, attempt: Int,
         return ListenableWorker.Result.success()
       }
       stage = NotificationRegistrationStage.FIREBASE
+      if (!productionCurrent()) return ListenableWorker.Result.success()
       val fcm = withTimeoutOrNull(firebaseTimeoutMillis) { installation(true) }
         ?: throw IOException("notification_firebase_timeout")
       stage = NotificationRegistrationStage.SAVE
       val binding = synchronized(RecordNotifications.lock) {
         val settings = RecordNotificationSettings(context)
-        if (RecordNotifications.locallyRevoked || !currentNotificationSession(store, stored, clock()) ||
+        if (!productionCurrent() || RecordNotifications.locallyRevoked || !currentNotificationSession(store, stored, clock()) ||
           !settings.optedIn || !RecordNotifications.permitted(context)) null
         else settings.bindingFor(stored.accessToken, fcm)
       } ?: return ListenableWorker.Result.success()
@@ -178,6 +200,7 @@ internal suspend fun registerRecordNotifications(context: Context, attempt: Int,
       expectedSession = notificationSessionFingerprint(stored.accessToken)
       val started = clock()
       stage = NotificationRegistrationStage.REGISTER
+      if (!productionCurrent()) return ListenableWorker.Result.success()
       val serverExpiry = client().use { it.registerNotifications(stored.accessToken, fcm, binding) }
       stage = NotificationRegistrationStage.EXPIRY
       // Local verification may conservatively shorten the server's absolute deadline.
@@ -186,20 +209,21 @@ internal suspend fun registerRecordNotifications(context: Context, attempt: Int,
       check(expires > clock())
       stage = NotificationRegistrationStage.SAVE
       synchronized(RecordNotifications.lock) {
-        if (currentNotificationSession(store, stored, clock()) && RecordNotifications.permitted(context)) {
+        if (productionCurrent() && currentNotificationSession(store, stored, clock()) && RecordNotifications.permitted(context)) {
           RecordNotificationSettings(context).registered(binding, started, expires)
         }
       }
       return ListenableWorker.Result.success()
     } catch (error: CancellationException) { throw error }
     catch (error: Exception) {
+      if (!productionCurrent()) return ListenableWorker.Result.success()
       val category = notificationRegistrationFailure(stage, error)
       val retry = category.retryable && attempt < 3
       // Enums and a bounded counter are the entire diagnostic payload, including release builds.
       Log.w("RecordNotifications", "registration_failed stage=${stage.name} category=${category.name} attempt=${(attempt + 1).coerceIn(1, 4)} retry=$retry")
       if (error is MobileAuthException && error.failure in setOf(MobileAuthFailure.AUTHENTICATION_REQUIRED, MobileAuthFailure.FORBIDDEN)) {
         synchronized(RecordNotifications.lock) {
-          if (active?.let { currentNotificationSession(store, it, clock()) } == true) {
+          if (productionCurrent() && active?.let { currentNotificationSession(store, it, clock()) } == true) {
             store.invalidateCacheAuthorization(active.accessToken)
             RecordNotifications.revoke(context)
           }
@@ -209,7 +233,7 @@ internal suspend fun registerRecordNotifications(context: Context, attempt: Int,
       synchronized(RecordNotifications.lock) {
         val settings = RecordNotificationSettings(context)
         // A cancelled/replaced registration must not mark a newer binding or OFF setting failed.
-        if (!RecordNotifications.locallyRevoked && settings.optedIn && RecordNotifications.permitted(context) &&
+        if (productionCurrent() && !RecordNotifications.locallyRevoked && settings.optedIn && RecordNotifications.permitted(context) &&
           settings.binding == expectedBinding && settings.sessionFingerprint == expectedSession) {
           settings.failure(stage, category, attempt + 1, terminal = !retry)
         }

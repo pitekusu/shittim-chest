@@ -13,6 +13,7 @@ import dev.pitekusu.shittim.records.storage.EncryptedRecordsDatabase
 import dev.pitekusu.shittim.records.storage.KeystorePrivateKeyStore
 import dev.pitekusu.shittim.records.storage.RecordCacheAccount
 import dev.pitekusu.shittim.records.storage.RecordDataKeyProtector
+import dev.pitekusu.shittim.records.storage.StorageNamespace
 import java.io.Closeable
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
@@ -38,7 +39,8 @@ internal class DebateWorkspace(val schemaVersion: Int = 1, val draft: String = "
 internal class DebateWorkspaceStore(private val database: EncryptedRecordsDatabase,
   private val cache: EncryptedRecordStore, private val owner: RecordCacheAccount,
   private val authorized: (String) -> Boolean,
-  private val context: Context, private val images: EncryptedRecordImageStore) : Closeable {
+  private val context: Context, private val images: EncryptedRecordImageStore,
+  private val boundAccountId: String? = null) : Closeable {
   private val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }
 
   suspend fun load(accountId: String): DebateWorkspace = RecordCacheAccount.lock.withLock {
@@ -81,6 +83,20 @@ internal class DebateWorkspaceStore(private val database: EncryptedRecordsDataba
       } ?: throw RecordImageException(RecordImageFailure.INVALID)
     } } catch (error: kotlin.coroutines.cancellation.CancellationException) { throw error }
     catch (_: Exception) { throw RecordImageException(RecordImageFailure.INVALID) }
+    return try { saveImageBytes(accountId, bytes) }
+    finally { bytes.fill(0) }
+  }
+
+  /** Sample assets use the same validation and encrypted storage as Photo Picker imports. */
+  suspend fun importBytes(accountId: String, bytes: ByteArray): DraftAttachment {
+    if (bytes.size !in 1..MAX_ATTACHMENT_BYTES) throw RecordImageException(RecordImageFailure.INVALID)
+    val privateBytes = bytes.copyOf()
+    return try { saveImageBytes(accountId, privateBytes) }
+    finally { privateBytes.fill(0) }
+  }
+
+  private suspend fun saveImageBytes(accountId: String, bytes: ByteArray): DraftAttachment {
+    RecordCacheAccount.lock.withLock { guard(accountId) }
     try {
       val (width, height) = validateAttachmentBytes(bytes)
       val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -96,7 +112,6 @@ internal class DebateWorkspaceStore(private val database: EncryptedRecordsDataba
     } catch (error: kotlin.coroutines.cancellation.CancellationException) { throw error }
     catch (error: RecordImageException) { throw error }
     catch (_: Exception) { throw RecordImageException(RecordImageFailure.INVALID) }
-    finally { bytes.fill(0) }
   }
 
   suspend fun image(accountId: String, image: DraftAttachment): ByteArray = RecordCacheAccount.lock.withLock {
@@ -116,7 +131,8 @@ internal class DebateWorkspaceStore(private val database: EncryptedRecordsDataba
   }
 
   private suspend fun guard(accountId: String) {
-    if (!authorized(accountId)) throw DebateRequestException(DebateFailure.AUTH_REQUIRED)
+    if ((boundAccountId != null && boundAccountId != accountId) || !authorized(accountId))
+      throw DebateRequestException(DebateFailure.AUTH_REQUIRED)
     owner.requireOwner(accountId)
     if (!authorized(accountId)) throw DebateRequestException(DebateFailure.AUTH_REQUIRED)
   }
@@ -124,12 +140,24 @@ internal class DebateWorkspaceStore(private val database: EncryptedRecordsDataba
 
   companion object {
     private const val WORKSPACE_ID = "debate-workspace-v1"
-    fun open(context: Context, authorized: (String) -> Boolean): DebateWorkspaceStore {
-      val database = EncryptedRecordsDatabase.open(context)
+    fun open(context: Context, authorized: (String) -> Boolean,
+      namespace: StorageNamespace = StorageNamespace.PRODUCTION): DebateWorkspaceStore =
+      openScoped(context, null, authorized, namespace)
+
+    fun open(context: Context, accountId: String, authorized: (String) -> Boolean,
+      namespace: StorageNamespace = StorageNamespace.PRODUCTION): DebateWorkspaceStore {
+      check(accountId.matches(Regex("[A-Za-z0-9_-]{43}")))
+      return openScoped(context, accountId, authorized, namespace)
+    }
+
+    private fun openScoped(context: Context, accountId: String?, authorized: (String) -> Boolean,
+      namespace: StorageNamespace): DebateWorkspaceStore {
+      val database = EncryptedRecordsDatabase.open(context, namespace)
       try {
-        val keys = KeystorePrivateKeyStore(context)
+        val keys = KeystorePrivateKeyStore(context, namespace)
         return DebateWorkspaceStore(database, EncryptedRecordStore(database, RecordDataKeyProtector(keys)),
-          RecordCacheAccount(context, keys, database), authorized, context.applicationContext, EncryptedRecordImageStore(context))
+          RecordCacheAccount(context, keys, database, namespace), authorized, context.applicationContext,
+          EncryptedRecordImageStore(context, namespace = namespace), accountId)
       } catch (error: Exception) { database.close(); throw error }
     }
   }

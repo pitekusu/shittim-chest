@@ -15,11 +15,13 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.withResumed
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import dev.pitekusu.shittim.records.ReviewDemoModeStore
 import kotlinx.coroutines.launch
 
 /** Private browser controller; only the redirect receiver is exported. No WebView or saved grant. */
 class MobileLoginActivity : ComponentActivity() {
   private val browser = AuthTabIntent.registerActivityResultLauncher(this) { result ->
+    if (!ReviewDemoModeStore.productionAllowed(this)) return@registerActivityResultLauncher
     if (result.resultCode == AuthTabIntent.RESULT_CANCELED) {
       // A fallback redirect can also close the Custom Tab. Consume onNewIntent before cancellation.
       lifecycleScope.launch { lifecycle.withResumed { login.browserResult(result) } }
@@ -28,12 +30,18 @@ class MobileLoginActivity : ComponentActivity() {
 
   private val login by viewModels<MobileLoginModel> {
     viewModelFactory { initializer {
-      MobileLoginModel(MobileAuthClient(), KeystoreTokenStore(applicationContext)::save)
+      MobileLoginModel(MobileAuthClient(), productionEpoch = { ReviewDemoModeStore.productionEpoch(applicationContext) },
+        saveToken = KeystoreTokenStore(applicationContext)::save)
     } }
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    if (!ReviewDemoModeStore.productionAllowed(this)) {
+      setIntent(Intent(this, MobileLoginActivity::class.java))
+      finishWithResult(MobileLoginStep.Finished(MobileLoginStatus.REJECTED))
+      return
+    }
     val callback = intent.dataString
     val returnTo = intent.getStringExtra(LOGIN_RETURN_TO)
     setIntent(Intent(this, MobileLoginActivity::class.java)) // Do not retain the callback in Activity state.
@@ -51,6 +59,10 @@ class MobileLoginActivity : ComponentActivity() {
         login.step.collect { step ->
           when (step) {
             is MobileLoginStep.OpenBrowser -> {
+              if (!ReviewDemoModeStore.productionAllowed(this@MobileLoginActivity)) {
+                finishWithResult(MobileLoginStep.Finished(MobileLoginStatus.REJECTED))
+                return@collect
+              }
               login.browserLaunched()
               try {
                 val authTab = AuthTabIntent.Builder().build()
@@ -74,7 +86,7 @@ class MobileLoginActivity : ComponentActivity() {
 
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
-    intent.dataString?.let(login::complete)
+    if (ReviewDemoModeStore.productionAllowed(this)) intent.dataString?.let(login::complete)
     setIntent(Intent(this, MobileLoginActivity::class.java))
   }
 
@@ -89,6 +101,11 @@ class MobileLoginActivity : ComponentActivity() {
 class MobileLoginRedirectActivity : Activity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    if (!ReviewDemoModeStore.productionAllowed(this)) {
+      setIntent(Intent())
+      finish()
+      return
+    }
     val action = intent.action
     val url = intent.dataString
     setIntent(Intent())

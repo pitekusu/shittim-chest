@@ -40,25 +40,31 @@ import androidx.core.content.ContextCompat
 
 /** One initial OS request, only after authentication; foreground changes also refresh registration. */
 @Composable
-internal fun RecordNotificationPermissionEffect(authorized: Boolean) {
+internal fun RecordNotificationPermissionEffect(authorized: Boolean, demoEntryId: String? = null) {
   val context = LocalContext.current
   val generation by RecordNotifications.changes.collectAsState()
+  val demoGeneration by DemoNotifications.changes.collectAsState()
   var resumed by remember { mutableStateOf(false) }
   val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-    RecordNotifications.permissionResult(context, granted)
+    if (demoEntryId == null) RecordNotifications.permissionResult(context, granted)
+    else DemoNotifications.permissionResult(context, demoEntryId, granted)
   }
-  LifecycleResumeEffect(authorized) {
+  LifecycleResumeEffect(authorized, demoEntryId) {
     resumed = true
-    if (authorized) RecordNotifications.resumeAuthorizedSession(context)
+    if (demoEntryId != null) DemoNotifications.refresh()
+    else if (authorized) RecordNotifications.resumeAuthorizedSession(context)
     onPauseOrDispose { resumed = false }
   }
-  LaunchedEffect(authorized, resumed, generation) {
+  LaunchedEffect(authorized, resumed, generation, demoEntryId, demoGeneration) {
     val request = synchronized(RecordNotifications.lock) {
-      val eligible = authorized && resumed && !RecordNotifications.locallyRevoked &&
-        RecordNotifications.configured(context) && Build.VERSION.SDK_INT >= 33
       val granted = Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context,
         Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-      RecordNotificationSettings(context).claimPermissionRequest(eligible, granted)
+      if (demoEntryId != null) resumed && DemoNotifications.claimPermissionRequest(context, demoEntryId, granted)
+      else {
+        val eligible = authorized && resumed && ReviewDemoModeStore.productionAllowed(context) &&
+          !RecordNotifications.locallyRevoked && RecordNotifications.configured(context) && Build.VERSION.SDK_INT >= 33
+        RecordNotificationSettings(context).claimPermissionRequest(eligible, granted)
+      }
     }
     if (request) permission.launch(Manifest.permission.POST_NOTIFICATIONS)
   }
@@ -66,32 +72,39 @@ internal fun RecordNotificationPermissionEffect(authorized: Boolean) {
 
 /** App ON/OFF and OS permission are independent: an OS denial never traps the switch ON. */
 @Composable
-internal fun RecordNotificationControls() {
+internal fun RecordNotificationControls(demoEntryId: String? = null) {
   val context = LocalContext.current
   val generation by RecordNotifications.changes.collectAsState()
-  val status = remember(generation) { RecordNotifications.status(context) }
-  val enabled = remember(generation) { RecordNotificationSettings(context).optedIn }
-  val diagnostic = remember(generation) { RecordNotificationSettings(context) }
-  LifecycleResumeEffect(Unit) {
-    RecordNotifications.changed()
+  val demoGeneration by DemoNotifications.changes.collectAsState()
+  val status = remember(generation, demoGeneration, demoEntryId) {
+    if (demoEntryId == null) RecordNotifications.status(context) else DemoNotifications.status(context, demoEntryId)
+  }
+  val enabled = remember(generation, demoGeneration, demoEntryId) {
+    if (demoEntryId == null) RecordNotificationSettings(context).optedIn else DemoNotifications.optedIn(context, demoEntryId)
+  }
+  val diagnostic = remember(generation, demoEntryId) { if (demoEntryId == null) RecordNotificationSettings(context) else null }
+  LifecycleResumeEffect(demoEntryId) {
+    if (demoEntryId == null) RecordNotifications.changed() else DemoNotifications.refresh()
     onPauseOrDispose { }
   }
   fun select(on: Boolean) {
-    if (on) RecordNotifications.enable(context) else RecordNotifications.disable(context)
+    if (demoEntryId != null) {
+      if (on) DemoNotifications.enable(context, demoEntryId) else DemoNotifications.disable(context, demoEntryId)
+    } else if (on) RecordNotifications.enable(context) else RecordNotifications.disable(context)
   }
   val description = when (status) {
     RecordNotificationStatus.PREPARING -> R.string.notification_preparing
     RecordNotificationStatus.DISABLED -> R.string.notification_disabled
     RecordNotificationStatus.PERMISSION_DENIED -> R.string.notification_denied
     RecordNotificationStatus.REGISTERING -> R.string.notification_registering
-    RecordNotificationStatus.ENABLED -> R.string.notification_enabled
+    RecordNotificationStatus.ENABLED -> if (demoEntryId == null) R.string.notification_enabled else R.string.demo_notification_enabled
     RecordNotificationStatus.FAILED -> R.string.notification_failed
   }
   Column {
     Surface(onClick = { select(!enabled) }, enabled = status != RecordNotificationStatus.PREPARING,
       modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("record-notification-settings"),
       shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerLow) {
-      val switchLabel = stringResource(R.string.notification_setting)
+      val switchLabel = stringResource(if (demoEntryId == null) R.string.notification_setting else R.string.demo_notification_setting)
       ListItem(leadingContent = {
         Icon(painterResource(R.drawable.ic_record_notification), contentDescription = null)
       }, supportingContent = { Text(stringResource(description)) }, trailingContent = {
@@ -99,7 +112,7 @@ internal fun RecordNotificationControls() {
           enabled = status != RecordNotificationStatus.PREPARING,
           modifier = Modifier.testTag("record-notification-switch").semantics { contentDescription = switchLabel })
       }, colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
-        Text(stringResource(R.string.notification_setting))
+        Text(switchLabel)
       }
     }
     if (status == RecordNotificationStatus.PERMISSION_DENIED) {
@@ -117,14 +130,14 @@ internal fun RecordNotificationControls() {
       }
     }
     if (status == RecordNotificationStatus.FAILED || status == RecordNotificationStatus.REGISTERING) {
-      val stage = diagnostic.failureStage
-      val category = diagnostic.failureCategory
+      val stage = diagnostic?.failureStage
+      val category = diagnostic?.failureCategory
       if (stage != null && category != null) Text(stringResource(R.string.notification_diagnostic,
-        stringResource(stage.label), stringResource(category.label), diagnostic.failureAttempt),
+        stringResource(stage.label), stringResource(category.label), diagnostic?.failureAttempt ?: 1),
         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(horizontal = 12.dp).testTag("record-notification-diagnostic"))
     }
-    Text(stringResource(R.string.notification_privacy), style = MaterialTheme.typography.bodySmall,
+    Text(stringResource(if (demoEntryId == null) R.string.notification_privacy else R.string.demo_notification_privacy), style = MaterialTheme.typography.bodySmall,
       color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
   }
 }

@@ -50,8 +50,8 @@ internal abstract class EncryptedRecordsDatabase : RoomDatabase() {
   abstract fun records(): EncryptedRecordDao
 
   companion object {
-    fun open(context: Context): EncryptedRecordsDatabase =
-      Room.databaseBuilder<EncryptedRecordsDatabase>(context.applicationContext, "encrypted-records.db")
+    fun open(context: Context, namespace: StorageNamespace = StorageNamespace.PRODUCTION): EncryptedRecordsDatabase =
+      Room.databaseBuilder<EncryptedRecordsDatabase>(context.applicationContext, namespace.name("encrypted-records.db"))
         .setDriver(AndroidSQLiteDriver())
         .build()
   }

@@ -27,6 +27,7 @@ import java.nio.file.Files
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
+import java.util.UUID
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.*
@@ -138,5 +139,21 @@ class RecordSyncWorkerTest {
     assertEquals("AUTH_REQUIRED", result.outputData.getString("failure"))
     assertNull(store.read()?.cacheAuthorization)
     assertEquals(token.accessToken, store.read()?.accessToken)
+  }
+
+  @Test fun aPersistedDemoStopsProductionSyncBeforeTokenVerificationOrCacheAccess() = runBlocking {
+    store.save(token)
+    ReviewDemoModeStore(context).write(ReviewDemoMode(ReviewDemoPhase.DEMO, UUID.randomUUID().toString()))
+    val factory = object : WorkerFactory() {
+      override fun createWorker(appContext: Context, workerClassName: String, workerParameters: WorkerParameters): ListenableWorker =
+        RecordSyncWorker(context, workerParameters, store,
+          { error("demo_must_not_verify_a_production_session") },
+          { error("demo_must_not_open_the_production_cache") })
+    }
+    val result = TestListenableWorkerBuilder<RecordSyncWorker>(context).setWorkerFactory(factory).build().doWork()
+    assertTrue(result is ListenableWorker.Result.Success)
+    assertEquals(token.accessToken, store.read()?.accessToken)
+    assertFalse(RecordSyncLease(store, token, deadline, Clock.fixed(now, ZoneOffset.UTC),
+      productionCurrent = { ReviewDemoModeStore.productionAllowed(context) }).permits("u".repeat(43)))
   }
 }

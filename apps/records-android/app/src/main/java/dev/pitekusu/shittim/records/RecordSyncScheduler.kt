@@ -10,12 +10,14 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import androidx.work.await
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.first
 
 internal object RecordSyncScheduler {
   private const val PERIODIC = "records-periodic-sync-v1"
@@ -29,24 +31,38 @@ internal object RecordSyncScheduler {
   fun cacheChanged() { mutableCacheChanges.update { it + 1 } }
 
   fun schedule(context: Context) {
-    val manager = WorkManager.getInstance(context)
-    manager.enqueueUniquePeriodicWork(PERIODIC, ExistingPeriodicWorkPolicy.KEEP,
-      PeriodicWorkRequestBuilder<RecordSyncWorker>(15, TimeUnit.MINUTES)
-        .setInitialDelay(15, TimeUnit.MINUTES)
-        .setConstraints(network).setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build())
-    syncNow(context)
+    synchronized(RecordNotifications.lock) {
+      if (!ReviewDemoModeStore.productionAllowed(context)) return
+      val manager = WorkManager.getInstance(context)
+      manager.enqueueUniquePeriodicWork(PERIODIC, ExistingPeriodicWorkPolicy.KEEP,
+        PeriodicWorkRequestBuilder<RecordSyncWorker>(15, TimeUnit.MINUTES)
+          .setInitialDelay(15, TimeUnit.MINUTES)
+          .setConstraints(network).setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build())
+      syncNow(context)
+    }
   }
 
   fun syncNow(context: Context) {
-    WorkManager.getInstance(context).enqueueUniqueWork(IMMEDIATE, ExistingWorkPolicy.KEEP,
-      OneTimeWorkRequestBuilder<RecordSyncWorker>().setConstraints(network)
-        .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build())
+    synchronized(RecordNotifications.lock) {
+      if (!ReviewDemoModeStore.productionAllowed(context)) return
+      WorkManager.getInstance(context).enqueueUniqueWork(IMMEDIATE, ExistingWorkPolicy.KEEP,
+        OneTimeWorkRequestBuilder<RecordSyncWorker>().setConstraints(network)
+          .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build())
+    }
   }
 
   fun cancel(context: Context) {
     val manager = WorkManager.getInstance(context)
     manager.cancelUniqueWork(IMMEDIATE)
     manager.cancelUniqueWork(PERIODIC)
+  }
+
+  suspend fun cancelAndAwait(context: Context) {
+    val manager = WorkManager.getInstance(context)
+    manager.cancelUniqueWork(IMMEDIATE).await()
+    manager.cancelUniqueWork(PERIODIC).await()
+    manager.getWorkInfosForUniqueWorkFlow(IMMEDIATE).first { work -> work.all { it.state.isFinished } }
+    manager.getWorkInfosForUniqueWorkFlow(PERIODIC).first { work -> work.all { it.state.isFinished } }
   }
 
   fun states(context: Context): Flow<RecordSyncState> {

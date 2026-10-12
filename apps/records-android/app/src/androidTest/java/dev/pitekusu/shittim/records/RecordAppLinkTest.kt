@@ -11,6 +11,9 @@ import androidx.test.runner.lifecycle.Stage
 import androidx.lifecycle.ViewModelProvider
 import dev.pitekusu.shittim.records.auth.MobileSessionModel
 import dev.pitekusu.shittim.records.auth.PendingDestination
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -25,16 +28,18 @@ class RecordAppLinkTest {
   @Test fun coldLinkIsQueuedOnceAndRecreationDoesNotReplaceThePendingRequest() {
     val destination = "/records/${"a".repeat(43)}"
     ActivityScenario.launch<MainActivity>(link(destination)).use { scenario ->
+      awaitReady(scenario)
       var pending: PendingDestination? = null
       scenario.onActivity {
-        val session = ViewModelProvider(it)[MobileSessionModel::class.java]
+        val session = normalSession(it)
         pending = session.pendingDestination.value
         assertEquals(destination, pending?.returnTo)
         assertNull(session.offlineCacheAccountId) // A route is not permission to read a record.
       }
       scenario.recreate()
+      awaitReady(scenario)
       scenario.onActivity {
-        assertSame(pending, ViewModelProvider(it)[MobileSessionModel::class.java].pendingDestination.value)
+        assertSame(pending, normalSession(it).pendingDestination.value)
       }
     }
   }
@@ -43,22 +48,24 @@ class RecordAppLinkTest {
     val first = "/records/${"a".repeat(43)}"
     val second = "/records/${"b".repeat(43)}"
     ActivityScenario.launch<MainActivity>(link(first)).use { scenario ->
+      awaitReady(scenario)
       var pending: PendingDestination? = null
       deliver(scenario, link(second))
       scenario.onActivity {
-        val session = ViewModelProvider(it)[MobileSessionModel::class.java]
+        val session = normalSession(it)
         pending = session.pendingDestination.value
         assertEquals(second, pending?.returnTo)
       }
       deliver(scenario, link("$first?next=/admin"))
       scenario.onActivity {
-        val session = ViewModelProvider(it)[MobileSessionModel::class.java]
+        val session = normalSession(it)
         assertSame(pending, session.pendingDestination.value)
         session.discardDestination()
       }
       scenario.recreate()
+      awaitReady(scenario)
       scenario.onActivity {
-        assertNull(ViewModelProvider(it)[MobileSessionModel::class.java].pendingDestination.value)
+        assertNull(normalSession(it).pendingDestination.value)
       }
     }
   }
@@ -67,18 +74,19 @@ class RecordAppLinkTest {
     val destination = "/records/${"a".repeat(43)}"
     val stale = link(destination).putExtra(RECORD_NOTIFICATION_BINDING, "stale-binding")
     ActivityScenario.launch<MainActivity>(stale).use { scenario ->
+      awaitReady(scenario)
       var pending: PendingDestination? = null
       scenario.onActivity {
-        assertNull(ViewModelProvider(it)[MobileSessionModel::class.java].pendingDestination.value)
+        assertNull(normalSession(it).pendingDestination.value)
       }
       deliver(scenario, link(destination))
       scenario.onActivity {
-        pending = ViewModelProvider(it)[MobileSessionModel::class.java].pendingDestination.value
+        pending = normalSession(it).pendingDestination.value
         assertEquals(destination, pending?.returnTo)
       }
       deliver(scenario, stale)
       scenario.onActivity {
-        val session = ViewModelProvider(it)[MobileSessionModel::class.java]
+        val session = normalSession(it)
         assertSame(pending, session.pendingDestination.value)
       }
     }
@@ -86,6 +94,20 @@ class RecordAppLinkTest {
 
   private fun link(path: String) = Intent(Intent.ACTION_VIEW, Uri.parse("https://shittim.pitekusu.dev$path"))
     .setClass(ApplicationProvider.getApplicationContext(), MainActivity::class.java)
+
+  private fun normalSession(activity: MainActivity): MobileSessionModel = requireNotNull(
+    (ViewModelProvider(activity)[RecordsAppModel::class.java].state.value as RecordsAppState.Ready).runtime.session,
+  )
+
+  private fun awaitReady(scenario: ActivityScenario<MainActivity>) {
+    lateinit var app: RecordsAppModel
+    scenario.onActivity { app = ViewModelProvider(it)[RecordsAppModel::class.java] }
+    // Await on the instrumentation thread; Activity callbacks must leave Main free to restore.
+    runBlocking {
+      val ready = withTimeout(5_000) { app.state.first { it != RecordsAppState.Loading } }
+      assertTrue("normal app mode did not become ready", ready is RecordsAppState.Ready)
+    }
+  }
 
   private fun deliver(scenario: ActivityScenario<MainActivity>, intent: Intent) {
     val lifecycle = ActivityLifecycleMonitorRegistry.getInstance()

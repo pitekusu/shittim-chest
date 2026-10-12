@@ -4,6 +4,7 @@ import androidx.annotation.MainThread
 import androidx.browser.auth.AuthTabIntent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import dev.pitekusu.shittim.records.RecordNotifications
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,9 +25,10 @@ internal sealed interface MobileLoginStep {
 @MainThread
 internal class MobileLoginModel(
   private val client: MobileAuthClient,
+  productionEpoch: () -> Long? = { 0L },
   private val saveToken: (StoredToken) -> Unit,
 ) : ViewModel() {
-  private val flow = MobileLoginFlow(client)
+  private val flow = MobileLoginFlow(client, productionEpoch = productionEpoch)
   private val mutableStep = MutableStateFlow<MobileLoginStep>(MobileLoginStep.Idle)
   val step = mutableStep.asStateFlow()
 
@@ -60,7 +62,13 @@ internal class MobileLoginModel(
     mutableStep.value = MobileLoginStep.Exchanging
     runOperation {
       val response = flow.complete(url)
-      withContext(Dispatchers.IO) { saveToken(StoredToken(response.accessToken, response.expiresAt)) }
+      withContext(Dispatchers.IO) {
+        synchronized(RecordNotifications.lock) {
+          if (!flow.productionPermitted()) throw MobileLoginException(MobileLoginStatus.CANCELLED)
+          saveToken(StoredToken(response.accessToken, response.expiresAt))
+        }
+      }
+      if (!flow.productionPermitted()) throw MobileLoginException(MobileLoginStatus.CANCELLED)
       mutableStep.value = MobileLoginStep.Finished(MobileLoginStatus.SIGNED_IN, response.returnTo)
     }
   }

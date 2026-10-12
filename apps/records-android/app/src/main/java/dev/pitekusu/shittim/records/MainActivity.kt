@@ -14,29 +14,15 @@ import com.slack.circuit.foundation.CircuitContent
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import coil3.request.CachePolicy
-import dev.pitekusu.shittim.records.auth.KeystoreTokenStore
-import dev.pitekusu.shittim.records.auth.MobileAuthClient
-import dev.pitekusu.shittim.records.auth.MobileSessionModel
-import dev.pitekusu.shittim.records.storage.RecordCacheAccount
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import dev.zacsweers.metro.createGraphFactory
 
 class MainActivity : ComponentActivity() {
-  private val session by viewModels<MobileSessionModel> {
-    viewModelFactory {
-      initializer {
-        val store = KeystoreTokenStore(applicationContext)
-        MobileSessionModel(MobileAuthClient(), store::read, store::save, store::clear,
-          store::invalidateCacheAuthorization, store::beginLogout,
-          store::isLogoutPending, store::completeLogout,
-          { accountId -> RecordCacheAccount.activate(applicationContext, accountId) },
-          {
-            RecordSyncScheduler.cancel(applicationContext)
-            RecordCacheAccount.clear(applicationContext)
-          }, revokeNotifications = { RecordNotifications.revoke(applicationContext) })
-      }
-    }
-  }
-  private val graph by lazy { createGraphFactory<RecordsGraph.Factory>().create(session) }
+  private val app by viewModels<RecordsAppModel>()
 
   override fun onCreate(savedInstanceState: Bundle?) {
     installSplashScreen()
@@ -50,8 +36,18 @@ class MainActivity : ComponentActivity() {
     enableEdgeToEdge()
     val firstLaunch = savedInstanceState == null
     setContent {
-      CompositionLocalProvider(LocalStartupIntro provides firstLaunch) {
-        CircuitContent(screen = BootstrapScreen, circuit = graph.circuit)
+      val state by app.state.collectAsState()
+      when (val ready = state) {
+        is RecordsAppState.Ready -> key(ready.runtime.demoEntryId ?: "normal") {
+          val graph = remember(ready.runtime) {
+            createGraphFactory<RecordsGraph.Factory>().create(ready.runtime)
+          }
+          CompositionLocalProvider(LocalStartupIntro provides firstLaunch,
+            LocalViewModelStoreOwner provides ready.runtime) {
+            CircuitContent(screen = BootstrapScreen, circuit = graph.circuit)
+          }
+        }
+        else -> ReviewDemoTransitionUi(state == RecordsAppState.StorageError, app::recover)
       }
     }
   }
@@ -63,17 +59,10 @@ class MainActivity : ComponentActivity() {
 
   override fun onResume() {
     super.onResume()
-    session.onForeground()
+    app.onForeground()
   }
 
   private fun openRecordLink(intent: Intent?) {
-    if (intent?.action == Intent.ACTION_VIEW) {
-      // A PendingIntent left from an earlier login must not select a record for another account.
-      intent.getStringExtra(RECORD_NOTIFICATION_BINDING)?.let { binding ->
-        if (binding != RecordNotificationSettings(applicationContext).binding ||
-          !hasLocalNotificationPermit(applicationContext)) return
-      }
-      recordDestination(intent.dataString)?.let(session::openDestination)
-    }
+    app.openIntent(intent)
   }
 }

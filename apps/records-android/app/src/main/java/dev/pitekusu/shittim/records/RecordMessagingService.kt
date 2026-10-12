@@ -41,6 +41,7 @@ class RecordMessagingService : FirebaseMessagingService() {
 
 internal fun hasLocalNotificationPermit(context: Context): Boolean = synchronized(RecordNotifications.lock) {
   try {
+    if (!ReviewDemoModeStore.productionAllowed(context)) return@synchronized false
     val settings = RecordNotificationSettings(context)
     val store = KeystoreTokenStore(context)
     val token = if (store.isLogoutPending()) null else store.read()
@@ -55,7 +56,7 @@ internal fun hasLocalNotificationPermit(context: Context): Boolean = synchronize
 internal fun showRecordNotification(context: Context, data: Map<String, String>): Boolean =
   synchronized(RecordNotifications.lock) {
     try {
-      if (RecordNotifications.locallyRevoked) return@synchronized false
+      if (!ReviewDemoModeStore.productionAllowed(context) || RecordNotifications.locallyRevoked) return@synchronized false
       val hint = RecordPublishedHint.parse(data) ?: return@synchronized false
       val settings = RecordNotificationSettings(context)
       val store = KeystoreTokenStore(context)

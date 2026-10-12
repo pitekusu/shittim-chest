@@ -21,9 +21,11 @@ import kotlinx.coroutines.withContext
 
 /** Original image bytes exceed Room's 1 MiB CursorWindow boundary. Callers hold the account lock. */
 internal class EncryptedRecordImageStore(context: Context,
-  private val protector: RecordDataKeyProtector = RecordDataKeyProtector(KeystorePrivateKeyStore(context)),
-  private val availableBytes: () -> Long = { context.noBackupFilesDir.usableSpace }) {
-  private val root = File(context.noBackupFilesDir, DIRECTORY)
+  protector: RecordDataKeyProtector? = null,
+  private val availableBytes: () -> Long = { context.noBackupFilesDir.usableSpace },
+  namespace: StorageNamespace = StorageNamespace.PRODUCTION) {
+  private val protector = protector ?: RecordDataKeyProtector(KeystorePrivateKeyStore(context, namespace))
+  private val root = File(context.noBackupFilesDir, namespace.name(DIRECTORY))
   init { check(!context.isDeviceProtectedStorage) }
 
   suspend fun save(accountId: String, binding: String, image: RecordAttachment, bytes: ByteArray): Unit = guarded {
@@ -116,8 +118,8 @@ internal class EncryptedRecordImageStore(context: Context,
     private const val WRAPPED_BYTES = 1 + 1088 + 48
     private const val HEADER_BYTES = 1 + WRAPPED_BYTES + 12
     private const val FREE_RESERVE_BYTES = 64L * 1024 * 1024
-    suspend fun clear(context: Context) = withContext(Dispatchers.IO) {
-      val root = File(context.noBackupFilesDir, DIRECTORY)
+    suspend fun clear(context: Context, namespace: StorageNamespace = StorageNamespace.PRODUCTION) = withContext(Dispatchers.IO) {
+      val root = File(context.noBackupFilesDir, namespace.name(DIRECTORY))
       root.listFiles().orEmpty().forEach { group ->
         check(group.isDirectory && group.name.matches(Regex("[A-Za-z0-9_-]{43}")))
         group.listFiles().orEmpty().forEach { file ->

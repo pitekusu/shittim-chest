@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="demo_notification_setting">デモの端末内通知</string>
+  <string name="demo_notification_channel">デモの議論結果</string>
+  <string name="demo_notification_enabled">この端末でデモの結果を通知します</string>
+  <string name="demo_notification_privacy">架空の議論が完了すると、この端末の通知欄に結果を表示します。通知からデモの記録を開けます。</string>
+  <string name="demo_notification_title">デモの議論が完了しました</string>
+  <string name="demo_notification_body">依頼者：%1$s\nタップしてデモの記録を確認できます。</string>
+</resources>

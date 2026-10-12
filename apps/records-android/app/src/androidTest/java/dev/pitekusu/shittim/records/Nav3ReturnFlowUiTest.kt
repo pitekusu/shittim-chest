@@ -18,6 +18,7 @@ import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -34,6 +35,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.navigation3.runtime.NavBackStack
 import androidx.navigation3.runtime.NavKey
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import android.view.KeyEvent
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.pitekusu.shittim.records.auth.MobileAvatar
 import dev.pitekusu.shittim.records.auth.MobileSessionUser
@@ -52,7 +54,7 @@ import org.junit.runner.RunWith
 class Nav3ReturnFlowUiTest {
   @get:Rule val compose = createAndroidComposeRule<MainActivity>()
 
-  @Test fun returningFromTheWebMenuKeepsTheAnswerAndReadingPosition() {
+  @Test fun returningFromTheMenuKeepsTheAnswerAndReadingPosition() {
     val host = Host(detailOpen = true)
     show(host)
     compose.waitUntil(10_000) { compose.onNodeWithText("復帰試験の初回意見0").isDisplayed() }
@@ -84,7 +86,11 @@ class Nav3ReturnFlowUiTest {
     instrumentation.addMonitor(monitor)
     try {
       compose.onNodeWithTag("records-menu-open").performClick()
-      compose.onNodeWithText(compose.activity.getString(R.string.menu_momotalk)).performScrollTo().performClick()
+      compose.onNodeWithText(compose.activity.getString(R.string.menu_momotalk)).assertDoesNotExist()
+      instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+      compose.waitUntil(5_000) {
+        compose.onAllNodesWithTag("records-menu").fetchSemanticsNodes().isEmpty()
+      }
       compose.onNodeWithTag("records-menu").assertDoesNotExist()
       stopAndResume()
       compose.onNodeWithTag("detail-section-Opinions").assertIsSelected()
@@ -94,7 +100,7 @@ class Nav3ReturnFlowUiTest {
       compose.onNodeWithTag("brand-intro").assertDoesNotExist()
       assertEquals(position, readingPosition(), .01f)
       compose.runOnIdle {
-        assertEquals(listOf("https://shittim.pitekusu.dev/momotalk"), launchedUrls)
+        assertTrue(launchedUrls.isEmpty())
         assertEquals(routes, host.backStack.toList())
       }
     } finally {

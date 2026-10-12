@@ -18,9 +18,10 @@ internal class RecordCacheAccount(
   private val context: Context,
   private val privateKeys: KeystorePrivateKeyStore,
   private val database: EncryptedRecordsDatabase,
+  private val namespace: StorageNamespace = StorageNamespace.PRODUCTION,
 ) {
-  private val marker = AtomicFile(File(context.noBackupFilesDir, "records-cache-account.v1"))
-  private val deletion = AtomicFile(File(context.noBackupFilesDir, "records-cache-delete.v1"))
+  private val marker = AtomicFile(File(context.noBackupFilesDir, namespace.name("records-cache-account.v1")))
+  private val deletion = AtomicFile(File(context.noBackupFilesDir, namespace.name("records-cache-delete.v1")))
 
   suspend fun activate(accountId: String): Unit = try {
     withContext(Dispatchers.IO) {
@@ -56,7 +57,7 @@ internal class RecordCacheAccount(
         throw error
       }
       privateKeys.clear()
-      EncryptedRecordImageStore.clear(context)
+      EncryptedRecordImageStore.clear(context, namespace)
       database.records().deleteAll()
       marker.delete()
       check(listOf("", ".new", ".bak").none { File(marker.baseFile.path + it).exists() })
@@ -111,14 +112,17 @@ internal class RecordCacheAccount(
     val lock = Mutex() // Also covers Activity/repository instances and session lifecycle callbacks.
     private val ACCOUNT_ID = Regex("[A-Za-z0-9_-]{43}")
 
-    suspend fun activate(context: Context, accountId: String) = update(context) { it.activate(accountId) }
+    suspend fun activate(context: Context, accountId: String,
+      namespace: StorageNamespace = StorageNamespace.PRODUCTION) = update(context, namespace) { it.activate(accountId) }
 
-    suspend fun clear(context: Context) = update(context) { it.clear() }
+    suspend fun clear(context: Context, namespace: StorageNamespace = StorageNamespace.PRODUCTION) =
+      update(context, namespace) { it.clear() }
 
-    private suspend fun update(context: Context, operation: suspend (RecordCacheAccount) -> Unit): Unit = try {
+    private suspend fun update(context: Context, namespace: StorageNamespace,
+      operation: suspend (RecordCacheAccount) -> Unit): Unit = try {
       lock.withLock {
-        val database = EncryptedRecordsDatabase.open(context)
-        try { operation(RecordCacheAccount(context, KeystorePrivateKeyStore(context), database)) }
+        val database = EncryptedRecordsDatabase.open(context, namespace)
+        try { operation(RecordCacheAccount(context, KeystorePrivateKeyStore(context, namespace), database, namespace)) }
         finally { database.close() }
       }
     } catch (error: CancellationException) {

@@ -1,6 +1,9 @@
 package dev.pitekusu.shittim.records
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.setContent
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
@@ -8,6 +11,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import androidx.work.WorkManager
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
@@ -24,6 +28,11 @@ class RecordNotificationDiagnosticUiTest {
 
   @Test fun menuShowsOnlyClassifiedFailureAndExplicitRetryClearsIt() {
     val context = compose.activity.applicationContext
+    if (Build.VERSION.SDK_INT >= 33 &&
+      context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+      InstrumentationRegistry.getInstrumentation().uiAutomation
+        .grantRuntimePermission(context.packageName, Manifest.permission.POST_NOTIFICATIONS)
+    }
     val preferences = context.getSharedPreferences("record-notification-v1", Context.MODE_PRIVATE)
     val firebase = FirebaseApp.initializeApp(context, FirebaseOptions.Builder()
       .setApplicationId("1:000000000000:android:0123456789abcdef012345")

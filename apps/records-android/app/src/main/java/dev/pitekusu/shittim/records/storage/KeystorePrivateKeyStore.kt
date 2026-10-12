@@ -18,9 +18,9 @@ internal class PrivateKeyStorageException : Exception("private_key_storage_unava
 
 /** Stores one account's encoded private key; callers must erase returned bytes after use. */
 @WorkerThread
-internal class KeystorePrivateKeyStore(context: Context) {
-  private val file = AtomicFile(File(context.noBackupFilesDir, "records-private-key.v1"))
-  private val keyAlias = "${context.packageName}.records-private-key.v1"
+internal class KeystorePrivateKeyStore(context: Context, namespace: StorageNamespace = StorageNamespace.PRODUCTION) {
+  private val file = AtomicFile(File(context.noBackupFilesDir, namespace.name("records-private-key.v1")))
+  private val keyAlias = "${context.packageName}.${namespace.name("records-private-key.v1")}"
   private val associatedData = keyAlias.toByteArray(Charsets.UTF_8) + VERSION
 
   init {

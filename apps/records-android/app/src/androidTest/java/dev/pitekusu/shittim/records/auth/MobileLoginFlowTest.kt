@@ -131,6 +131,31 @@ class MobileLoginFlowTest {
     }
   }
 
+  @Test
+  fun demoModeAndARoundTripRejectNewAndInFlightProductionLogin() = runBlocking {
+    withContext(Dispatchers.Main) {
+      MobileLoginFixture().use { fixture ->
+        var epoch: Long? = null
+        val flow = MobileLoginFlow(fixture.client, Clock.fixed(fixture.now, ZoneOffset.UTC),
+          { fixture.elapsed }, productionEpoch = { epoch })
+        rejected { flow.begin("/") }
+        assertEquals(0, fixture.starts)
+        epoch = 1L
+        flow.begin("/")
+        val callback = fixture.callback()
+        fixture.exchangeGate = CompletableDeferred()
+        val exchange = async { rejected(MobileLoginStatus.CANCELLED) { flow.complete(callback) } }
+        withTimeout(5_000) { fixture.exchanging.await() }
+        epoch = null // Demo access never grants permission to exchange a production callback.
+        epoch = 2L // Returning to NORMAL cannot revive the older operation.
+        fixture.exchangeGate!!.complete(Unit)
+        exchange.await()
+        assertFalse(flow.productionPermitted())
+        assertEquals(1, fixture.exchanges)
+      }
+    }
+  }
+
   private fun flow(fixture: MobileLoginFixture) = MobileLoginFlow(
     fixture.client, Clock.fixed(fixture.now, ZoneOffset.UTC), { fixture.elapsed },
   )
