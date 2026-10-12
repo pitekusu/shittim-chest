@@ -976,9 +976,12 @@ def test_records_release_restores_app_links_after_publish_failure(directory: Pat
         validate_notification_workflows(directory)
 
 
-@pytest.mark.parametrize("previous_public_version", ["", "retained/version+1"])
+@pytest.mark.parametrize(
+    ("previous_public_version", "previous_index_version"),
+    [("", "previous-entry"), ("", ""), ("retained/version+1", "previous-entry")],
+)
 def test_records_public_html_publish_failure_restores_both_attempted_pages(
-    directory: Path, tmp_path: Path, previous_public_version: str
+    directory: Path, tmp_path: Path, previous_public_version: str, previous_index_version: str
 ) -> None:
     runner = tmp_path / "runner"
     runner.mkdir()
@@ -994,6 +997,7 @@ def test_records_public_html_publish_failure_restores_both_attempted_pages(
         "RUNNER_TEMP": str(runner),
         "AWS_CALL_LOG": str(calls),
         "PREVIOUS_PUBLIC_VERSION": previous_public_version,
+        "PREVIOUS_INDEX_VERSION": previous_index_version,
         "PUBLIC_HEAD_DENIED": "false",
     }
     attempted = subprocess.run(  # noqa: S603 - tracked workflow with a shell-only AWS stub.
@@ -1035,16 +1039,27 @@ def test_records_public_html_publish_failure_restores_both_attempted_pages(
             for line in commands
             if line.startswith("s3api delete-object ") and f"--key {page}/index.html" in line
         ]
-        if previous_public_version:
+        assert not deleted
+        if previous_public_version or previous_index_version:
             assert len(restored) == 1
-            assert (
-                f"/{page}/index.html?versionId={quote(previous_public_version, safe='')}"
-                in restored[0]
-            )
-            assert not deleted
+            source_key = f"{page}/index.html" if previous_public_version else "index.html"
+            source_version = previous_public_version or previous_index_version
+            assert f"/{source_key}?versionId={quote(source_version, safe='')}" in restored[0]
         else:
-            assert len(deleted) == 1
             assert not restored
+            replacement = [
+                line
+                for line in commands
+                if line.startswith("s3 cp ")
+                and "records-public-unavailable.html" in line
+                and f"/{page}/index.html" in line
+            ]
+            assert len(replacement) == 1
+            fallback = (runner / "records-public-unavailable.html").read_text()
+            assert "準備中" in fallback
+            assert "<script" not in fallback
+            assert "href=" not in fallback
+            assert "https:" not in fallback
     invalidation = next(
         line for line in commands if line.startswith("cloudfront create-invalidation ")
     )
@@ -1075,6 +1090,7 @@ def test_records_public_html_head_failure_stops_before_any_upload(
             "RUNNER_TEMP": str(runner),
             "AWS_CALL_LOG": str(calls),
             "PREVIOUS_PUBLIC_VERSION": "",
+            "PREVIOUS_INDEX_VERSION": "previous-entry",
             "PUBLIC_HEAD_DENIED": "true",
         },
         capture_output=True,
@@ -1201,11 +1217,24 @@ JSON
           if [ "$PUBLIC_HEAD_DENIED" = true ]; then printf '(403) AccessDenied' >&2; return 1; fi
           if [ -z "$PREVIOUS_PUBLIC_VERSION" ]; then printf '(404) Not Found' >&2; return 1; fi
           jq --null-input --arg version "$PREVIOUS_PUBLIC_VERSION" '{VersionId:$version}' ;;
+        *'--key index.html'*)
+          if [ -z "$PREVIOUS_INDEX_VERSION" ]; then printf '(404) Not Found' >&2; return 1; fi
+          jq --null-input --arg version "$PREVIOUS_INDEX_VERSION" '{VersionId:$version}' ;;
         *) printf '%s' '{"VersionId":"previous-entry"}' ;;
       esac ;;
     's3 cp')
       case "$4" in
-        */data-deletion/index.html) return 42 ;;
+        */data-deletion/index.html)
+          case "$3" in
+            *records-public-unavailable.html) return 0 ;;
+            *) return 42 ;;
+          esac ;;
+      esac ;;
+    's3api delete-object')
+      case "$*" in
+        *privacy-policy/index.html*|*data-deletion/index.html*)
+          printf '(403) AccessDenied: public HTML delete denied' >&2
+          return 1 ;;
       esac ;;
     'cloudfront create-invalidation') printf '%s' fixture-invalidation ;;
   esac

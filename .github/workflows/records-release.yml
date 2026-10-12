@@ -1071,19 +1071,31 @@ jobs:
           for public_page in privacy-policy data-deletion; do
             if [ -f "${RUNNER_TEMP}/records-${public_page}-published" ]; then
               previous_version=$(cat "${RUNNER_TEMP}/records-previous-${public_page}-version")
+              previous_key="${public_page}/index.html"
+              if [ -z "${previous_version}" ]; then
+                previous_version=$(cat "${RUNNER_TEMP}/records-previous-index-version")
+                previous_key=index.html
+              fi
               if [ -n "${previous_version}" ]; then
                 encoded_version=$(jq --null-input --raw-output --arg value "${previous_version}" \
                   '$value | @uri')
                 aws s3api copy-object \
                   --bucket "${web_bucket}" \
                   --key "${public_page}/index.html" \
-                  --copy-source "${web_bucket}/${public_page}/index.html?versionId=${encoded_version}" \
+                  --copy-source "${web_bucket}/${previous_key}?versionId=${encoded_version}" \
                   --cache-control "no-cache" \
                   --content-type "text/html; charset=utf-8" \
                   --metadata-directive REPLACE >/dev/null
               else
-                aws s3api delete-object --bucket "${web_bucket}" \
-                  --key "${public_page}/index.html" >/dev/null
+                cat > "${RUNNER_TEMP}/records-public-unavailable.html" <<'HTML'
+          <!doctype html>
+          <html lang="ja"><head><meta charset="utf-8"><meta name="robots" content="noindex">
+          <title>準備中 | シッテムの箱</title></head><body><h1>準備中</h1>
+          <p>このページは現在準備中です。</p></body></html>
+          HTML
+                aws s3 cp "${RUNNER_TEMP}/records-public-unavailable.html" \
+                  "s3://${web_bucket}/${public_page}/index.html" \
+                  --cache-control "no-cache" --content-type "text/html; charset=utf-8"
               fi
             fi
           done
