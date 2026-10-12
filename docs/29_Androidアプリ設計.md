@@ -364,6 +364,7 @@ App Linksの公開証明書と配布版の接続はC19で確定する。C05はAn
 
 C05で定義した以下の契約をC12で公開ルートへ接続する。全応答を`private, no-store`とする。
 JSONはcamelCase、unknown field・余分／重複queryを拒否し、検証例外は固定コードだけへ変換する。
+既存Discord callbackのOAuth応答だけは、[RFC 6749 §4.1.2](https://www.rfc-editor.org/rfc/rfc6749.html#section-4.1.2)に従い未知のquery項目を無視する。`code`・`state`の欠落・空文字・重複とproviderの`error`は拒否する。追加項目から本人・権限・復帰先・tokenを採用しない。
 
 | ルート | 入力／出力 |
 |---|---|
@@ -579,7 +580,7 @@ OpenAPIでは2つのGETだけにCookieまたはopaque Bearerの選択を記載�
 ## C12：モバイル認証のHTTP境界と公開接続
 
 `mobile_http.py`はC07〜C10の処理に薄いHTTP境界を設ける。JSON body・queryはそれぞれ4 KiB以下とし、
-余分な項目、重複JSON field／query、base64 bodyを拒否する。成功・失敗とも`private, no-store`とする。
+ネイティブAPIでは余分な項目、重複JSON field／query、base64 bodyを拒否する。共有Discord callbackのOAuth応答は未知のquery項目を無視し、必須の`code`・`state`だけを一意かつ空でない値として検証する。providerの`error`があれば拒否し、追加項目を認証・保存・遷移に使わない。成功・失敗とも`private, no-store`とする。
 開始・交換はCookie／Authorizationを受け付けず、確認・ログアウトはBearerだけを使用する。
 ネイティブ通信ではOriginを要求しないが、付いていれば設定済みHTTPS originとの完全一致を要求する。
 ブラウザーのCookieに依存する認可・callbackは専用nonceとOAuth stateを照合し、Webセッションとは分離する。
@@ -587,7 +588,7 @@ OpenAPIでは2つのGETだけにCookieまたはopaque Bearerの選択を記載�
 共有Discord callbackは`m.`で始まるstateをモバイルへ振り分ける。この判別自体に認証効果はなく、
 state全体・専用Cookie・期限を既存処理で照合する。重複state・キャンセル・不正CookieでもWebへフォールバックしない。
 失敗時は外部入力を含まないHTMLで再ログインを案内し、モバイルOAuth Cookieだけを消す。
-拒否時は`records_mobile_callback_rejected`へ固定の公開エラー分類と、ブラウザーCookieの有無・形式、provider errorの有無、query項目の形式、Authorization headerの有無だけを記録する。認証URL・query値・Cookie値・認証コード・state・利用者情報・providerの説明・例外本文は記録しない。診断は拒否理由の切り分けに使い、state・Cookie・期限・一回限り交換の検証や公開HTMLを変更しない。
+拒否時は`records_mobile_callback_rejected`へ固定の公開エラー分類と、ブラウザーCookieの有無・形式、provider errorの有無、必須query項目の形式、Authorization headerの有無だけを記録する。認証URL・query値・Cookie値・認証コード・state・利用者情報・providerの説明・例外本文は記録しない。診断は拒否理由の切り分けに使い、state・Cookie・期限・一回限り交換の検証や公開HTMLを変更しない。
 開始→認可→callback→交換→議論閲覧→ログアウトを架空データで通し、コード再使用拒否とWeb認証の維持を確認する。
 
 既存Auth Lambdaの`live` aliasへ5つのHTTP API v2ルートを接続する。Session Table・用途別HMAC・
