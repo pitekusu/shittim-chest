@@ -29,7 +29,7 @@ import org.junit.runner.RunWith
 class BootstrapUiNavigationTest {
   @get:Rule val compose = createAndroidComposeRule<MainActivity>()
 
-  @Test fun menuContainsWebDestinationsAndMovesLogoutOutOfTheRecordList() {
+  @Test fun submissionMenuOmitsWebDestinationsAndKeepsLogoutOutOfTheRecordList() {
     val events = mutableListOf<BootstrapScreen.Event>()
     val user = MobileSessionUser("架空の依頼者", MobileAvatar("placeholder", "依頼者", "cyan"))
     val session = SessionState.SignedIn(user, "u".repeat(43), Instant.parse("2027-01-01T00:00:00Z"))
@@ -39,7 +39,10 @@ class BootstrapUiNavigationTest {
     compose.onNodeWithText("架空の依頼者").assertDoesNotExist()
     compose.onNodeWithText(compose.activity.getString(R.string.session_logout)).assertDoesNotExist()
     compose.onNodeWithTag("records-menu-open").performClick()
-    compose.onNodeWithText(compose.activity.getString(R.string.menu_momotalk)).assertIsDisplayed()
+    for (label in listOf(R.string.menu_insights, R.string.menu_momotalk, R.string.menu_memorial,
+      R.string.menu_status, R.string.menu_prompts)) {
+      compose.onNodeWithText(compose.activity.getString(label)).assertDoesNotExist()
+    }
     compose.onNodeWithText(compose.activity.getString(R.string.session_logout)).performScrollTo().performClick()
     compose.runOnIdle { assertEquals(BootstrapScreen.Event.Logout, events.single()) }
   }

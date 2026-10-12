@@ -36,8 +36,10 @@ internal class RecordSyncWorker(context: Context, parameters: WorkerParameters,
     { lease -> RecordsRepository.open(context, lease::permits, activateOwner = false) })
 
   override suspend fun doWork(): Result = withContext(Dispatchers.IO) { coroutineScope {
+    val productionEpoch = ReviewDemoModeStore.productionEpoch(applicationContext) ?: return@coroutineScope Result.success()
+    fun productionCurrent() = ReviewDemoModeStore.productionEpoch(applicationContext) == productionEpoch
     var observedToken: StoredToken? = null
-    val notifications = RecordSyncNotifications(this, RecordSyncScheduler::cacheChanged)
+    val notifications = RecordSyncNotifications(this, { if (productionCurrent()) RecordSyncScheduler.cacheChanged() })
     try {
       val stored = if (store.isLogoutPending()) null else store.read()
       observedToken = stored
@@ -45,13 +47,15 @@ internal class RecordSyncWorker(context: Context, parameters: WorkerParameters,
       if (stored == null || permit == null || !permit.permits(Instant.now())) {
         return@coroutineScope stopped(RecordReadFailure.AUTH_REQUIRED)
       }
+      if (!productionCurrent()) return@coroutineScope Result.success()
       val verified = verifySession(stored.accessToken)
+      if (!productionCurrent()) return@coroutineScope Result.success()
       if (verified.cacheAccountId != permit.accountId || !verified.expiresAt.isAfter(Instant.now())) {
         RecordNotifications.revokeMatchingSession(applicationContext, stored.accessToken)
         store.invalidateCacheAuthorization(stored.accessToken)
         return@coroutineScope stopped(RecordReadFailure.AUTH_REQUIRED)
       }
-      val lease = RecordSyncLease(store, stored, minOf(permit.expiresAt, verified.expiresAt))
+      val lease = RecordSyncLease(store, stored, minOf(permit.expiresAt, verified.expiresAt), productionCurrent = ::productionCurrent)
       // A worker must not reactivate an owner after logout/account switching erased it.
       openRepository(lease).use { records ->
         val finished = withTimeoutOrNull(8 * 60_000L) {
@@ -67,6 +71,7 @@ internal class RecordSyncWorker(context: Context, parameters: WorkerParameters,
       Result.success(workDataOf("finishedAt" to System.currentTimeMillis()))
     } catch (error: CancellationException) { throw error }
     catch (error: MobileAuthException) {
+      if (!productionCurrent()) return@coroutineScope Result.success()
       if (error.failure in setOf(MobileAuthFailure.AUTHENTICATION_REQUIRED, MobileAuthFailure.FORBIDDEN)) {
         observedToken?.let { RecordNotifications.revokeMatchingSession(applicationContext, it.accessToken) }
         try { observedToken?.let { store.invalidateCacheAuthorization(it.accessToken) } }
@@ -76,6 +81,7 @@ internal class RecordSyncWorker(context: Context, parameters: WorkerParameters,
         MobileAuthFailure.UNAVAILABLE, MobileAuthFailure.THROTTLED)) RecordReadFailure.UNAVAILABLE
         else RecordReadFailure.INVALID_RESPONSE)
     } catch (error: RecordReadException) {
+      if (!productionCurrent()) return@coroutineScope Result.success()
       if (error.failure == RecordReadFailure.AUTH_REQUIRED) {
         observedToken?.let { RecordNotifications.revokeMatchingSession(applicationContext, it.accessToken) }
         try { observedToken?.let { store.invalidateCacheAuthorization(it.accessToken) } }
@@ -163,12 +169,15 @@ internal class RecordSyncNotifications(private val scope: CoroutineScope, privat
 
 /** Rechecks persisted deletion intent, token identity and absolute deadline at every cache boundary. */
 internal class RecordSyncLease(private val store: KeystoreTokenStore, private val token: StoredToken,
-  private val deadline: Instant, private val clock: Clock = Clock.systemUTC()) {
+  private val deadline: Instant, private val clock: Clock = Clock.systemUTC(),
+  private val productionCurrent: () -> Boolean = { true }) {
   fun permits(accountId: String): Boolean = try {
-    val now = clock.instant()
-    val current = if (store.isLogoutPending()) null else store.read()
-    val permit = current?.cacheAuthorization
-    current?.accessToken == token.accessToken && permit?.accountId == accountId &&
-      token.cacheAuthorization?.accountId == accountId && permit.permits(now) && now < deadline
+    if (!productionCurrent()) false else {
+      val now = clock.instant()
+      val current = if (store.isLogoutPending()) null else store.read()
+      val permit = current?.cacheAuthorization
+      current?.accessToken == token.accessToken && permit?.accountId == accountId &&
+        token.cacheAuthorization?.accountId == accountId && permit.permits(now) && now < deadline
+    }
   } catch (_: Exception) { false }
 }

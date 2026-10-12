@@ -268,6 +268,87 @@ instrumentationは既存のdebug設定を維持する。`RuntimeDiscoveryTest`�
 - 確認応答のinstallStatusは更新進行中だけを読み、更新なしの未定義値から再起動を案内しない。開始・復帰した実際の版を取消対象とし、確認から同意までの新規公開や背景での版変更でも同じ版を再案内しない。背景中にPlay側で取り消されてlistenerが受信しなかった場合も、既に要求した版は再案内せず、新しい版は提示する。
 - 更新操作直前の確認結果も反映し、更新の撤回・FLEXIBLE不可なら古い案内を消す。SDKのlistenerはComposition破棄まで保持し、背景中の失敗も明示再試行できる。未開始の確認応答では、失敗案内を同じ要求版が利用可能な場合だけ維持し、次版公開・撤回・FLEXIBLE不可で古い失敗を解除する。問い合わせは前景のみで背景pollingは追加しない。プロセス破棄・画面再作成でイベントを受信できず同じUPDATE_AVAILABLE応答へ戻った場合は取消と失敗を区別できないため、同一版の再案内を抑止し、新規起動・新しい版で再提示する。未定義の状態から失敗原因を推測しない。
 
+## Play審査用アクセス：端末内デモ
+
+ログイン画面の「デモで試す / Try demo」は、Discordアカウント・サーバー参加・審査用の資格情報を要求しない。初回審査・更新審査で同じ入口を使う。通常のDiscord OAuth／Guild認可は維持し、デモ用tokenやバックエンドの認証例外は設けない。
+
+- 通常と同じ一覧・検索・勝者／依頼者の絞り込み・並べ替え、詳細の質問全文・意見・投票／採点・結果・親愛度、画像の拡大表示を使う。初期データは6件の架空記録、3人の勝者、2人の架空依頼者と端末内で描画したサンプル画像である。
+- 「＋」から通常の入力・画像プレビュー・下書き保存・送信・依頼履歴・進捗・結果を試す。「架空のサンプル画像を追加」だけで画像付きの審査手順が完結する。同じPhoto Pickerで選んだ画像も既存validatorを使って端末内へ暗号化コピーし、外部へ送らない。
+- 進行は約10秒の端末内処理で、結果は操作確認用の定型サンプルである。入力した議題・画像をAIが分析する機能ではなく、有料生成・Discord投稿・本番の親愛度変更・S3アップロードを行わない。入力・進行・結果の画面と状態管理は通常版と共有する。
+- `StorageNamespace.DEMO`は本番とは別のDB・owner/deletion marker・Keystore alias・鍵ファイル・画像・workspace・依頼進行を使う。通常利用の保存名・形式は維持する。初期記録は同梱データから読め、デモの下書き・画像・進行は再起動後も復元する。期限・地域制限・ワンタイム認証・手動許可は設けない。
+- 通常→デモは通常ログアウトと端末内消去を先に完了する。期限切れ・再認証取消でtokenがない場合も、残った通常の記録・画像・下書きを消去してから開く。消去失敗時はデモへ進めず、再試行する。
+- メニューの「デモを終了」は確認後にデモの保存データと表示済み通知を消去してログイン画面へ戻る。「デモを初期化」は同じ消去後に新しいデモを開く。通常に戻った後はDiscordログインを必要とする。途中で終了・再起動した場合は、最後にcommitされたモードから消去を続ける。
+- 「デモの端末内通知」をオンにすると、結果確認時に端末内通知を表示し、タップからデモの詳細を開ける。専用設定・channel・entry ID付きIntentを使い、Firebase登録・実FCM配送は行わない。OSの通知許可だけはpackage単位で通常版と共通であり、拒否しても閲覧・作成を使える。
+- Play公式アプリ内更新は通常・デモ双方で維持する。更新SDKへ本番token・記録・下書き・画像を渡さず、更新確認失敗・未対応・オフラインでもデモ利用を妨げない。デモのデータ操作は端末内で完結するが、Playの更新確認まで通信ゼロとは主張しない。
+- 外部Web機能への5つのメニュー導線は通常・デモ双方の提出版から外す。DemoのMarkdownから外部リンクも開かず、制限を表示する。Webサービス自体は残るが、このAndroid版の審査対象機能として申告しない。
+
+詳細な境界・機能対応表は[Androidアプリ設計](../../docs/29_Androidアプリ設計.md)の「Play審査用アクセス：端末内デモ」を正とする。2026年10月12日、Debug／テストAPK・Android LintとR8最適化Release APK／Release Lint、標準CI範囲の非画面227件、関連画面18件をローカルで確認した。Releaseは本番upload keyとは別の一時検証鍵で署名し、配布していない。当該ローカル検証時点では実機、実Play更新、本番Discordログイン、実FCM配送、Console設定、Play配布、審査送信は未実施であり、英語Console文案は未記入の草案である。Play配布の成否は正式配布Workflowとreceiptで別途記録する。
+
+### 検証・実機受入
+
+`ReviewDemoModeStoreTest`・`StorageNamespaceTest`・`DemoSandboxTest`・`DemoNotificationsTest`で、破損時の閉鎖、AtomicFile中断回復、モード世代、同じowner IDでも保存領域が相互不可読であること、片側だけの消去、再起動復元、同ID送信、画像検証、旧通知・callbackの拒否を確認する。通常認証・同期の回帰試験も実行し、本番接続のsentinelでDemoから認証・本番Records・Discord・AI・S3・FCMを呼ばないことを確認する。開始済みのGoogle SDK処理やOS全体の通信までゼロとする試験とは区別する。
+
+非画面227件は失敗・ignoredとも0件。関連9class・27件のうち画面18件はすべて成功し、重複するcontroller／App Linkの非画面9件は227件にも含まれる。当初失敗した2件は、OS通知権限fixtureと戻る／DialogのSDK操作を修正して再実行した。最新のRoot UI 2件とLintも成功した。その後、モード書込み失敗後の復旧と古い画面操作の拒否を追加し、controller 7件とDebug Lintを確認した。専用API 36 AVDをOS設定で320dp・文字2倍・ダークにし、Bottom Sheetをスクロールして初期化・終了のラベルと確認Dialog全体を読めることを確認し、元の設定へ戻した。
+
+最新sourceのR8最適化APKで、機内モードの入口と同梱画像、暗号化した下書き・画像のforce-stop後復元、送信受付後のforce-stopから完成記録・画像・全文検索まで確認した。最終のDebug／Release Lintはともにエラー0件で成功した。Demoの進行中はDiscordでの取消案内を表示せず、メニューからの初期化を案内する。保存画像が欠損した場合は保存エラーとして扱い、オンライン接続へ誘導しない。
+
+提出予定と同じReleaseビルドを実機で確認する。受入操作は架空データだけを使用し、本番の有料生成やDiscord投稿を追加しない。
+
+1. Discord未ログイン・機内モードで「デモで試す / Try demo」を開き、一覧・検索・絞り込み・並べ替え・詳細・質問全文・サンプル画像を操作する。
+2. 架空の議題とサンプル画像で送信し、依頼履歴・進捗・結果・画像を確認する。下書き中／進行中の再起動、同IDの再確認で重複が増えないことも確認する。
+3. デモ通知のオン／オフ、OS許可／拒否、通知タップ、再起動、デモ終了後の古い通知拒否を確認する。実FCM配送の受入とは分ける。
+4. 初期化・終了・再入場と、通常ログアウト→デモ→終了→通常再ログインを確認する。期限切れ・tokenなし・保存失敗・途中cleanupと古いApp Link／認証callbackを含め、別モードの保存データを読めないことを確認する。
+5. 明暗・320dp／文字2倍・広幅・回転・Photo Pickerを確認する。任意の端末画像の取り込みも端末内で完結することを確認する。
+
+### Play Console「アプリのアクセス権」の英語文案
+
+以下は**未記入の草案**。通常機能にログイン制限があることを申告し、審査担当者用の代替入口としてDemoを案内する。「アクセス制限なし」として通常のログインを省略して申告しない。提出予定版で上の実機受入を完了してから、画面の文言と手順を再照合して使用する。初回審査・更新審査で継続して同じ入口を維持する。[Google Playのログイン情報要件](https://support.google.com/googleplay/android-developer/answer/15748846?hl=en)と[アプリのアクセス権の案内](https://support.google.com/googleplay/android-developer/answer/9859455?hl=en)は2026年10月12日に照合した。
+
+```text
+Instruction name: Review access - built-in isolated demo
+
+Username: Not required for the review demo.
+Password: Not required for the review demo.
+
+1. Launch the app and tap "デモで試す / Try demo" on the login screen.
+   Do not choose Discord sign-in. No Discord account, server membership,
+   one-time code, approval, payment, or review account is required.
+2. Browse the fictional records. Use the search and filter controls to test
+   search, winner/requester filters, and sorting. Open a record to inspect
+   the full question, initial/final opinions, voting and score details,
+   result, and affection details. Swipe or use the bottom tabs.
+   The sample record containing "ピクニック" includes one image. Tap
+   "画像 1枚" (1 image) in the question panel to open the zoomable viewer.
+   The "工作会" sample has a "画像 3枚" (3 images) button and lets you
+   switch between three attached images.
+3. Return to the list and tap "+" to create a demo discussion. Enter a
+   fictional question, such as "Please plan a fictional picnic."
+   Tap "架空のサンプル画像を追加" to attach an in-app sample image.
+   No personal photo is needed. The regular photo picker is also available;
+   selected images are processed and stored only on this device in demo mode.
+4. Tap "シッテムの箱を開く" to submit locally. Inspect the progress screen;
+   the demo normally completes in about 10 seconds. Tap "議論の記録を読む"
+   to open the result. The top-right menu item "依頼した議論" opens request
+   history. Drafts, selected images, and request progress survive app restart.
+5. Optional: in the top-right menu, enable "デモの端末内通知" and allow the
+   Android notification permission. Complete another demo discussion and
+   tap its local completion notification to open the result.
+   Notification permission is optional; all other demo features remain available.
+6. Use the menu to change the theme. "デモを初期化" resets demo data;
+   "デモを終了" deletes demo data and returns to the login screen.
+   Confirm the displayed dialog. You can enter the demo again at any time.
+
+The demo uses the same native screens and interaction flow as normal use,
+with fictional records, sample images, and predefined sample results.
+It does not analyze the entered question or images using AI, create AI charges,
+post to Discord, upload to S3, or access or change production records/accounts.
+Notifications are generated locally; remote Firebase/FCM delivery is not used.
+External web menu features are absent from this submitted Android version,
+and external links do not open in demo mode.
+The demo has no account expiration or region restriction and works offline.
+Normal Discord sign-in remains separate and is not needed to review the demo.
+```
+
 ## C20：本人向け内部テスト
 
 最初は本人だけを[Play Consoleの内部テストトラック](https://support.google.com/googleplay/android-developer/answer/9845334)へ登録する。
@@ -518,10 +599,10 @@ API 36・架空データ。標準のテスト用window／font scale overrideで�
 ## C37：Web機能メニューとログアウト
 
 - 先頭の「依頼した議論」は、時計付きの履歴アイコン・「進行状況・結果を見る」・右向き矢印を備えた強調カードにする。標準Surface／ListItemと既存のシアン配色を使い、カード全体から依頼履歴を開く。新規作成の「＋」とは区別し、狭幅・文字拡大では折り返す。
-- 認証済みの一覧・詳細の上部へメニューを追加。いろいろな記録、モモトーク、メモリアルロビー、サービス状態確認、プロンプト管理を固定URLでCustom Tabsへ開く。Web側の認可を使い、アプリのtokenはブラウザーへ渡さない。
+- 認証済みの一覧・詳細の上部にメニューを置く。審査デモを含む提出版では、いろいろな記録、モモトーク、メモリアルロビー、サービス状態確認、プロンプト管理への5つの外部Web導線を通常・Demo双方から外す。依頼履歴・通知・表示切替・ログアウトを残し、Demoでは初期化・終了を確認付きで行う。
 - ログアウト・自動／ライト／ダーク切替をメニューへ移し、記録一覧にあったログイン状態カードと表示切替を撤去。通信不調によるオフライン閲覧でも同じログアウト操作が可能。
 - ログイン前の常設説明文を削除。期限切れ・取消・失敗・ブラウザー不可の状態表示は残す。C35の短い完了通知は次の起動／ログイン演出PRで置き換える。
-- 架空データの画面試験でメニューの導線とログアウト操作、一覧・詳細のスクロール維持を確認する。実Webへの接続とブラウザーからの復帰は内部テスト版で確認する。
+- 架空データの画面試験で依頼履歴・通知・表示切替・ログアウト／Demo終了、外部Web導線がないこと、一覧・詳細のスクロール維持を確認する。通常認証の実機受入とDemoだけの操作確認は区別する。
 - 依頼履歴カードのプレビュー：[ダーク](screenshots/debate-history-menu-dark.png)、[ライト](screenshots/debate-history-menu-light.png)、[OS設定320dp・文字2倍](screenshots/debate-history-menu-large-text.png)。Bottom Sheetの文字拡大は内容内だけのoverrideではなく、専用AVDのOS設定で確認する。
 
 ## C39：GitHubからの内部テスト配布

@@ -6,6 +6,7 @@ import android.os.Looper
 import androidx.browser.auth.AuthTabIntent
 import androidx.lifecycle.ViewModelStore
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -119,6 +120,32 @@ class MobileLoginModelTest {
           model.complete(fixture.callback())
           assertEquals(1, fixture.exchanges)
           assertEquals(1, saves)
+        } finally { owner.clear() }
+      }
+    }
+  }
+
+  @Test
+  fun switchingThroughDemoDuringExchangeCannotPersistAProductionToken() = runBlocking {
+    withContext(Dispatchers.Main) {
+      MobileLoginFixture().use { fixture ->
+        var epoch: Long? = 1L
+        var saves = 0
+        val model = MobileLoginModel(fixture.client, productionEpoch = { epoch }) { saves++ }
+        val owner = ViewModelStore().apply { put("login", model) }
+        try {
+          model.begin("/")
+          withTimeout(5_000) { model.step.first { it is MobileLoginStep.OpenBrowser } }
+          model.browserLaunched()
+          fixture.exchangeGate = CompletableDeferred()
+          model.complete(fixture.callback())
+          withTimeout(5_000) { fixture.exchanging.await() }
+          epoch = null
+          epoch = 2L
+          fixture.exchangeGate!!.complete(Unit)
+          assertEquals(MobileLoginStatus.CANCELLED, finished(model).status)
+          assertEquals(0, saves)
+          assertEquals(1, fixture.exchanges)
         } finally { owner.clear() }
       }
     }

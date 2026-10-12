@@ -1,8 +1,5 @@
 package dev.pitekusu.shittim.records
 
-import android.content.ActivityNotFoundException
-import android.net.Uri
-import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -22,6 +19,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -31,24 +30,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import dev.pitekusu.shittim.records.auth.RECORDS_ORIGIN
 import dev.pitekusu.shittim.records.ui.ShittimSectionHeading
 import dev.pitekusu.shittim.records.ui.ShittimSpacing
-
-private val webDestinations = listOf(
-  R.string.menu_insights to "/insights",
-  R.string.menu_momotalk to "/momotalk",
-  R.string.menu_memorial to "/memorial",
-)
-private val adminDestinations = listOf(
-  R.string.menu_status to "/admin",
-  R.string.menu_prompts to "/admin/prompts",
-)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -65,18 +52,18 @@ internal fun RecordsAppBar(onMenuClick: () -> Unit) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun RecordsNavigationMenu(state: BootstrapScreen.State, onDismiss: () -> Unit) {
-  val context = LocalContext.current
-  var browserError by remember { mutableStateOf(false) }
-  fun openWeb(path: String) {
-    try {
-      CustomTabsIntent.Builder().setShowTitle(true).build()
-        .launchUrl(context, Uri.parse("$RECORDS_ORIGIN$path"))
-      onDismiss()
-    } catch (_: ActivityNotFoundException) {
-      browserError = true
-    } catch (_: SecurityException) {
-      browserError = true
-    }
+  var demoAction by remember { mutableStateOf<BootstrapScreen.Event?>(null) }
+  if (demoAction != null) {
+    val action = requireNotNull(demoAction)
+    AlertDialog(onDismissRequest = { demoAction = null },
+      title = { Text(stringResource(if (action == BootstrapScreen.Event.ResetDemo) R.string.review_demo_reset else R.string.review_demo_exit)) },
+      text = { Text(stringResource(R.string.review_demo_reset_hint)) },
+      confirmButton = { TextButton(onClick = {
+        demoAction = null
+        onDismiss()
+        state.eventSink(action)
+      }, modifier = Modifier.testTag("review-demo-confirm")) { Text(stringResource(R.string.review_demo_confirm)) } },
+      dismissButton = { TextButton(onClick = { demoAction = null }) { Text(stringResource(R.string.review_demo_cancel)) } })
   }
   ModalBottomSheet(onDismissRequest = onDismiss, modifier = Modifier.testTag("records-menu"),
     sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
@@ -87,22 +74,18 @@ internal fun RecordsNavigationMenu(state: BootstrapScreen.State, onDismiss: () -
         onDismiss()
         state.eventSink(BootstrapScreen.Event.ShowDebateRequests)
       })
-      ShittimSectionHeading(stringResource(R.string.menu_web))
-      webDestinations.forEach { (label, path) ->
-        MenuItem(label, R.drawable.ic_open_web, onClick = { openWeb(path) })
-      }
-      ShittimSectionHeading(stringResource(R.string.menu_admin))
-      adminDestinations.forEach { (label, path) ->
-        MenuItem(label, R.drawable.ic_open_web, onClick = { openWeb(path) })
-      }
-      if (browserError) Text(stringResource(R.string.menu_browser_unavailable),
-        color = MaterialTheme.colorScheme.error)
       ShittimSectionHeading(stringResource(R.string.menu_settings))
-      RecordNotificationControls()
+      RecordNotificationControls(demoEntryId = state.demoEntryId)
       BootstrapThemeSelector(state.themeChoice) {
         state.eventSink(BootstrapScreen.Event.SelectTheme(it))
       }
-      MenuItem(R.string.session_logout, R.drawable.ic_logout,
+      if (state.demoEntryId != null) {
+        Text(stringResource(R.string.review_demo_external_links), style = MaterialTheme.typography.bodySmall)
+        MenuItem(R.string.review_demo_reset, R.drawable.ic_arrow_back,
+          modifier = Modifier.testTag("review-demo-reset"), onClick = { demoAction = BootstrapScreen.Event.ResetDemo })
+        MenuItem(R.string.review_demo_exit, R.drawable.ic_logout,
+          modifier = Modifier.testTag("review-demo-exit"), onClick = { demoAction = BootstrapScreen.Event.ExitDemo })
+      } else MenuItem(R.string.session_logout, R.drawable.ic_logout,
         modifier = Modifier.testTag("records-menu-logout"), onClick = {
         onDismiss()
         state.eventSink(BootstrapScreen.Event.Logout)

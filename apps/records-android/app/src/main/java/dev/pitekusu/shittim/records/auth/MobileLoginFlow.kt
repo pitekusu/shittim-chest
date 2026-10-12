@@ -25,13 +25,17 @@ internal class MobileLoginFlow(
   private val client: MobileAuthClient,
   private val clock: Clock = Clock.systemUTC(),
   private val elapsedMillis: () -> Long = SystemClock::elapsedRealtime,
+  private val productionEpoch: () -> Long? = { 0L },
 ) {
   private var pending: Attempt? = null
+  private var activeEpoch: Long? = null
   private val random = SecureRandom()
 
   suspend fun begin(returnTo: String): String {
     if (pending != null) throw MobileLoginException(MobileLoginStatus.REJECTED)
-    val attempt = Attempt(randomValue(), randomValue(), returnTo, elapsedMillis() + 600_000)
+    val epoch = productionEpoch() ?: throw MobileLoginException(MobileLoginStatus.REJECTED)
+    activeEpoch = epoch
+    val attempt = Attempt(randomValue(), randomValue(), returnTo, elapsedMillis() + 600_000, epoch)
     pending = attempt
     try {
       val response = client.start(MobileStartRequest(s256(attempt.verifier), attempt.state, returnTo))
@@ -49,6 +53,7 @@ internal class MobileLoginFlow(
 
   suspend fun complete(callbackUrl: String): MobileExchangeResponse {
     val attempt = pending ?: throw MobileLoginException(MobileLoginStatus.REJECTED)
+    requireCurrent(attempt)
     if (attempt.claimed || attempt.transaction == null) throw MobileLoginException(MobileLoginStatus.REJECTED)
     val callback = parseMobileCallback(callbackUrl)
     if (callback.transaction != attempt.transaction || !MessageDigest.isEqual(
@@ -69,10 +74,12 @@ internal class MobileLoginFlow(
     }
   }
 
-  fun cancel() { pending = null }
+  fun cancel() { pending = null; activeEpoch = null }
+
+  fun productionPermitted(): Boolean = activeEpoch != null && productionEpoch() == activeEpoch
 
   private fun requireCurrent(attempt: Attempt) {
-    if (pending !== attempt) throw MobileLoginException(MobileLoginStatus.CANCELLED)
+    if (pending !== attempt || productionEpoch() != attempt.epoch) throw MobileLoginException(MobileLoginStatus.CANCELLED)
   }
 
   private fun requireUnexpired(attempt: Attempt) {
@@ -83,7 +90,7 @@ internal class MobileLoginFlow(
     .encodeToString(ByteArray(32).also(random::nextBytes))
 
   private class Attempt(
-    val verifier: String, val state: String, val returnTo: String, var deadline: Long,
+    val verifier: String, val state: String, val returnTo: String, var deadline: Long, val epoch: Long,
     var transaction: String? = null, var claimed: Boolean = false,
   )
 }

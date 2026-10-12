@@ -66,7 +66,8 @@ internal fun DebateRequestsScreen(state: DebateHistoryState, online: Boolean,
 @Composable
 internal fun DebateRequestStatusScreen(id: String, state: DebateStatusState,
   submission: DebateSubmissionState, online: Boolean, onRetry: () -> Unit,
-  onResult: (String) -> Unit, onReauth: () -> Unit, onNew: () -> Unit, modifier: Modifier = Modifier) {
+  onResult: (String) -> Unit, onReauth: () -> Unit, onNew: () -> Unit, modifier: Modifier = Modifier,
+  demo: Boolean = false) {
   val receipt = debateReceipt(id, state, submission)
   val ownWorkspace = submission.workspace?.takeIf { it.requestId == id }
   Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(ShittimSpacing.Medium)
@@ -106,7 +107,7 @@ internal fun DebateRequestStatusScreen(id: String, state: DebateStatusState,
           Text(stringResource(R.string.debate_open_result))
         }
       }
-      if (receipt?.terminal != true) Text(stringResource(R.string.debate_no_cancel),
+      if (receipt?.terminal != true) Text(stringResource(if (demo) R.string.review_demo_progress_hint else R.string.debate_no_cancel),
         style = MaterialTheme.typography.bodySmall)
       if (receipt?.terminal == true) TextButton(onClick = onNew) { Text(stringResource(R.string.debate_new)) }
     }

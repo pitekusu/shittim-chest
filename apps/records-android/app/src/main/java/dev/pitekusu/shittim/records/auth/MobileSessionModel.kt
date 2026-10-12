@@ -260,6 +260,25 @@ internal class MobileSessionModel(
     }
   }
 
+  /** A demo transition also erases cache left by expiry or cancelled reauthentication. */
+  suspend fun logoutForDemo() {
+    val verification = operation
+    verification?.cancel()
+    expiry?.cancel()
+    val previous = pendingLogoutToken ?: token
+    revokeNotifications()
+    token = null
+    mutableCachePermit.value = null
+    offlineAllowed = false
+    mutableState.value = SessionState.SigningOut
+    verification?.join()
+    // A cancelled startup read may not have populated the in-memory token yet.
+    val stored = previous ?: try { withContext(Dispatchers.IO) { readToken() } }
+    catch (_: TokenStorageException) { null } // An unreadable token can still be erased safely.
+    finishLogout(stored)
+    operation = null
+  }
+
   private suspend fun finishLogout(previous: StoredToken?, verification: Job? = null) {
     revokeNotifications()
     pendingLogoutToken = previous // A failed local deletion can retry without losing revocation.

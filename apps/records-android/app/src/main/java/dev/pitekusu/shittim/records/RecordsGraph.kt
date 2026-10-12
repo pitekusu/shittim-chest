@@ -12,7 +12,9 @@ internal interface RecordsGraph {
 
   @DependencyGraph.Factory
   fun interface Factory {
-    fun create(@Provides session: MobileSessionModel): RecordsGraph
+    fun create(@Provides runtime: RecordsRuntime): RecordsGraph
+
+    fun create(session: MobileSessionModel): RecordsGraph = create(RecordsRuntime(session = session))
   }
 
   @Provides

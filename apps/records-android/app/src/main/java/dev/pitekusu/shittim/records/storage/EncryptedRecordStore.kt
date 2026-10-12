@@ -12,7 +12,7 @@ import kotlinx.coroutines.withContext
 
 internal enum class CachedRecordPart(val code: String) {
   LIST("list"), DETAIL("detail"), SYNC_PROGRESS("sync-progress"), AVATAR("avatar"), REVISION("revision"),
-  DEBATE_WORKSPACE("debate-workspace")
+  DEBATE_WORKSPACE("debate-workspace"), DEMO_SANDBOX("demo-sandbox")
 }
 
 internal class RecordCacheException : Exception("record_cache_unavailable")

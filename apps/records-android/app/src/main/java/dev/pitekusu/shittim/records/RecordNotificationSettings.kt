@@ -135,7 +135,7 @@ internal object RecordNotifications {
   @Volatile internal var locallyRevoked = false
   internal fun changed() { mutableChanges.update { it + 1 } }
 
-  fun configured(context: Context): Boolean = FirebaseApp.getApps(context).isNotEmpty()
+  fun configured(context: Context): Boolean = ReviewDemoModeStore.productionAllowed(context) && FirebaseApp.getApps(context).isNotEmpty()
   fun permitted(context: Context): Boolean =
     (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context,
       Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) &&
@@ -176,6 +176,7 @@ internal object RecordNotifications {
   }
 
   fun retryRegistration(context: Context) = synchronized(lock) {
+    if (!ReviewDemoModeStore.productionAllowed(context)) return@synchronized
     RecordNotificationSettings(context).retryRegistration()
     RecordNotificationRegistration.schedule(context, replace = true)
   }
@@ -193,12 +194,14 @@ internal object RecordNotifications {
   }
 
   fun permissionResult(context: Context, granted: Boolean) = synchronized(lock) {
+    if (!ReviewDemoModeStore.productionAllowed(context)) return@synchronized
     RecordNotificationSettings(context).permissionResult(granted)
     // Never re-enable an OFF setting or revive a session invalidated while the dialog was open.
     if (!locallyRevoked) RecordNotificationRegistration.schedule(context, replace = true)
   }
 
   fun disable(context: Context) = synchronized(lock) {
+    if (!ReviewDemoModeStore.productionAllowed(context)) return@synchronized
     RecordNotificationSettings(context).disable()
     NotificationManagerCompat.from(context).cancelAll()
     RecordNotificationRegistration.schedule(context, replace = true)

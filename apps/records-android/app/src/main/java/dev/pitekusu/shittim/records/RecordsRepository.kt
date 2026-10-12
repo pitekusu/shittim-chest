@@ -34,7 +34,7 @@ internal class RecordsRepository(
   private val isActiveAccount: (String) -> Boolean,
   private val activateOwner: Boolean = true,
   private val imageStore: EncryptedRecordImageStore? = null,
-) : Closeable {
+) : RecordsReader {
   private val json = Json { encodeDefaults = true }
   private val memoLock = Any()
   @Volatile private var closed = false
@@ -83,7 +83,7 @@ internal class RecordsRepository(
     return result
   }
 
-  suspend fun cachedAttachment(accountId: String, recordId: String, image: RecordAttachment): ByteArray? = accountLock.withLock {
+  override suspend fun cachedAttachment(accountId: String, recordId: String, image: RecordAttachment): ByteArray? = accountLock.withLock {
     prepareRead(accountId)
     val bytes = imageStore?.read(accountId, recordId, image)
     try { requireActive(accountId) } catch (error: Exception) { bytes?.fill(0); throw error }
@@ -136,7 +136,7 @@ internal class RecordsRepository(
     ids
   }
 
-  suspend fun cachedRecords(accountId: String): List<RecordListEntry> {
+  override suspend fun cachedRecords(accountId: String): List<RecordListEntry> {
     try {
       val (listRows, avatarRows) = accountLock.withLock {
         prepareRead(accountId)
@@ -240,7 +240,7 @@ internal class RecordsRepository(
     return remote.syncIndex(token, cursor).also { requireActive(accountId) }
   }
 
-  suspend fun queryCachedRecords(accountId: String, entries: List<RecordListEntry>,
+  override suspend fun queryCachedRecords(accountId: String, entries: List<RecordListEntry>,
     query: RecordListQuery): List<RecordListEntry> = withContext(Dispatchers.Default) {
     requireActive(accountId)
     val matches = entries.filter { entry ->
@@ -365,7 +365,7 @@ internal class RecordsRepository(
     result
   }
 
-  suspend fun cachedRecord(accountId: String, recordId: String): RecordPreview? = accountLock.withLock {
+  override suspend fun cachedRecord(accountId: String, recordId: String): RecordPreview? = accountLock.withLock {
     prepareRead(accountId)
     val result = load(accountId, recordId, CachedRecordPart.DETAIL)?.let { serialized ->
       decode(serialized) {
