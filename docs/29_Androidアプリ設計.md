@@ -21,7 +21,7 @@ updated: 2026-10-12
 | デザイン基盤の先行実装 | Expressiveテーマ、独自配色・書体・背景、準備画面 | C01を維持した追加差分。C02の機能実装とは分離 |
 | C02 | Circuit・Metroによる準備画面の状態管理・依存接続 | 実装済み |
 | C03 | Android CI | 実装済み |
-| C04 | CodeQL接続 | CodeQL 2.27.2でKotlin 2.4.20のmanual抽出を確認し、解析workflowを追加。mainの4言語解析・upload確認待ち |
+| C04 | CodeQL接続 | CodeQL 2.27.2で当時のKotlin 2.4.20のmanual抽出を確認し、解析workflowへ接続済み。依存更新時はPRとmainの4言語解析・uploadを確認 |
 | C05 | モバイル認証の要求・応答・内部状態 | 契約定義を実装済み。C12で公開接続 |
 | C06 | 認証取引と一回限りコードの保存処理 | 条件付き保存・期限確認・消費用transaction部品を実装済み。C09でセッション発行と結合 |
 | C07 | ログイン開始とブラウザー認可 | 内部serviceを実装済み。state・Cookie検証をC08から利用。C12で公開接続 |
@@ -81,6 +81,8 @@ C04はCodeQLの対応後に独立したPRで再開し、C02・C03の機能は混
 公式Java/Kotlin bundleのSHA-256を照合し、管理用ビルド入口で`:app:assembleDebug`を実行してデータベースを作成した。アプリのmain Kotlinソース67件が抽出され、`security-extended`の解析は成功し検出0件だった。テストソースはこのビルドの解析対象に含めない。
 依存ライブラリFirebaseの`JavaDataStorage.getAllSync`にextractorの型診断が残るため、依存の全metadataまで完全に抽出できたとは扱わない。
 
+現行アプリのKotlin／Compose CompilerはVersion Catalogに従い2.4.21を使う。単独の[Kotlin更新PR](https://github.com/pitekusu/shittim-chest/pull/565)ではCodeQL 2.27.2のmanualビルド・解析・uploadを確認済み。これはKotlinだけを更新した構成の結果であり、依存更新の統合時は同一SHAのPRとマージ後のmainで4言語の解析・uploadを改めて確認する。
+
 既存の`.github/workflows/codeql.yml`へ`java-kotlin`の`manual`モード解析を追加し、CodeQL Action v4.38.3（同梱CLI 2.27.2）を使う。
 TemurinはAndroidの`.java-version`から読み、SDK Platform 37.2とBuild Tools 37.0.0を用意する。
 CodeQL初期化後にWrapperから`:app:assembleDebug`を実行する。Gradle Actionのキャッシュを無効にし、`--no-daemon --no-build-cache --no-configuration-cache --rerun-tasks -Pkotlin.incremental=false`で再コンパイルを保証する。
@@ -93,7 +95,7 @@ GitHubのdefault setupとadvanced setupは併用せず、切替手順は
 
 ### Kotlin Compiler Native Image
 
-Kotlin 2.4.20のNative Image版を単体CLIとして利用する。
+単体CLIには、導入・検証済みのKotlin 2.4.20のNative Image版を利用する。現行アプリのKotlin／Compose Compiler 2.4.21とは別に管理する。
 GraalVMで事前コンパイルされたKotlin/JVMコンパイラーであり、
 アプリをKotlin/Nativeへ移行するものではない。Material 3やJVM targetも変更しない。
 
@@ -102,7 +104,7 @@ GraalVMで事前コンパイルされたKotlin/JVMコンパイラーであり、
 `-include-runtime`は配布物内のリソース参照で失敗したため、通常のclass出力と
 標準ライブラリを指定する実行方法を使う。上流の非推奨API警告は抑制しない。
 
-Kotlin Gradle Plugin 2.4.20ではNative Image選択の正式な設定は確認できていない。
+2026年9月17日の確認時点では、Kotlin Gradle Plugin 2.4.20にNative Image選択の正式な設定は確認できなかった。
 CLIの導入だけでAGPの
 `:app:compileDebugKotlin`が置き換わるわけではなく、APKビルドは従来の方式を維持する。
 Gradle連携を独自実装せず、正式な連携経路を確認できた時点で改めて採用する。
@@ -311,7 +313,7 @@ flowchart LR
     UI -->|SelectTheme| Presenter
 ```
 
-- Circuit 0.39.0とMetro 1.4.4をVersion Catalogで固定する。Kotlin／Compose Compiler 2.4.20とMaterial 3 1.5.0-alpha28は維持する。
+- Circuit／Metro・Kotlin／Compose Compiler・Material 3の採用版はVersion Catalogを正とする。
 - `RecordsGraph`はActivityごとに1回生成し、実際に使うCircuitとPresenterだけを提供する。Application全体のscopeや空のRepositoryは設けない。
 - `BootstrapScreen`は固定の画面識別子、`State`は表示選択、`Event.SelectTheme`は操作入力を表す。まだback stackを作らず、画面識別子の永続化もしない。
 - `BootstrapPresenter`が`rememberSaveable`で表示選択を保持し、Activity再生成時に復元する。端末設定やアカウント設定には保存しない。
@@ -330,7 +332,7 @@ debug APK／テストAPK・LintとAPI 36の非画面instrumentation testを実�
 - Android専用差分では無関係なCore／Recordsの全試験を実行しない。共通CI・分類器の変更は両側を検証する。
 - `android-gate`は必要なビルドの失敗・取消・skipや分類失敗を成功扱いしない。Gradleの成功終了だけでは合格にせず、実行済みJUnit結果を確認し、結果欠落・0件・失敗・skipを拒否する。
 - レポートのみを短期保存し、APK／署名済み配布は後続工程に残す。
-- Kotlin 2.4.20とMaterial 3 1.5.0-alpha28は維持する。C04のCodeQL解析は独立したworkflowで確認する。
+- Kotlin／Compose CompilerとMaterial 3はVersion Catalogの採用版で検証する。C04のCodeQL解析は独立したworkflowで確認する。
 
 ## C05：モバイル認証の契約（公開前）
 
@@ -642,7 +644,7 @@ API 36のinstrumentation testで保存・再読込・IV更新・鍵の非export�
 - DTOを通常classとし、`toString()`にtoken・code・state・verifier・本人情報を含めない。
 
 通信依存はKtor 3.6.0、OkHttp engine、kotlinx.serialization 1.11.0、Coroutines 1.11.0を
-Version Catalogで固定する。serialization compiler pluginは既存Kotlin 2.4.20と揃える。
+Version Catalogで固定する。serialization compiler pluginは同CatalogのKotlin版と揃える。
 2026年9月21日に[Ktor公式](https://ktor.io/docs/client-engines.html#okhttp)と
 [serializationのリリース](https://github.com/Kotlin/kotlinx.serialization/releases/tag/v1.11.0)を確認。
 1.12.0-RCは今回採用せず、JSON runtimeは安定版を使う。通信・ブラウザー・画面・保存は責務を分ける。
@@ -1330,15 +1332,15 @@ component semantics・semantic token・adaptive layout・accessibilityの指針�
 
 ### Material 3 Expressiveの全面採用
 
-Material 3 `1.5.0-alpha28`をAndroid全画面の基盤とする。テーマだけの試験採用やstable版との使い分けは行わない。
+Material 3 `1.5.0-beta01`をAndroid全画面の基盤とする。テーマだけの試験採用やstable版との使い分けは行わない。
 依存するCompose本体もプレビュー版を採用し、Version Catalogで公式Alpha BOMとMaterial 3を固定する。
 
 | 対象 | 採用版・管理方法 |
 |---|---|
-| Compose BOM | `androidx.compose:compose-bom-alpha:2026.09.00` |
-| Material 3 | `1.5.0-alpha28`を明示固定。BOMの指定と一致させる |
-| UI・Foundation・Runtime・Animation・Tooling | BOMが指定する`1.13.0-alpha03` |
-| Compose Compiler | BOMの対象外。Kotlinと同じ版を維持する |
+| Compose BOM | `androidx.compose:compose-bom-alpha:2026.10.00` |
+| Material 3 | `1.5.0-beta01`を明示固定。BOMの指定と一致させる |
+| UI・Foundation・Runtime・Animation・Tooling | BOMが指定する`1.13.0-beta01` |
+| Compose Compiler | BOMの対象外。Kotlinと同じ`2.4.21`を使う |
 
 1.5系の公開APIを上記の用途へ接続し、非推奨の旧ListItemや旧ToggleButton overloadを使わない。
 後続の認証・一覧・詳細もこのテーマと部品へ統一する。画面の採用方針であり、認証・通信・保存の安全仕様は変更しない。
