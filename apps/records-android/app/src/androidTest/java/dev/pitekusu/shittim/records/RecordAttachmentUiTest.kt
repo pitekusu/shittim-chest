@@ -92,7 +92,7 @@ class RecordAttachmentUiTest {
     showViewer((1..2).map { edgeImage(80, 40, it) })
     waitForAllEdges(80, 40)
     compose.onNodeWithTag("attachment-viewer").performTouchInput { doubleClick() }
-    compose.waitUntil(5_000) { !allEdgesVisible(80, 40) }
+    compose.waitUntil(5_000) { allEdgesVisible(80, 40) == false }
     compose.onNodeWithTag("attachment-viewer").performTouchInput {
       swipe(center, center - Offset(width * .15f, 0f), durationMillis = 1_000)
     }
@@ -116,11 +116,19 @@ class RecordAttachmentUiTest {
   private fun waitForAllEdges(width: Int, height: Int) {
     // Check actual rendered pixels: matching counters alone cannot catch double scaling
     // that hides the source image's edges inside an otherwise full-screen viewport.
-    compose.waitUntil(5_000) { allEdgesVisible(width, height) }
+    compose.waitUntil(5_000) { allEdgesVisible(width, height) == true }
   }
 
-  private fun allEdgesVisible(width: Int, height: Int): Boolean {
-    val viewport = compose.onNodeWithTag("attachment-viewer").captureToImage().asAndroidBitmap()
+  private fun allEdgesVisible(width: Int, height: Int): Boolean? {
+    val viewport = try {
+      compose.onNodeWithTag("attachment-viewer").captureToImage().asAndroidBitmap()
+    } catch (failure: AssertionError) {
+      // PixelCopy exposes its callback timeout as an AssertionError. A missing
+      // capture must keep both visible and cropped assertions pending until
+      // waitUntil's existing deadline; other capture failures remain failures.
+      if (failure.message != "Failed waiting for PixelCopy!") throw failure
+      return null
+    }
     val scale = min(viewport.width.toFloat() / width, viewport.height.toFloat() / height)
     val drawnWidth = width * scale
     val drawnHeight = height * scale
