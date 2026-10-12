@@ -394,7 +394,9 @@ def test_public_timestamps_require_timezone_offsets(
     model: type[BaseModel],
     field_name: str,
 ) -> None:
-    adapter = TypeAdapter(model.model_fields[field_name].annotation)
+    annotation = model.model_fields[field_name].annotation
+    assert annotation is not None
+    adapter = TypeAdapter(annotation)
     aware = datetime(2026, 8, 15, tzinfo=UTC)
 
     assert adapter.validate_python(aware) == aware

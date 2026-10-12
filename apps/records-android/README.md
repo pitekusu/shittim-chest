@@ -8,7 +8,7 @@ C23では詳細の3人の初回意見・最終案を表示し、Markdown本文�
 C24では3人の投票・得票数と、記録に採点があれば展開式の内訳を表示する。勝者はAPIの保存結果を使う。
 C25では親愛度と勝利コメントなどの任意項目を表示する。
 C26〜C28でKeystore・PQC・Roomの暗号化保存部品を追加し、C29で認証済み記録を保存するようにした。C30は期限付きオフライン認可とログアウト時の記録削除、C31は全記録同期・キャンセル・再開、C32は保存済み一覧・詳細のオフライン表示とオンライン更新、C33はローカル検索・勝者絞り込み・並べ替えを担当する。
-CodeQL接続（C04）はCodeQL 2.27.2でKotlin 2.4.20のmanual抽出を確認し、専用workflowへ追加した。PRとマージ後のmainで4言語の解析・upload確認を完了条件とし、Kotlinはダウングレードしない。
+CodeQL接続（C04）はCodeQL 2.27.2で当時のKotlin 2.4.20のmanual抽出を確認し、専用workflowへ追加した。現行Kotlin 2.4.21も単独更新PRでmanualビルド・解析・uploadを確認済み。依存更新の統合時は同一SHAのPRとマージ後のmainで4言語の解析・uploadを改めて確認し、Kotlinはダウングレードしない。
 
 ## 開発環境
 
@@ -20,6 +20,7 @@ CodeQL接続（C04）はCodeQL 2.27.2でKotlin 2.4.20のmanual抽出を確認し
 - `JAVA_HOME`にJDK、`ANDROID_HOME`にSDKのディレクトリを指定する。
   Android Studioが作る`local.properties`でもSDKを指定できるが、Gitへ追加しない。
 - Gradleは同梱Wrapperを使う。プラグイン・ライブラリは`gradle/libs.versions.toml`を正とする。
+- アプリのKotlin／Compose Compilerは`2.4.21`を使い、serialization compiler pluginも同じ版に揃える。
 
 ### ローカルの一時ビルドをため込まない
 
@@ -44,7 +45,7 @@ Release配布のヘルパーもこの入口へ接続し、`--output-dir`の出�
 
 ### Kotlin Compiler Native Image（単体CLI）
 
-Kotlin 2.4.20の公式Native Image版を、単体ソースのコンパイルに利用する。
+単体ソースのコンパイルには、導入・検証済みのKotlin 2.4.20の公式Native Image版を利用する。アプリの現行Kotlin／Compose Compiler 2.4.21とは別に管理する。
 AGP／Gradleのコンパイラーは自動では切り替わらず、APK生成は既存方式のままとする。
 通常のKotlin/JVMバイトコードを生成するもので、Kotlin/Nativeへの移行ではない。
 
@@ -205,7 +206,7 @@ CIで全試験を確認する場合は、手動実行の`android_screen_tests`�
 - `RecordsGraph.kt`：Circuitへ準備画面のPresenterとUIを登録。未使用の依存やscopeは追加しない。
 - `BootstrapPresenter.kt`：画面識別子・State・Eventと、一時的な表示選択の保持／復元。
 - `BootstrapUi.kt`：Stateを受けて描画し、選択操作をeventSinkへ返す。Previewは固定Stateだけで表示。
-- Circuit `0.39.0`、Metro `1.4.4`を固定。Kotlin `2.4.20`とMaterial 3 `1.5.0-alpha28`は維持。
+- Circuit／Metro・Kotlin／Compose Compiler・Material 3の採用版は`gradle/libs.versions.toml`を正とする。
 
 ## C18のRelease設定
 
@@ -816,8 +817,8 @@ API 36の架空データで、日付境界・議題の4行上限・全人格と�
 - `BootstrapUi.kt`：幅・文字倍率に応じた1列／2列配置とExpressive List。未実装機能は押せるリンクに見せない。
 - `BootstrapThemeSelector.kt`：ButtonGroupによる排他的な自動／明暗選択。均等幅を強制せず、文字が収まらない項目は標準overflow menuへ移す。押下時の幅・形状変化はMaterialのMotionSchemeを使用する。
 - morphing Chipは実際の記録フィルターを作る段階で使用する。準備画面にダミーのフィルターや未使用の共通部品は置かない。
-- Material 3 `1.5.0-alpha28`を全面採用し、Compose本体も`compose-bom-alpha:2026.09.00`で揃える。
-  UI・Foundation・Runtime・Animation・Toolingは`1.13.0-alpha03`を使用する。
+- Material 3 `1.5.0-beta01`を全面採用し、Compose本体も`compose-bom-alpha:2026.10.00`で揃える。
+  UI・Foundation・Runtime・Animation・Toolingは`1.13.0-beta01`を使用する。
   stable版との混在を前提にせず、更新時はBOMとMaterial 3を一組として依存解決・ビルド・表示を確認する。
 - 使用フォントの出典とライセンスは`app/src/main/assets/licenses/`を参照する。
 
