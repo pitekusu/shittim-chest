@@ -1,6 +1,8 @@
 """Strict HTTP boundary for device login; Web cookies never authorize mobile API calls."""
 
 import json
+import logging
+import re
 from collections.abc import Mapping
 from datetime import datetime
 from typing import Any
@@ -34,6 +36,7 @@ from shittim_records.mobile_session import MobileSessionService
 MOBILE_API_PREFIX = "/api/v1/auth/mobile/"
 DISCORD_CALLBACK_ROUTE = "GET /api/v1/auth/discord/callback"
 MAX_INPUT_BYTES = 4096
+LOGGER = logging.getLogger(__name__)
 
 
 class MobileAuthHttpController:
@@ -56,6 +59,7 @@ class MobileAuthHttpController:
 
     def handle(self, event: Mapping[str, Any], *, now: datetime) -> dict[str, Any]:
         request = parse_request(event)
+        query: dict[str, list[str]] | None = None
         try:
             if len(request.raw_query.encode("utf-8")) > MAX_INPUT_BYTES:
                 raise AuthFailure("mobile_request_invalid")
@@ -149,6 +153,7 @@ class MobileAuthHttpController:
                 "guild_membership_required": (403, "GUILD_MEMBERSHIP_REQUIRED"),
             }.get(error.code, (503, "RECORDS_UNAVAILABLE"))
             if request.route_key == DISCORD_CALLBACK_ROUTE:
+                _log_callback_failure(request, query, code)
                 return _callback_error(status)
             response = error_response(status, code, request.request_id)
             if status == 401:
@@ -188,6 +193,32 @@ def _unique_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 def _empty_body(event: Mapping[str, Any]) -> None:
     if event.get("isBase64Encoded") is True or event.get("body") not in (None, ""):
         raise AuthFailure("mobile_request_invalid")
+
+
+def _log_callback_failure(request: Request, query: dict[str, list[str]] | None, code: str) -> None:
+    # Record only fixed classifications and shape checks. Browser credentials and
+    # provider details must never enter logs, even when a malformed request fails.
+    nonce = request.cookies.get(MOBILE_OAUTH_COOKIE_NAME)
+    LOGGER.warning(
+        json.dumps(
+            {
+                "event": "records_mobile_callback_rejected",
+                "failure_code": code,
+                "browser_cookie_present": nonce is not None,
+                "browser_cookie_valid": (
+                    nonce is not None and re.fullmatch(r"[A-Za-z0-9_-]{43}", nonce) is not None
+                ),
+                "provider_error_present": query is not None and "error" in query,
+                "query_fields_valid": (
+                    query is not None
+                    and set(query) == {"code", "state"}
+                    and all(len(values) == 1 and bool(values[0]) for values in query.values())
+                ),
+                "authorization_present": "authorization" in request.headers,
+            },
+            separators=(",", ":"),
+        )
+    )
 
 
 def _callback_error(status: int) -> dict[str, Any]:

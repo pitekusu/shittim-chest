@@ -587,6 +587,7 @@ OpenAPIでは2つのGETだけにCookieまたはopaque Bearerの選択を記載�
 共有Discord callbackは`m.`で始まるstateをモバイルへ振り分ける。この判別自体に認証効果はなく、
 state全体・専用Cookie・期限を既存処理で照合する。重複state・キャンセル・不正CookieでもWebへフォールバックしない。
 失敗時は外部入力を含まないHTMLで再ログインを案内し、モバイルOAuth Cookieだけを消す。
+拒否時は`records_mobile_callback_rejected`へ固定の公開エラー分類と、ブラウザーCookieの有無・形式、provider errorの有無、query項目の形式、Authorization headerの有無だけを記録する。認証URL・query値・Cookie値・認証コード・state・利用者情報・providerの説明・例外本文は記録しない。診断は拒否理由の切り分けに使い、state・Cookie・期限・一回限り交換の検証や公開HTMLを変更しない。
 開始→認可→callback→交換→議論閲覧→ログアウトを架空データで通し、コード再使用拒否とWeb認証の維持を確認する。
 
 既存Auth Lambdaの`live` aliasへ5つのHTTP API v2ルートを接続する。Session Table・用途別HMAC・
