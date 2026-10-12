@@ -10,6 +10,8 @@ import androidx.test.platform.app.InstrumentationRegistry
 import dev.pitekusu.shittim.records.auth.CacheAuthorization
 import dev.pitekusu.shittim.records.auth.KeystoreTokenStore
 import dev.pitekusu.shittim.records.auth.MobileAuthClient
+import dev.pitekusu.shittim.records.auth.MobileLoginStatus
+import dev.pitekusu.shittim.records.auth.MobileLoginStep
 import dev.pitekusu.shittim.records.auth.MobileSessionModel
 import dev.pitekusu.shittim.records.auth.SessionState
 import dev.pitekusu.shittim.records.auth.StoredToken
@@ -112,6 +114,8 @@ class ReviewDemoAppModelTest {
     assertTrue(first.consumeDemoRecord(record))
     assertFalse(first.consumeDemoRecord(record))
     requireNotNull(first.demo).save(DebateWorkspace(draft = "消去される架空の下書き"))
+    val oldExit = first.exitDemo
+    val oldReset = first.resetDemo
     withContext(Dispatchers.Main) { first.resetDemo() }
     val reset = ready(model, demo = true, previous = first)
     assertNotEquals(entry, reset.demoEntryId)
@@ -120,6 +124,16 @@ class ReviewDemoAppModelTest {
     assertEquals("", requireNotNull(reset.demo).load().draft)
     withContext(Dispatchers.Main) { model.openIntent(demoNotificationIntent(app, entry, record)) }
     assertNull(reset.demoDestination.value)
+    val nextEntry = requireNotNull(reset.demoEntryId)
+    val nextDemo = requireNotNull(reset.demo)
+    val retainedDraft = "新しいデモに保持する架空の下書き"
+    nextDemo.save(DebateWorkspace(draft = retainedDraft))
+    for (staleAction in listOf(oldExit, oldReset)) {
+      withContext(Dispatchers.Main) { staleAction() }
+      assertSame(reset, (model.state.value as? RecordsAppState.Ready)?.runtime)
+      assertEquals(ReviewDemoMode(ReviewDemoPhase.DEMO, nextEntry), modes.read())
+      assertEquals(retainedDraft, nextDemo.load().draft)
+    }
     assertEquals(0, constructions.get())
   }
 
@@ -306,6 +320,40 @@ class ReviewDemoAppModelTest {
     assertNull(session.offlineCacheAccountId)
     assertFalse(normal.isActive(normalAccount))
     assertEquals(0, authCalls.get())
+  }
+
+  @Test fun retainedNormalEntryCallbackCannotEraseANewAuthenticatedSessionAfterADemoRoundTrip() = runBlocking {
+    val model = start(::fakeSession)
+    val first = ready(model, demo = false)
+    val oldEnter = first.enterDemo
+    withContext(Dispatchers.Main) { first.enterDemo() }
+    val demo = ready(model, demo = true, previous = first)
+    withContext(Dispatchers.Main) { demo.exitDemo() }
+    val current = ready(model, demo = false, previous = demo)
+    val session = requireNotNull(current.session)
+    withTimeout(5_000) { session.state.first { it is SessionState.SignedOut } }
+    seedStorage(StorageNamespace.PRODUCTION, normalAccount)
+    val store = KeystoreTokenStore(app)
+    store.save(StoredToken("t".repeat(43), now.plusSeconds(3600),
+      CacheAuthorization(normalAccount, now.minusSeconds(60), now.plusSeconds(3600))))
+    withContext(Dispatchers.Main) {
+      assertTrue(session.beginLogin())
+      session.loginResult(MobileLoginStep.Finished(MobileLoginStatus.SIGNED_IN))
+    }
+    withTimeout(5_000) { session.state.first { it is SessionState.SignedIn } }
+    val callsBefore = authCalls.get()
+    assertFalse(first.isActive(normalAccount))
+    assertTrue(current.isActive(normalAccount))
+    withContext(Dispatchers.Main) { oldEnter() }
+    assertSame(current, (model.state.value as? RecordsAppState.Ready)?.runtime)
+    assertEquals(ReviewDemoMode(ReviewDemoPhase.NORMAL), modes.read())
+    assertTrue(session.state.value is SessionState.SignedIn)
+    assertNotNull(store.read())
+    DebateWorkspaceStore.open(app, normalAccount, current::isActive).use { workspace ->
+      assertEquals("架空の隔離確認下書き", workspace.load(normalAccount).draft)
+      assertEquals(1, workspace.load(normalAccount).attachments.size)
+    }
+    assertEquals(callsBefore, authCalls.get())
   }
 
   private suspend fun start(factory: (Context) -> MobileSessionModel): RecordsAppModel = withContext(Dispatchers.Main) {

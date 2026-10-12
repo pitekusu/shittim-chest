@@ -12,12 +12,19 @@ internal class RecordsRuntime(
   val demo: DemoSandbox? = null,
   val demoEntryId: String? = null,
   private val productionAllowed: () -> Boolean = { true },
-  val enterDemo: () -> Unit = {},
-  val exitDemo: () -> Unit = {},
-  val resetDemo: () -> Unit = {},
+  enterDemo: () -> Unit = {},
+  exitDemo: () -> Unit = {},
+  resetDemo: () -> Unit = {},
 ) : ViewModelStoreOwner {
   override val viewModelStore = ViewModelStore()
   @Volatile private var active = true
+  private val enterDemoAction = enterDemo
+  private val exitDemoAction = exitDemo
+  private val resetDemoAction = resetDemo
+  // Retained UI callbacks belong to this runtime and cannot act on its replacement.
+  val enterDemo: () -> Unit = { if (active && demo == null && productionAllowed()) enterDemoAction() }
+  val exitDemo: () -> Unit = { if (active && demo?.isActive() == true) exitDemoAction() }
+  val resetDemo: () -> Unit = { if (active && demo?.isActive() == true) resetDemoAction() }
   private val destination = MutableStateFlow<String?>(null)
   val demoDestination = destination.asStateFlow()
 

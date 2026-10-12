@@ -282,13 +282,13 @@ instrumentationは既存のdebug設定を維持する。`RuntimeDiscoveryTest`�
 - Play公式アプリ内更新は通常・デモ双方で維持する。更新SDKへ本番token・記録・下書き・画像を渡さず、更新確認失敗・未対応・オフラインでもデモ利用を妨げない。デモのデータ操作は端末内で完結するが、Playの更新確認まで通信ゼロとは主張しない。
 - 外部Web機能への5つのメニュー導線は通常・デモ双方の提出版から外す。DemoのMarkdownから外部リンクも開かず、制限を表示する。Webサービス自体は残るが、このAndroid版の審査対象機能として申告しない。
 
-詳細な境界・機能対応表は[Androidアプリ設計](../../docs/29_Androidアプリ設計.md)の「Play審査用アクセス：端末内デモ」を正とする。2026年10月12日、Debug／テストAPK・Android LintとR8最適化Release APK／Release Lint、標準CI範囲の非画面227件、関連画面18件をローカルで確認した。Releaseは本番upload keyとは別の一時検証鍵で署名し、配布していない。実機、実Play更新、本番Discordログイン、実FCM配送、Console設定、Play配布、審査送信は未実施であり、英語Console文案は未記入の草案である。
+詳細な境界・機能対応表は[Androidアプリ設計](../../docs/29_Androidアプリ設計.md)の「Play審査用アクセス：端末内デモ」を正とする。2026年10月12日、Debug／テストAPK・Android LintとR8最適化Release APK／Release Lint、標準CI範囲の非画面227件、関連画面18件をローカルで確認した。Releaseは本番upload keyとは別の一時検証鍵で署名し、配布していない。当該ローカル検証時点では実機、実Play更新、本番Discordログイン、実FCM配送、Console設定、Play配布、審査送信は未実施であり、英語Console文案は未記入の草案である。Play配布の成否は正式配布Workflowとreceiptで別途記録する。
 
 ### 検証・実機受入
 
 `ReviewDemoModeStoreTest`・`StorageNamespaceTest`・`DemoSandboxTest`・`DemoNotificationsTest`で、破損時の閉鎖、AtomicFile中断回復、モード世代、同じowner IDでも保存領域が相互不可読であること、片側だけの消去、再起動復元、同ID送信、画像検証、旧通知・callbackの拒否を確認する。通常認証・同期の回帰試験も実行し、本番接続のsentinelでDemoから認証・本番Records・Discord・AI・S3・FCMを呼ばないことを確認する。開始済みのGoogle SDK処理やOS全体の通信までゼロとする試験とは区別する。
 
-非画面227件は失敗・ignoredとも0件。関連9class・27件のうち画面18件はすべて成功し、重複するcontroller／App Linkの非画面9件は227件にも含まれる。当初失敗した2件は、OS通知権限fixtureと戻る／DialogのSDK操作を修正して再実行した。最新のRoot UI 2件とLintも成功した。専用API 36 AVDをOS設定で320dp・文字2倍・ダークにし、Bottom Sheetをスクロールして初期化・終了のラベルと確認Dialog全体を読めることを確認し、元の設定へ戻した。
+非画面227件は失敗・ignoredとも0件。関連9class・27件のうち画面18件はすべて成功し、重複するcontroller／App Linkの非画面9件は227件にも含まれる。当初失敗した2件は、OS通知権限fixtureと戻る／DialogのSDK操作を修正して再実行した。最新のRoot UI 2件とLintも成功した。その後、モード書込み失敗後の復旧と古い画面操作の拒否を追加し、controller 7件とDebug Lintを確認した。専用API 36 AVDをOS設定で320dp・文字2倍・ダークにし、Bottom Sheetをスクロールして初期化・終了のラベルと確認Dialog全体を読めることを確認し、元の設定へ戻した。
 
 最新sourceのR8最適化APKで、機内モードの入口と同梱画像、暗号化した下書き・画像のforce-stop後復元、送信受付後のforce-stopから完成記録・画像・全文検索まで確認した。最終のDebug／Release Lintはともにエラー0件で成功した。Demoの進行中はDiscordでの取消案内を表示せず、メニューからの初期化を案内する。保存画像が欠損した場合は保存エラーとして扱い、オンライン接続へ誘導しない。
 
