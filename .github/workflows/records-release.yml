@@ -758,6 +758,9 @@ jobs:
               source.extractall(destination)
           if not (destination / "index.html").is_file():
               raise SystemExit("Records Web artifact has no index.html")
+          for page in ("privacy-policy", "data-deletion"):
+              if not (destination / page / "index.html").is_file():
+                  raise SystemExit("Records Web artifact has no public information HTML")
           PY
           edge_stack=$(aws cloudformation describe-stacks --region us-east-1 \
             --stack-name ShittimChest-Prod-RecordsEdge --output json)
@@ -801,6 +804,21 @@ jobs:
               "${RUNNER_TEMP}/records-previous-assetlinks.error"
             : > "${RUNNER_TEMP}/records-previous-assetlinks-version"
           fi
+          for public_page in privacy-policy data-deletion; do
+            if aws s3api head-object --bucket "${web_bucket}" \
+              --key "${public_page}/index.html" \
+              > "${RUNNER_TEMP}/records-previous-${public_page}.json" \
+              2> "${RUNNER_TEMP}/records-previous-${public_page}.error"
+            then
+              jq --exit-status --raw-output '.VersionId // empty' \
+                "${RUNNER_TEMP}/records-previous-${public_page}.json" \
+                > "${RUNNER_TEMP}/records-previous-${public_page}-version"
+            else
+              grep --extended-regexp --quiet '404|Not Found' \
+                "${RUNNER_TEMP}/records-previous-${public_page}.error"
+              : > "${RUNNER_TEMP}/records-previous-${public_page}-version"
+            fi
+          done
           printf '%s' "${web_bucket}" > "${RUNNER_TEMP}/records-web-bucket"
           printf '%s' "${distribution_id}" > "${RUNNER_TEMP}/records-distribution-id"
           assetlinks="${web_stage}/.well-known/assetlinks.json"
@@ -821,12 +839,20 @@ jobs:
           touch "${RUNNER_TEMP}/records-assetlinks-published"
           aws s3 cp "${assetlinks}" "s3://${web_bucket}/.well-known/assetlinks.json" \
             --cache-control "public,max-age=300" --content-type "application/json"
+          for public_page in privacy-policy data-deletion; do
+            touch "${RUNNER_TEMP}/records-${public_page}-published"
+            aws s3 cp "${web_stage}/${public_page}/index.html" \
+              "s3://${web_bucket}/${public_page}/index.html" \
+              --cache-control "no-cache" --content-type "text/html; charset=utf-8"
+          done
           aws s3 cp "${web_stage}/index.html" "s3://${web_bucket}/index.html" \
             --cache-control "no-cache" --content-type "text/html; charset=utf-8"
           touch "${RUNNER_TEMP}/records-index-published"
           invalidation_id=$(aws cloudfront create-invalidation \
             --distribution-id "${distribution_id}" \
             --paths "/index.html" "/.well-known/assetlinks.json" \
+              "/privacy-policy" "/privacy-policy/" "/privacy-policy/index.html" \
+              "/data-deletion" "/data-deletion/" "/data-deletion/index.html" \
             --query 'Invalidation.Id' --output text)
           aws cloudfront wait invalidation-completed \
             --distribution-id "${distribution_id}" --id "${invalidation_id}"
@@ -850,6 +876,24 @@ jobs:
             aws cloudformation describe-stacks --region "${region}" \
               --stack-name "${stack}" --output json \
               | jq --exit-status '.Stacks[0].EnableTerminationProtection == true' >/dev/null
+          done
+      - name: Verify public Records information HTML before browser execution
+        run: |
+          endpoint=$(cat "${RUNNER_TEMP}/records-public-origin")
+          [[ "${endpoint}" =~ ^https://[a-z0-9.-]+$ ]]
+          for public_page in privacy-policy data-deletion; do
+            for suffix in "" "/" "/index.html"; do
+              status=$(curl --silent --show-error --max-redirs 0 --max-time 20 \
+                --dump-header "${RUNNER_TEMP}/records-${public_page}.headers" \
+                --output "${RUNNER_TEMP}/records-${public_page}.html" --write-out '%{http_code}' \
+                "${endpoint}/${public_page}${suffix}")
+              test "${status}" = 200
+              grep --ignore-case --extended-regexp --quiet \
+                '^content-type: text/html([;[:space:]]|$)' \
+                "${RUNNER_TEMP}/records-${public_page}.headers"
+              cmp "${RUNNER_TEMP}/records-${public_page}.html" \
+                "${RUNNER_TEMP}/records-web-dist/${public_page}/index.html"
+            done
           done
       - name: Verify anonymous and protected Records API boundaries
         run: |
@@ -984,7 +1028,9 @@ jobs:
         continue-on-error: true
         run: |
           if [ ! -f "${RUNNER_TEMP}/records-index-published" ] && \
-            [ ! -f "${RUNNER_TEMP}/records-assetlinks-published" ]; then
+            [ ! -f "${RUNNER_TEMP}/records-assetlinks-published" ] && \
+            [ ! -f "${RUNNER_TEMP}/records-privacy-policy-published" ] && \
+            [ ! -f "${RUNNER_TEMP}/records-data-deletion-published" ]; then
             exit 0
           fi
           web_bucket=$(cat "${RUNNER_TEMP}/records-web-bucket")
@@ -1022,9 +1068,37 @@ jobs:
                 --key .well-known/assetlinks.json >/dev/null
             fi
           fi
+          for public_page in privacy-policy data-deletion; do
+            if [ -f "${RUNNER_TEMP}/records-${public_page}-published" ]; then
+              previous_version=$(cat "${RUNNER_TEMP}/records-previous-${public_page}-version")
+              if [ -n "${previous_version}" ]; then
+                encoded_version=$(jq --null-input --raw-output --arg value "${previous_version}" \
+                  '$value | @uri')
+                aws s3api copy-object \
+                  --bucket "${web_bucket}" \
+                  --key "${public_page}/index.html" \
+                  --copy-source "${web_bucket}/${public_page}/index.html?versionId=${encoded_version}" \
+                  --cache-control "no-cache" \
+                  --content-type "text/html; charset=utf-8" \
+                  --metadata-directive REPLACE >/dev/null
+              else
+                cat > "${RUNNER_TEMP}/records-public-unavailable.html" <<'HTML'
+          <!doctype html>
+          <html lang="ja"><head><meta charset="utf-8"><meta name="robots" content="noindex">
+          <title>準備中 | シッテムの箱</title></head><body><h1>準備中</h1>
+          <p>このページは現在準備中です。</p></body></html>
+          HTML
+                aws s3 cp "${RUNNER_TEMP}/records-public-unavailable.html" \
+                  "s3://${web_bucket}/${public_page}/index.html" \
+                  --cache-control "no-cache" --content-type "text/html; charset=utf-8"
+              fi
+            fi
+          done
           rollback_invalidation=$(aws cloudfront create-invalidation \
             --distribution-id "${distribution_id}" \
             --paths "/index.html" "/.well-known/assetlinks.json" \
+              "/privacy-policy" "/privacy-policy/" "/privacy-policy/index.html" \
+              "/data-deletion" "/data-deletion/" "/data-deletion/index.html" \
             --query 'Invalidation.Id' --output text)
           aws cloudfront wait invalidation-completed \
             --distribution-id "${distribution_id}" --id "${rollback_invalidation}"

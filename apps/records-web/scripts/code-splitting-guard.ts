@@ -9,6 +9,18 @@ export interface GuardChunk {
   readonly css?: readonly string[];
 }
 
+export const HTML_ENTRY_FILES = [
+  "privacy-policy/index.html",
+  "data-deletion/index.html",
+  "index.html",
+] as const;
+
+function htmlEntryFile(chunk: GuardChunk): string | undefined {
+  if (!chunk.isEntry) return undefined;
+  const facade = normalizeModuleId(chunk.facadeModuleId ?? "");
+  return HTML_ENTRY_FILES.find((file) => facade.endsWith(`/${file}`));
+}
+
 const ROUTES = {
   MomotalkPage: {
     facade: "/src/routes/MomotalkPage.tsx",
@@ -101,8 +113,14 @@ export function staticClosure(
 
 export function assertCodeSplittingModuleOwnership(chunks: readonly GuardChunk[]): void {
   const chunksByFileName = new Map(chunks.map((chunk) => [chunk.fileName, chunk]));
-  const entry = findUniqueChunk(chunks, (chunk) => chunk.isEntry, "entry_chunk_count");
-  const initialClosure = staticClosure(entry, chunksByFileName);
+  const entries = HTML_ENTRY_FILES.map((file) =>
+    findUniqueChunk(chunks, (chunk) => htmlEntryFile(chunk) === file, `${file}_entry_count`),
+  );
+  if (chunks.filter((chunk) => chunk.isEntry).length !== entries.length) {
+    throw new Error("code_splitting_module_graph_unexpected_entry");
+  }
+  const initialClosures = entries.map((entry) => staticClosure(entry, chunksByFileName));
+  const initialClosure = new Set(initialClosures.flatMap((closure) => [...closure]));
   const routeClosures = new Map<string, Set<string>>();
 
   for (const [routeName, route] of Object.entries(ROUTES)) {
@@ -148,7 +166,7 @@ export function assertCodeSplittingModuleOwnership(chunks: readonly GuardChunk[]
 
   for (const moduleSuffix of INITIAL_MODULES) {
     const owner = ownerOf(moduleSuffix);
-    if (!initialClosure.has(owner.fileName)) {
+    if (initialClosures.some((closure) => !closure.has(owner.fileName))) {
       throw new Error(`code_splitting_module_graph_initial_module_deferred: ${moduleSuffix}`);
     }
   }
@@ -187,6 +205,7 @@ export function codeSplittingModuleOwnershipGuard(): Plugin {
               imports: chunk.imports,
               css: [...(metadata?.importedCss ?? [])],
               isEntry: chunk.isEntry,
+              html: htmlEntryFile(chunk) ?? null,
               route:
                 Object.entries(ROUTES).find(([, route]) =>
                   normalizeModuleId(chunk.facadeModuleId ?? "").endsWith(route.facade),

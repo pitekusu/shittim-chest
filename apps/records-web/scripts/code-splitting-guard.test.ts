@@ -68,6 +68,13 @@ function canonicalChunks(): GuardChunk[] {
       isEntry: false,
       moduleIds: [`${root}/src/generated/admin-status-response-validator.mjs`],
     },
+    ...["privacy-policy", "data-deletion"].map((page) => ({
+      facadeModuleId: `${root}/${page}/index.html`,
+      fileName: `assets/${page}.js`,
+      imports: ["assets/index.js"],
+      isEntry: true,
+      moduleIds: [],
+    })),
   ];
 }
 
@@ -75,6 +82,34 @@ describe("code splitting module ownership", () => {
   test("accepts route-private validators and VoteGraph", () => {
     expect(() => assertCodeSplittingModuleOwnership(canonicalChunks())).not.toThrow();
   });
+
+  test.each(["privacy-policy", "data-deletion"])("rejects a missing %s entry", (page) => {
+    const chunks = canonicalChunks().filter((chunk) => chunk.fileName !== `assets/${page}.js`);
+    expect(() => assertCodeSplittingModuleOwnership(chunks)).toThrow("entry_count");
+  });
+
+  test("rejects an unexpected HTML entry", () => {
+    const chunks = canonicalChunks();
+    chunks.push({
+      facadeModuleId: `${root}/other.html`,
+      fileName: "assets/other.js",
+      imports: ["assets/index.js"],
+      isEntry: true,
+      moduleIds: [],
+    });
+    expect(() => assertCodeSplittingModuleOwnership(chunks)).toThrow("unexpected_entry");
+  });
+
+  test.each(["privacy-policy", "data-deletion"])(
+    "rejects a private validator in the %s initial closure",
+    (page) => {
+      const chunks = canonicalChunks();
+      chunks
+        .find((chunk) => chunk.fileName === `assets/${page}.js`)!
+        .imports.push("assets/RecordDetail.js");
+      expect(() => assertCodeSplittingModuleOwnership(chunks)).toThrow("wrong_owner");
+    },
+  );
 
   test.each(["RecordsHome", "AdminPromptsPage", "MemorialPage", "MomotalkPage"])(
     "rejects a %s validator hoisted into the initial entry",

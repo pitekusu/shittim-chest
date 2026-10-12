@@ -28,6 +28,11 @@ internal class RecordsRuntime(
   private val destination = MutableStateFlow<String?>(null)
   val demoDestination = destination.asStateFlow()
 
+  fun openPublicPage(page: RecordsPublicPage, launch: (RecordsPublicPage) -> Unit) {
+    if (!active || (if (demo != null) !demo.isActive() else !productionAllowed())) return
+    launch(page)
+  }
+
   fun isActive(accountId: String): Boolean = active && when {
     demo != null -> accountId == DEMO_ACCOUNT_ID && demo.isActive()
     else -> productionAllowed() && session?.isCacheAuthorized(accountId) == true

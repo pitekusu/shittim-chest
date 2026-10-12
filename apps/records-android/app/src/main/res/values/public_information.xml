@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="privacy_policy">プライバシーポリシー</string>
+  <string name="data_deletion_request">データ削除申請</string>
+  <string name="menu_public_information">このアプリについて</string>
+</resources>

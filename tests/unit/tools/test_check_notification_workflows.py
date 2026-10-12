@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
 import textwrap
 from pathlib import Path
+from urllib.parse import quote
+from zipfile import ZipFile
 
 import pytest
 from tools.check_notification_workflows import (
@@ -971,6 +974,273 @@ def test_records_release_restores_app_links_after_publish_failure(directory: Pat
 
     with pytest.raises(WorkflowPolicyError, match="restore the prior App Links"):
         validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    ("previous_public_version", "previous_index_version"),
+    [("", "previous-entry"), ("", ""), ("retained/version+1", "previous-entry")],
+)
+def test_records_public_html_publish_failure_restores_both_attempted_pages(
+    directory: Path, tmp_path: Path, previous_public_version: str, previous_index_version: str
+) -> None:
+    runner = tmp_path / "runner"
+    runner.mkdir()
+    _records_public_html_archive(runner)
+    calls = runner / "aws-calls"
+    workflow = (directory / RECORDS_RELEASE_WORKFLOW).read_text(encoding="utf-8")
+    publish = _workflow_step_block(workflow, "Publish the attested Records Web artifact")
+    rollback = _workflow_step_block(
+        workflow, "Restore the previous Records Web files after a post-publish failure"
+    )
+    stub = _records_public_html_aws_stub()
+    environment = os.environ | {
+        "RUNNER_TEMP": str(runner),
+        "AWS_CALL_LOG": str(calls),
+        "PREVIOUS_PUBLIC_VERSION": previous_public_version,
+        "PREVIOUS_INDEX_VERSION": previous_index_version,
+        "PUBLIC_HEAD_DENIED": "false",
+    }
+    attempted = subprocess.run(  # noqa: S603 - tracked workflow with a shell-only AWS stub.
+        ["/usr/bin/bash", "-euo", "pipefail", "-c", stub + _records_web_step_script(publish)],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert attempted.returncode != 0
+    assert not (runner / "records-index-published").exists()
+    for page in ("privacy-policy", "data-deletion"):
+        assert (runner / f"records-{page}-published").is_file()
+        assert (
+            runner / f"records-previous-{page}-version"
+        ).read_text().strip() == previous_public_version
+    subprocess.run(  # noqa: S603 - no AWS binary is invoked; all calls stay in the fixture.
+        ["/usr/bin/bash", "-euo", "pipefail", "-c", stub + _records_web_step_script(rollback)],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=True,
+    )
+    commands = calls.read_text().splitlines()
+    for page in ("privacy-policy", "data-deletion"):
+        upload = next(
+            line for line in commands if line.startswith("s3 cp ") and f"/{page}/index.html" in line
+        )
+        assert "--cache-control no-cache --content-type text/html; charset=utf-8" in upload
+        restored = [
+            line
+            for line in commands
+            if line.startswith("s3api copy-object ") and f"--key {page}/index.html" in line
+        ]
+        deleted = [
+            line
+            for line in commands
+            if line.startswith("s3api delete-object ") and f"--key {page}/index.html" in line
+        ]
+        assert not deleted
+        if previous_public_version:
+            assert len(restored) == 1
+            assert (
+                f"/{page}/index.html?versionId={quote(previous_public_version, safe='')}"
+                in restored[0]
+            )
+        else:
+            assert not restored
+            replacement = [
+                line
+                for line in commands
+                if line.startswith("s3 cp ")
+                and "records-public-unavailable.html" in line
+                and f"/{page}/index.html" in line
+            ]
+            assert len(replacement) == 1
+            fallback = (runner / "records-public-unavailable.html").read_text()
+            assert "準備中" in fallback
+            assert "<script" not in fallback
+            assert "href=" not in fallback
+            assert "https:" not in fallback
+    invalidation = next(
+        line for line in commands if line.startswith("cloudfront create-invalidation ")
+    )
+    for page in ("privacy-policy", "data-deletion"):
+        for suffix in ("", "/", "/index.html"):
+            assert f"/{page}{suffix}" in invalidation.split()
+
+
+def test_records_public_html_head_failure_stops_before_any_upload(
+    directory: Path, tmp_path: Path
+) -> None:
+    runner = tmp_path / "runner"
+    runner.mkdir()
+    _records_public_html_archive(runner)
+    calls = runner / "aws-calls"
+    workflow = (directory / RECORDS_RELEASE_WORKFLOW).read_text(encoding="utf-8")
+    publish = _workflow_step_block(workflow, "Publish the attested Records Web artifact")
+    result = subprocess.run(  # noqa: S603 - tracked workflow with a shell-only AWS stub.
+        [
+            "/usr/bin/bash",
+            "-euo",
+            "pipefail",
+            "-c",
+            _records_public_html_aws_stub() + _records_web_step_script(publish),
+        ],
+        env=os.environ
+        | {
+            "RUNNER_TEMP": str(runner),
+            "AWS_CALL_LOG": str(calls),
+            "PREVIOUS_PUBLIC_VERSION": "",
+            "PREVIOUS_INDEX_VERSION": "previous-entry",
+            "PUBLIC_HEAD_DENIED": "true",
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert not any(line.startswith("s3 cp ") for line in calls.read_text().splitlines())
+
+
+@pytest.mark.parametrize("failure", ["none", "wrong-document", "wrong-type", "redirect"])
+def test_records_public_html_smoke_requires_exact_artifact_at_all_six_urls(
+    directory: Path, tmp_path: Path, failure: str
+) -> None:
+    runner = tmp_path / "runner"
+    runner.mkdir()
+    (runner / "records-public-origin").write_text("https://records-fixture.invalid")
+    for page in ("privacy-policy", "data-deletion"):
+        folder = runner / "records-web-dist" / page
+        folder.mkdir(parents=True)
+        (folder / "index.html").write_text(page)
+    workflow = (directory / RECORDS_RELEASE_WORKFLOW).read_text(encoding="utf-8")
+    smoke = _workflow_step_block(
+        workflow, "Verify public Records information HTML before browser execution"
+    )
+    stub = """
+curl() {
+  local headers output url argument status=200 content_type=text/html
+  while [ "$#" -gt 0 ]; do
+    argument=$1
+    shift
+    case "$argument" in
+      --dump-header) headers=$1; shift ;;
+      --output) output=$1; shift ;;
+      https://*) url=$argument ;;
+    esac
+  done
+  printf '%s\\n' "$url" >> "${RUNNER_TEMP}/curl-calls"
+  case "$url" in
+    */privacy-policy*) page=privacy-policy ;;
+    */data-deletion*) page=data-deletion ;;
+    *) return 2 ;;
+  esac
+  cp "${RUNNER_TEMP}/records-web-dist/${page}/index.html" "$output"
+  case "$SMOKE_FAILURE" in
+    wrong-document) printf wrong > "$output" ;;
+    wrong-type) content_type=application/json ;;
+    redirect) status=302 ;;
+  esac
+  printf 'HTTP/2 %s\\r\\ncontent-type: %s; charset=utf-8\\r\\n' \\
+    "$status" "$content_type" > "$headers"
+  printf '%s' "$status"
+}
+"""
+    result = subprocess.run(  # noqa: S603 - curl is a shell fixture, with no network access.
+        ["/usr/bin/bash", "-euo", "pipefail", "-c", stub + _records_web_step_script(smoke)],
+        env=os.environ | {"RUNNER_TEMP": str(runner), "SMOKE_FAILURE": failure},
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    if failure == "none":
+        assert result.returncode == 0, result.stderr
+        assert set((runner / "curl-calls").read_text().splitlines()) == {
+            f"https://records-fixture.invalid/{page}{suffix}"
+            for page in ("privacy-policy", "data-deletion")
+            for suffix in ("", "/", "/index.html")
+        }
+    else:
+        assert result.returncode != 0
+
+
+def _records_web_step_script(step: str) -> str:
+    return textwrap.dedent(step.split("        run: |\n", 1)[1])
+
+
+def _records_public_html_archive(runner: Path) -> None:
+    evidence = runner / "records-evidence"
+    evidence.mkdir()
+    with ZipFile(evidence / "records-web.zip", "w") as archive:
+        archive.writestr("index.html", '<div id="root"></div>')
+        archive.writestr("assets/app.js", "// fixture")
+        archive.writestr("privacy-policy/index.html", "privacy fixture")
+        archive.writestr("data-deletion/index.html", "deletion fixture")
+        archive.writestr(
+            ".well-known/assetlinks.json",
+            json.dumps(
+                [
+                    {
+                        "relation": ["delegate_permission/common.handle_all_urls"],
+                        "target": {
+                            "namespace": "android_app",
+                            "package_name": "dev.pitekusu.shittim.records",
+                            "sha256_cert_fingerprints": [":".join(["AA"] * 32)],
+                        },
+                    }
+                ]
+            ),
+        )
+
+
+def _records_public_html_aws_stub() -> str:
+    return """
+aws() {
+  printf '%s\\n' "$*" >> "$AWS_CALL_LOG"
+  case "$1 $2" in
+    'cloudformation describe-stacks')
+      cat <<'JSON'
+{"Stacks":[{"Outputs":[
+  {"OutputKey":"RecordsWebBucketName",
+   "OutputValue":"shittim-chest-production-records-web-000000000000"},
+  {"OutputKey":"RecordsDistributionId","OutputValue":"FIXTURE"},
+  {"OutputKey":"RecordsPublicOrigin","OutputValue":"https://records-fixture.invalid"}
+]}]}
+JSON
+      ;;
+    'sts get-caller-identity') printf '%s' 000000000000 ;;
+    's3api get-bucket-versioning') printf '%s' '{"Status":"Enabled"}' ;;
+    's3api head-object')
+      case "$*" in
+        *privacy-policy/index.html*|*data-deletion/index.html*)
+          if [ "$PUBLIC_HEAD_DENIED" = true ]; then printf '(403) AccessDenied' >&2; return 1; fi
+          if [ -z "$PREVIOUS_PUBLIC_VERSION" ]; then printf '(404) Not Found' >&2; return 1; fi
+          jq --null-input --arg version "$PREVIOUS_PUBLIC_VERSION" '{VersionId:$version}' ;;
+        *'--key index.html'*)
+          if [ -z "$PREVIOUS_INDEX_VERSION" ]; then printf '(404) Not Found' >&2; return 1; fi
+          jq --null-input --arg version "$PREVIOUS_INDEX_VERSION" '{VersionId:$version}' ;;
+        *) printf '%s' '{"VersionId":"previous-entry"}' ;;
+      esac ;;
+    's3 cp')
+      case "$4" in
+        */data-deletion/index.html)
+          case "$3" in
+            *records-public-unavailable.html) return 0 ;;
+            *) return 42 ;;
+          esac ;;
+      esac ;;
+    's3api delete-object')
+      case "$*" in
+        *privacy-policy/index.html*|*data-deletion/index.html*)
+          printf '(403) AccessDenied: public HTML delete denied' >&2
+          return 1 ;;
+      esac ;;
+    'cloudfront create-invalidation') printf '%s' fixture-invalidation ;;
+  esac
+}
+"""
 
 
 def test_records_release_revalidates_bundle_checksum_before_deploy(directory: Path) -> None:

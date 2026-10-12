@@ -34,6 +34,7 @@ const AdminPage = lazy(() => import("./routes/AdminPage"));
 const AdminPromptsPage = lazy(() => import("./routes/AdminPromptsPage"));
 const MemorialPage = lazy(() => import("./routes/MemorialPage"));
 const MomotalkPage = lazy(() => import("./routes/MomotalkPage"));
+const PublicInformationPage = lazy(() => import("./routes/PublicInformationPage"));
 
 function LoadingScreen(): React.JSX.Element {
   return (
@@ -245,7 +246,40 @@ export function App(): React.JSX.Element {
     <QueryClientProvider client={client}>
       <RecordsArchiveProvider>
         <BrowserRouter>
-          <ApplicationRoutes theme={theme} onThemeToggle={toggleTheme} />
+          <Routes>
+            <Route
+              path="/privacy-policy/index.html"
+              element={<Navigate to="/privacy-policy" replace />}
+            />
+            <Route
+              path="/data-deletion/index.html"
+              element={<Navigate to="/data-deletion" replace />}
+            />
+            <Route
+              path="/privacy-policy"
+              element={
+                <Suspense fallback={<RouteLoadingFallback />}>
+                  <PublicInformationPage page="privacy" theme={theme} onThemeToggle={toggleTheme} />
+                </Suspense>
+              }
+            />
+            <Route
+              path="/data-deletion"
+              element={
+                <Suspense fallback={<RouteLoadingFallback />}>
+                  <PublicInformationPage
+                    page="deletion"
+                    theme={theme}
+                    onThemeToggle={toggleTheme}
+                  />
+                </Suspense>
+              }
+            />
+            <Route
+              path="*"
+              element={<ApplicationRoutes theme={theme} onThemeToggle={toggleTheme} />}
+            />
+          </Routes>
         </BrowserRouter>
       </RecordsArchiveProvider>
     </QueryClientProvider>

@@ -22,6 +22,11 @@ const SPA_REWRITE_CODE = `function handler(event) {
       uri.indexOf("/assets/") === 0 || /\\.[^/]+$/.test(uri)) {
     return request;
   }
+  if (uri === "/privacy-policy" || uri === "/privacy-policy/" ||
+      uri === "/data-deletion" || uri === "/data-deletion/") {
+    request.uri = (uri.charAt(uri.length - 1) === "/" ? uri.slice(0, -1) : uri) + "/index.html";
+    return request;
+  }
   request.uri = "/index.html";
   return request;
 }`;

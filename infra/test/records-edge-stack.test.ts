@@ -1,4 +1,5 @@
 import { App, Tags, Validations } from "aws-cdk-lib";
+import { runInNewContext } from "node:vm";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { AwsSolutionsChecks } from "cdk-nag";
 import { describe, expect, test } from "vitest";
@@ -84,6 +85,33 @@ describe("RecordsEdgeStack", () => {
     expect(code).toContain('uri.indexOf(\\"/api/\\")');
     expect(code).toContain('uri.indexOf(\\"/assets/\\")');
     expect(code).toContain('request.uri = \\"/index.html\\"');
+  });
+
+  test("serves public initial HTML without changing other URI or query handling", () => {
+    const { template } = synthesize();
+    const [rewrite] = Object.values(template.findResources("AWS::CloudFront::Function"));
+    if (rewrite === undefined) throw new Error("SPA rewrite function is missing");
+    const handler = runInNewContext(`${rewrite.Properties.FunctionCode}; handler`) as
+      (event: { request: { uri: string; querystring: object; headers: object } }) => object;
+    for (const [uri, rewritten] of [
+      ["/privacy-policy", "/privacy-policy/index.html"],
+      ["/privacy-policy/", "/privacy-policy/index.html"],
+      ["/data-deletion", "/data-deletion/index.html"],
+      ["/data-deletion/", "/data-deletion/index.html"],
+      ["/", "/index.html"],
+      ["/login", "/index.html"],
+      ["/admin", "/index.html"],
+      ["/privacy-policy/extra", "/index.html"],
+      ["/records/" + "r".repeat(43), "/index.html"],
+      ["/api", "/api"],
+      ["/api/v1/session", "/api/v1/session"],
+      ["/assets/main.js", "/assets/main.js"],
+      ["/.well-known/assetlinks.json", "/.well-known/assetlinks.json"],
+      ["/privacy-policy/index.html", "/privacy-policy/index.html"],
+    ]) {
+      const request = { uri: uri!, querystring: { lang: { value: "ja" } }, headers: { accept: { value: "text/html" } } };
+      expect(handler({ request })).toEqual({ ...request, uri: rewritten });
+    }
   });
 
   test("sets exact domain parameters, certificate, aliases, and security headers", () => {

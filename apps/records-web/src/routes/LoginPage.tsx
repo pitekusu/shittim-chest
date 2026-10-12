@@ -1,4 +1,4 @@
-import { Navigate, useLocation } from "react-router-dom";
+import { Link, Navigate, useLocation } from "react-router-dom";
 
 import type { SessionResponse } from "../api/types";
 import { BrandMark } from "../components/Brand";
@@ -67,6 +67,10 @@ export function LoginPage({ session }: { readonly session: SessionResponse }): R
         >
           吹雪型JCのつどいサーバの先生であることを認証します。
         </p>
+        <nav className={authStyles.policyLinks} aria-label="プライバシーとデータ削除">
+          <Link to="/privacy-policy">プライバシーポリシー</Link>
+          <Link to="/data-deletion">データ削除の申請</Link>
+        </nav>
       </section>
     </main>
   );

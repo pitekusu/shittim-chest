@@ -3,6 +3,7 @@ import { focusManager, QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { App } from "./App";
+import { DATA_DELETION_MAILTO } from "./legalContact";
 import { authenticatedSession, mockApi, response } from "./test/recordsTestUtils";
 import { THEME_STORAGE_KEY } from "./theme";
 
@@ -44,6 +45,65 @@ afterEach(() => {
 });
 
 describe("App shell", () => {
+  it.each([
+    ["/privacy-policy", "プライバシーポリシー"],
+    ["/data-deletion", "データ削除の申請"],
+  ])("opens public page %s without a session or API request", async (path, title) => {
+    window.history.replaceState(null, "", path);
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockRejectedValue(new Error("API is unavailable"));
+    vi.stubGlobal("fetch", fetch);
+    vi.spyOn(window, "scrollTo").mockImplementation(() => undefined);
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: title })).toBeVisible();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(document.title).toBe(`${title} | シッテムの箱`);
+    expect(document.querySelector('link[rel="canonical"]')).toHaveAttribute(
+      "href",
+      `https://shittim.pitekusu.dev${path}`,
+    );
+  });
+
+  it.each([
+    ["/privacy-policy/index.html", "/privacy-policy", "プライバシーポリシー"],
+    ["/data-deletion/index.html", "/data-deletion", "データ削除の申請"],
+  ])(
+    "canonicalizes public HTML alias %s without mounting session lookup",
+    async (alias, path, title) => {
+      window.history.replaceState(null, "", alias);
+      const fetch = vi
+        .fn<typeof globalThis.fetch>()
+        .mockRejectedValue(new Error("API is unavailable"));
+      vi.stubGlobal("fetch", fetch);
+      vi.spyOn(window, "scrollTo").mockImplementation(() => undefined);
+      render(<App />);
+      expect(await screen.findByRole("heading", { name: title })).toBeVisible();
+      expect(window.location.pathname).toBe(path);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(document.querySelector('link[rel="canonical"]')).toHaveAttribute(
+        "href",
+        `https://shittim.pitekusu.dev${path}`,
+      );
+    },
+  );
+
+  it("opens the deletion email client without submitting a website form", async () => {
+    window.history.replaceState(null, "", "/data-deletion");
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockRejectedValue(new Error("API is unavailable"));
+    vi.stubGlobal("fetch", fetch);
+    vi.spyOn(window, "scrollTo").mockImplementation(() => undefined);
+    render(<App />);
+    expect(await screen.findByRole("link", { name: "データ削除をメールで申請" })).toHaveAttribute(
+      "href",
+      DATA_DELETION_MAILTO,
+    );
+    expect(screen.getByText("本人確認後に運営が手動で削除へ対応", { exact: false })).toBeVisible();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("shows the loading status until session lookup fails, then offers a retry", async () => {
     let rejectSession!: (reason: Error) => void;
     vi.stubGlobal(

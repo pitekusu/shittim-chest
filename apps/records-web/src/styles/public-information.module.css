@@ -1,0 +1,111 @@
+.shell {
+  min-height: 100dvh;
+  color: var(--records-ink-900);
+  background: var(--records-page-background);
+}
+
+.header {
+  display: flex;
+  max-width: 960px;
+  margin-inline: auto;
+  padding: 24px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  color: inherit;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.content {
+  max-width: 760px;
+  margin: 16px auto;
+  padding: clamp(20px, 5vw, 48px);
+  border: 1px solid var(--records-line);
+  border-radius: var(--records-radius-card);
+  background: var(--records-surface-strong);
+  line-height: 1.9;
+}
+
+.content h1 {
+  margin-block: 28px 8px;
+  font-size: clamp(1.5rem, 5vw, 2rem);
+  line-height: 1.5;
+}
+
+.content h2 {
+  margin-block: 0 12px;
+  font-size: 1.2rem;
+  line-height: 1.6;
+}
+
+.content section {
+  margin-block-start: 32px;
+}
+
+.content p {
+  margin-block: 12px;
+}
+
+.content ul {
+  padding-inline-start: 1.5em;
+}
+
+.content li + li {
+  margin-block-start: 10px;
+}
+
+.content a,
+.footer a {
+  color: var(--records-link);
+  text-underline-offset: 0.2em;
+}
+
+.updated {
+  color: var(--records-ink-600);
+  font-size: 0.875rem;
+}
+
+.navigation {
+  display: flex;
+  gap: 12px 24px;
+  flex-wrap: wrap;
+  font-size: 0.875rem;
+}
+
+.navigation [aria-current="page"] {
+  font-weight: 700;
+}
+
+.request {
+  padding: 20px;
+  border: 1px solid var(--records-line-strong);
+  border-radius: var(--records-radius-control);
+  background: var(--records-cyan-100);
+}
+
+.request > a {
+  display: inline-flex;
+  margin-block: 8px;
+  color: var(--records-on-accent);
+  text-align: center;
+  text-decoration: none;
+}
+
+.footer {
+  padding: 24px;
+  text-align: center;
+}
+
+@media (width < 800px) {
+  .content {
+    margin-inline: 12px;
+  }
+}

@@ -3,7 +3,12 @@
 from pathlib import Path
 
 import pytest
-from tools.check_public_surface import DENY_PATTERNS, candidate_files
+from tools.check_public_surface import (
+    DENY_PATTERNS,
+    REPOSITORY_ROOT,
+    candidate_files,
+    denied_labels,
+)
 
 
 def test_aws_account_pattern_detects_real_id_but_allows_documented_dummy() -> None:
@@ -30,6 +35,27 @@ def test_email_pattern_detects_address_but_allows_package_versions() -> None:
     assert pattern.search(b"operator" + b"@" + b"example.com")
     assert pattern.search(b"vite-plus@0.2.9") is None
     assert pattern.search(b"voidzero-dev/vite-plus-core@0.2.9") is None
+
+
+def test_user_approved_contact_is_allowed_only_in_its_designated_source() -> None:
+    contact_path = Path("apps/records-web/src/legalContact.ts")
+    contact_source = (REPOSITORY_ROOT / contact_path).read_bytes()
+
+    assert DENY_PATTERNS["email address"].search(contact_source)
+    assert denied_labels(contact_path, contact_source) == []
+    assert denied_labels(Path("apps/records-web/src/routes/PrivacyPage.tsx"), contact_source) == [
+        "email address"
+    ]
+    assert denied_labels(Path("docs/contact.md"), contact_source) == ["email address"]
+
+
+def test_unapproved_email_is_rejected_even_beside_the_approved_contact() -> None:
+    contact_path = Path("apps/records-web/src/legalContact.ts")
+    contact_source = (REPOSITORY_ROOT / contact_path).read_bytes()
+    other_email = b"private" + b"@" + b"example.com"
+
+    assert denied_labels(contact_path, other_email) == ["email address"]
+    assert denied_labels(contact_path, contact_source + b"\n" + other_email) == ["email address"]
 
 
 def test_candidate_files_follow_the_git_supplied_file_set(tmp_path: Path) -> None:

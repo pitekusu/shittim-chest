@@ -74,6 +74,15 @@ internal fun RecordsNavigationMenu(state: BootstrapScreen.State, onDismiss: () -
         onDismiss()
         state.eventSink(BootstrapScreen.Event.ShowDebateRequests)
       })
+      ShittimSectionHeading(stringResource(R.string.menu_public_information))
+      RecordsPublicPage.entries.forEach { page ->
+        MenuItem(page.title, R.drawable.ic_open_web,
+          modifier = Modifier.testTag("public-page-${page.name}"), onClick = {
+            state.eventSink(BootstrapScreen.Event.OpenPublicPage(page))
+          })
+      }
+      if (state.publicPageError) Text(stringResource(R.string.menu_browser_unavailable),
+        color = MaterialTheme.colorScheme.error)
       ShittimSectionHeading(stringResource(R.string.menu_settings))
       RecordNotificationControls(demoEntryId = state.demoEntryId)
       BootstrapThemeSelector(state.themeChoice) {

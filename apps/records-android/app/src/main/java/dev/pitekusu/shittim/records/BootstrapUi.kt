@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalUriHandler
@@ -197,6 +198,18 @@ private fun BootstrapLoginControls(
     }
     if (state.session !is SessionState.SignedIn) item(key = "theme") {
       BootstrapThemeSelector(state.themeChoice) { state.eventSink(BootstrapScreen.Event.SelectTheme(it)) }
+    }
+    item(key = "public-information") {
+      Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+        RecordsPublicPage.entries.forEach { page ->
+          TextButton(onClick = { state.eventSink(BootstrapScreen.Event.OpenPublicPage(page)) },
+            modifier = Modifier.fillMaxWidth().testTag("public-page-${page.name}")) {
+            Text(stringResource(page.title))
+          }
+        }
+        if (state.publicPageError) Text(stringResource(R.string.menu_browser_unavailable),
+          color = MaterialTheme.colorScheme.error)
+      }
     }
   }
 }

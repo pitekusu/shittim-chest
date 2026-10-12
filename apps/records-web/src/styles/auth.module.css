@@ -289,3 +289,15 @@
     width: 80vw;
   }
 }
+.policyLinks {
+  display: flex;
+  margin-block-start: 24px;
+  gap: 12px 20px;
+  flex-wrap: wrap;
+  font-size: 0.875rem;
+}
+
+.policyLinks a {
+  color: var(--records-link);
+  text-underline-offset: 0.2em;
+}
