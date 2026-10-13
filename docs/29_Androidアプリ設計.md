@@ -1521,11 +1521,13 @@ WIF・Environment・Play権限の外部設定前は起動を拒否する。設�
 
 ### 同一成果物の検証・配信
 
+毎回、Workflowの必須入力`release_notes_ja`へ、その版の利用者向け更新内容を日本語で1〜500 Unicode文字指定する。古い説明を使い回す既定値は設けない。空白のみ・上限超過・不正UTF-8は秘密入力の準備とPlay採番より前に拒否する。本文を環境変数経由で固定の`whatsnew/whatsnew-ja-JP`へ保存し、採用Actionの`whatsNewDirectory`でAABと同じeditへ更新情報を設定する。shellの命令やコマンド引数へ本文を埋め込まない。
+
 1. 固定SHAの最新main CI・Records CI・既存CodeQLが成功したことを確認する。新しい失敗・実行中の試行を古い成功で置き換えない。
 2. Playの全トラック、現在のbundle／APKを読み、その最大値より大きい`versionCode`を決める。`minimum_version_code`は通常の最大値＋1に優先する下限指定であり、失敗後に状態と副作用を確認した前回試行番号＋1を指定して番号の再利用を防ぐ。指定値を検証し、現在の最大番号＋1との大きい方を使う。以後の更新が不可能になる最終番号`2100000000`は、下限指定・自動採番ともビルド前に拒否する。競合した場合は自動的な再番号付け・再ビルドをせず終了する。
 3. 既存upload keyでRelease AABを一度ビルドし、Release Lintを実行する。JDKとdigest固定の公式bundletoolで署名・証明書・パッケージ・版番号・非debugを検証する。pinした公開証明書のUTC有効期間を確認し、その証明書だけの一時truststoreを使ってJDKの厳格検証を行う。自己署名を理由に重大警告全体を許可せず、一時truststoreは検証後に回収する。
 4. 検証した同一AABのhashを再照合し、配信直前にWIF認証を更新する。C38の提出Actionへ単一AABと資格情報ファイルのpath、固定したクローズドトラック`alpha`・statusを渡す。upload・track更新・commitはActionが担当し、helperから別のcommitを行わない。
-5. Action成功後に公式Google SDKでPlayの版番号・bundle hash・クローズドトラック`alpha`の`completed`を再取得し、検証したAABと照合する。提出前の`verification.json`と、提出後照合が成功した場合の簡単な`receipt.json`を保持する。
+5. Action成功後に公式Google SDKでPlayの版番号・bundle hash・クローズドトラック`alpha`の`completed`と対象版の日本語更新情報を再取得し、検証したAABと本文digestを照合する。提出前の`verification.json`と、提出後照合が成功した場合の簡単な`receipt.json`を保持する。更新情報のlocaleとUTF-8本文のSHA-256を記録し、本文はartifactへ含めない。本文の一時ファイルは`always()`で回収し、読取失敗後も検証記録のdigestから本文を再照合できるようにする。
 
 事前確認と提出後照合のtrack／bundle／APK読取だけは、公式Google SDKの`execute(num_retries=3)`で一時的なAPI障害を最大3回、指数backoff付きで再試行する。edit作成・削除やupload・track更新・commitの再送は追加しない。読取の再試行後も失敗した場合はreceiptを成功扱いせず、残った検証記録とPlayの状態を確認する。
 

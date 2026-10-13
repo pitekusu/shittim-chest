@@ -8,6 +8,10 @@ on:
         type: string
         default: "1"
         required: true
+      release_notes_ja:
+        description: Japanese release notes describing this update (1-500 Unicode characters)
+        type: string
+        required: true
 
 permissions: {}
 
@@ -65,6 +69,7 @@ jobs:
         run: '"${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.2" "build-tools;37.0.0"'
       - name: Prepare private upload signing and Firebase inputs
         env:
+          RELEASE_NOTES_JA: ${{ inputs.release_notes_ja }}
           UPLOAD_KEY_BASE64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}
           UPLOAD_STORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_STORE_PASSWORD }}
           UPLOAD_KEY_ALIAS: ${{ vars.ANDROID_UPLOAD_KEY_ALIAS }}
@@ -129,6 +134,7 @@ jobs:
           tracks: alpha
           status: completed
           releaseName: "0.0.${{ steps.version.outputs.version_code }}"
+          whatsNewDirectory: ${{ runner.temp }}/android-release/whatsnew
       - name: Read back the submitted closed track and bundle digest
         run: uv run --frozen python -m tools.android_release readback --state "${STATE}"
       - name: Retain only non-secret verification and submission receipt

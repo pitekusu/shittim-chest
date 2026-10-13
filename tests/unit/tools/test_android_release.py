@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -11,6 +12,11 @@ import pytest
 from tools import android_release as release
 
 SHA = "a" * 40
+NOTES = "キーボード表示中の入力操作を改善しました。\r\nアプリの安定性を改善しました。"
+NOTES_FIELDS = {
+    "releaseNotesLanguage": "ja-JP",
+    "releaseNotesSha256": hashlib.sha256(NOTES.encode("utf-8")).hexdigest(),
+}
 
 
 @pytest.fixture
@@ -34,7 +40,30 @@ def state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "output"))
     state = tmp_path / "android-release"
     state.mkdir()
+    notes_path = state / release.RELEASE_NOTES_FILE
+    notes_path.parent.mkdir()
+    notes_path.write_text(NOTES, encoding="utf-8")
     return state
+
+
+@pytest.fixture
+def materialize_inputs(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    inputs = {
+        "RELEASE_NOTES_JA": NOTES,
+        "UPLOAD_KEY_BASE64": base64.b64encode(b"synthetic keystore").decode(),
+        "UPLOAD_STORE_PASSWORD": "synthetic",
+        "UPLOAD_KEY_ALIAS": "synthetic-upload",
+        "FIREBASE_CLIENT_CONFIG": json.dumps(
+            {
+                "client": [
+                    {"client_info": {"android_client_info": {"package_name": release.PACKAGE}}}
+                ]
+            }
+        ),
+    }
+    for name, value in inputs.items():
+        monkeypatch.setenv(name, value)
+    return inputs
 
 
 @pytest.mark.parametrize("value", (1, "1", 2_100_000_000, "2100000000"))
@@ -182,26 +211,65 @@ def test_client_delegates_play_connection_to_official_sdk(
     "missing", ("UPLOAD_STORE_PASSWORD", "UPLOAD_KEY_ALIAS", "FIREBASE_CLIENT_CONFIG")
 )
 def test_missing_inputs_do_not_materialize_private_files(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    materialize_inputs: dict[str, str],
+    missing: str,
 ) -> None:
-    inputs = {
-        "UPLOAD_KEY_BASE64": base64.b64encode(b"synthetic keystore").decode(),
-        "UPLOAD_STORE_PASSWORD": "synthetic",
-        "UPLOAD_KEY_ALIAS": "synthetic-upload",
-        "FIREBASE_CLIENT_CONFIG": json.dumps(
-            {
-                "client": [
-                    {"client_info": {"android_client_info": {"package_name": release.PACKAGE}}}
-                ]
-            }
-        ),
-    }
-    for name, value in inputs.items():
-        monkeypatch.setenv(name, "" if name == missing else value)
+    monkeypatch.setenv(missing, "")
     private = tmp_path / "private"
     with pytest.raises(ValueError, match="android_release_inputs_missing"):
         release.materialize(private)
     assert not list(private.iterdir())
+
+
+@pytest.mark.parametrize("notes", ("あ" * 500, "😀" * 500))
+def test_materialize_accepts_500_unicode_characters(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    materialize_inputs: dict[str, str],
+    notes: str,
+) -> None:
+    monkeypatch.setenv("RELEASE_NOTES_JA", notes)
+    private = tmp_path / "private"
+
+    release.materialize(private)
+
+    assert (private / release.RELEASE_NOTES_FILE).read_text(encoding="utf-8") == notes
+
+
+@pytest.mark.parametrize("notes", ("", " \n　", "あ" * 501, "\udcff"))
+def test_invalid_release_notes_stop_before_materializing_private_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    materialize_inputs: dict[str, str],
+    notes: str,
+) -> None:
+    monkeypatch.setenv("RELEASE_NOTES_JA", notes)
+    private = tmp_path / "private"
+
+    with pytest.raises(ValueError, match=r"play_release_notes_.*_invalid"):
+        release.materialize(private)
+
+    assert not private.exists()
+
+
+def test_release_notes_keep_shell_characters_as_text_without_logging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    materialize_inputs: dict[str, str],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    marker = tmp_path / "must-not-be-created"
+    notes = f'変更の説明\n$(touch "{marker}") `touch "{marker}"` $HOME ${{{{ inputs.other }}}}'
+    monkeypatch.setenv("RELEASE_NOTES_JA", f"\n{notes}\n")
+    private = tmp_path / "private"
+
+    release.materialize(private)
+
+    assert (private / release.RELEASE_NOTES_FILE).read_text(encoding="utf-8") == notes
+    assert not marker.exists()
+    assert capsys.readouterr() == ("", "")
 
 
 @pytest.mark.parametrize(
@@ -224,16 +292,31 @@ def test_readback_verifies_closed_artifact_without_publishing(
     remote_track: str,
     expected: bool,
 ) -> None:
-    verified = {"sha": SHA, "versionCode": 7, "bundleSha256": "ab" * 32, "track": "alpha"}
+    verified = {
+        "sha": SHA,
+        "versionCode": 7,
+        "bundleSha256": "ab" * 32,
+        "track": "alpha",
+        **NOTES_FIELDS,
+    }
     (state / "verification.json").write_text(json.dumps(verified))
     api.edits().tracks().get.return_value.execute.return_value = {
         "track": remote_track,
-        "releases": [{"status": status, "versionCodes": [str(remote_code)]}],
+        "releases": [
+            {
+                "status": status,
+                "versionCodes": [str(remote_code)],
+                "releaseNotes": [{"language": "ja-JP", "text": NOTES}],
+            }
+        ],
     }
     api.edits().bundles().list().execute.return_value = {
         "bundles": [{"versionCode": remote_code, "sha256": remote_hash}]
     }
     if expected:
+        # Only the digest must survive always-cleanup to confirm a prior submission.
+        (state / release.RELEASE_NOTES_FILE).unlink()
+        (state / "whatsnew").rmdir()
         release.readback(state)
         assert json.loads((state / "receipt.json").read_text()) == {
             **verified,
@@ -260,12 +343,24 @@ def test_readback_verifies_closed_artifact_without_publishing(
 def test_exhausted_readback_preserves_verification_without_resubmitting(
     api: MagicMock, state: Path, failed_read: str
 ) -> None:
-    verified = {"sha": SHA, "versionCode": 7, "bundleSha256": "ab" * 32, "track": "alpha"}
+    verified = {
+        "sha": SHA,
+        "versionCode": 7,
+        "bundleSha256": "ab" * 32,
+        "track": "alpha",
+        **NOTES_FIELDS,
+    }
     verification = state / "verification.json"
     verification.write_text(json.dumps(verified))
     api.edits().tracks().get.return_value.execute.return_value = {
         "track": "alpha",
-        "releases": [{"status": "completed", "versionCodes": ["7"]}],
+        "releases": [
+            {
+                "status": "completed",
+                "versionCodes": ["7"],
+                "releaseNotes": [{"language": "ja-JP", "text": NOTES}],
+            }
+        ],
     }
     api.edits().bundles().list.return_value.execute.return_value = {
         "bundles": [{"versionCode": 7, "sha256": "ab" * 32}]
@@ -308,7 +403,11 @@ def test_verification_records_the_fixed_closed_track(
 
     release.verify(state, bundletool)
 
-    assert json.loads((state / "verification.json").read_text()) == {**verified, "track": "alpha"}
+    assert json.loads((state / "verification.json").read_text()) == {
+        **verified,
+        "track": "alpha",
+        **NOTES_FIELDS,
+    }
     assert (state / "verified/app-release.aab").read_bytes() == bundle.read_bytes()
     verifier.assert_called_once_with(bundle, bundletool, code=7, sha=SHA, certificate="ab" * 32)
 
@@ -328,6 +427,93 @@ def test_wrong_verification_track_stops_before_play_inspection(
 
     api.edits().insert.assert_not_called()
     assert not (state / "receipt.json").exists()
+
+
+@pytest.mark.parametrize(
+    "remote_notes",
+    (
+        [],
+        [{"language": "ja-JP", "text": "前の更新内容"}],
+        [{"language": "en-US", "text": NOTES}],
+        [{"language": "ja-JP", "text": NOTES}, {"language": "ja-JP", "text": NOTES}],
+    ),
+)
+def test_readback_rejects_missing_changed_or_duplicate_japanese_notes(
+    api: MagicMock, state: Path, remote_notes: list[dict[str, str]]
+) -> None:
+    (state / "verification.json").write_text(
+        json.dumps(
+            {
+                "sha": SHA,
+                "versionCode": 7,
+                "bundleSha256": "ab" * 32,
+                "track": "alpha",
+                **NOTES_FIELDS,
+            }
+        )
+    )
+    api.edits().tracks().get.return_value.execute.return_value = {
+        "track": "alpha",
+        "releases": [
+            {"status": "completed", "versionCodes": ["7"], "releaseNotes": remote_notes},
+            {
+                "status": "completed",
+                "versionCodes": ["6"],
+                "releaseNotes": [{"language": "ja-JP", "text": NOTES}],
+            },
+        ],
+    }
+    api.edits().bundles().list().execute.return_value = {
+        "bundles": [{"versionCode": 7, "sha256": "ab" * 32}]
+    }
+
+    with pytest.raises(ValueError, match="play_submission_unconfirmed"):
+        release.readback(state)
+
+    assert not (state / "receipt.json").exists()
+    api.edits().commit.assert_not_called()
+    api.edits().bundles().upload.assert_not_called()
+    api.edits().tracks().update.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "notes_fields",
+    (
+        {},
+        {"releaseNotesLanguage": "en-US", "releaseNotesSha256": "ab" * 32},
+        {"releaseNotesLanguage": "ja-JP", "releaseNotesSha256": "invalid"},
+    ),
+)
+def test_invalid_notes_verification_stops_before_readback_inspection(
+    api: MagicMock, state: Path, notes_fields: dict[str, str]
+) -> None:
+    (state / "verification.json").write_text(json.dumps({"track": "alpha", **notes_fields}))
+
+    with pytest.raises(ValueError, match="play_release_notes_verification_invalid"):
+        release.readback(state)
+
+    api.edits().insert.assert_not_called()
+    assert not (state / "receipt.json").exists()
+
+
+def test_cleanup_removes_notes_but_preserves_submission_evidence(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in ("upload-key.p12", "google-services.json", "gradle-build.log"):
+        (state / name).write_bytes(b"synthetic private file")
+    for name in ("plan.json", "verification.json", "receipt.json"):
+        (state / name).write_text("{}")
+    monkeypatch.setenv("RUNNER_TEMP", str(state.parent))
+    monkeypatch.setattr("sys.argv", ["release", "cleanup", "--state", str(state)])
+
+    assert release.main() == 0
+
+    assert not (state / "whatsnew").exists()
+    assert all(not (state / name).exists() for name in release.PRIVATE_FILES)
+    assert all(
+        (state / name).read_text() == "{}"
+        for name in ("plan.json", "verification.json", "receipt.json")
+    )
 
 
 def test_invalid_state_and_private_errors_are_not_logged(

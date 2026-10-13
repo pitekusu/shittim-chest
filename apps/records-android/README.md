@@ -632,6 +632,8 @@ C38を先に取り込み、`.github/workflows/android-release.yml`を`main`か�
 
 通常配布は`Android Closed Release`でクローズドトラック`alpha`へ固定する。認証Environmentの`android-internal`と排他groupの`android-internal-release`は既存のWIF条件と旧実行との排他を維持するため、そのまま使う。
 
+毎回、必須入力`release_notes_ja`へその版の利用者向け更新内容を日本語で1〜500 Unicode文字指定する。固定の説明を既定値にせず、空白のみ・上限超過・不正UTF-8はPlayの採番前に拒否する。本文は環境変数経由で準備し、固定の`whatsnew-ja-JP`ファイルを採用Actionの`whatsNewDirectory`へ渡す。ActionがAABと同じeditでGoogle Playの更新情報へ反映する。提出後は対象版の日本語本文のSHA-256も照合し、receiptへlocaleと本文digestだけを残す。Consoleの推奨事項の解消は、配布receiptと区別して対象versionCodeの画面で確認する。
+
 管理者がGoogle WIFを、固定リポジトリ・数値repository/owner ID・`main`・このWorkflow・
 `workflow_dispatch`・`android-internal` Environmentだけに限定する。
 既存Play用サービスアカウントに`roles/iam.workloadIdentityUser`を付け、Play Consoleでは

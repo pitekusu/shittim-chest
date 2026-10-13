@@ -287,6 +287,19 @@ def _validate_android_release(directory: Path) -> None:
         raise WorkflowPolicyError("Android Release must retain its trusted main-only boundary")
     if _contains_untrusted_run_expression(text) or _contains_run_expression(text, "${{ inputs."):
         raise WorkflowPolicyError("Android Release must pass untrusted inputs through env")
+    notes_input = re.search(r"(?m)^      release_notes_ja:\n((?: {8}.+\n)+)", text)
+    notes_fields = (
+        re.findall(r"(?m)^        ([a-z_]+):[ \t]*(.*)$", notes_input.group(1))
+        if notes_input is not None
+        else []
+    )
+    if (
+        len(notes_fields) != 3
+        or set(dict(notes_fields)) != {"description", "type", "required"}
+        or dict(notes_fields).get("type") != "string"
+        or dict(notes_fields).get("required") != "true"
+    ):
+        raise WorkflowPolicyError("Android Release must require release notes without a default")
     protected_steps = (
         "Require successful same-SHA main CI and CodeQL",
         "Authenticate only to inspect current Play versions",
@@ -303,6 +316,21 @@ def _validate_android_release(directory: Path) -> None:
     if positions != sorted(positions):
         raise WorkflowPolicyError(
             "Android Release must verify its bundle before renewed auth and publish"
+        )
+    materialize_name = "Prepare private upload signing and Firebase inputs"
+    materialize = _workflow_step_block(text, materialize_name)
+    if (
+        text.count(f"      - name: {materialize_name}\n") != 1
+        or materialize.count(
+            'run: uv run --frozen python -m tools.android_release materialize --state "${STATE}"'
+        )
+        != 1
+        or materialize.count("          RELEASE_NOTES_JA: ${{ inputs.release_notes_ja }}\n") != 1
+        or "        if:" in materialize
+        or text.index(f"      - name: {materialize_name}\n") > positions[1]
+    ):
+        raise WorkflowPolicyError(
+            "Android Release must validate release notes before Play inspection"
         )
     for name, action in ((protected_steps[2], "verify"), (protected_steps[5], "readback")):
         block = _workflow_step_block(text, name)
@@ -364,6 +392,7 @@ def _validate_android_release(directory: Path) -> None:
         "tracks": "alpha",
         "status": "completed",
         "releaseName": '"0.0.${{ steps.version.outputs.version_code }}"',
+        "whatsNewDirectory": "${{ runner.temp }}/android-release/whatsnew",
     }
     inputs = re.findall(r"(?m)^          (\S[^:\n]*):[ \t]*(.*)$", upload)
     if (
