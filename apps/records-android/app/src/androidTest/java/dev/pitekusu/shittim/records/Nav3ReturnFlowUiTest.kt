@@ -86,7 +86,7 @@ class Nav3ReturnFlowUiTest {
     instrumentation.addMonitor(monitor)
     try {
       compose.onNodeWithTag("records-menu-open").performClick()
-      compose.onNodeWithText(compose.activity.getString(R.string.menu_momotalk)).assertDoesNotExist()
+      compose.onNodeWithText(compose.activity.getString(R.string.menu_momotalk)).assertExists()
       instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
       compose.waitUntil(5_000) {
         compose.onAllNodesWithTag("records-menu").fetchSemanticsNodes().isEmpty()

@@ -267,6 +267,12 @@ Authlib・Auth Tab・認証検証の共通化も維持する。この方針の�
 | 議論公開通知 | Firebase Cloud Messaging、Firebase Admin SDK、NotificationCompat、Activity Result、WorkManager | 配送・通知表示・権限要求・登録再試行を既存APIへ任せる。セッションへの束縛、公開済み記録の確認、重複防止とログアウト時の抑止をサービス側で管理 |
 | C38〜C39：内部テスト配布 | r0adkll/upload-google-play、Google認証Action、既存のgoogle-auth・Google API client | upload・track更新・commitは採用Actionへ任せる。helperは版番号読取・署名と同一AABの検証・提出後照合・秘密の準備と回収だけを担当し、独自の提出APIやedit受け渡しを作らない |
 
+### Play ConsoleのSDK・エッジツーエッジ推奨事項
+
+FirebaseとPlay App Updateが要求する古いFragmentは、Version Catalogで管理する`androidx.fragment:fragment`のGradle依存制約で更新する。Compose画面へFragmentを直接追加せず、既存の推移依存だけに適用する。[Fragmentの公式更新情報](https://developer.android.com/jetpack/androidx/releases/fragment)を確認し、releaseRuntimeClasspathと最適化済みAABの依存情報で採用版を検証する。通知とアプリ内更新の既存試験を維持する。
+
+MainActivityは`enableEdgeToEdge()`と`android:windowSoftInputMode="adjustResize"`を使用する。[Composeの公式設定](https://developer.android.com/develop/ui/compose/system/setup-e2e)に従い、キーボードのインセットを受け取る。通常画面の`safeDrawingPadding()`／`imePadding()`と全画面画像Dialogの安全領域処理を維持し、検索・議題入力時の操作がキーボードに隠れないことを確認する。
+
 ### C15までの独自処理を残す理由
 
 次の処理はライブラリを使わないためではなく、既存APIだけでは満たせない安全条件やサービス固有の契約を守るために残す。

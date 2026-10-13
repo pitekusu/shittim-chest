@@ -100,8 +100,11 @@ tasks.matching { it.name == "preReleaseBuild" }.configureEach {
 kotlin { jvmToolchain(21) }
 
 dependencies {
-  // Lint resolves its tool dependencies separately from the Gradle plugin classpath.
   constraints {
+    implementation(libs.androidx.fragment) {
+      because("Firebase and Play App Update still request deprecated Fragment releases")
+    }
+    // Lint resolves its tool dependencies separately from the Gradle plugin classpath.
     add("androidLintTool", libs.build.commons.lang3)
     add("androidLintTool", libs.build.httpclient)
     add("androidLintTool", libs.build.bouncycastle.bcpkix)

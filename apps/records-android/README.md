@@ -22,6 +22,13 @@ CodeQL接続（C04）はCodeQL 2.27.2で当時のKotlin 2.4.20のmanual抽出を
 - Gradleは同梱Wrapperを使う。プラグイン・ライブラリは`gradle/libs.versions.toml`を正とする。
 - アプリのKotlin／Compose Compilerは`2.4.21`を使い、serialization compiler pluginも同じ版に揃える。
 
+### Play ConsoleのSDK・エッジツーエッジ推奨事項
+
+- FirebaseとPlay App Updateが要求する古いFragmentは、Version Catalogで管理した`androidx.fragment:fragment`の依存制約で更新する。Compose画面にFragmentを直接追加せず、既存の推移依存へ適用する。
+- MainActivityは`enableEdgeToEdge()`と`android:windowSoftInputMode="adjustResize"`を使用する。通常画面の`safeDrawingPadding()`／`imePadding()`と、全画面画像Dialogの安全領域処理を維持し、検索・議題入力時にキーボードで操作が隠れないことを確認する。
+
+[Fragmentの公式更新情報](https://developer.android.com/jetpack/androidx/releases/fragment)と[Composeのエッジツーエッジ設定](https://developer.android.com/develop/ui/compose/system/setup-e2e)を参照する。
+
 ### ローカルの一時ビルドをため込まない
 
 ローカルではリポジトリのrootから管理用の入口を使う。設定済みの`JAVA_HOME`と`ANDROID_HOME`、署名・Firebaseの環境変数は引き継ぐ。
