@@ -426,7 +426,7 @@ Normal Discord sign-in remains separate and is not needed to review the demo.
 - upload keyと署名パスワードは引き続きC18のReleaseビルド専用。API用の短寿命認証はAABを署名せず、署名済みAABの提出にはupload keyを再読込する必要はない。
 - 正式な提出入口はC39の手動Workflow。`releaseFiles`へ**検証済みの署名付きAABを1個だけ**指定し、globや複数成果物を渡さない。提出段階で再ビルドせず、`packageName`・`tracks: alpha`・`status: completed`をWorkflowで固定する。掲載情報・本番トラック・内部アプリ共有は変更しない。
 - 配布helperは公式Google SDKを使い、版番号の事前読取、秘密入力の準備、AAB検証、提出後の再取得、後片付けに限定する。全track・提出済みbundle／APKの最大番号検査、SHA-256／署名／package／versionCodeの検証を維持し、競合時の自動再番号付けやuploadの自動再送は行わない。
-- Actionは通常のcommitを行う。[Play commitの既定動作](https://developers.google.com/android-publisher/api-ref/rest/v3/edits/commit)は既存審査を取り消して変更を送信し得るため、起動前に他の審査が進行中でなく、未送信の掲載情報変更を意図せず送信しない状態をPlay Consoleで確認する。この運用確認を自動guardで代替したとは扱わない。
+- Actionは通常のcommitを行う。[Play commitの既定動作](https://developers.google.com/android-publisher/api-ref/rest/v3/edits/commit)が既存審査や未送信変更へ作用し得ることは継続して考慮する。配布依頼を受けたらC39のCI・Workflow・receipt・Play APIによる提出状態の確認を行い、Console状態を毎回ユーザーへ再質問しない。実際に競合や応答不明の提出が判明した場合は副作用を確認し、自動guardで審査・公開状態を保護したとは扱わない。
 
 接続試験は架空データでWorkflowの単一AAB・WIF入力・固定トラックとhelperの検証境界を確認する。Action内部の提出処理を独自に複製して試験せず、実署名・WIF・Play配布の受入とは区別する。
 
