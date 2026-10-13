@@ -575,16 +575,207 @@ class RecordsRepositoryTest {
         entered.await()
         assertEquals(ids.toSet(), records.cachedRecords(accountId).map { it.recordId }.toSet())
         assertEquals(ids.toSet(), bodyNotifications.last())
-        assertEquals(listOf("sync-index", ids[0], ids[1], "avatar.png"), calls)
+        assertEquals(listOf("sync-index", ids[0], ids[1], ids[0], "avatar.png"), calls)
       } finally { release.complete(Unit) }
       assertEquals(RecordReadFailure.UNAVAILABLE, pending.await())
       assertEquals(ids.toSet(), records.syncCheckpoint(accountId)?.pendingAvatars)
       calls.clear()
       failImage = false
       records.synchronize(token, accountId)
-      assertEquals(listOf("sync-index", "avatar.png"), calls)
+      assertEquals(listOf("sync-index", ids[0], "avatar.png"), calls)
       assertEquals(true, records.syncCheckpoint(accountId)?.complete)
       assertTrue(records.cachedRecords(accountId).all { it.requesterAvatar.bytes != null })
+    }
+  }
+
+  @Test fun pendingAvatarRenewsExpiredUrlsAfterReopenAndRetriesWithoutReplacingBodies() = runBlocking {
+    val revision = "z".repeat(43)
+    val avatarRevision = "i".repeat(43)
+    val expiredUrl = "https://fixture.s3.ap-northeast-1.amazonaws.com/requesters/fake/avatar.png?signature=expired"
+    fun avatarDetail(signature: String) = detail().replace(
+      "\"kind\":\"placeholder\",\"url\":null",
+      "\"kind\":\"image\",\"url\":\"${expiredUrl.substringBefore('?')}?signature=$signature\"")
+    repository(MockEngine {
+      respond(avatarDetail("expired"), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { records ->
+      records.record(token, accountId, recordId, avatarRevision)
+      records.saveSyncCheckpoint(accountId, RecordSyncCheckpoint(readContractVersion = 2,
+        committedRevisions = mapOf(recordId to revision), pendingAvatars = setOf(recordId),
+        removalCandidates = emptySet(), indexBased = true))
+    }
+    val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+    val png = ByteArrayOutputStream().use { output ->
+      bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+      output.toByteArray()
+    }
+    bitmap.recycle()
+    for (attempt in 1..2) {
+      val calls = mutableListOf<String>()
+      repository(MockEngine { request ->
+        val id = request.url.encodedPath.substringAfterLast('/')
+        if (id == "avatar.png") {
+          val signature = request.url.parameters["signature"]
+          calls += checkNotNull(signature)
+          assertEquals("fresh-$attempt", signature)
+          assertNull(request.headers[HttpHeaders.Authorization])
+          if (attempt == 1) respond("", HttpStatusCode.Forbidden)
+          else respond(png, headers = headersOf(HttpHeaders.ContentType, "image/png"))
+        } else {
+          calls += id
+          assertEquals("Bearer $token", request.headers[HttpHeaders.Authorization])
+          respond(if (id == "sync-index") index() else avatarDetail("fresh-$attempt")
+            .replace("架空の結論", "URL更新時の本文"),
+            headers = headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+      }).use { records ->
+        if (attempt == 1) {
+          try { records.synchronize(token, accountId); fail("unavailable avatar must remain pending") }
+          catch (error: RecordReadException) { assertEquals(RecordReadFailure.UNAVAILABLE, error.failure) }
+          assertEquals(setOf(recordId), records.syncCheckpoint(accountId)?.pendingAvatars)
+          assertNull(records.cachedRecords(accountId).single().requesterAvatar.bytes)
+        } else {
+          records.synchronize(token, accountId)
+          assertEquals(true, records.syncCheckpoint(accountId)?.complete)
+          assertTrue(records.cachedRecords(accountId).single().requesterAvatar.bytes != null)
+        }
+        assertEquals(listOf("sync-index", recordId, "fresh-$attempt"), calls)
+        assertEquals("架空の結論", records.cachedRecord(accountId, recordId)?.decision)
+        assertEquals(expiredUrl, records.cachedListEntry(accountId, recordId)?.requesterAvatar?.url)
+        assertEquals(mapOf(recordId to revision), records.syncCheckpoint(accountId)?.committedRevisions)
+      }
+    }
+    val calls = mutableListOf<String>()
+    repository(MockEngine { request ->
+      calls += request.url.encodedPath.substringAfterLast('/')
+      respond(index(), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { records ->
+      records.saveAvatar(token, accountId, checkNotNull(records.cachedListEntry(accountId, recordId)))
+      assertTrue(calls.isEmpty())
+      records.synchronize(token, accountId)
+      assertEquals(listOf("sync-index"), calls)
+      assertTrue(records.cachedRecords(accountId).single().requesterAvatar.bytes != null)
+    }
+  }
+
+  @Test fun avatarRefreshCannotCacheAChangedProfileSourceOrContinueAfterAccountSwitch() = runBlocking {
+    val url = "https://fixture.s3.ap-northeast-1.amazonaws.com/requesters/original/avatar.png"
+    fun avatarDetail(source: String) = detail().replace(
+      "\"kind\":\"placeholder\",\"url\":null", "\"kind\":\"image\",\"url\":\"$source\"")
+    repository(MockEngine {
+      respond(avatarDetail(url), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { it.record(token, accountId, recordId, "i".repeat(43)) }
+    for (switchAccount in listOf(false, true)) {
+      var requests = 0
+      repository(MockEngine { request ->
+        requests++
+        assertEquals("/api/v1/records/$recordId", request.url.encodedPath)
+        if (switchAccount) activeAccountId = "v".repeat(43)
+        respond(avatarDetail(if (switchAccount) url else url.replace("/original/", "/changed/")),
+          headers = headersOf(HttpHeaders.ContentType, "application/json"))
+      }).use { records ->
+        val entry = checkNotNull(records.cachedListEntry(accountId, recordId))
+        if (switchAccount) {
+          try { records.saveAvatar(token, accountId, entry); fail("changed authorization must stop download") }
+          catch (error: RecordReadException) { assertEquals(RecordReadFailure.AUTH_REQUIRED, error.failure) }
+        } else assertFalse(records.saveAvatar(token, accountId, entry))
+        assertEquals(1, requests)
+        activeAccountId = accountId
+        assertNull(records.cachedRecords(accountId).single().requesterAvatar.bytes)
+        assertEquals(url, records.cachedListEntry(accountId, recordId)?.requesterAvatar?.url)
+        assertEquals("架空の結論", records.cachedRecord(accountId, recordId)?.decision)
+      }
+    }
+  }
+
+  @Test fun changedOrRemovedAvatarOutsideTheHeadRestartsAllIndexPagesAndFinishes() = runBlocking {
+    val head = "h".repeat(43)
+    val following = "n".repeat(43)
+    val png = avatarPng()
+    for (placeholder in listOf(false, true)) {
+      val root = "https://fixture.s3.ap-northeast-1.amazonaws.com/requesters/scenario-$placeholder"
+      val oldUrl = "$root/original/avatar.png"
+      val nextUrl = "$root/following/avatar.png"
+      val changedUrl = if (placeholder) null else "$root/changed/avatar.png"
+      seedPendingAvatars(head, linkedMapOf(recordId to oldUrl, following to nextUrl))
+      val calls = mutableListOf<String>()
+      fun engine() = MockEngine { request ->
+        val id = request.url.encodedPath.substringAfterLast('/')
+        if (id == "sync-index") {
+          val cursor = request.url.parameters["cursor"]
+          calls += if (cursor == null) "index:head" else "index:tail"
+          val body = if (cursor == null) index(listOf(head), "tail.signature")
+          else index(listOf(recordId, following)).replace(
+            "\"recordId\":\"$recordId\",\"revision\":\"${"z".repeat(43)}\",\"avatarRevision\":\"${"i".repeat(43)}\"",
+            "\"recordId\":\"$recordId\",\"revision\":\"${"y".repeat(43)}\",\"avatarRevision\":\"${"j".repeat(43)}\"")
+          respond(body, headers = headersOf(HttpHeaders.ContentType, "application/json"))
+        } else if (id == "avatar.png") {
+          calls += request.url.encodedPath
+          assertFalse(request.url.encodedPath.contains("/original/"))
+          assertNull(request.headers[HttpHeaders.Authorization])
+          respond(png, headers = headersOf(HttpHeaders.ContentType, "image/png"))
+        } else {
+          calls += id
+          respond(detailWithAvatar(id, if (id == recordId) changedUrl else nextUrl),
+            headers = headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+      }
+      repository(engine()).use { records ->
+        try { records.synchronize(token, accountId); fail("changed profile must leave a complete index retry") }
+        catch (error: RecordReadException) { assertEquals(RecordReadFailure.UNAVAILABLE, error.failure) }
+        assertEquals(listOf("index:head", recordId), calls)
+        val checkpoint = checkNotNull(records.syncCheckpoint(accountId))
+        assertFalse(checkpoint.complete)
+        assertFalse(checkpoint.pageLoaded)
+        assertNull(checkpoint.cursor)
+        assertEquals(setOf(head, recordId, following), checkpoint.removalCandidates)
+        assertEquals(setOf(recordId, following), checkpoint.pendingAvatars)
+      }
+      calls.clear()
+      repository(engine()).use { records ->
+        records.synchronize(token, accountId)
+        assertTrue("older index pages must reconcile the pending record", "index:tail" in calls)
+        val checkpoint = checkNotNull(records.syncCheckpoint(accountId))
+        assertTrue(checkpoint.complete)
+        assertTrue(checkpoint.pendingAvatars.isEmpty())
+        assertEquals("y".repeat(43), checkpoint.committedRevisions[recordId])
+        val entries = records.cachedRecords(accountId).associateBy { it.recordId }
+        assertTrue(checkNotNull(entries[following]).requesterAvatar.bytes != null)
+        assertEquals(!placeholder, checkNotNull(entries[recordId]).requesterAvatar.bytes != null)
+        assertEquals(changedUrl, records.cachedListEntry(accountId, recordId)?.requesterAvatar?.url)
+        assertEquals(if (placeholder) 1 else 2, calls.count { it.endsWith("/avatar.png") })
+      }
+    }
+  }
+
+  @Test fun pendingAvatarDetail404OutsideTheHeadRemovesItsRecordAndContinuesTheQueue() = runBlocking {
+    val head = "h".repeat(43)
+    val following = "n".repeat(43)
+    val root = "https://fixture.s3.ap-northeast-1.amazonaws.com/requesters"
+    val nextUrl = "$root/following/avatar.png"
+    seedPendingAvatars(head, linkedMapOf(recordId to "$root/removed/avatar.png", following to nextUrl))
+    val calls = mutableListOf<String>()
+    val png = avatarPng()
+    repository(MockEngine { request ->
+      val id = request.url.encodedPath.substringAfterLast('/')
+      calls += id
+      when (id) {
+        "sync-index" -> respond(index(listOf(head), "tail.signature"),
+          headers = headersOf(HttpHeaders.ContentType, "application/json"))
+        recordId -> respond("", HttpStatusCode.NotFound)
+        "avatar.png" -> respond(png, headers = headersOf(HttpHeaders.ContentType, "image/png"))
+        else -> respond(detailWithAvatar(id, nextUrl),
+          headers = headersOf(HttpHeaders.ContentType, "application/json"))
+      }
+    }).use { records ->
+      records.synchronize(token, accountId)
+      assertEquals(listOf("sync-index", recordId, following, "avatar.png"), calls)
+      assertNull(records.cachedRecord(accountId, recordId))
+      assertNull(records.cachedListEntry(accountId, recordId))
+      val checkpoint = checkNotNull(records.syncCheckpoint(accountId))
+      assertTrue(checkpoint.complete)
+      assertTrue(checkpoint.pendingAvatars.isEmpty())
+      assertFalse(recordId in checkpoint.committedRevisions)
+      assertTrue(records.cachedRecords(accountId).single { it.recordId == following }.requesterAvatar.bytes != null)
     }
   }
 
@@ -819,6 +1010,33 @@ class RecordsRepositoryTest {
     return RecordsRepository(RecordsReadClient(engine),
       EncryptedRecordStore(database, RecordDataKeyProtector(privateKeys)), database,
       RecordCacheAccount(privateContext, privateKeys, database), { it == activeAccountId })
+  }
+
+  private suspend fun seedPendingAvatars(head: String, urls: Map<String, String>) {
+    val ids = listOf(head) + urls.keys
+    repository(MockEngine { request ->
+      val id = request.url.encodedPath.substringAfterLast('/')
+      respond(detailWithAvatar(id, urls[id]), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { records ->
+      for (id in ids) records.record(token, accountId, id, "i".repeat(43))
+      records.saveSyncCheckpoint(accountId, RecordSyncCheckpoint(readContractVersion = 2,
+        pageLoaded = true, committedRevisions = ids.associateWith { "z".repeat(43) },
+        pendingAvatars = urls.keys, removalCandidates = emptySet(), indexBased = true))
+    }
+  }
+
+  private fun detailWithAvatar(id: String, url: String?): String = if (url == null) detail(id)
+    else detail(id).replace("\"kind\":\"placeholder\",\"url\":null",
+      "\"kind\":\"image\",\"url\":\"$url\"")
+
+  private fun avatarPng(): ByteArray {
+    val bitmap = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888)
+    return try {
+      ByteArrayOutputStream().use { output ->
+        bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+        output.toByteArray()
+      }
+    } finally { bitmap.recycle() }
   }
 
   private fun index(ids: List<String> = listOf(recordId), cursor: String? = null): String =

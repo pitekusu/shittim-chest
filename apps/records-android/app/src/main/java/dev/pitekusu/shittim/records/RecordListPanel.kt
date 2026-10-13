@@ -270,7 +270,7 @@ internal fun RequesterAvatar(name: String, avatar: RecordAvatar, modifier: Modif
     .clip(CircleShape).clearAndSetSemantics {}, contentAlignment = Alignment.Center) {
     Surface(color = background, shape = CircleShape, modifier = Modifier.size(size)) {
       Box(contentAlignment = Alignment.Center) {
-        Text(name.take(1), style = if (size < 40.dp) MaterialTheme.typography.labelSmall
+        Text(remember(name) { requesterAvatarInitial(name) }, style = if (size < 40.dp) MaterialTheme.typography.labelSmall
           else MaterialTheme.typography.titleLarge)
       }
     }
