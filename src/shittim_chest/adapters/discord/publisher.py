@@ -5,9 +5,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import json
+import logging
 import math
 from collections.abc import Mapping
 from datetime import timedelta
+from typing import Literal
 
 import discord
 
@@ -49,6 +52,27 @@ DISCORD_MAX_RATELIMIT_TIMEOUT_SECONDS = 300.0
 DEFAULT_DELIVERY_TIMEOUT_SECONDS = 45.0
 DEFAULT_COMPLETION_RETRIES = 3
 DEFAULT_COMPLETION_RETRY_SECONDS = 0.1
+_LOGGER = logging.getLogger("shittim_chest")
+
+type _DeliveryConflictStage = Literal[
+    "outbox_state", "source_image", "send_response", "history_reconciliation"
+]
+type _DeliveryConflictReason = Literal[
+    "operation_abandoned",
+    "source_size_mismatch",
+    "source_hash_mismatch",
+    "attachment_count_mismatch",
+    "attachment_filename_mismatch",
+    "attachment_size_mismatch",
+    "attachment_content_type_mismatch",
+    "message_target_mismatch",
+    "message_author_mismatch",
+    "message_nonce_mismatch",
+    "message_body_mismatch",
+    "message_hash_mismatch",
+    "history_duplicate_match",
+    "history_limit_reached",
+]
 
 
 class DiscordPyPublisher:
@@ -124,7 +148,7 @@ class DiscordPyPublisher:
         if current.status is OutboxStatus.SENT:
             return current
         if current.status is OutboxStatus.ABANDONED:
-            raise DiscordDeliveryConflict
+            raise _delivery_conflict(current, stage="outbox_state", reason="operation_abandoned")
 
         claimed = await self._outbox.claim(
             expected=expected,
@@ -287,16 +311,24 @@ class DiscordPyPublisher:
             inspected += 1
             if message.author.id != user.id or str(message.nonce) != operation.nonce:
                 continue
-            self._validate_attachments(message, operation)
+            self._validate_attachments(message, operation, stage="history_reconciliation")
             if message.content != operation.content:
-                raise DiscordDeliveryConflict
+                raise _delivery_conflict(
+                    operation, stage="history_reconciliation", reason="message_body_mismatch"
+                )
             if content_sha256(message.content) != operation.content_hash:
-                raise DiscordDeliveryConflict
+                raise _delivery_conflict(
+                    operation, stage="history_reconciliation", reason="message_hash_mismatch"
+                )
             if matched is not None:
-                raise DiscordDeliveryConflict
+                raise _delivery_conflict(
+                    operation, stage="history_reconciliation", reason="history_duplicate_match"
+                )
             matched = message
         if inspected >= self._history_limit:
-            raise DiscordDeliveryConflict
+            raise _delivery_conflict(
+                operation, stage="history_reconciliation", reason="history_limit_reached"
+            )
         return matched
 
     def _validate_message(
@@ -305,33 +337,57 @@ class DiscordPyPublisher:
         message: discord.Message,
         operation: OutboxOperation,
     ) -> None:
-        self._validate_attachments(message, operation)
+        self._validate_attachments(message, operation, stage="send_response")
         user = client.user
         if user is None:
             raise DiscordIdentityUnavailable
-        if (
-            str(message.channel.id) != operation.delivery_target_id
-            or message.author.id != user.id
-            or str(message.nonce) != operation.nonce
-            or message.content != operation.content
-            or content_sha256(message.content) != operation.content_hash
-        ):
-            raise DiscordDeliveryConflict
+        if str(message.channel.id) != operation.delivery_target_id:
+            raise _delivery_conflict(
+                operation, stage="send_response", reason="message_target_mismatch"
+            )
+        if message.author.id != user.id:
+            raise _delivery_conflict(
+                operation, stage="send_response", reason="message_author_mismatch"
+            )
+        if str(message.nonce) != operation.nonce:
+            raise _delivery_conflict(
+                operation, stage="send_response", reason="message_nonce_mismatch"
+            )
+        if message.content != operation.content:
+            raise _delivery_conflict(
+                operation, stage="send_response", reason="message_body_mismatch"
+            )
+        if content_sha256(message.content) != operation.content_hash:
+            raise _delivery_conflict(
+                operation, stage="send_response", reason="message_hash_mismatch"
+            )
 
     @staticmethod
-    def _validate_attachments(message: discord.Message, operation: OutboxOperation) -> None:
+    def _validate_attachments(
+        message: discord.Message,
+        operation: OutboxOperation,
+        *,
+        stage: _DeliveryConflictStage,
+    ) -> None:
         if not operation.attachments:
             return
         actual = message.attachments
         if len(actual) != len(operation.attachments):
-            raise DiscordDeliveryConflict
+            raise _delivery_conflict(operation, stage=stage, reason="attachment_count_mismatch")
         for received, expected in zip(actual, operation.attachments, strict=True):
-            if (
-                received.filename != _image_filename(expected)
-                or received.size != expected.size_bytes
-                or received.content_type != expected.content_type
-            ):
-                raise DiscordDeliveryConflict
+            if received.filename != _image_filename(expected):
+                raise _delivery_conflict(
+                    operation, stage=stage, reason="attachment_filename_mismatch"
+                )
+            if received.size != expected.size_bytes:
+                raise _delivery_conflict(operation, stage=stage, reason="attachment_size_mismatch")
+            # Discord's attachment content_type is optional response metadata.
+            # Persisted source bytes, returned filename/size, and any present MIME
+            # still have to match; missing MIME does not invalidate the upload.
+            if received.content_type is not None and received.content_type != expected.content_type:
+                raise _delivery_conflict(
+                    operation, stage=stage, reason="attachment_content_type_mismatch"
+                )
 
     async def _send(
         self,
@@ -347,11 +403,14 @@ class DiscordPyPublisher:
                 raise DiscordPermissionDenied
             for image in operation.attachments:
                 content = await self._image_store.load_original(image)
-                if (
-                    len(content) != image.size_bytes
-                    or hashlib.sha256(content).hexdigest() != image.sha256
-                ):
-                    raise DiscordDeliveryConflict
+                if len(content) != image.size_bytes:
+                    raise _delivery_conflict(
+                        operation, stage="source_image", reason="source_size_mismatch"
+                    )
+                if hashlib.sha256(content).hexdigest() != image.sha256:
+                    raise _delivery_conflict(
+                        operation, stage="source_image", reason="source_hash_mismatch"
+                    )
                 files.append(
                     discord.File(
                         io.BytesIO(content),
@@ -429,6 +488,34 @@ class DiscordPyPublisher:
         if not math.isfinite(parsed) or parsed <= 0:
             return self._retry_delay_seconds
         return max(1.0, parsed)
+
+
+def _delivery_conflict(
+    operation: OutboxOperation,
+    *,
+    stage: _DeliveryConflictStage,
+    reason: _DeliveryConflictReason,
+) -> DiscordDeliveryConflict:
+    """Record only fixed check labels and opaque correlation before failing closed."""
+
+    _LOGGER.warning(
+        json.dumps(
+            {
+                "severity": "WARNING",
+                "event": "discord_delivery_conflict",
+                "debate_id": str(operation.debate_id),
+                "stage": stage,
+                "reason": reason,
+                "action": "attachment" if operation.attachments else "message",
+                "phase": operation.phase.value if operation.phase is not None else None,
+                "delivery_sequence": operation.delivery_sequence,
+                "delivery_attempt": operation.delivery_attempt,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+    return DiscordDeliveryConflict()
 
 
 def _image_filename(image: DebateImage) -> str:

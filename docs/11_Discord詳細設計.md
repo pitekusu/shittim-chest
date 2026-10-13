@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, discord, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-09-23
+updated: 2026-10-13
 ---
 
 # Discord詳細設計
@@ -208,12 +208,19 @@ Outboxは「送る内容と順序」を永続化した送信待ち記録であ�
 
 Android開始を含め、司会が原画像を1枚ずつ既存Outboxで投稿する。対象スレッドの添付権限を確認し、nonce・作者・本文・添付の照合と保存済みreceiptで応答不明や討論再試行の二重投稿を防ぐ。画像本文・元ファイル名・署名付きURLをログへ残さない。
 
+Discord応答の添付`content_type`は任意属性のため、欠落している場合だけ照合を省略する。
+値が返った場合は保存済みのMIMEと一致を要求し、空文字・異なる画像形式・汎用バイナリ形式を成功扱いしない。
+添付数、管理下のファイル名、実バイト数と、送信元原画像のchecksum・サイズ照合は維持する。
+この扱いは送信応答と履歴照合で共通とし、Android開始でも入力画像の形式検証を省略しない。
+
+
 ## 公式資料確認記録
 
 | 確認日 | 対象 | 公式資料 | 設計への反映 |
 |---|---|---|---|
 | 2026-08-14 | Interactions | [受付と応答](https://docs.discord.com/developers/interactions/receiving-and-responding) | 署名、PING、初回応答 |
 | 2026-08-14 | Application Commands | [コマンド](https://docs.discord.com/developers/interactions/application-commands) | サーバー内コマンド、入力制約 |
+| 2026-10-13 | Attachment Object | [添付構造](https://docs.discord.com/developers/resources/message#attachment-object-attachment-structure) | 応答MIMEの省略と画像配送の照合境界 |
 | 2026-08-14 | Message Resource | [メッセージ](https://docs.discord.com/developers/resources/message) | 本文、nonce、メンション抑止 |
 | 2026-08-14 | Rate Limits | [レート制限](https://docs.discord.com/developers/topics/rate-limits) | Retry-Afterと有限の再試行 |
 | 2026-08-14 | Threads | [スレッド](https://docs.discord.com/developers/topics/threads) | 公開スレッド、権限境界 |
