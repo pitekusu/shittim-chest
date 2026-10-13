@@ -1172,7 +1172,7 @@ entryProviderは同一アカウントの描画scopeでrememberし、entryのcont
 - GitHub OIDCとWorkload Identity Federation（WIF）から短寿命認証を取得し、Google認証Actionの`credentials_file_path`を提出Actionの`serviceAccountJson`へ渡す。長期秘密鍵JSONや`serviceAccountJsonPlainText`は使わない。WIF・Play権限の外部設定が未完了なら配布を開始しない。
 - upload keyとパスワードはC18のRelease署名専用であり、API認証で代用しない。提出は署名済み同一AABを使い、署名し直さない。
 - helperは既存の公式Google SDKによる版番号の事前読取、秘密入力の準備、AAB検証、提出後の再取得、後片付けに限定する。独自upload・commit、Actionとのedit受け渡し、試行状態機械は追加しない。
-- Actionは通常のcommitを行うため、既存審査を取り消して変更を送信し得る。起動前にPlay Consoleで他の審査が進行中でなく、未送信の掲載情報変更を意図せず送らない状態を確認する。これは運用上の前提であり、自動guardが防いでいるとは扱わない。
+- Actionは通常のcommitを行うため、既存審査を取り消して変更を送信し得る。配布依頼を受けたら、同一SHAの必須CI、直近のWorkflow・receipt、Play APIで確認できる提出状態を調べて進める。審査中変更や未送信の掲載情報変更の有無を配布のたびにユーザーへ再質問しない。APIだけでConsoleの審査・公開状態を確認済みとは扱わず、実際に競合や応答不明の提出が判明した場合は副作用を確認する。専用の審査guardを実装済みとは扱わない。
 
 関連試験は単一AAB・WIF入力・固定トラックとhelperの検証境界に絞る。Action内部のuploadやcommitを独自に複製して再試験せず、架空データの接続確認と実署名・WIF・Play配布の受入を区別する。詳細はAndroid READMEとC39に集約し、公開設計書へ実project ID・認証アカウント・ローカル保管場所を記載しない。
 
@@ -1533,7 +1533,7 @@ WIF・Environment・Play権限の外部設定前は起動を拒否する。設�
 
 receiptの`status=submitted`・`verified=true`は、クローズドトラック`alpha`と同一AABの提出後照合に成功したことを表す。審査済み・公開済み・端末で更新可能な証拠とは区別する。
 
-起動前にPlay Consoleで他の審査が進行中でなく、未送信の掲載情報変更を意図せず送らない状態を確認する。通常のcommitは既存審査を取り消し、変更を審査へ送信し得るため、この運用確認を省略しない。専用の審査guardを実装済みとは扱わず、実行中は同じアプリのPlay Consoleを編集しない。
+配布依頼を受けたら、同一SHAの必須CI、直近のWorkflow・receipt、Playの全トラック・bundle・APKで確認できる提出状態を調べて進める。Play Consoleの審査中変更や未送信の掲載情報変更の有無を、配布のたびにユーザーへ再質問しない。通常commitが既存審査や未送信変更へ作用し得ることは継続して考慮し、APIだけでConsoleの審査・公開状態を確認済みとは扱わない。実際に並行編集・競合・応答不明の提出が判明した場合は副作用を確認する。専用の審査guardを実装済みとは扱わず、実行中は同じアプリのPlay Consoleを編集しない。
 
 uploadの自動再送や競合時の自動再番号付けは行わない。失敗・タイムアウト・取消・応答不明ではWorkflowの「再実行」は使わず、Play Consoleと版番号・hash・alpha track、残っているreceiptで副作用を確認してから新しい手動実行を判断する。receiptが残っていなくても、upload／commit未実行とは判断しない。
 
