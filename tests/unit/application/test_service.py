@@ -33,6 +33,7 @@ from shittim_chest.application import (
     RetryDebateCommand,
     RuntimeNotReady,
 )
+from shittim_chest.application import service as application_service
 from shittim_chest.application.models import (
     DebateSnapshot,
     GenerationCheckpoint,
@@ -1780,6 +1781,273 @@ async def test_task_group_cancels_siblings_and_persists_failure(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("nested", [False, True], ids=["direct-child", "nested-child-group"])
+async def test_final_proposal_persistence_conflict_preserves_work_for_successor_lease(
+    dependencies: Dependencies,
+    caplog: pytest.LogCaptureFixture,
+    nested: bool,
+) -> None:
+    class ConflictingProposalRepository(FakeRepository):
+        conflicted = False
+
+        async def claim_recoverable(
+            self, *, lease_owner: str, at: datetime
+        ) -> tuple[DebateSnapshot, ...]:
+            for debate_id in self.recoverable:
+                lease = self.current[debate_id].lease
+                assert lease is not None and lease.expires_at < at
+            claimed = await super().claim_recoverable(lease_owner=lease_owner, at=at)
+            refreshed = []
+            for snapshot in claimed:
+                assert snapshot.lease is not None
+                snapshot = replace(
+                    snapshot, lease=replace(snapshot.lease, expires_at=at + timedelta(seconds=60))
+                )
+                self.current[snapshot.state.debate_id] = snapshot
+                refreshed.append(snapshot)
+            return tuple(refreshed)
+
+        async def replace(
+            self,
+            *,
+            expected: DebateSnapshot,
+            updated: DebateSnapshot,
+            operation_id: str | None = None,
+            ingress_claim: IngressClaimFence | None = None,
+        ) -> DebateSnapshot:
+            if expected.state.phase is DebatePhase.COLLECTING_FINAL_PROPOSALS and len(
+                updated.final_proposals
+            ) > len(expected.final_proposals):
+                if not self.conflicted and len(updated.final_proposals) == 2:
+                    self.conflicted = True
+                    conflict = RepositoryConflict("private-result-save-sentinel")
+                    if nested:
+                        raise ExceptionGroup(
+                            "private-group-sentinel",
+                            [ExceptionGroup("private-nested-sentinel", [conflict])],
+                        )
+                    raise conflict
+                if (
+                    self.conflicted
+                    and expected.lease is not None
+                    and expected.lease.owner_id == "worker-1"
+                ):
+                    # Keep another provider result in flight until TaskGroup cancels it.
+                    await asyncio.Event().wait()
+            return await super().replace(
+                expected=expected,
+                updated=updated,
+                operation_id=operation_id,
+                ingress_claim=ingress_claim,
+            )
+
+    repository = ConflictingProposalRepository()
+    dependencies = (*dependencies[:6], repository, dependencies[7])
+    first_worker = make_application(dependencies)
+    accepted = await accept_bound_debate(first_worker)
+
+    with caplog.at_level(logging.WARNING, logger="shittim_chest"):
+        await first_worker.run_debate(accepted.debate_id)
+
+    pending = repository.current[accepted.debate_id]
+    assert pending.state.phase is DebatePhase.COLLECTING_FINAL_PROPOSALS
+    assert pending.error_code is None
+    assert pending.terminal_delivery is None
+    assert pending.lease is not None
+    assert pending.lease.owner_id == "worker-1"
+    assert {proposal.participant for proposal in pending.final_proposals} == {
+        ParticipantSlot.PARTICIPANT_A
+    }
+    checkpoints = {
+        participant: pending.checkpoint_for(
+            phase=DebatePhase.COLLECTING_FINAL_PROPOSALS, participant=participant
+        )
+        for participant in PARTICIPANTS
+    }
+    for participant, checkpoint in checkpoints.items():
+        assert checkpoint is not None
+        assert checkpoint.logical_attempt == 1
+        assert checkpoint.status is (
+            GenerationStatus.COMPLETED
+            if participant is ParticipantSlot.PARTICIPANT_A
+            else GenerationStatus.IN_FLIGHT
+        )
+    assert MetricEvent.FAILED not in {event for event, _ in dependencies[2].events}
+    events = [json.loads(record.message) for record in caplog.records]
+    assert {event["stage"] for event in events} == {
+        "final_proposal_result_persistence",
+        "attempt",
+    }
+    assert all(event["exception_categories"] == ["repository_conflict"] for event in events)
+    assert "private-" not in caplog.text
+
+    dependencies[0].current = pending.lease.expires_at + timedelta(seconds=1)
+    repository.recoverable = (accepted.debate_id,)
+    await make_application(dependencies, lease_owner="worker-2").resume_recoverable()
+
+    completed = repository.current[accepted.debate_id]
+    assert completed.state.phase is DebatePhase.COMPLETED
+    assert completed.error_code is None
+    for participant in PARTICIPANTS:
+        checkpoint = completed.checkpoint_for(
+            phase=DebatePhase.COLLECTING_FINAL_PROPOSALS, participant=participant
+        )
+        assert checkpoint is not None
+        assert checkpoint.status is GenerationStatus.COMPLETED
+        expected_attempts = 1 if participant is ParticipantSlot.PARTICIPANT_A else 2
+        assert checkpoint.logical_attempt == expected_attempts
+        assert dependencies[5].proposal_calls.count(participant) == expected_attempts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "expected_code"),
+    [
+        (
+            application_service._PhaseDeadlineExceeded("private-phase-sentinel"),
+            "phase_deadline_exceeded",
+        ),
+        (TimeoutError("private-session-sentinel"), "session_deadline_exceeded"),
+        (
+            application_service._ImagePreparationFailed("private-image-sentinel"),
+            "attachment_preparation_failed",
+        ),
+        (OutboxRecoveryFailed("discord_send_failed"), "discord_send_failed"),
+    ],
+)
+async def test_nested_task_group_failures_keep_known_attempt_classification(
+    dependencies: Dependencies,
+    failure: Exception,
+    expected_code: str,
+) -> None:
+    dependencies[5].proposal_errors[ParticipantSlot.PARTICIPANT_A] = ExceptionGroup(
+        "private-group-sentinel", [ExceptionGroup("private-nested-sentinel", [failure])]
+    )
+    app = make_application(dependencies)
+    accepted = await accept_bound_debate(app)
+
+    await app.run_debate(accepted.debate_id)
+
+    failed = dependencies[6].current[accepted.debate_id]
+    assert failed.state.phase is DebatePhase.FAILED
+    assert failed.error_code == expected_code
+    assert failed.state.failed_from_phase is DebatePhase.COLLECTING_FINAL_PROPOSALS
+
+
+@pytest.mark.asyncio
+async def test_nested_terminal_conflict_exhaustion_is_not_hidden_by_repository_conflicts(
+    dependencies: Dependencies,
+) -> None:
+    exhausted = application_service._TerminalDeliveryConflictExhausted("private-terminal-sentinel")
+    dependencies[5].proposal_errors[ParticipantSlot.PARTICIPANT_B] = ExceptionGroup(
+        "private-group-sentinel",
+        [RepositoryConflict("private-conflict-sentinel"), ExceptionGroup("nested", [exhausted])],
+    )
+    app = make_application(dependencies)
+    accepted = await accept_bound_debate(app)
+
+    with pytest.raises(application_service._TerminalDeliveryConflictExhausted) as raised:
+        await app.run_debate(accepted.debate_id)
+
+    assert raised.value is exhausted
+    pending = dependencies[6].current[accepted.debate_id]
+    assert pending.state.phase is DebatePhase.COLLECTING_FINAL_PROPOSALS
+    assert pending.error_code is None
+    assert MetricEvent.FAILED not in {event for event, _ in dependencies[2].events}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unexpected_kind", ["validation", "custom-class"])
+async def test_mixed_task_group_failures_keep_unexpected_errors_and_log_only_fixed_metadata(
+    dependencies: Dependencies,
+    caplog: pytest.LogCaptureFixture,
+    unexpected_kind: str,
+) -> None:
+    unexpected = (
+        ValueError("private-question-persona-output-sentinel")
+        if unexpected_kind == "validation"
+        else type("PrivateClassNameSentinel", (RuntimeError,), {})("private-token-sentinel")
+    )
+    dependencies[5].proposal_errors[ParticipantSlot.PARTICIPANT_B] = ExceptionGroup(
+        "private-group-sentinel",
+        [
+            RepositoryConflict("private-discord-id-sentinel"),
+            ExceptionGroup("private-nested-sentinel", [unexpected]),
+        ],
+    )
+    app = make_application(dependencies)
+    accepted = await accept_bound_debate(app)
+
+    with caplog.at_level(logging.WARNING, logger="shittim_chest"):
+        await app.run_debate(accepted.debate_id)
+
+    failed = dependencies[6].current[accepted.debate_id]
+    assert failed.state.phase is DebatePhase.FAILED
+    assert failed.error_code == "phase_failed"
+    events = [json.loads(record.message) for record in caplog.records]
+    expected_categories = sorted(
+        [
+            "repository_conflict",
+            "value_validation_failed" if unexpected_kind == "validation" else "unexpected_error",
+        ]
+    )
+    assert {event["stage"] for event in events} == {"final_proposal_generation", "attempt"}
+    for event in events:
+        assert set(event) == {
+            "severity",
+            "event",
+            "debate_id",
+            "stage",
+            "phase",
+            "exception_categories",
+        }
+        assert event["event"] == "debate_work_exception"
+        assert event["debate_id"] == str(accepted.debate_id)
+        assert event["phase"] == "collecting_final_proposals"
+        assert event["exception_categories"] == expected_categories
+    assert all(record.exc_info is None and record.stack_info is None for record in caplog.records)
+    assert "private-" not in caplog.text
+    assert "PrivateClassNameSentinel" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_diagnostic_snapshot_failure_does_not_replace_repository_conflict_handling(
+    dependencies: Dependencies,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class UnavailableDiagnosticRepository(FakeRepository):
+        reads = 0
+
+        async def get(self, debate_id: application_service.DebateId) -> DebateSnapshot | None:
+            self.reads += 1
+            # The first two reads enter the owned attempt; the third is diagnostic only.
+            if self.reads == 3:
+                raise ValueError("private-diagnostic-sentinel")
+            return await super().get(debate_id)
+
+    repository = UnavailableDiagnosticRepository()
+    dependencies = (*dependencies[:6], repository, dependencies[7])
+    app = make_application(
+        dependencies,
+        outbox_recovery=FakeOutboxRecovery(error=RepositoryConflict("private-conflict-sentinel")),
+    )
+    accepted = await accept_bound_debate(app)
+    repository.reads = 0
+
+    with caplog.at_level(logging.WARNING, logger="shittim_chest"):
+        await app.run_debate(accepted.debate_id)
+
+    pending = repository.current[accepted.debate_id]
+    assert pending.state.phase is DebatePhase.ACCEPTED
+    assert pending.error_code is None
+    event = json.loads(caplog.records[-1].message)
+    assert event["stage"] == "attempt"
+    assert event["phase"] is None
+    assert event["exception_categories"] == ["repository_conflict"]
+    assert "private-" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_external_cancellation_checkpoints_and_propagates_cancelled_error(
     dependencies: Dependencies,
 ) -> None:
@@ -2322,7 +2590,11 @@ async def test_terminal_outbox_condition_conflict_fails_closed_without_hot_retry
     assert MetricEvent.TERMINAL_DELIVERY_CONFLICT_RETRY not in {
         event for event, _ in dependencies[2].events
     }
-    event = json.loads(caplog.records[-1].message)
+    event = next(
+        event
+        for record in caplog.records
+        if (event := json.loads(record.message))["event"] == "terminal_delivery_conflict"
+    )
     assert event["failed_action_kinds"] == ["outbox_sent_check"]
     assert event["failure_codes"] == ["ConditionalCheckFailed"]
     assert event["retryable"] is False
