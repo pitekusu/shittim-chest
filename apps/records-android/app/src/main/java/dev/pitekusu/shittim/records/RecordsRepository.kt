@@ -267,8 +267,9 @@ internal class RecordsRepository(
     requireActive(accountId)
   }
 
-  suspend fun saveAvatar(accountId: String, entry: RecordListEntry) {
-    val url = entry.requesterAvatar.url ?: return
+  /** False means the saved profile metadata needs another complete index pass. */
+  suspend fun saveAvatar(token: String, accountId: String, entry: RecordListEntry): Boolean {
+    val url = entry.requesterAvatar.url ?: return true
     val source = checkNotNull(avatarCacheKey(entry))
     val existing = accountLock.withLock {
       prepareRead(accountId)
@@ -276,9 +277,21 @@ internal class RecordsRepository(
         decode(bytes) { json.decodeFromString<CachedAvatar>(it) }
       }
     }
-    if (existing?.source == source) return
+    if (existing?.source == source) return true
     requireActive(accountId)
-    val bytes = remote.avatar(url)?.let { thumbnailAvatar(it) }
+    // Bodies are published before icons and retries may resume in a later process.
+    // Renew the short-lived URL through the existing authenticated detail boundary,
+    // without overwriting the body or claiming a new committed record revision.
+    val detail = remote.firstRecord(token, "/records/${entry.recordId}") as? RecordReadResult.Found
+      ?: throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+    requireActive(accountId)
+    val current = detail.listEntry?.requesterAvatar?.url
+    // A profile can change between the index and this read. The caller must restart
+    // the index, including old pages, instead of caching another icon under this key.
+    if (current == null || avatarSource(current) != avatarSource(url)) {
+      return false
+    }
+    val bytes = remote.avatar(current)?.let { thumbnailAvatar(it) }
     try {
       accountLock.withLock {
         prepareRead(accountId)
@@ -288,6 +301,7 @@ internal class RecordsRepository(
         requireActive(accountId)
       }
     } finally { bytes?.fill(0) }
+    return true
   }
 
   suspend fun pruneAvatars(accountId: String): Unit = accountLock.withLock {

@@ -126,7 +126,25 @@ internal suspend fun RecordsRepository.synchronize(token: String, accountId: Str
       saveSyncCheckpoint(accountId, progress)
       for (id in progress.pendingAvatars.toList()) {
         currentCoroutineContext().ensureActive()
-        cachedListEntry(accountId, id)?.let { saveAvatar(accountId, it) }
+        try {
+          val entry = cachedListEntry(accountId, id)
+          if (entry != null && !saveAvatar(token, accountId, entry)) {
+            // A resumed icon queue only checks the latest head. A changed profile
+            // on an older page needs a complete index pass to update its metadata.
+            progress = progress.copy(cursor = null, pageLoaded = false,
+              pendingIds = emptyList(), pendingReferences = emptyList(), cursorHashes = emptySet(),
+              removalCandidates = cachedRecordIds(accountId))
+            saveSyncCheckpoint(accountId, progress)
+            throw RecordReadException(RecordReadFailure.UNAVAILABLE)
+          }
+        } catch (error: RecordReadException) {
+          if (error.failure != RecordReadFailure.NOT_FOUND) throw error
+          // Only the authenticated detail 404 is authoritative; S3 image 404s
+          // remain fallbacks inside saveAvatar and do not delete records.
+          removeRecords(accountId, setOf(id))
+          progress = progress.copy(committedRevisions = progress.committedRevisions - id,
+            needsAvatarPrune = true)
+        }
         progress = progress.copy(pendingAvatars = progress.pendingAvatars - id)
         try { saveSyncCheckpoint(accountId, progress) } finally { onSaved() }
       }
