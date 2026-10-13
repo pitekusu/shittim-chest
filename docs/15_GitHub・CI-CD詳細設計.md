@@ -211,7 +211,7 @@ KotlinのCodeQL解析はC04の別作業であり、このCIの成功を解析成
 
 GitHub OIDCからGoogle WIFとサービスアカウントへ委譲し、短寿命のADCを使う。AWS権限と長期Play API秘密鍵は渡さない。署名用upload keyとFirebase Android設定はEnvironment Secretとして別途保護する。外部設定未完了では`ANDROID_RELEASE_ENABLED=false`により起動を拒否する。
 
-完全SHA固定の`r0adkll/upload-google-play`が単一の検証済みAABを`alpha`・`completed`へupload・commitする。WIF資格情報ファイルのpathを渡し、helperは公式Google SDKによる版番号読取・AAB検証・提出後照合と秘密の準備・回収に限定する。独自commitやedit受け渡しは行わない。
+完全SHA固定の`r0adkll/upload-google-play`が単一の検証済みAABを`alpha`・`completed`へupload・commitする。WIF資格情報ファイルのpathを渡し、helperは公式Google SDKによる版番号読取・AAB検証・提出後照合と秘密の準備・回収に限定する。独自commitやedit受け渡しは行わない。 毎回必須の`release_notes_ja`入力を1〜500 Unicode文字で事前検査し、固定の`whatsnew-ja-JP`をActionの`whatsNewDirectory`へ渡して更新情報も同じeditで設定する。入力は環境変数経由で処理し、提出後は対象版の日本語本文digestまで照合する。
 
 通常のcommitは既存審査を取り消し、未送信変更を審査へ送信し得るため、起動前にPlay Consoleで他の審査と意図しない掲載情報変更がないことを確認する。失敗・応答不明では自動再送せず、Play側の状態と副作用を調べてから新しい手動実行を判断する。公開artifactは7日保持の`verification.json`と簡単な`receipt.json`だけとし、提出後照合と実機での更新可能性を区別する。
 

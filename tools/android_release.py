@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -25,7 +26,20 @@ SCOPE = "https://www.googleapis.com/auth/androidpublisher"
 PLAY_MAX_VERSION_CODE = 2_100_000_000
 # The existing closed test track is fixed; operators cannot select production.
 PLAY_TRACK = "alpha"
-PRIVATE_FILES = ("upload-key.p12", "google-services.json", "gradle-build.log")
+RELEASE_NOTES_LANGUAGE = "ja-JP"
+RELEASE_NOTES_FILE = "whatsnew/whatsnew-ja-JP"
+PRIVATE_FILES = ("upload-key.p12", "google-services.json", "gradle-build.log", RELEASE_NOTES_FILE)
+
+
+def validate_release_notes(value: str) -> str:
+    text = value.strip()
+    if not 1 <= len(text) <= 500:
+        raise ValueError("play_release_notes_length_invalid")
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise ValueError("play_release_notes_utf8_invalid") from error
+    return text
 
 
 def client():
@@ -106,6 +120,9 @@ def preflight(state: Path) -> None:
 
 
 def materialize(state: Path) -> None:
+    # The Action reads notes after uploading the AAB. Validate them before any
+    # private input is written, Play version is chosen, or upload can consume it.
+    notes = validate_release_notes(os.environ.get("RELEASE_NOTES_JA", ""))
     state.mkdir(mode=0o700)
     inputs = {
         "upload-key.p12": base64.b64decode(os.environ["UPLOAD_KEY_BASE64"], validate=True),
@@ -126,9 +143,15 @@ def materialize(state: Path) -> None:
     for name, content in inputs.items():
         with (state / name).open("xb") as stream:
             stream.write(content)
+    notes_path = state / RELEASE_NOTES_FILE
+    notes_path.parent.mkdir(mode=0o700)
+    with notes_path.open("x", encoding="utf-8") as stream:
+        stream.write(notes)
 
 
 def verify(state: Path, bundletool: Path) -> None:
+    notes_path = state / RELEASE_NOTES_FILE
+    validate_release_notes(notes_path.read_text(encoding="utf-8", newline=""))
     plan = json.loads((state / "plan.json").read_text())
     bundle = Path("apps/records-android/app/build/outputs/bundle/release/app-release.aab")
     result = verify_bundle(
@@ -143,7 +166,15 @@ def verify(state: Path, bundletool: Path) -> None:
     shutil.copyfile(bundle, artifact / "app-release.aab")
     if digest(artifact / "app-release.aab") != result["bundleSha256"]:
         raise ValueError("android_bundle_copy_changed")
-    write_json(state / "verification.json", {**result, "track": PLAY_TRACK})
+    write_json(
+        state / "verification.json",
+        {
+            **result,
+            "track": PLAY_TRACK,
+            "releaseNotesLanguage": RELEASE_NOTES_LANGUAGE,
+            "releaseNotesSha256": digest(notes_path),
+        },
+    )
     print("android_bundle_verified")
 
 
@@ -153,6 +184,13 @@ def readback(state: Path) -> None:
     result = json.loads((state / "verification.json").read_text())
     if result.get("track") != PLAY_TRACK:
         raise ValueError("play_verification_track_invalid")
+    notes_digest = result.get("releaseNotesSha256")
+    if (
+        result.get("releaseNotesLanguage") != RELEASE_NOTES_LANGUAGE
+        or not isinstance(notes_digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", notes_digest) is None
+    ):
+        raise ValueError("play_release_notes_verification_invalid")
     with client() as api, inspection(api) as params:
         track = api.edits().tracks().get(**params, track=PLAY_TRACK).execute(num_retries=3)
         bundles = api.edits().bundles().list(**params).execute(num_retries=3).get("bundles", [])
@@ -161,6 +199,12 @@ def readback(state: Path) -> None:
         and any(
             r.get("status") == "completed"
             and str(result["versionCode"]) in r.get("versionCodes", [])
+            and [
+                hashlib.sha256(note.get("text", "").encode("utf-8")).hexdigest()
+                for note in r.get("releaseNotes", [])
+                if note.get("language") == RELEASE_NOTES_LANGUAGE
+            ]
+            == [notes_digest]
             for r in track.get("releases", [])
         )
         and any(
@@ -191,6 +235,9 @@ def main() -> int:
         if args.action == "cleanup":
             for name in PRIVATE_FILES:
                 (state / name).unlink(missing_ok=True)
+            notes_directory = state / "whatsnew"
+            if notes_directory.is_dir() and not any(notes_directory.iterdir()):
+                notes_directory.rmdir()
         elif args.action == "verify":
             if args.bundletool is None:
                 raise ValueError("android_bundletool_missing")

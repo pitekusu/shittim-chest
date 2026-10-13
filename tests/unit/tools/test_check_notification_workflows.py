@@ -224,6 +224,10 @@ def test_android_release_cannot_discard_receipts_after_cancellation(
         ("tracks: alpha", "tracks: production"),
         ("tracks: alpha", "tracks: internal"),
         ("tracks: alpha", "tracks: beta"),
+        (
+            "whatsNewDirectory: ${{ runner.temp }}/android-release/whatsnew",
+            "whatsNewDirectory: listings",
+        ),
         ("status: completed", "status: draft"),
         ("retention-days: 7", "retention-days: 90"),
         (
@@ -275,6 +279,54 @@ def test_android_release_rejects_extra_play_mutation_inputs(
     )
 
     with pytest.raises(WorkflowPolicyError, match="only WIF inputs"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "before,after",
+    (
+        (
+            "        type: string\n        required: true",
+            "        type: string\n        required: false",
+        ),
+        (
+            "        type: string\n        required: true",
+            "        type: string\n        default: Old notes\n        required: true",
+        ),
+        ("      release_notes_ja:", "      optional_notes:"),
+        ("          RELEASE_NOTES_JA: ${{ inputs.release_notes_ja }}\n", ""),
+        (
+            "      - name: Prepare private upload signing and Firebase inputs\n",
+            "      - name: Prepare private upload signing and Firebase inputs\n        if: false\n",
+        ),
+        (
+            "-m tools.android_release materialize --state",
+            "-m tools.android_release cleanup --state",
+        ),
+        (
+            'run: uv run --frozen python -m tools.android_release materialize --state "${STATE}"',
+            'run: echo "${{ inputs.release_notes_ja }}"',
+        ),
+    ),
+)
+def test_android_release_cannot_omit_or_unsafely_expand_release_notes(
+    directory: Path, android_release: Path, before: str, after: str
+) -> None:
+    _replace(android_release, before, after, 1)
+
+    with pytest.raises(WorkflowPolicyError, match="Android Release"):
+        validate_notification_workflows(directory)
+
+
+def test_android_release_validates_notes_before_play_inspection(
+    directory: Path, android_release: Path
+) -> None:
+    text = android_release.read_text(encoding="utf-8")
+    materialize = _workflow_step_block(text, "Prepare private upload signing and Firebase inputs")
+    auth = _workflow_step_block(text, "Authenticate only to inspect current Play versions")
+    android_release.write_text(text.replace(materialize, "").replace(auth, auth + materialize))
+
+    with pytest.raises(WorkflowPolicyError, match="validate release notes before Play inspection"):
         validate_notification_workflows(directory)
 
 
