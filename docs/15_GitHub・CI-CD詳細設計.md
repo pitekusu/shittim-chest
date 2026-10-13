@@ -205,17 +205,17 @@ Dependabotの通常更新は設定順に09:00から15分間隔で開始し、既
 初回成功とC03のマージを確認し、`android-gate`をmainの必須チェックへ登録済み。
 KotlinのCodeQL解析はC04の別作業であり、このCIの成功を解析成功として扱わない。
 
-### Android内部テスト配布（C39）
+### Androidクローズドテスト配布（C39）
 
-`android-release.yml`は固定main SHAの手動実行だけを受け付け、`android-internal` Environmentに配布認証を分離する。同一SHAの最新CI・Records CI・CodeQL成功を確認し、署名・manifest・hashを検証した同一AABだけを内部トラックへ提出する。Core／Records配信やPlay掲載情報は変更しない。
+`android-release.yml`は固定main SHAの手動実行だけを受け付け、`android-internal` Environmentに配布認証を分離する。同一SHAの最新CI・Records CI・CodeQL成功を確認し、署名・manifest・hashを検証した同一AABだけをクローズドトラック`alpha`へ提出する。Core／Records配信やPlay掲載情報は変更しない。
 
 GitHub OIDCからGoogle WIFとサービスアカウントへ委譲し、短寿命のADCを使う。AWS権限と長期Play API秘密鍵は渡さない。署名用upload keyとFirebase Android設定はEnvironment Secretとして別途保護する。外部設定未完了では`ANDROID_RELEASE_ENABLED=false`により起動を拒否する。
 
-完全SHA固定の`r0adkll/upload-google-play`が単一の検証済みAABを`internal`・`completed`へupload・commitする。WIF資格情報ファイルのpathを渡し、helperは公式Google SDKによる版番号読取・AAB検証・提出後照合と秘密の準備・回収に限定する。独自commitやedit受け渡しは行わない。
+完全SHA固定の`r0adkll/upload-google-play`が単一の検証済みAABを`alpha`・`completed`へupload・commitする。WIF資格情報ファイルのpathを渡し、helperは公式Google SDKによる版番号読取・AAB検証・提出後照合と秘密の準備・回収に限定する。独自commitやedit受け渡しは行わない。
 
 通常のcommitは既存審査を取り消し、未送信変更を審査へ送信し得るため、起動前にPlay Consoleで他の審査と意図しない掲載情報変更がないことを確認する。失敗・応答不明では自動再送せず、Play側の状態と副作用を調べてから新しい手動実行を判断する。公開artifactは7日保持の`verification.json`と簡単な`receipt.json`だけとし、提出後照合と実機での更新可能性を区別する。
 
-外部設定、最小権限、配布・失敗時の手順は[Androidアプリ設計](29_Androidアプリ設計.md#c39内部テスト配布の自動化)を参照する。既存3言語のCodeQLとC04のAndroid解析待ちを混同しない。
+外部設定、最小権限、配布・失敗時の手順は[Androidアプリ設計](29_Androidアプリ設計.md#c39クローズドテスト配布の自動化)を参照する。4言語のCodeQLと同一SHAのmain CIを確認する。
 
 ### npm監査サービスの障害
 
