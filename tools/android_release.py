@@ -22,6 +22,8 @@ from tools.verify_android_bundle import PACKAGE, digest, verify_bundle
 
 SCOPE = "https://www.googleapis.com/auth/androidpublisher"
 PLAY_MAX_VERSION_CODE = 2_100_000_000
+# The existing closed test track is fixed; operators cannot select production.
+PLAY_TRACK = "alpha"
 PRIVATE_FILES = ("upload-key.p12", "google-services.json", "gradle-build.log")
 
 
@@ -78,8 +80,8 @@ def preflight(state: Path) -> None:
         tracks = api.edits().tracks().list(**params).execute().get("tracks", [])
         bundles = api.edits().bundles().list(**params).execute().get("bundles", [])
         apks = api.edits().apks().list(**params).execute().get("apks", [])
-    if not any(t["track"] == "internal" for t in tracks):
-        raise ValueError("play_internal_track_missing")
+    if not any(t["track"] == PLAY_TRACK for t in tracks):
+        raise ValueError("play_closed_track_missing")
     codes = [
         version_code(c)
         for t in tracks
@@ -98,7 +100,7 @@ def preflight(state: Path) -> None:
     write_json(state / "plan.json", {"sha": sha, "versionCode": code})
     with Path(os.environ["GITHUB_OUTPUT"]).open("a") as stream:
         stream.write(f"version_code={code}\n")
-    print(f"play_internal_preflight_ready versionCode={code}")
+    print(f"play_closed_preflight_ready versionCode={code}")
 
 
 def materialize(state: Path) -> None:
@@ -139,7 +141,7 @@ def verify(state: Path, bundletool: Path) -> None:
     shutil.copyfile(bundle, artifact / "app-release.aab")
     if digest(artifact / "app-release.aab") != result["bundleSha256"]:
         raise ValueError("android_bundle_copy_changed")
-    write_json(state / "verification.json", result)
+    write_json(state / "verification.json", {**result, "track": PLAY_TRACK})
     print("android_bundle_verified")
 
 
@@ -147,11 +149,14 @@ def readback(state: Path) -> None:
     # Run only after the Action succeeds. This verifies the submitted artifact,
     # not review completion or when a particular device can install the update.
     result = json.loads((state / "verification.json").read_text())
+    if result.get("track") != PLAY_TRACK:
+        raise ValueError("play_verification_track_invalid")
     with client() as api, inspection(api) as params:
-        track = api.edits().tracks().get(**params, track="internal").execute()
+        track = api.edits().tracks().get(**params, track=PLAY_TRACK).execute()
         bundles = api.edits().bundles().list(**params).execute().get("bundles", [])
     if not (
-        any(
+        track.get("track") == PLAY_TRACK
+        and any(
             r.get("status") == "completed"
             and str(result["versionCode"]) in r.get("versionCodes", [])
             for r in track.get("releases", [])
@@ -163,7 +168,7 @@ def readback(state: Path) -> None:
     ):
         raise ValueError("play_submission_unconfirmed_check_console")
     write_json(state / "receipt.json", {**result, "status": "submitted", "verified": True})
-    print(f"play_internal_submission_verified versionCode={result['versionCode']}")
+    print(f"play_closed_submission_verified versionCode={result['versionCode']}")
 
 
 def main() -> int:

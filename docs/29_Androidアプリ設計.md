@@ -1158,11 +1158,11 @@ entryProviderは同一アカウントの描画scopeでrememberし、entryのcont
 
 架空の認可済み状態とDemoで、依頼履歴・通知・表示切替・ログアウト／Demo終了、通常利用だけに5つのWeb機能が表示されること、幅を変えた際のスクロール位置を確認する。通常認証の実機受入と、Demoだけの操作確認は区別する。
 
-## C38：内部テスト配布の接続
+## C38：テスト配布の接続
 
 [r0adkll/upload-google-play](https://github.com/r0adkll/upload-google-play)（MIT）を配布Workflowの完全SHA付き`uses:`で固定する。既存の署名・CIを維持し、upload・track更新・commitを採用Actionへ任せる。Gradle Play Publisherと独自Pythonの提出処理は使わず、Gradle pluginやアプリの実行時依存を追加しない。
 
-- 提出Actionの`releaseFiles`へ検証済み署名付きAABの正確なpathを1個だけ渡し、glob・複数成果物・提出時の再ビルドを使わない。`packageName`、`tracks: internal`、`status: completed`をWorkflowで固定し、本番トラック・掲載情報・内部アプリ共有は変更しない。
+- 提出Actionの`releaseFiles`へ検証済み署名付きAABの正確なpathを1個だけ渡し、glob・複数成果物・提出時の再ビルドを使わない。`packageName`、`tracks: alpha`、`status: completed`をWorkflowで固定し、本番トラック・掲載情報・内部アプリ共有は変更しない。
 - GitHub OIDCとWorkload Identity Federation（WIF）から短寿命認証を取得し、Google認証Actionの`credentials_file_path`を提出Actionの`serviceAccountJson`へ渡す。長期秘密鍵JSONや`serviceAccountJsonPlainText`は使わない。WIF・Play権限の外部設定が未完了なら配布を開始しない。
 - upload keyとパスワードはC18のRelease署名専用であり、API認証で代用しない。提出は署名済み同一AABを使い、署名し直さない。
 - helperは既存の公式Google SDKによる版番号の事前読取、秘密入力の準備、AAB検証、提出後の再取得、後片付けに限定する。独自upload・commit、Actionとのedit受け渡し、試行状態機械は追加しない。
@@ -1484,15 +1484,19 @@ Android設定はリポジトリ外の`google-services.json`を`SHITTIM_ANDROID_F
 Firebase未作成のため、コード試験と実FCM配送の確認を区別する。実機で前景・背景・アプリ終了中の通知、タップ先、通知拒否、ログアウト後の抑止を確認してから有効化完了とする。
 端末の強制停止やOS制限による遅延・未配送はアプリ内の同期で補い、到着時刻の保証とは扱わない。
 
-## C39：内部テスト配布の自動化
+## C39：クローズドテスト配布の自動化
 
-`Android Internal Release`は手動実行専用とし、固定リポジトリの`main`と`android-internal` Environmentだけで動かす。既存のCore／Records配信とは分離し、Play掲載情報や本番トラックは変更しない。C38の提出Actionと既存helperを利用する。
+`Android Closed Release`は手動実行専用とし、固定リポジトリの`main`と`android-internal` Environmentだけで動かす。既存のCore／Records配信とは分離し、Play掲載情報や本番トラックは変更しない。C38の提出Actionと既存helperを利用する。
+
+
+
+審査通過後の通常配布先は、既存のクローズドトラック`alpha`に固定する。新しい任意track入力は追加しない。認証Environmentの`android-internal`と排他groupの`android-internal-release`は、既存WIF条件と旧実行との排他を保つため名称を維持する。これらの名称はPlayの提出先を表さない。
 
 ### 認証・外部設定
 
 Google Cloud管理者が既存Play用サービスアカウントへのWorkload Identity Federation（WIF）を設定する。GitHub OIDCから公式認証Actionで短寿命の資格情報を得て、その設定ファイルのpathを提出Actionへ渡す。helperの読取にはgoogle-authと公式Google API clientを使う。サービスアカウントJSONの秘密鍵はGitHubへ登録しない。Firebase送信用サービスアカウントも流用しない。
 
-WIFの条件は数値のリポジトリ／所有者ID、`main`、この配布Workflow、`workflow_dispatch`、`android-internal`のsubjectに限定する。サービスアカウントへの委譲は`roles/iam.workloadIdentityUser`だけとし、Owner／Editorや汎用Token Creatorは付けない。Play Consoleでは対象アプリの読取・テストトラック配信に限定する。内部トラックへの限定は、Play権限だけに頼らずWorkflowのAction入力でも固定する。
+WIFの条件は数値のリポジトリ／所有者ID、`main`、この配布Workflow、`workflow_dispatch`、`android-internal`のsubjectに限定する。サービスアカウントへの委譲は`roles/iam.workloadIdentityUser`だけとし、Owner／Editorや汎用Token Creatorは付けない。Play Consoleでは対象アプリの読取・テストトラック配信に限定する。クローズドトラック`alpha`への限定は、Play権限だけに頼らずWorkflowのAction入力でも固定する。
 
 subjectはGitHubのOIDC設定APIが返す`sub_claim_prefix`とEnvironmentから組み立て、provider条件と照合する。immutable subjectが有効な場合は、所有者名・リポジトリ名のそれぞれに`@数値ID`が入るため、旧形式の名前だけを固定しない。[GitHubのOIDC仕様](https://docs.github.com/en/actions/reference/security/oidc)を参照する。
 認証拒否時もJWT・token本文は取得・記録せず、GitHub設定とprovider条件を確認する。subjectの不一致なら、その一致条件だけを実際の形式へ合わせ、他の制限・mapping・IAM権限は緩めない。
@@ -1514,18 +1518,18 @@ WIF・Environment・Play権限の外部設定前は起動を拒否する。設�
 1. 固定SHAの最新main CI・Records CI・既存CodeQLが成功したことを確認する。新しい失敗・実行中の試行を古い成功で置き換えない。
 2. Playの全トラック、現在のbundle／APKを読み、その最大値より大きい`versionCode`を決める。`minimum_version_code`は通常の最大値＋1に優先する下限指定であり、失敗後に状態と副作用を確認した前回試行番号＋1を指定して番号の再利用を防ぐ。指定値を検証し、現在の最大番号＋1との大きい方を使う。以後の更新が不可能になる最終番号`2100000000`は、下限指定・自動採番ともビルド前に拒否する。競合した場合は自動的な再番号付け・再ビルドをせず終了する。
 3. 既存upload keyでRelease AABを一度ビルドし、Release Lintを実行する。JDKとdigest固定の公式bundletoolで署名・証明書・パッケージ・版番号・非debugを検証する。pinした公開証明書のUTC有効期間を確認し、その証明書だけの一時truststoreを使ってJDKの厳格検証を行う。自己署名を理由に重大警告全体を許可せず、一時truststoreは検証後に回収する。
-4. 検証した同一AABのhashを再照合し、配信直前にWIF認証を更新する。C38の提出Actionへ単一AABと資格情報ファイルのpath、固定した内部トラック・statusを渡す。upload・track更新・commitはActionが担当し、helperから別のcommitを行わない。
-5. Action成功後に公式Google SDKでPlayの版番号・bundle hash・内部トラックの`completed`を再取得し、検証したAABと照合する。提出前の`verification.json`と、提出後照合が成功した場合の簡単な`receipt.json`を保持する。
+4. 検証した同一AABのhashを再照合し、配信直前にWIF認証を更新する。C38の提出Actionへ単一AABと資格情報ファイルのpath、固定したクローズドトラック`alpha`・statusを渡す。upload・track更新・commitはActionが担当し、helperから別のcommitを行わない。
+5. Action成功後に公式Google SDKでPlayの版番号・bundle hash・クローズドトラック`alpha`の`completed`を再取得し、検証したAABと照合する。提出前の`verification.json`と、提出後照合が成功した場合の簡単な`receipt.json`を保持する。
 
-receiptの`status=submitted`・`verified=true`は、内部トラックと同一AABの提出後照合に成功したことを表す。審査済み・公開済み・端末で更新可能な証拠とは区別する。
+receiptの`status=submitted`・`verified=true`は、クローズドトラック`alpha`と同一AABの提出後照合に成功したことを表す。審査済み・公開済み・端末で更新可能な証拠とは区別する。
 
 起動前にPlay Consoleで他の審査が進行中でなく、未送信の掲載情報変更を意図せず送らない状態を確認する。通常のcommitは既存審査を取り消し、変更を審査へ送信し得るため、この運用確認を省略しない。専用の審査guardを実装済みとは扱わず、実行中は同じアプリのPlay Consoleを編集しない。
 
-uploadの自動再送や競合時の自動再番号付けは行わない。失敗・タイムアウト・取消・応答不明ではWorkflowの「再実行」は使わず、Play Consoleと版番号・hash・internal track、残っているreceiptで副作用を確認してから新しい手動実行を判断する。receiptが残っていなくても、upload／commit未実行とは判断しない。
+uploadの自動再送や競合時の自動再番号付けは行わない。失敗・タイムアウト・取消・応答不明ではWorkflowの「再実行」は使わず、Play Consoleと版番号・hash・alpha track、残っているreceiptで副作用を確認してから新しい手動実行を判断する。receiptが残っていなくても、upload／commit未実行とは判断しない。
 
 公開artifactはSHA・版番号・AAB hash・署名／manifestの`verification.json`と簡単な`receipt.json`だけとし、7日保持する。署名鍵、Firebase設定、WIF資格情報、edit ID、Gradleログ、AABそのものを公開artifactへ含めず、秘密入力と一時ログは`always()`で回収する。
 
-試験は固定mainと必須CI、全トラックの最大版番号、長期資格情報拒否、署名／manifest／hash、単一AABと固定Action入力、提出後照合の不一致・API障害、取消時の後片付けを架空データで確認する。Action内部のupload・commitやライブラリの再試行機構を独自に再実装して試験しない。実配布ではPlay Consoleの審査・公開状態と内部トラックを確認し、Play内部テスト版の実機取得・更新を確認する。架空データの接続確認や提出receiptだけで配布受入を完了扱いにしない。最初のActionによるWIF実提出は外部設定・mainの検証完了後、別の配布依頼で行う。
+試験は固定mainと必須CI、全トラックの最大版番号、長期資格情報拒否、署名／manifest／hash、単一AABと固定Action入力、提出後照合の不一致・API障害、取消時の後片付けを架空データで確認する。Action内部のupload・commitやライブラリの再試行機構を独自に再実装して試験しない。実配布ではPlay Consoleの審査・公開状態とクローズドトラック`alpha`を確認し、Playクローズドテスト版の実機取得・更新を確認する。架空データの接続確認や提出receiptだけで配布受入を完了扱いにしない。最初のActionによるWIF実提出は外部設定・mainの検証完了後、別の配布依頼で行う。
 
 公式仕様：[提出ActionとWIF入力](https://github.com/r0adkll/upload-google-play)、[WIFとDeployment pipelines](https://docs.cloud.google.com/iam/docs/workload-identity-federation-with-deployment-pipelines)、[GitHub認証Action](https://github.com/google-github-actions/auth)、[Play editsと同時編集](https://developers.google.com/android-publisher/edits)、[commitの既定動作](https://developers.google.com/android-publisher/api-ref/rest/v3/edits/commit)。
 

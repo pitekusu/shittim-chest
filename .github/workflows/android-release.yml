@@ -1,4 +1,4 @@
-name: Android Internal Release
+name: Android Closed Release
 
 on:
   workflow_dispatch:
@@ -120,22 +120,22 @@ jobs:
           service_account: ${{ vars.PLAY_SERVICE_ACCOUNT }}
           create_credentials_file: true
           export_environment_variables: true
-      - name: Upload the verified AAB to internal with the maintained Action
+      - name: Upload the verified AAB to the closed track with the maintained Action
         uses: r0adkll/upload-google-play@744d577ff543375f35f60408e13fb32c7caa90ce # master (v1.1.5 + dependency updates)
         with:
           serviceAccountJson: ${{ steps.play-auth.outputs.credentials_file_path }}
           packageName: dev.pitekusu.shittim.records
           releaseFiles: ${{ runner.temp }}/android-release/verified/app-release.aab
-          tracks: internal
+          tracks: alpha
           status: completed
           releaseName: "0.0.${{ steps.version.outputs.version_code }}"
-      - name: Read back the submitted internal track and bundle digest
+      - name: Read back the submitted closed track and bundle digest
         run: uv run --frozen python -m tools.android_release readback --state "${STATE}"
       - name: Retain only non-secret verification and submission receipt
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: android-internal-receipt-${{ github.sha }}-${{ github.run_id }}
+          name: android-closed-receipt-${{ github.sha }}-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/android-release/verification.json
             ${{ runner.temp }}/android-release/receipt.json

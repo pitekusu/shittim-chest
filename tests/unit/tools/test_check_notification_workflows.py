@@ -221,17 +221,20 @@ def test_android_release_cannot_discard_receipts_after_cancellation(
             "releaseFiles: ${{ runner.temp }}/android-release/verified/app-release.aab",
             "releaseFiles: ${{ runner.temp }}/android-release/**/*.aab",
         ),
-        ("tracks: internal", "tracks: production"),
+        ("tracks: alpha", "tracks: production"),
+        ("tracks: alpha", "tracks: internal"),
+        ("tracks: alpha", "tracks: beta"),
         ("status: completed", "status: draft"),
         ("retention-days: 7", "retention-days: 90"),
         (
-            "      - name: Upload the verified AAB to internal with the maintained Action\n",
-            "      - name: Upload the verified AAB to internal with the maintained Action\n"
+            "      - name: Upload the verified AAB to the closed track "
+            "with the maintained Action\n",
+            "      - name: Upload the verified AAB to the closed track with the maintained Action\n"
             "        if: always()\n",
         ),
         (
-            "      - name: Read back the submitted internal track and bundle digest\n",
-            "      - name: Read back the submitted internal track and bundle digest\n"
+            "      - name: Read back the submitted closed track and bundle digest\n",
+            "      - name: Read back the submitted closed track and bundle digest\n"
             "        if: always()\n",
         ),
         (
@@ -291,7 +294,7 @@ def test_android_release_upload_action_must_be_full_sha_pinned(
 def test_android_release_cannot_upload_twice(directory: Path, android_release: Path) -> None:
     text = android_release.read_text(encoding="utf-8")
     upload = _workflow_step_block(
-        text, "Upload the verified AAB to internal with the maintained Action"
+        text, "Upload the verified AAB to the closed track with the maintained Action"
     )
     android_release.write_text(
         text + "\n" + upload.replace("maintained Action", "second Action"), encoding="utf-8"
@@ -304,8 +307,8 @@ def test_android_release_cannot_upload_twice(directory: Path, android_release: P
 def test_android_release_cannot_read_back_before_upload(
     directory: Path, android_release: Path
 ) -> None:
-    upload_name = "Upload the verified AAB to internal with the maintained Action"
-    readback_name = "Read back the submitted internal track and bundle digest"
+    upload_name = "Upload the verified AAB to the closed track with the maintained Action"
+    readback_name = "Read back the submitted closed track and bundle digest"
     text = android_release.read_text(encoding="utf-8")
     text = (
         text.replace(upload_name, "temporary-step")

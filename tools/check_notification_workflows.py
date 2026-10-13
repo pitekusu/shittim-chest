@@ -292,8 +292,8 @@ def _validate_android_release(directory: Path) -> None:
         "Authenticate only to inspect current Play versions",
         "Verify signature certificate package version and immutable bundle digest",
         "Renew federated credentials immediately before publishing",
-        "Upload the verified AAB to internal with the maintained Action",
-        "Read back the submitted internal track and bundle digest",
+        "Upload the verified AAB to the closed track with the maintained Action",
+        "Read back the submitted closed track and bundle digest",
         "Retain only non-secret verification and submission receipt",
         "Remove private signing Firebase and Gradle log files",
     )
@@ -361,7 +361,7 @@ def _validate_android_release(directory: Path) -> None:
         "serviceAccountJson": "${{ steps.play-auth.outputs.credentials_file_path }}",
         "packageName": "dev.pitekusu.shittim.records",
         "releaseFiles": "${{ runner.temp }}/android-release/verified/app-release.aab",
-        "tracks": "internal",
+        "tracks": "alpha",
         "status": "completed",
         "releaseName": '"0.0.${{ steps.version.outputs.version_code }}"',
     }
@@ -374,7 +374,8 @@ def _validate_android_release(directory: Path) -> None:
         or dict(inputs) != expected_inputs
     ):
         raise WorkflowPolicyError(
-            "Android Release must upload its single verified internal AAB once with only WIF inputs"
+            "Android Release must upload its single verified closed-track AAB once "
+            "with only WIF inputs"
         )
     receipts = _workflow_step_block(
         text, "Retain only non-secret verification and submission receipt"

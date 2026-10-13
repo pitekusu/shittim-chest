@@ -129,4 +129,4 @@ def verify_bundle(
         or application.get(ANDROID + "debuggable", "false") != "false"
     ):
         raise ValueError("android_bundle_manifest_invalid")
-    return {"sha": sha, "versionCode": code, "bundleSha256": digest(bundle), "track": "internal"}
+    return {"sha": sha, "versionCode": code, "bundleSha256": digest(bundle)}

@@ -55,9 +55,9 @@ Androidアプリと、それを支えるPythonの認証・閲覧APIに適用す�
 - 不採用や低レベル処理を残す理由は、該当設計またはコードへ短く記載する。専用の承認工程や大量の比較資料は要求しない。
 - 未使用の依存は先行追加せず、必要になるC工程で導入・固定する。用途ごとの採用方針は`docs/29_Androidアプリ設計.md`を参照する。
 
-## Android内部テスト配布の認証と署名
+## Androidテスト配布の認証と署名
 
-- 配布手順の詳細は`apps/records-android/README.md`の「C20：本人向け内部テスト」を参照する。
+- 通常配布はクローズドトラック`alpha`へ行い、`apps/records-android/README.md`の「C39：GitHubからのクローズドテスト配布」を参照する。初回の本人向け手順はC20に残す。
   この端末ではPlay Developer API用のサービスアカウントJSONを
   `${XDG_DATA_HOME:-$HOME/.local/share}/shittim-chest/play-api/service-account.json`に保管する。
   JSONはAPI認証専用であり、AABの署名パスワードではない。存在・権限・JSON形式だけを確認し、秘密値を表示しない。
@@ -71,7 +71,7 @@ Androidアプリと、それを支えるPythonの認証・閲覧APIに適用す�
   復旧不能なら勝手に別の鍵で署名せず、Playのupload key再設定を含む対応を本人と決める。
   パスワードをチャット・Git・コマンド引数・ログ・サービスアカウントJSONへ書かない。
 - Play APIで全trackと提出済みbundleの`versionCode`を確認し、その最大値より大きい番号で現行`main`からAABを作る。
-  同じupload keyで署名されたことを確認して内部テストだけへ提出し、Play APIで反映後のtrackを再取得する。
+  同じupload keyで署名されたことを確認して固定したクローズドトラック`alpha`だけへ提出し、Play APIで反映後のtrackを再取得する。
   API認証だけ成功しても署名可能とは判断しない。署名情報が不足すれば提出を止め、未配布と報告する。
 
 ## Androidのローカル一時ビルド
