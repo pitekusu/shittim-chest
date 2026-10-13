@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
@@ -626,7 +628,9 @@ async def test_retry_reconciles_an_existing_message_without_another_send() -> No
 
 
 @pytest.mark.asyncio
-async def test_reconciliation_fails_closed_on_same_nonce_with_different_content() -> None:
+async def test_reconciliation_fails_closed_on_same_nonce_with_different_content(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     expected = snapshot()
     operation = replace(
         prepared(expected),
@@ -648,9 +652,15 @@ async def test_reconciliation_fails_closed_on_same_nonce_with_different_content(
 
     send_mock.assert_not_awaited()
 
+    event = json.loads(caplog.records[-1].message)
+    assert event["stage"] == "history_reconciliation"
+    assert event["reason"] == "message_body_mismatch"
+
 
 @pytest.mark.asyncio
-async def test_reconciliation_fails_closed_on_duplicate_exact_messages() -> None:
+async def test_reconciliation_fails_closed_on_duplicate_exact_messages(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     expected = snapshot()
     operation = replace(
         prepared(expected),
@@ -674,9 +684,15 @@ async def test_reconciliation_fails_closed_on_duplicate_exact_messages() -> None
 
     send_mock.assert_not_awaited()
 
+    event = json.loads(caplog.records[-1].message)
+    assert event["stage"] == "history_reconciliation"
+    assert event["reason"] == "history_duplicate_match"
+
 
 @pytest.mark.asyncio
-async def test_reconciliation_fails_closed_when_history_reaches_500_items() -> None:
+async def test_reconciliation_fails_closed_when_history_reaches_500_items(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     expected = snapshot()
     operation = replace(
         prepared(expected),
@@ -699,6 +715,10 @@ async def test_reconciliation_fails_closed_when_history_reaches_500_items() -> N
         await subject.publish_persisted(expected=expected, operation_id=operation.operation_id)
 
     send_mock.assert_not_awaited()
+
+    event = json.loads(caplog.records[-1].message)
+    assert event["stage"] == "history_reconciliation"
+    assert event["reason"] == "history_limit_reached"
 
 
 @pytest.mark.asyncio
@@ -1043,14 +1063,16 @@ def image_operation(expected: DebateSnapshot) -> OutboxOperation:
     )
 
 
-def image_message(operation: OutboxOperation) -> discord.Message:
+def image_message(
+    operation: OutboxOperation, *, missing_content_type: bool = False
+) -> discord.Message:
     received = cast(Any, message(operation))
     image = operation.attachments[0]
     received.attachments = [
         SimpleNamespace(
             filename=f"{image.attachment_id}-{image.sha256[:16]}.png",
             size=image.size_bytes,
-            content_type=image.content_type,
+            content_type=None if missing_content_type else image.content_type,
             width=image.width,
             height=image.height,
         )
@@ -1059,7 +1081,10 @@ def image_message(operation: OutboxOperation) -> discord.Message:
 
 
 @pytest.mark.asyncio
-async def test_image_upload_uses_validated_original_and_neutral_filename() -> None:
+@pytest.mark.parametrize("missing_content_type", [False, True])
+async def test_image_upload_uses_validated_original_and_neutral_filename(
+    missing_content_type: bool,
+) -> None:
     expected = snapshot()
     operation = image_operation(expected)
 
@@ -1080,7 +1105,7 @@ async def test_image_upload_uses_validated_original_and_neutral_filename() -> No
         assert len(files) == 1
         assert files[0].filename.endswith(".png")
         transmitted.append(files[0].fp.read())
-        return image_message(operation)
+        return image_message(operation, missing_content_type=missing_content_type)
 
     send_mock.side_effect = send
     sent = await subject.publish_persisted(expected=expected, operation_id=operation.operation_id)
@@ -1089,7 +1114,10 @@ async def test_image_upload_uses_validated_original_and_neutral_filename() -> No
 
 
 @pytest.mark.asyncio
-async def test_image_accepted_post_recovers_without_uploading_again() -> None:
+@pytest.mark.parametrize("missing_content_type", [False, True])
+async def test_image_accepted_post_recovers_without_uploading_again(
+    missing_content_type: bool,
+) -> None:
     expected = snapshot()
     operation = replace(
         image_operation(expected),
@@ -1100,7 +1128,9 @@ async def test_image_accepted_post_recovers_without_uploading_again() -> None:
     )
     repository = FakeOutboxRepository(operation)
     subject, _, send_mock, _ = publisher(
-        operation, repository, history_messages=(image_message(operation),)
+        operation,
+        repository,
+        history_messages=(image_message(operation, missing_content_type=missing_content_type),),
     )
     sent = await subject.publish_persisted(expected=expected, operation_id=operation.operation_id)
     assert sent is not None and sent.status is OutboxStatus.SENT
@@ -1124,3 +1154,203 @@ async def test_image_same_nonce_with_changed_attachment_fails_closed() -> None:
     with pytest.raises(DiscordDeliveryConflict):
         await subject.publish_persisted(expected=expected, operation_id=operation.operation_id)
     send_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_terminating_image_reconciliation_accepts_missing_optional_mime_without_posting() -> (
+    None
+):
+    expected = snapshot()
+    operation = replace(image_operation(expected), delivery_attempt=1)
+    repository = FakeOutboxRepository(operation)
+    subject, _, send_mock, _ = publisher(
+        operation,
+        repository,
+        history_messages=(image_message(operation, missing_content_type=True),),
+    )
+
+    sent = await subject.reconcile_persisted(expected=expected, operation_id=operation.operation_id)
+
+    assert sent is not None and sent.status is OutboxStatus.SENT
+    assert repository.claims == 0
+    assert repository.marks == [str(MESSAGE_ID)]
+    send_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reconcile", [False, True], ids=["send-response", "history"])
+@pytest.mark.parametrize(
+    ("changed_field", "changed_value", "reason"),
+    [
+        ("count", 0, "attachment_count_mismatch"),
+        ("filename", "private-filename-sentinel.png", "attachment_filename_mismatch"),
+        ("size", 0, "attachment_size_mismatch"),
+        ("content_type", "image/jpeg", "attachment_content_type_mismatch"),
+        ("content_type", "application/octet-stream", "attachment_content_type_mismatch"),
+        ("content_type", "", "attachment_content_type_mismatch"),
+    ],
+)
+async def test_image_response_conflicts_identify_fixed_check_without_exposing_payload(
+    caplog: pytest.LogCaptureFixture,
+    reconcile: bool,
+    changed_field: str,
+    changed_value: str | int,
+    reason: str,
+) -> None:
+    expected = snapshot()
+    operation = image_operation(expected)
+    if reconcile:
+        operation = replace(
+            operation,
+            status=OutboxStatus.CLAIMED,
+            claim_owner="prior",
+            claim_expires_at=NOW - timedelta(seconds=1),
+            delivery_attempt=1,
+        )
+    received = image_message(operation, missing_content_type=True)
+    if changed_field == "count":
+        cast(Any, received).attachments = []
+    else:
+        setattr(cast(Any, received).attachments[0], changed_field, changed_value)
+    load_original = AsyncMock(return_value=b"original image fixture")
+    repository = FakeOutboxRepository(operation)
+    subject, thread, send_mock, _ = publisher(
+        operation,
+        repository,
+        history_messages=(received,) if reconcile else (),
+        image_store=cast(DebateImageStore, SimpleNamespace(load_original=load_original)),
+    )
+    cast(Any, thread).guild = SimpleNamespace(id=int(GUILD_ID), me=object())
+    cast(Any, thread).permissions_for.return_value = SimpleNamespace(attach_files=True)
+    send_mock.return_value = received
+
+    with (
+        caplog.at_level(logging.WARNING, logger="shittim_chest"),
+        pytest.raises(DiscordDeliveryConflict),
+    ):
+        await subject.publish_persisted(expected=expected, operation_id=operation.operation_id)
+
+    assert repository.marks == []
+    assert repository.retry_delays == []
+    if reconcile:
+        send_mock.assert_not_awaited()
+        load_original.assert_not_awaited()
+    else:
+        send_mock.assert_awaited_once()
+        load_original.assert_awaited_once()
+    event = json.loads(caplog.records[-1].message)
+    assert event == {
+        "severity": "WARNING",
+        "event": "discord_delivery_conflict",
+        "debate_id": str(operation.debate_id),
+        "stage": "history_reconciliation" if reconcile else "send_response",
+        "reason": reason,
+        "action": "attachment",
+        "phase": "scoring_affection",
+        "delivery_sequence": 0,
+        "delivery_attempt": 2 if reconcile else 1,
+    }
+    assert all(record.exc_info is None and record.stack_info is None for record in caplog.records)
+    image = operation.attachments[0]
+    for private_value in (
+        operation.content,
+        operation.nonce,
+        operation.content_hash,
+        operation.operation_id,
+        image.attachment_id,
+        image.sha256,
+        image.asset_key,
+        image.vision_asset_key,
+        "private-filename-sentinel.png",
+        "image/jpeg",
+        "application/octet-stream",
+    ):
+        assert private_value not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("source", "reason"),
+    [
+        (b"private-short-source-sentinel", "source_size_mismatch"),
+        (b"original image fixture"[::-1], "source_hash_mismatch"),
+    ],
+)
+async def test_source_image_conflict_keeps_size_and_checksum_guards_before_send(
+    caplog: pytest.LogCaptureFixture, source: bytes, reason: str
+) -> None:
+    expected = snapshot()
+    operation = image_operation(expected)
+    repository = FakeOutboxRepository(operation)
+    subject, thread, send_mock, _ = publisher(
+        operation,
+        repository,
+        image_store=cast(
+            DebateImageStore, SimpleNamespace(load_original=AsyncMock(return_value=source))
+        ),
+    )
+    cast(Any, thread).guild = SimpleNamespace(id=int(GUILD_ID), me=object())
+    cast(Any, thread).permissions_for.return_value = SimpleNamespace(attach_files=True)
+
+    with (
+        caplog.at_level(logging.WARNING, logger="shittim_chest"),
+        pytest.raises(DiscordDeliveryConflict),
+    ):
+        await subject.publish_persisted(expected=expected, operation_id=operation.operation_id)
+
+    send_mock.assert_not_awaited()
+    assert repository.marks == []
+    event = json.loads(caplog.records[-1].message)
+    assert event["stage"] == "source_image"
+    assert event["reason"] == reason
+    assert source.decode() not in caplog.text
+    assert operation.attachments[0].sha256 not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("changed_field", "reason"),
+    [
+        ("channel", "message_target_mismatch"),
+        ("author", "message_author_mismatch"),
+        ("nonce", "message_nonce_mismatch"),
+        ("content", "message_body_mismatch"),
+    ],
+)
+async def test_missing_attachment_mime_preserves_message_identity_and_body_guards(
+    caplog: pytest.LogCaptureFixture, changed_field: str, reason: str
+) -> None:
+    expected = snapshot()
+    operation = image_operation(expected)
+    received = image_message(operation, missing_content_type=True)
+    conflicting_id = int(THREAD_ID) * 10**15
+    if changed_field in {"channel", "author"}:
+        setattr(cast(Any, received), changed_field, SimpleNamespace(id=conflicting_id))
+    else:
+        setattr(cast(Any, received), changed_field, "private-returned-payload-sentinel")
+    repository = FakeOutboxRepository(operation)
+    subject, thread, send_mock, _ = publisher(
+        operation,
+        repository,
+        image_store=cast(
+            DebateImageStore,
+            SimpleNamespace(load_original=AsyncMock(return_value=b"original image fixture")),
+        ),
+    )
+    cast(Any, thread).guild = SimpleNamespace(id=int(GUILD_ID), me=object())
+    cast(Any, thread).permissions_for.return_value = SimpleNamespace(attach_files=True)
+    send_mock.return_value = received
+
+    with (
+        caplog.at_level(logging.WARNING, logger="shittim_chest"),
+        pytest.raises(DiscordDeliveryConflict),
+    ):
+        await subject.publish_persisted(expected=expected, operation_id=operation.operation_id)
+
+    send_mock.assert_awaited_once()
+    assert repository.marks == []
+    event = json.loads(caplog.records[-1].message)
+    assert event["stage"] == "send_response"
+    assert event["reason"] == reason
+    assert "private-returned-payload-sentinel" not in caplog.text
+    assert str(conflicting_id) not in caplog.text
