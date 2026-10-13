@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.DeviceConfigurationOverride
 import androidx.compose.ui.test.FontScale
@@ -53,6 +55,7 @@ class DebateScreensUiTest {
       }
     } }
     compose.onNodeWithTag("debate-question").assertIsDisplayed()
+    compose.onNodeWithTag("debate-add-images").performScrollTo().assertIsDisplayed().assertHasClickAction().assertIsEnabled()
     screenshot("debate-versus-dark.png")
     compose.runOnIdle { online.value = false }
     compose.onNodeWithTag("debate-submit").performScrollTo().assertIsNotEnabled()
@@ -70,6 +73,7 @@ class DebateScreensUiTest {
         }
       }
     } }
+    compose.onNodeWithTag("debate-add-images").performScrollTo().assertIsDisplayed().assertHasClickAction().assertIsEnabled()
     screenshot("debate-versus-light.png")
     compose.runOnIdle { assertEquals(0, submitted) }
     compose.onNodeWithTag("debate-submit").performScrollTo().performClick()
@@ -91,6 +95,7 @@ class DebateScreensUiTest {
       }
     } }
     compose.onNodeWithTag("debate-versus").assertIsDisplayed()
+    compose.onNodeWithTag("debate-add-images").performScrollTo().assertIsDisplayed().assertHasClickAction().assertIsEnabled()
     screenshot("debate-versus-large-text.png")
     compose.onNodeWithTag("debate-submit").performScrollTo().performClick()
     compose.runOnIdle { assertEquals(1, submitted) }

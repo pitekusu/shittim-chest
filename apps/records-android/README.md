@@ -259,7 +259,9 @@ instrumentationは既存のdebug設定を維持する。`RuntimeDiscoveryTest`�
 
 3人の顔を「アロナ VS プラナ VS 安倍晋三AI」と並べ、人格色の斜めのVSバッジと短い登場演出を表示する。Compose標準のAnimatableとMaterialのMotionSchemeを使い、背景では停止する。復帰・再作成で再演せず、アニメーション無効時は完成形を表示する。演出中も下書き入力・明示送信を待たせない。
 
-公開先の説明文は撤去し、送信ボタンは「シッテムの箱を開く」とする。空白・文字数・オフライン・送信中・受付済みの送信制御、暗号化下書き保存、APIとDiscordの投稿先は変更しない。
+公開先の説明文は撤去し、送信ボタンは「議論を開始」とする。空白・文字数・オフライン・送信中・受付済みの送信制御、暗号化下書き保存、APIとDiscordの投稿先は変更しない。
+
+「画像を添付」は画像追加アイコン付きの枠線ボタンで示す。幅を画面に合わせ、最小48dpの高さを確保し、文字拡大時はラベルの折り返しに合わせて高さを広げる。形式・サイズ・枚数の説明はボタンの直下へ表示する。
 
 `DebateScreensUiTest`を任意に実行し、架空の入力で[ダーク](screenshots/debate-versus-dark.png)、[ライト](screenshots/debate-versus-light.png)、[320dp・文字2倍](screenshots/debate-versus-large-text.png)を確認する。実Discord投稿・実機受入・内部テスト配布の証拠ではなく、重い画面試験CIは追加しない。
 
@@ -342,7 +344,7 @@ Password: Not required for the review demo.
    Tap "架空のサンプル画像を追加" to attach an in-app sample image.
    No personal photo is needed. The regular photo picker is also available;
    selected images are processed and stored only on this device in demo mode.
-4. Tap "シッテムの箱を開く" to submit locally. Inspect the progress screen;
+4. Tap "議論を開始" to submit locally. Inspect the progress screen;
    the demo normally completes in about 10 seconds. Tap "議論の記録を読む"
    to open the result. The top-right menu item "依頼した議論" opens request
    history. Drafts, selected images, and request progress survive app restart.
