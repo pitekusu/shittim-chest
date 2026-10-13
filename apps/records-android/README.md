@@ -663,7 +663,8 @@ receiptの`status=submitted`・`verified=true`はalpha/completedと同一AABのh
 trackの`completed`とreceiptは端末で更新可能な証拠ではない。審査・公開の状態をPlay Consoleで確認し、
 Playクローズドテスト版を実機で取得・更新できることを別途確認して配布受入とする。
 
-起動前にPlay Consoleで他の審査と未送信変更を確認し、実行中は同じアプリを編集しない。
+配布依頼を受けたら、同一SHAの必須CI、直近のWorkflow・receipt、Playの全トラック・bundle・APKで確認できる提出状態を調べて進める。Play Consoleの審査中変更や未送信の掲載情報変更の有無を、配布のたびにユーザーへ再質問しない。
+Actionの通常commitが既存審査や未送信変更へ作用し得ることは継続して考慮し、APIだけでConsoleの審査・公開状態を確認済みとは扱わない。実際に並行編集・競合・応答不明の提出が判明した場合は副作用を確認する。実行中は同じアプリのPlay Consoleを編集しない。
 失敗・タイムアウト・取消・応答不明ではWorkflowの「再実行」は使わず、Play側の版番号・hash・alpha trackとreceiptを確認する。
 副作用を把握してから新しい手動実行を判断し、自動再送・自動再番号付けは行わない。
 artifactは非機密の`verification.json`と`receipt.json`だけ7日保持し、鍵・資格情報・Firebase設定・edit ID・AAB・Gradleログは含めない。

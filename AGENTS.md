@@ -57,6 +57,7 @@ Androidアプリと、それを支えるPythonの認証・閲覧APIに適用す�
 
 ## Androidテスト配布の認証と署名
 
+- Androidのクローズドテスト配布を依頼されたら、許可済みの配布を進める。Play Consoleの審査中変更や未送信の掲載情報変更の有無を毎回ユーザーへ再質問しない。CI・Workflow・receipt・Play APIで確認できる提出状態を確認し、実際に競合や応答不明の提出が判明した場合だけ副作用を調べて対応する。APIだけでConsoleの審査・公開状態を確認済みとは扱わない。
 - 通常配布はクローズドトラック`alpha`へ行い、`apps/records-android/README.md`の「C39：GitHubからのクローズドテスト配布」を参照する。初回の本人向け手順はC20に残す。
   毎回、その版の利用者向け更新内容をGoogle Playの更新情報へ記載する。Workflowの必須入力`release_notes_ja`に日本語で1〜500文字を指定し、提出後の本文照合まで確認する。
   この端末ではPlay Developer API用のサービスアカウントJSONを
