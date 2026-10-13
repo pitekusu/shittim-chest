@@ -2,12 +2,22 @@ package dev.pitekusu.shittim.records
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.icu.text.BreakIterator
 import java.io.ByteArrayOutputStream
 import java.net.URI
 import java.security.MessageDigest
 import java.util.Base64
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+internal fun requesterAvatarInitial(name: String): String {
+  val text = name.trim()
+  if (text.isEmpty()) return ""
+  // A visible character can contain surrogate pairs, modifiers, or joined emoji.
+  val boundary = BreakIterator.getCharacterInstance(Locale.ROOT).apply { setText(text) }.following(0)
+  return text.substring(0, boundary)
+}
 
 internal fun validStoredAvatarUrl(url: String): Boolean = try {
   val uri = URI(url)
