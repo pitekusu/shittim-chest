@@ -21,6 +21,8 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.click
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
@@ -32,6 +34,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -136,6 +139,8 @@ class RecordDetailVisualTest {
     } } }
     compose.onNodeWithTag("detail-section-Voting").performClick()
     compose.waitForIdle()
+    compose.onNodeWithTag("vote-graph").assertIsDisplayed()
+    for (index in 0..2) compose.onNodeWithTag("vote-person-$index").assertIsDisplayed()
     compose.onNodeWithTag("vote-person-0").performClick()
     compose.waitUntil(5_000) { compose.onNodeWithTag("vote-detail-sheet").isDisplayed() }
     compose.onNodeWithTag("vote-detail-content").performTouchInput {
@@ -169,11 +174,7 @@ class RecordDetailVisualTest {
     } } }
     compose.onNodeWithTag("detail-section-Voting").performClick()
     compose.waitForIdle()
-    compose.onNodeWithTag("vote-graph").assertDoesNotExist()
-    compose.onNodeWithTag("vote-route-0").performScrollTo().performClick()
-    compose.waitUntil(5_000) { compose.onNodeWithTag("vote-detail-sheet").isDisplayed() }
-    InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
-    compose.waitUntil(5_000) { !compose.onNodeWithTag("vote-detail-sheet").isDisplayed() }
+    assertBallotRowsAreSeparateAndTappable()
     compose.onNodeWithTag("detail-section-Affection").performClick()
     compose.waitForIdle()
     for (index in 0..2) {
@@ -182,6 +183,50 @@ class RecordDetailVisualTest {
       compose.onNodeWithTag("affection-card-$index").assertExists()
     }
     capture("detail-large-text")
+  }
+
+  @Test fun narrowScreenKeepsEveryBallotSeparateAndTappable() {
+    showVotingScreen(360.dp, 1f)
+    assertBallotRowsAreSeparateAndTappable()
+    capture("detail-voting-narrow")
+  }
+
+  @Test fun largeTextUsesSeparateBallotsEvenWhenGraphWidthIsAvailable() {
+    showVotingScreen(400.dp, 2f)
+    val bounds = compose.onNodeWithTag("vote-route-0").getUnclippedBoundsInRoot()
+    assertTrue(bounds.right - bounds.left >= 300.dp)
+    assertBallotRowsAreSeparateAndTappable()
+    capture("detail-voting-large-text")
+  }
+
+  private fun showVotingScreen(width: Dp, fontScale: Float) {
+    compose.activityRule.scenario.onActivity { it.setContent { ShittimTheme(false) {
+      val density = LocalDensity.current
+      CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
+        Box(Modifier.width(width).windowInsetsPadding(WindowInsets.safeDrawing)) {
+          RecordDetailScreen(RecordPreviewState.Ready(visualPreview()), "visual-sample", {},
+            motionAllowed = false)
+        }
+      }
+    } } }
+    compose.onNodeWithTag("detail-section-Voting").performClick()
+    compose.waitForIdle()
+  }
+
+  private fun assertBallotRowsAreSeparateAndTappable() {
+    compose.onNodeWithTag("vote-graph").assertDoesNotExist()
+    val bounds = (0..2).map { compose.onNodeWithTag("vote-route-$it").getUnclippedBoundsInRoot() }
+    bounds.zipWithNext().forEach { (previous, next) ->
+      assertTrue("Ballots must be arranged vertically without overlap", previous.bottom < next.top)
+    }
+    listOf("アロナ", "プラナ", "安倍晋三AI").forEachIndexed { index, name ->
+      compose.onNodeWithTag("vote-route-$index").performScrollTo().assertIsDisplayed()
+        .performTouchInput { click(center) }
+      compose.waitUntil(5_000) { compose.onNodeWithTag("vote-detail-sheet").isDisplayed() }
+      compose.onNodeWithText("投票理由：$name", substring = true).assertIsDisplayed()
+      InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+      compose.waitUntil(5_000) { !compose.onNodeWithTag("vote-detail-sheet").isDisplayed() }
+    }
   }
 
   @Test fun backClosesAnExpandedLongQuestionWithoutChangingThePage() {
@@ -255,7 +300,7 @@ class RecordDetailVisualTest {
     val slots = listOf("participant-a", "participant-b", "participant-c")
     val votes = names.mapIndexed { index, name ->
       val candidate = if (index == 1) 2 else 1
-      RecordVote(name, names[candidate], "一緒に楽しめる提案だと思いました。\n".repeat(30),
+      RecordVote(name, names[candidate], "投票理由：$name\n" + "一緒に楽しめる提案だと思いました。\n".repeat(30),
         names.indices.filter { it != index }.map { other ->
           RecordAssessment(names[other], 4, 5, 4, 5, 4,
             "相手の提案の良さを活かせています。", 22, slots[other])

@@ -186,23 +186,26 @@ private fun VoteNode(count: RecordVoteCount, winnerName: String, winnerSlot: Str
 @Composable
 private fun VoteRows(voting: RecordVoting, winnerName: String, winnerSlot: String?,
   onClick: (RecordVote) -> Unit) {
-  voting.votes.forEachIndexed { index, vote ->
-    val count = voting.counts.firstOrNull { voteParticipantMatches(it.participantName,
-      it.participantSlot, vote.voterName, vote.voterSlot) }
-    Surface(onClick = { onClick(vote) }, modifier = Modifier.fillMaxWidth().testTag("vote-route-$index"),
-      shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
-      Row(Modifier.padding(ShittimSpacing.Small), verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(ShittimSpacing.Small)) {
-        ShittimParticipantAvatar(vote.voterName, vote.voterSlot, size = 36.dp)
-        Text("→", style = MaterialTheme.typography.titleMedium)
-        ShittimParticipantAvatar(vote.candidateName, vote.candidateSlot, size = 36.dp,
-          crowned = voteParticipantMatches(vote.candidateName, vote.candidateSlot,
-            winnerName, winnerSlot))
-        Column {
-          Text(stringResource(R.string.record_vote_route, vote.voterName, vote.candidateName),
-            style = MaterialTheme.typography.labelMedium)
-          if (count != null) Text(stringResource(R.string.record_vote_badge, count.count),
-            style = MaterialTheme.typography.labelSmall)
+  // BoxWithConstraints stacks its children; own the vertical layout of all three ballots.
+  Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Small)) {
+    voting.votes.forEachIndexed { index, vote ->
+      val count = voting.counts.firstOrNull { voteParticipantMatches(it.participantName,
+        it.participantSlot, vote.voterName, vote.voterSlot) }
+      Surface(onClick = { onClick(vote) }, modifier = Modifier.fillMaxWidth().testTag("vote-route-$index"),
+        shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+        Row(Modifier.padding(ShittimSpacing.Small), verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(ShittimSpacing.Small)) {
+          ShittimParticipantAvatar(vote.voterName, vote.voterSlot, size = 36.dp)
+          Text("→", style = MaterialTheme.typography.titleMedium)
+          ShittimParticipantAvatar(vote.candidateName, vote.candidateSlot, size = 36.dp,
+            crowned = voteParticipantMatches(vote.candidateName, vote.candidateSlot,
+              winnerName, winnerSlot))
+          Column(Modifier.weight(1f)) {
+            Text(stringResource(R.string.record_vote_route, vote.voterName, vote.candidateName),
+              style = MaterialTheme.typography.labelMedium)
+            if (count != null) Text(stringResource(R.string.record_vote_badge, count.count),
+              style = MaterialTheme.typography.labelSmall)
+          }
         }
       }
     }
