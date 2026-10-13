@@ -366,7 +366,7 @@ Normal Discord sign-in remains separate and is not needed to review the demo.
 
 最初は本人だけを[Play Consoleの内部テストトラック](https://support.google.com/googleplay/android-developer/answer/9845334)へ登録する。
 「内部アプリ共有」は別の鍵で再署名されるため、Playアプリ署名鍵を使うApp Linksの受入確認には使用しない。
-友人への配布、一般公開、Android配布Workflowの自動化はまだ行わない。
+この節は初回の本人向け内部テスト手順である。審査通過後の通常配布はC39のクローズドトラック`alpha`を使う。
 
 1. Records Releaseで`https://shittim.pitekusu.dev/.well-known/assetlinks.json`を配信する。初回配信より前にReleaseIdentityの対象ファイル限定IAM変更を適用する。次の比較が成功し、Play Consoleの「アプリ署名鍵」に現在表示されるSHA-256がすべて同ファイルにあることを確認する。証明書が増えた場合は追加してから配信する。
 
@@ -408,14 +408,14 @@ Normal Discord sign-in remains separate and is not needed to review the demo.
 
 記録する受入結果は版番号、内部テストの状態、App Links検証、ログイン・記録復帰・更新の成否だけにする。署名鍵・パスワード・token・private Discord ID・実質問を記録しない。鍵が未作成、Play配布未実施、または実機未確認ならC20の配布受入は未完了として扱う。
 
-## C38：内部テスト配布の接続
+## C38：テスト配布の接続
 
 - [r0adkll/upload-google-play](https://github.com/r0adkll/upload-google-play)（MIT）を配布Workflowの完全SHA付き`uses:`で固定する。アップロードとcommitはこのActionへ任せ、Gradle Play Publisherや独自Pythonの提出処理は使わない。既存のAGP・Kotlin・Materialと通常ビルドは維持し、アプリの実行時依存を追加しない。
 - 採用時に保守状況・ライセンス・ランタイム・WIF対応・依存advisoryを確認する。採用pinのbraces・qs・undiciには既知advisoryがあるが、固定AABパス・固定API引数・WebSocket未使用の経路では、その攻撃条件に該当する入力経路を確認できなかった。脆弱性ゼロとは扱わず、pin更新時に再確認する。
 - API認証はGitHub OIDCと[Workload Identity Federation](https://cloud.google.com/iam/docs/workload-identity-federation-with-deployment-pipelines#github-actions)による短寿命認証を使う。認証Actionの`credentials_file_path`を提出Actionの`serviceAccountJson`へ渡す。サービスアカウントの長期秘密鍵JSONや`serviceAccountJsonPlainText`は使わない。
 - Play側のサービスアカウント権限を本アプリのテストトラックに限定し、本番公開・掲載情報変更・財務権限を付けない。GitHub側のWIF条件はrepository・main・専用Environment・配布Workflowに限定する。外部設定が未完了なら配布受入は未完了とする。
 - upload keyと署名パスワードは引き続きC18のReleaseビルド専用。API用の短寿命認証はAABを署名せず、署名済みAABの提出にはupload keyを再読込する必要はない。
-- 正式な提出入口はC39の手動Workflow。`releaseFiles`へ**検証済みの署名付きAABを1個だけ**指定し、globや複数成果物を渡さない。提出段階で再ビルドせず、`packageName`・`tracks: internal`・`status: completed`をWorkflowで固定する。掲載情報・本番トラック・内部アプリ共有は変更しない。
+- 正式な提出入口はC39の手動Workflow。`releaseFiles`へ**検証済みの署名付きAABを1個だけ**指定し、globや複数成果物を渡さない。提出段階で再ビルドせず、`packageName`・`tracks: alpha`・`status: completed`をWorkflowで固定する。掲載情報・本番トラック・内部アプリ共有は変更しない。
 - 配布helperは公式Google SDKを使い、版番号の事前読取、秘密入力の準備、AAB検証、提出後の再取得、後片付けに限定する。全track・提出済みbundle／APKの最大番号検査、SHA-256／署名／package／versionCodeの検証を維持し、競合時の自動再番号付けやuploadの自動再送は行わない。
 - Actionは通常のcommitを行う。[Play commitの既定動作](https://developers.google.com/android-publisher/api-ref/rest/v3/edits/commit)は既存審査を取り消して変更を送信し得るため、起動前に他の審査が進行中でなく、未送信の掲載情報変更を意図せず送信しない状態をPlay Consoleで確認する。この運用確認を自動guardで代替したとは扱わない。
 
@@ -618,10 +618,12 @@ API 36・架空データ。標準のテスト用window／font scale overrideで�
 - 架空データの画面試験で依頼履歴・通知・表示切替・ログアウト／Demo終了、通常版の5つのWeb導線と下方の公開情報へのスクロール、DemoでのWeb機能非表示、一覧・詳細のスクロール維持を確認する。ブラウザーIntentの固定URL・アプリ資格情報の非付加、旧runtime・DemoからのWeb機能起動拒否は関連非画面試験で確認する。通常認証の実機受入とDemoだけの操作確認は区別する。
 - 依頼履歴カードのプレビュー：[ダーク](screenshots/debate-history-menu-dark.png)、[ライト](screenshots/debate-history-menu-light.png)、[OS設定320dp・文字2倍](screenshots/debate-history-menu-large-text.png)。Bottom Sheetの文字拡大は内容内だけのoverrideではなく、専用AVDのOS設定で確認する。
 
-## C39：GitHubからの内部テスト配布
+## C39：GitHubからのクローズドテスト配布
 
 C38を先に取り込み、`.github/workflows/android-release.yml`を`main`から手動実行する。
 通常のCIやPRではPlay認証・署名・提出を行わない。Play掲載情報や本番トラックも変更しない。
+
+通常配布は`Android Closed Release`でクローズドトラック`alpha`へ固定する。認証Environmentの`android-internal`と排他groupの`android-internal-release`は既存のWIF条件と旧実行との排他を維持するため、そのまま使う。
 
 管理者がGoogle WIFを、固定リポジトリ・数値repository/owner ID・`main`・このWorkflow・
 `workflow_dispatch`・`android-internal` Environmentだけに限定する。
@@ -639,26 +641,26 @@ Environmentはmain限定とし、次を安全に登録する。
 有効化後も、配布は別の明示的な手動実行で行う。
 固定SHAの最新main CI・Records CI・既存CodeQL成功を確認し、全トラック/bundle/APKの最大版番号より
 大きいAABを一度ビルドする。Release Lint、JDK署名、固定bundletoolのmanifest、upload証明書とhashを検証し、
-検証した同一AABだけを固定した提出Actionへ渡す。Actionがupload・internal track更新・commitを行い、helperのPlay再取得で版番号・hash・`completed`が一致したことを確認する。
+検証した同一AABだけを固定した提出Actionへ渡す。Actionがupload・alpha track更新・commitを行い、helperのPlay再取得で版番号・hash・`completed`が一致したことを確認する。
 `minimum_version_code`は指定下限であり、通常はPlay読取の最大番号＋1を使う。失敗後の新しい実行では、
 Consoleで副作用を確認した前回試行番号＋1を下限に指定し、API未掲載の番号も再利用しない。
 以後の更新を不可能にするPlayの最終番号`2100000000`は、下限指定・自動採番のどちらでもビルド前に拒否する。
 署名検証はpinした公開証明書のUTC有効期間を確認し、その証明書だけの一時truststoreでJDKの厳格検証を行う。
 自己署名を理由にexit code 4全体を許可せず、期限切れ・未有効やその他の重大警告は拒否する。一時truststoreは回収する。
 `verification.json`は提出前のAAB検証、`receipt.json`はAction成功後の提出後照合の小さな記録とする。
-receiptの`status=submitted`・`verified=true`はinternal/completedと同一AABのhash照合成功を表す。
+receiptの`status=submitted`・`verified=true`はalpha/completedと同一AABのhash照合成功を表す。
 trackの`completed`とreceiptは端末で更新可能な証拠ではない。審査・公開の状態をPlay Consoleで確認し、
-Play内部テスト版を実機で取得・更新できることを別途確認して配布受入とする。
+Playクローズドテスト版を実機で取得・更新できることを別途確認して配布受入とする。
 
 起動前にPlay Consoleで他の審査と未送信変更を確認し、実行中は同じアプリを編集しない。
-失敗・タイムアウト・取消・応答不明ではWorkflowの「再実行」は使わず、Play側の版番号・hash・internal trackとreceiptを確認する。
+失敗・タイムアウト・取消・応答不明ではWorkflowの「再実行」は使わず、Play側の版番号・hash・alpha trackとreceiptを確認する。
 副作用を把握してから新しい手動実行を判断し、自動再送・自動再番号付けは行わない。
 artifactは非機密の`verification.json`と`receipt.json`だけ7日保持し、鍵・資格情報・Firebase設定・edit ID・AAB・Gradleログは含めない。
 秘密入力と一時ログは`always()`で回収する。強制終了やreceipt保存失敗もupload／commit未実行の証拠とは扱わない。
 
 架空データの接続試験は実提出の受入ではない。最初のActionによるWIF提出は別の配布依頼で行う。
 
-詳しい外部設定と検証境界は[Androidアプリ設計](../../docs/29_Androidアプリ設計.md#c39内部テスト配布の自動化)を参照する。
+詳しい外部設定と検証境界は[Androidアプリ設計](../../docs/29_Androidアプリ設計.md#c39クローズドテスト配布の自動化)を参照する。
 
 ## C40：依存と配布ツールの更新検知
 

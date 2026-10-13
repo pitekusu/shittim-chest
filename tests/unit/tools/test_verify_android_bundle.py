@@ -74,7 +74,6 @@ def test_signed_bundle_binds_manifest_source_and_digest(
         "sha": SHA,
         "versionCode": 7,
         "bundleSha256": hashlib.sha256(bundle.read_bytes()).hexdigest(),
-        "track": "internal",
     }
     imported = run.call_args_list[0].args[0]
     assert imported[1:4] == ["-importcert", "-noprompt", "-alias"]

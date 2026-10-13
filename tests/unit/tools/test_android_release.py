@@ -18,7 +18,7 @@ def api(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     api = MagicMock()
     api.__enter__.return_value = api
     api.edits().insert().execute.return_value = {"id": "synthetic-inspection"}
-    api.edits().tracks().list().execute.return_value = {"tracks": [{"track": "internal"}]}
+    api.edits().tracks().list().execute.return_value = {"tracks": [{"track": "alpha"}]}
     api.edits().bundles().list().execute.return_value = {"bundles": []}
     api.edits().apks().list().execute.return_value = {"apks": []}
     api.reset_mock()
@@ -54,7 +54,8 @@ def test_preflight_uses_all_tracks_bundles_and_apks(
 ) -> None:
     api.edits().tracks().list().execute.return_value = {
         "tracks": [
-            {"track": "internal", "releases": [{"versionCodes": ["1"]}]},
+            {"track": "alpha", "releases": [{"versionCodes": ["1"]}]},
+            {"track": "internal", "releases": [{"versionCodes": ["2"]}]},
             {"track": "production", "releases": [{"versionCodes": [str(track)]}]},
         ]
     }
@@ -120,10 +121,16 @@ def test_failed_inventory_discards_only_its_read_edit(api: MagicMock, state: Pat
     assert not (state / "plan.json").exists()
 
 
-def test_missing_internal_track_is_not_a_production_fallback(api: MagicMock, state: Path) -> None:
-    api.edits().tracks().list().execute.return_value = {"tracks": [{"track": "production"}]}
-    with pytest.raises(ValueError, match="play_internal_track_missing"):
+@pytest.mark.parametrize("other_track", ("production", "internal", "beta"))
+def test_missing_closed_track_does_not_fall_back(
+    api: MagicMock, state: Path, other_track: str
+) -> None:
+    api.edits().tracks().list().execute.return_value = {"tracks": [{"track": other_track}]}
+    with pytest.raises(ValueError, match="play_closed_track_missing"):
         release.preflight(state)
+    assert not (state / "plan.json").exists()
+    api.edits().commit.assert_not_called()
+    api.edits().bundles().upload.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -194,21 +201,29 @@ def test_missing_inputs_do_not_materialize_private_files(
 
 
 @pytest.mark.parametrize(
-    "remote_code,remote_hash,status,expected",
+    "remote_code,remote_hash,status,remote_track,expected",
     (
-        (7, "ab" * 32, "completed", True),
-        (8, "ab" * 32, "completed", False),
-        (7, "cd" * 32, "completed", False),
-        (7, "ab" * 32, "draft", False),
+        (7, "ab" * 32, "completed", "alpha", True),
+        (8, "ab" * 32, "completed", "alpha", False),
+        (7, "cd" * 32, "completed", "alpha", False),
+        (7, "ab" * 32, "draft", "alpha", False),
+        (7, "ab" * 32, "completed", "internal", False),
+        (7, "ab" * 32, "completed", "production", False),
     ),
 )
-def test_readback_verifies_internal_artifact_without_publishing(
-    api: MagicMock, state: Path, remote_code: int, remote_hash: str, status: str, expected: bool
+def test_readback_verifies_closed_artifact_without_publishing(
+    api: MagicMock,
+    state: Path,
+    remote_code: int,
+    remote_hash: str,
+    status: str,
+    remote_track: str,
+    expected: bool,
 ) -> None:
-    verified = {"sha": SHA, "versionCode": 7, "bundleSha256": "ab" * 32, "track": "internal"}
+    verified = {"sha": SHA, "versionCode": 7, "bundleSha256": "ab" * 32, "track": "alpha"}
     (state / "verification.json").write_text(json.dumps(verified))
-    api.edits().tracks().get().execute.return_value = {
-        "track": "internal",
+    api.edits().tracks().get.return_value.execute.return_value = {
+        "track": remote_track,
         "releases": [{"status": status, "versionCodes": [str(remote_code)]}],
     }
     api.edits().bundles().list().execute.return_value = {
@@ -228,6 +243,47 @@ def test_readback_verifies_internal_artifact_without_publishing(
     api.edits().commit.assert_not_called()
     api.edits().bundles().upload.assert_not_called()
     api.edits().tracks().update.assert_not_called()
+    api.edits().tracks().get.assert_called_once_with(
+        packageName=release.PACKAGE, editId="synthetic-inspection", track="alpha"
+    )
+
+
+def test_verification_records_the_fixed_closed_track(
+    state: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(state.parent)
+    monkeypatch.setenv("ANDROID_UPLOAD_CERT_SHA256", "ab" * 32)
+    (state / "plan.json").write_text(json.dumps({"sha": SHA, "versionCode": 7}))
+    bundle = Path("apps/records-android/app/build/outputs/bundle/release/app-release.aab")
+    bundle.parent.mkdir(parents=True)
+    bundle.write_bytes(b"synthetic signed bundle")
+    verified = {"sha": SHA, "versionCode": 7, "bundleSha256": release.digest(bundle)}
+    verifier = MagicMock(return_value=verified)
+    monkeypatch.setattr(release, "verify_bundle", verifier)
+    bundletool = state.parent / "bundletool.jar"
+
+    release.verify(state, bundletool)
+
+    assert json.loads((state / "verification.json").read_text()) == {**verified, "track": "alpha"}
+    assert (state / "verified/app-release.aab").read_bytes() == bundle.read_bytes()
+    verifier.assert_called_once_with(bundle, bundletool, code=7, sha=SHA, certificate="ab" * 32)
+
+
+@pytest.mark.parametrize("recorded_track", ("internal", "production", "beta", None))
+def test_wrong_verification_track_stops_before_play_inspection(
+    api: MagicMock, state: Path, recorded_track: str | None
+) -> None:
+    (state / "verification.json").write_text(
+        json.dumps(
+            {"sha": SHA, "versionCode": 7, "bundleSha256": "ab" * 32, "track": recorded_track}
+        )
+    )
+
+    with pytest.raises(ValueError, match="play_verification_track_invalid"):
+        release.readback(state)
+
+    api.edits().insert.assert_not_called()
+    assert not (state / "receipt.json").exists()
 
 
 def test_invalid_state_and_private_errors_are_not_logged(
