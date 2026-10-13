@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Mapping
 from dataclasses import replace
 from datetime import datetime, timedelta
 from types import MappingProxyType
-from typing import TypeVar, cast
+from typing import Literal, TypeVar, cast
 from uuid import uuid7
 
 from shittim_chest.application.discord import (
@@ -92,6 +92,15 @@ from shittim_chest.domain.attachments import ImageInput
 from shittim_chest.domain.composite_voting import COMPOSITE_VOTING_VERSION
 
 _T = TypeVar("_T")
+
+type _AttemptExceptionStage = Literal[
+    "attempt",
+    "final_proposal_generation",
+    "final_proposal_snapshot_read",
+    "final_proposal_checkpoint_validation",
+    "final_proposal_result_validation",
+    "final_proposal_result_persistence",
+]
 
 DEFAULT_TERMINAL_DELIVERY_CONFLICT_RETRIES = 3
 DEFAULT_TERMINAL_DELIVERY_CONFLICT_RETRY_SECONDS = 1.0
@@ -388,18 +397,36 @@ class DebateApplication:
             await self._recover_outbox_then_run_phases(debate_id)
         except asyncio.CancelledError:
             raise
-        except _TerminalDeliveryConflictExhausted, RepositoryConflict:
-            raise
-        except _PhaseDeadlineExceeded:
-            await self._fail_current(debate_id, error_code="phase_deadline_exceeded")
-        except TimeoutError:
-            await self._fail_current(debate_id, error_code="session_deadline_exceeded")
-        except OutboxRecoveryFailed as error:
-            await self._fail_current(debate_id, error_code=error.delivery_code)
-        except _ImagePreparationFailed:
-            await self._fail_current(debate_id, error_code="attachment_preparation_failed")
+        except Exception as failure:
+            error = _attempt_error_for_handling(failure)
+            await self._record_attempt_exception(debate_id, failure)
+            if isinstance(error, _TerminalDeliveryConflictExhausted | RepositoryConflict):
+                # TaskGroup wraps child conflicts; keep the existing successor-lease
+                # recovery path instead of terminalizing durable generation work.
+                if error is failure:
+                    raise
+                raise error from failure
+            if isinstance(error, _PhaseDeadlineExceeded):
+                error_code = "phase_deadline_exceeded"
+            elif isinstance(error, TimeoutError):
+                error_code = "session_deadline_exceeded"
+            elif isinstance(error, OutboxRecoveryFailed):
+                error_code = error.delivery_code
+            elif isinstance(error, _ImagePreparationFailed):
+                error_code = "attachment_preparation_failed"
+            else:
+                error_code = "phase_failed"
+            await self._fail_current(debate_id, error_code=error_code)
+
+    async def _record_attempt_exception(self, debate_id: DebateId, error: Exception) -> None:
+        # A failed diagnostic read must not replace the original failure handling.
+        try:
+            snapshot = await self._repository.get(debate_id)
         except Exception:
-            await self._fail_current(debate_id, error_code="phase_failed")
+            phase = None
+        else:
+            phase = snapshot.state.phase if snapshot is not None else None
+        _log_attempt_exception(debate_id, error, stage="attempt", phase=phase)
 
     async def _finish_terminal_delivery_with_conflict_retry(
         self,
@@ -2074,63 +2101,76 @@ class DebateApplication:
         evidence: EvidenceBundle,
         write_lock: asyncio.Lock,
     ) -> str | None:
+        stage: _AttemptExceptionStage = "final_proposal_generation"
         try:
-            proposal = await self._within_phase(
-                self._openai.generate_final_proposal(
-                    participant=participant,
-                    question=snapshot.question,
-                    **await self._image_arguments(snapshot),
-                    evidence=evidence,
-                    initial_opinions=snapshot.initial_opinions,
-                    affection_score=_affection_score(snapshot, participant),
-                    preference_frame=snapshot.preference_for(participant),
-                    candidate_plan=snapshot.candidates_for(participant),
-                )
-            )
-        except GenerationProviderError as error:
-            return error.code
-        except _PhaseDeadlineExceeded:
-            return "generation_deadline_exceeded"
-        if proposal.participant is not participant:
-            return "openai_participant_mismatch"
-
-        async with write_lock:
-            current = await self._require_snapshot(snapshot.state.debate_id)
             try:
-                self._remaining_generation_seconds(current)
-            except TimeoutError:
-                return "session_deadline_exceeded"
-            checkpoint = current.checkpoint_for(
-                phase=DebatePhase.COLLECTING_FINAL_PROPOSALS,
-                participant=participant,
-            )
-            expected_checkpoint = snapshot.checkpoint_for(
-                phase=DebatePhase.COLLECTING_FINAL_PROPOSALS,
-                participant=participant,
-            )
-            if checkpoint is None or checkpoint != expected_checkpoint:
-                raise RepositoryConflict("final proposal result lost its exact generation claim")
-            if any(existing.participant is participant for existing in current.final_proposals):
-                raise RepositoryConflict("final proposal output is already durable")
-            lease = current.lease
-            if lease is None:
-                raise RepositoryConflict("final proposal result lost its fenced lease")
-            settled_at = self._clock.now()
-            completed = checkpoint.complete(lease=lease, at=settled_at)
-            proposals = tuple(
-                sorted(
-                    (*current.final_proposals, proposal),
-                    key=lambda item: PARTICIPANTS.index(item.participant),
+                proposal = await self._within_phase(
+                    self._openai.generate_final_proposal(
+                        participant=participant,
+                        question=snapshot.question,
+                        **await self._image_arguments(snapshot),
+                        evidence=evidence,
+                        initial_opinions=snapshot.initial_opinions,
+                        affection_score=_affection_score(snapshot, participant),
+                        preference_frame=snapshot.preference_for(participant),
+                        candidate_plan=snapshot.candidates_for(participant),
+                    )
                 )
+            except GenerationProviderError as error:
+                return error.code
+            except _PhaseDeadlineExceeded:
+                return "generation_deadline_exceeded"
+            if proposal.participant is not participant:
+                return "openai_participant_mismatch"
+
+            async with write_lock:
+                stage = "final_proposal_snapshot_read"
+                current = await self._require_snapshot(snapshot.state.debate_id)
+                try:
+                    self._remaining_generation_seconds(current)
+                except TimeoutError:
+                    return "session_deadline_exceeded"
+                stage = "final_proposal_checkpoint_validation"
+                checkpoint = current.checkpoint_for(
+                    phase=DebatePhase.COLLECTING_FINAL_PROPOSALS,
+                    participant=participant,
+                )
+                expected_checkpoint = snapshot.checkpoint_for(
+                    phase=DebatePhase.COLLECTING_FINAL_PROPOSALS,
+                    participant=participant,
+                )
+                if checkpoint is None or checkpoint != expected_checkpoint:
+                    raise RepositoryConflict(
+                        "final proposal result lost its exact generation claim"
+                    )
+                if any(existing.participant is participant for existing in current.final_proposals):
+                    raise RepositoryConflict("final proposal output is already durable")
+                lease = current.lease
+                if lease is None:
+                    raise RepositoryConflict("final proposal result lost its fenced lease")
+                stage = "final_proposal_result_validation"
+                settled_at = self._clock.now()
+                completed = checkpoint.complete(lease=lease, at=settled_at)
+                proposals = tuple(
+                    sorted(
+                        (*current.final_proposals, proposal),
+                        key=lambda item: PARTICIPANTS.index(item.participant),
+                    )
+                )
+                updated = replace(
+                    current,
+                    state=replace(current.state, updated_at=settled_at),
+                    final_proposals=proposals,
+                    generation_checkpoints=current.generation_checkpoints_with(completed),
+                )
+                stage = "final_proposal_result_persistence"
+                await self._repository.replace(expected=current, updated=updated)
+            return None
+        except Exception as error:
+            _log_attempt_exception(
+                snapshot.state.debate_id, error, stage=stage, phase=snapshot.state.phase
             )
-            updated = replace(
-                current,
-                state=replace(current.state, updated_at=settled_at),
-                final_proposals=proposals,
-                generation_checkpoints=current.generation_checkpoints_with(completed),
-            )
-            await self._repository.replace(expected=current, updated=updated)
-        return None
+            raise
 
     async def _stage_final_proposal_delivery(
         self,
@@ -2886,6 +2926,79 @@ class DebateApplication:
     ) -> None:
         if actor_id != snapshot.requester_id and not can_manage_messages:
             raise RequestNotAllowed("only the requester or a moderator may perform this operation")
+
+
+def _attempt_error_for_handling(error: Exception) -> Exception:
+    """Unwrap homogeneous TaskGroup failures without hiding mixed unexpected errors."""
+
+    if not isinstance(error, ExceptionGroup):
+        return error
+    for family in (
+        (RepositoryConflict, _TerminalDeliveryConflictExhausted),
+        (_PhaseDeadlineExceeded,),
+        (TimeoutError,),
+        (OutboxRecoveryFailed,),
+        (_ImagePreparationFailed,),
+    ):
+        matching, remaining = error.split(family)
+        if matching is not None and remaining is None:
+            # Exhausted terminal delivery must remain visible even alongside other
+            # repository conflicts. Standard split/subgroup preserve nested groups.
+            selected = matching.subgroup(_TerminalDeliveryConflictExhausted) or matching
+            while isinstance(selected, ExceptionGroup):
+                selected = selected.exceptions[0]
+            return selected
+    return error
+
+
+def _attempt_exception_categories(error: Exception) -> list[str]:
+    if isinstance(error, ExceptionGroup):
+        return sorted(
+            {
+                category
+                for child in error.exceptions
+                for category in _attempt_exception_categories(child)
+            }
+        )
+    for kind, category in (
+        (RepositoryConflict, "repository_conflict"),
+        (_TerminalDeliveryConflictExhausted, "terminal_delivery_conflict_exhausted"),
+        (_PhaseDeadlineExceeded, "phase_deadline_exceeded"),
+        (TimeoutError, "session_deadline_exceeded"),
+        (OutboxRecoveryFailed, "outbox_recovery_failed"),
+        (_ImagePreparationFailed, "image_preparation_failed"),
+        (GenerationProviderError, "generation_provider_error"),
+        (InvalidApplicationOperation, "application_validation_failed"),
+        (ValueError, "value_validation_failed"),
+        (TypeError, "type_validation_failed"),
+        (AttributeError, "attribute_error"),
+    ):
+        if isinstance(error, kind):
+            return [category]
+    return ["unexpected_error"]
+
+
+def _log_attempt_exception(
+    debate_id: DebateId,
+    error: Exception,
+    *,
+    stage: _AttemptExceptionStage,
+    phase: DebatePhase | None,
+) -> None:
+    _LOGGER.warning(
+        json.dumps(
+            {
+                "severity": "WARNING",
+                "event": "debate_work_exception",
+                "debate_id": str(debate_id),
+                "stage": stage,
+                "phase": phase.value if phase is not None else None,
+                "exception_categories": _attempt_exception_categories(error),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
 
 
 def _log_terminal_delivery_conflict(

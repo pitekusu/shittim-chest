@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, python, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-09-23
+updated: 2026-10-13
 ---
 
 # アプリケーション・Python詳細設計
@@ -245,6 +245,10 @@ API・画面は[メモリアルロビー設計](27_メモリアルロビー設�
 ## 7. エラーと観測
 
 - 外部通信失敗、条件付き更新の競合、リース喪失を区別し、安定した本文なしのコードへ変換する。
+- `TaskGroup`が包む例外も、Python標準の例外グループAPIで分類する。すべての末端例外が保存競合なら、
+  通常の`RepositoryConflict`と同じ復旧経路へ戻し、`phase_failed`として終了させない。
+  保存済み出力と再開点を保持し、後継リースで未完了分だけを既存の回数・期限内で再開する。
+  同じリースで生成を再試行せず、異なる未分類例外が混在するグループを競合だけと扱わない。
 - 既知の事前調査失敗は、承認済みの縮退状態へ変換して続行する。
 - 帰宅挨拶は最善努力型とし、失敗しても終了を妨げない。
 - 質問、人格、モデル出力、URL、クエリ、Discord識別子、秘密値をログや指標の次元へ入れない。
@@ -266,6 +270,7 @@ API・画面は[メモリアルロビー設計](27_メモリアルロビー設�
 
 | 確認日 | 対象 | 公式資料 | 設計への反映 |
 |---|---|---|---|
+| 2026-10-13 | Python 3.14の例外グループ | [TaskGroup](https://docs.python.org/3.14/library/asyncio-task.html#task-groups)、[split/subgroup](https://docs.python.org/3.14/library/exceptions.html#exception-groups) | 並列処理の保存競合を通常の復旧経路へ戻す |
 | 2026-08-14 | Python asyncio | [タスクとコルーチン](https://docs.python.org/3/library/asyncio-task.html) | 並行処理、期限、取り消し |
 | 2026-08-14 | Python typing | [型ヒント](https://docs.python.org/3/library/typing.html) | SDKに依存しないインターフェース境界 |
 | 2026-08-14 | Pydantic | [モデル](https://docs.pydantic.dev/latest/concepts/models/) | 厳密・不変・余剰フィールド禁止の検証 |
