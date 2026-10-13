@@ -67,9 +67,13 @@ def test_preflight_uses_all_tracks_bundles_and_apks(
     code = max(track, bundle, apk) + 1
     assert json.loads((state / "plan.json").read_text()) == {"sha": SHA, "versionCode": code}
     assert (state.parent / "output").read_text() == f"version_code={code}\n"
+    for resource in (api.edits().tracks(), api.edits().bundles(), api.edits().apks()):
+        resource.list.return_value.execute.assert_called_once_with(num_retries=3)
+    api.edits().insert.return_value.execute.assert_called_once_with()
     api.edits().delete.assert_called_once_with(
         packageName=release.PACKAGE, editId="synthetic-inspection"
     )
+    api.edits().delete.return_value.execute.assert_called_once_with()
     api.edits().commit.assert_not_called()
     api.edits().bundles().upload.assert_not_called()
 
@@ -246,6 +250,46 @@ def test_readback_verifies_closed_artifact_without_publishing(
     api.edits().tracks().get.assert_called_once_with(
         packageName=release.PACKAGE, editId="synthetic-inspection", track="alpha"
     )
+    api.edits().tracks().get.return_value.execute.assert_called_once_with(num_retries=3)
+    api.edits().bundles().list.return_value.execute.assert_called_once_with(num_retries=3)
+    api.edits().insert.return_value.execute.assert_called_once_with()
+    api.edits().delete.return_value.execute.assert_called_once_with()
+
+
+@pytest.mark.parametrize("failed_read", ("track", "bundle"))
+def test_exhausted_readback_preserves_verification_without_resubmitting(
+    api: MagicMock, state: Path, failed_read: str
+) -> None:
+    verified = {"sha": SHA, "versionCode": 7, "bundleSha256": "ab" * 32, "track": "alpha"}
+    verification = state / "verification.json"
+    verification.write_text(json.dumps(verified))
+    api.edits().tracks().get.return_value.execute.return_value = {
+        "track": "alpha",
+        "releases": [{"status": "completed", "versionCodes": ["7"]}],
+    }
+    api.edits().bundles().list.return_value.execute.return_value = {
+        "bundles": [{"versionCode": 7, "sha256": "ab" * 32}]
+    }
+    request = (
+        api.edits().tracks().get.return_value
+        if failed_read == "track"
+        else api.edits().bundles().list.return_value
+    )
+    request.execute.side_effect = release.HttpError(
+        MagicMock(status=503), b'{"error":{"message":"synthetic temporary outage"}}'
+    )
+
+    with pytest.raises(release.HttpError):
+        release.readback(state)
+
+    request.execute.assert_called_once_with(num_retries=3)
+    api.edits().insert.return_value.execute.assert_called_once_with()
+    api.edits().delete.return_value.execute.assert_called_once_with()
+    assert json.loads(verification.read_text()) == verified
+    assert not (state / "receipt.json").exists()
+    api.edits().commit.assert_not_called()
+    api.edits().bundles().upload.assert_not_called()
+    api.edits().tracks().update.assert_not_called()
 
 
 def test_verification_records_the_fixed_closed_track(
@@ -303,15 +347,28 @@ def test_invalid_state_and_private_errors_are_not_logged(
     assert capsys.readouterr().err == "android_release_failed\n"
 
 
+@pytest.mark.parametrize("status", (403, 503))
 def test_official_sdk_http_error_logs_only_status(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+    status: int,
 ) -> None:
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
     monkeypatch.setattr(
         "sys.argv", ["release", "readback", "--state", str(tmp_path / "android-release")]
     )
-    response = MagicMock(status=403)
+    response = MagicMock(status=status)
     error = release.HttpError(response, b'{"error":{"message":"synthetic private detail"}}')
-    monkeypatch.setattr(release, "readback", MagicMock(side_effect=error))
+    logger = release.logging.getLogger("googleapiclient.http")
+    monkeypatch.setattr(logger, "disabled", False)
+
+    def failed_readback(state: Path) -> None:
+        logger.warning("Retrying synthetic private edit URI after temporary error")
+        raise error
+
+    monkeypatch.setattr(release, "readback", failed_readback)
     assert release.main() == 1
-    assert capsys.readouterr().err == "play_http_403\n"
+    assert capsys.readouterr().err == f"play_http_{status}\n"
+    assert not caplog.records

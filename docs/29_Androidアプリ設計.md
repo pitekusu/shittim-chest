@@ -1527,6 +1527,8 @@ WIF・Environment・Play権限の外部設定前は起動を拒否する。設�
 4. 検証した同一AABのhashを再照合し、配信直前にWIF認証を更新する。C38の提出Actionへ単一AABと資格情報ファイルのpath、固定したクローズドトラック`alpha`・statusを渡す。upload・track更新・commitはActionが担当し、helperから別のcommitを行わない。
 5. Action成功後に公式Google SDKでPlayの版番号・bundle hash・クローズドトラック`alpha`の`completed`を再取得し、検証したAABと照合する。提出前の`verification.json`と、提出後照合が成功した場合の簡単な`receipt.json`を保持する。
 
+事前確認と提出後照合のtrack／bundle／APK読取だけは、公式Google SDKの`execute(num_retries=3)`で一時的なAPI障害を最大3回、指数backoff付きで再試行する。edit作成・削除やupload・track更新・commitの再送は追加しない。読取の再試行後も失敗した場合はreceiptを成功扱いせず、残った検証記録とPlayの状態を確認する。
+
 receiptの`status=submitted`・`verified=true`は、クローズドトラック`alpha`と同一AABの提出後照合に成功したことを表す。審査済み・公開済み・端末で更新可能な証拠とは区別する。
 
 起動前にPlay Consoleで他の審査が進行中でなく、未送信の掲載情報変更を意図せず送らない状態を確認する。通常のcommitは既存審査を取り消し、変更を審査へ送信し得るため、この運用確認を省略しない。専用の審査guardを実装済みとは扱わず、実行中は同じアプリのPlay Consoleを編集しない。

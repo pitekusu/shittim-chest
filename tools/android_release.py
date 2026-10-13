@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import logging
 import os
 import re
 import shutil
@@ -43,6 +44,7 @@ def client():
 def inspection(api):
     # These edits only read inventory and are discarded. Never use this after
     # an unknown upload result: creating an edit can invalidate an unfinished edit.
+    # Retry only inventory reads; edit mutations may have ambiguous side effects.
     identifier = api.edits().insert(packageName=PACKAGE, body={}).execute()["id"]
     try:
         yield {"packageName": PACKAGE, "editId": identifier}
@@ -77,9 +79,9 @@ def preflight(state: Path) -> None:
     ):
         raise ValueError("play_requires_main_sha")
     with client() as api, inspection(api) as params:
-        tracks = api.edits().tracks().list(**params).execute().get("tracks", [])
-        bundles = api.edits().bundles().list(**params).execute().get("bundles", [])
-        apks = api.edits().apks().list(**params).execute().get("apks", [])
+        tracks = api.edits().tracks().list(**params).execute(num_retries=3).get("tracks", [])
+        bundles = api.edits().bundles().list(**params).execute(num_retries=3).get("bundles", [])
+        apks = api.edits().apks().list(**params).execute(num_retries=3).get("apks", [])
     if not any(t["track"] == PLAY_TRACK for t in tracks):
         raise ValueError("play_closed_track_missing")
     codes = [
@@ -152,8 +154,8 @@ def readback(state: Path) -> None:
     if result.get("track") != PLAY_TRACK:
         raise ValueError("play_verification_track_invalid")
     with client() as api, inspection(api) as params:
-        track = api.edits().tracks().get(**params, track=PLAY_TRACK).execute()
-        bundles = api.edits().bundles().list(**params).execute().get("bundles", [])
+        track = api.edits().tracks().get(**params, track=PLAY_TRACK).execute(num_retries=3)
+        bundles = api.edits().bundles().list(**params).execute(num_retries=3).get("bundles", [])
     if not (
         track.get("track") == PLAY_TRACK
         and any(
@@ -173,6 +175,8 @@ def readback(state: Path) -> None:
 
 def main() -> int:
     os.umask(0o077)
+    # SDK retry warnings include private edit URIs; log only our status categories.
+    logging.getLogger("googleapiclient.http").disabled = True
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "action", choices=("materialize", "preflight", "verify", "readback", "cleanup")
