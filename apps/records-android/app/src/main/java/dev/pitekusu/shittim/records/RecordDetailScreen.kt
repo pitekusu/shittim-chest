@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -49,6 +50,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -196,6 +198,10 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
         // Five lines at normal sizes; retain a height cap for landscape and large text so
         // the answer remains reachable. The reading sheet always contains the full question.
         val questionMaximumHeight = maxHeight * 0.35f
+        // Short windows keep the image shortcut in the existing header rather than
+        // measuring a second 48dp row into a few remaining pixels below it.
+        val inlineImages = recordImages.isNotEmpty() && questionMaximumHeight < 160.dp
+        val previewLineHeight = with(LocalDensity.current) { MaterialTheme.typography.bodyLarge.lineHeight.toDp() }
         Column(Modifier.fillMaxSize()) {
           Surface(onClick = { questionOpen = true },
             color = MaterialTheme.colorScheme.surfaceContainer,
@@ -210,24 +216,23 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
                   style = MaterialTheme.typography.labelLarge,
                   color = MaterialTheme.colorScheme.primary,
                   modifier = Modifier.weight(1f).testTag("detail-question-label"))
+                if (inlineImages && recordImages.isNotEmpty()) AttachmentThumbnails(recordImages.take(1),
+                  onOpen = { imageIndex = it }, compact = true, totalCount = recordImages.size,
+                  modifier = Modifier.width(48.dp).testTag("detail-images-open"))
                 TextButton(onClick = { questionOpen = true },
                   modifier = Modifier.testTag("detail-question-full")) {
                   Text(stringResource(R.string.record_question_full))
                   Icon(painterResource(R.drawable.ic_expand_more), null, Modifier.size(18.dp))
                 }
               }
-              Text(state.preview.question, style = MaterialTheme.typography.bodyLarge,
-                maxLines = 5, overflow = TextOverflow.Ellipsis,
+              if (!inlineImages || questionMaximumHeight >= 112.dp + previewLineHeight)
+                Text(state.preview.question, style = MaterialTheme.typography.bodyLarge,
+                maxLines = if (inlineImages) 1 else 5, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false).fillMaxWidth().clipToBounds()
                   .testTag("detail-question-text"))
-              if (preview.attachments.isNotEmpty()) Row(
-                Modifier.fillMaxWidth().padding(top = ShittimSpacing.Small)
-                  .testTag("detail-images-open"),
-                verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.attachment_count, preview.attachments.size),
-                  style = MaterialTheme.typography.labelMedium,
-                  color = MaterialTheme.colorScheme.primary)
-              }
+              if (!inlineImages && recordImages.isNotEmpty()) AttachmentThumbnails(recordImages,
+                onOpen = { imageIndex = it }, compact = true,
+                modifier = Modifier.padding(top = ShittimSpacing.Small).testTag("detail-images-open"))
             }
           }
           if (selected.section == RecordDetailSection.Opinions && opinions.isNotEmpty()) {

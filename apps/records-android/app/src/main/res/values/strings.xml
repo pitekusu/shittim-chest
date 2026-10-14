@@ -196,6 +196,9 @@
     <string name="attachment_discard_unsent">未送信の画像を削除して下書きに戻る</string>
     <string name="attachment_count">画像 %1$d枚</string>
     <string name="attachment_number">画像 %1$d</string>
+    <string name="attachment_open">画像 %1$dを開く</string>
+    <string name="notification_vibration_upgrade">通知の振動を有効にする</string>
+    <string name="notification_vibration_description">ブッ、ブブの振動パターンを使います。強さは端末の通知設定に従います。</string>
     <string name="attachment_image">議題の添付画像</string>
     <string name="attachment_position">添付画像 %1$d / %2$d</string>
     <string name="attachment_previous">前の画像</string>

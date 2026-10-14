@@ -9,11 +9,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Badge
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -31,6 +34,9 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -44,16 +50,32 @@ import me.saket.telephoto.zoomable.zoomable
 
 @Composable
 internal fun AttachmentThumbnails(images: List<RecordImagePresentation>,
-  onOpen: (Int) -> Unit, modifier: Modifier = Modifier, onRemove: ((String) -> Unit)? = null) {
+  onOpen: (Int) -> Unit, modifier: Modifier = Modifier, onRemove: ((String) -> Unit)? = null,
+  compact: Boolean = false, totalCount: Int = images.size) {
   Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
     images.forEachIndexed { index, image ->
-      Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+      val description = stringResource(R.string.attachment_open, index + 1) +
+        if (totalCount > images.size) "、" + stringResource(R.string.attachment_count, totalCount) else ""
+      Column(if (compact) Modifier else Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
         Surface(onClick = { onOpen(index) }, shape = MaterialTheme.shapes.medium,
-          modifier = Modifier.fillMaxWidth().height(80.dp).testTag("attachment-$index")) {
-          if (image.bytes != null) AttachmentImage(image, Modifier.fillMaxSize(), maximum = 256)
-          else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            if (image.loading) CircularProgressIndicator()
-            else Text(stringResource(R.string.attachment_number, index + 1))
+          color = MaterialTheme.colorScheme.surfaceContainerHigh,
+          modifier = (if (compact) Modifier.size(48.dp) else Modifier.fillMaxWidth().height(80.dp))
+            .testTag(if (compact) "detail-attachment-$index" else "attachment-$index")
+            .semantics { contentDescription = description }) {
+          Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            if (image.bytes != null) AttachmentImage(image, Modifier.fillMaxSize(), maximum = 256,
+              contentScale = if (compact) ContentScale.Crop else ContentScale.Fit, compact = compact)
+            else {
+              if (image.loading) CircularProgressIndicator(
+                modifier = if (compact) Modifier.size(18.dp) else Modifier, strokeWidth = if (compact) 2.dp else 4.dp)
+              else if (compact) Icon(painterResource(R.drawable.ic_image),
+                stringResource(R.string.attachment_unavailable), Modifier.size(24.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+              else Text(stringResource(R.string.attachment_number, index + 1))
+            }
+            if (compact && totalCount > images.size) Badge(Modifier.align(Alignment.TopEnd)) {
+              Text(totalCount.toString())
+            }
           }
         }
         if (onRemove != null) TextButton(onClick = { onRemove(image.image.attachmentId) }) {
@@ -125,14 +147,17 @@ internal fun AttachmentViewer(images: List<RecordImagePresentation>, initial: In
 
 @Composable
 private fun AttachmentImage(image: RecordImagePresentation, modifier: Modifier, maximum: Int,
-  contentScale: ContentScale = ContentScale.Fit, onSize: (Size) -> Unit = {}) {
+  contentScale: ContentScale = ContentScale.Fit, onSize: (Size) -> Unit = {}, compact: Boolean = false) {
   val context = LocalContext.current
   var failed by remember(image.bytes, maximum) { mutableStateOf(false) }
   var attempt by remember(image.bytes, maximum) { mutableIntStateOf(0) }
   val request = remember(image.bytes, maximum, attempt) { ImageRequest.Builder(context)
     .data(image.bytes).size(maximum, maximum).diskCachePolicy(CachePolicy.DISABLED).build() }
   Box(modifier, contentAlignment = Alignment.Center) {
-    if (failed) Column(horizontalAlignment = Alignment.CenterHorizontally) {
+    if (failed && compact) Icon(painterResource(R.drawable.ic_image),
+      stringResource(R.string.attachment_unavailable), Modifier.size(24.dp),
+      tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    else if (failed) Column(horizontalAlignment = Alignment.CenterHorizontally) {
       Text(stringResource(R.string.attachment_unavailable))
       TextButton(onClick = { attempt++; failed = false }) { Text(stringResource(R.string.session_retry)) }
     } else AsyncImage(request, contentDescription = stringResource(R.string.attachment_image),

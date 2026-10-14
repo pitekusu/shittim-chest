@@ -111,6 +111,39 @@ class RecordsRepositoryCacheTest {
     }
   }
 
+  @Test fun legacyOfflineListsDeriveImageCountsOncePerMemoWithoutAnyNetworkRequest() = runBlocking {
+    saveList(entry(firstId), schemaVersion = 1)
+    saveList(entry(secondId), schemaVersion = 1)
+    saveDetail(firstId, RecordPreview("架空の画像付き議題", "架空の結論", "アロナ",
+      attachments = DemoFixtures.sampleImages))
+    repeat(2) { visit ->
+      repository().use { records ->
+        assertEquals(3, records.cachedListEntry(accountId, firstId)?.attachmentCount)
+        val saved = records.cachedRecords(accountId).associateBy { it.recordId }
+        assertEquals(3, saved[firstId]?.attachmentCount)
+        assertEquals(0, saved[secondId]?.attachmentCount)
+        if (visit == 1) {
+          RecordCacheAccount.lock.withLock {
+            // The resolved list memo must not parse the body again on later reloads.
+            store.save(accountId, firstId, CachedRecordPart.DETAIL, byteArrayOf(1))
+          }
+          assertEquals(3, records.cachedRecords(accountId).first { it.recordId == firstId }.attachmentCount)
+        }
+      }
+    }
+  }
+
+  @Test fun currentOfflineListsKeepImageCountsWithoutDecryptingSavedBodies() = runBlocking {
+    saveList(entry(firstId, attachmentCount = 3))
+    RecordCacheAccount.lock.withLock {
+      store.save(accountId, firstId, CachedRecordPart.DETAIL, byteArrayOf(1))
+    }
+    repository().use { records ->
+      assertEquals(3, records.cachedListEntry(accountId, firstId)?.attachmentCount)
+      assertEquals(3, records.cachedRecords(accountId).single().attachmentCount)
+    }
+  }
+
   @Test fun aSeparateWriterUpdatesAndDeletesRowsWhileAnOfflineReaderKeepsItsMemo() = runBlocking {
     saveList(entry(firstId))
     saveList(entry(secondId, "変更しない架空の議題"))
@@ -228,14 +261,14 @@ class RecordsRepositoryCacheTest {
 
   private fun entry(id: String, question: String = "架空の議題",
     avatar: RecordAvatar = RecordAvatar(null, "cyan"), requesterName: String = "架空の依頼者",
-    winnerName: String = "アロナ", winnerSlot: String? = "participant-a"): RecordListEntry =
+    winnerName: String = "アロナ", winnerSlot: String? = "participant-a", attachmentCount: Int = 0): RecordListEntry =
     RecordListEntry(id, question, requesterName, avatar, Instant.parse("2026-09-24T00:00:00Z"),
-      winnerName, winnerSlot)
+      winnerName, winnerSlot, attachmentCount)
 
-  private suspend fun saveList(entry: RecordListEntry) = RecordCacheAccount.lock.withLock {
+  private suspend fun saveList(entry: RecordListEntry, schemaVersion: Int = 2) = RecordCacheAccount.lock.withLock {
     val encoded = Json.encodeToString(entry)
     store.save(accountId, entry.recordId, CachedRecordPart.LIST,
-      """{"schemaVersion":1,"entry":$encoded}""".toByteArray())
+      """{"schemaVersion":$schemaVersion,"entry":$encoded}""".toByteArray())
   }
 
   private suspend fun saveDetail(id: String, preview: RecordPreview) = RecordCacheAccount.lock.withLock {

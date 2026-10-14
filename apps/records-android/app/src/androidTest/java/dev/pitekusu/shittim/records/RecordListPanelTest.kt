@@ -13,6 +13,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -88,6 +90,30 @@ class RecordListPanelTest {
     compose.onNodeWithText("架空の議題").assertDoesNotExist()
     compose.onNodeWithText(compose.activity.getString(R.string.record_list_loading)).assertIsDisplayed()
     assertEquals(1, events.size)
+  }
+
+  @Test fun imageBadgeIdentifiesSavedAttachmentsAndCardStillOpensDetail() {
+    val imageId = "i".repeat(43)
+    val plainId = "p".repeat(43)
+    val entries = listOf(imageId to 3, plainId to 0).map { (id, count) ->
+      RecordListEntry(id, "架空の議題", "架空の依頼者", RecordAvatar(null, "cyan"),
+        Instant.parse("2026-09-24T00:00:00Z"), "アロナ", attachmentCount = count)
+    }
+    val state = RecordListState.Ready.fromSaved(entries)
+    val events = mutableListOf<BootstrapScreen.Event>()
+    compose.activityRule.scenario.onActivity { activity -> activity.setContent { ShittimTheme(false) {
+      val pages = remember(state.pages) { state.pages.asRecordJournal() }
+      val items = pages.collectAsLazyPagingItems()
+      LazyColumn { recordListItems(state, items, events::add) }
+    } } }
+    compose.waitUntil(5_000) {
+      compose.onAllNodesWithTag("journal-images-$imageId", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+    }
+    compose.onNodeWithContentDescription(compose.activity.getString(R.string.attachment_count, 3),
+      useUnmergedTree = true).assertIsDisplayed()
+    compose.onNodeWithTag("journal-images-$plainId", useUnmergedTree = true).assertDoesNotExist()
+    compose.onNodeWithTag("journal-card-$imageId").performClick()
+    assertEquals(imageId, (events.single() as BootstrapScreen.Event.OpenRecord).recordId)
   }
 
 }

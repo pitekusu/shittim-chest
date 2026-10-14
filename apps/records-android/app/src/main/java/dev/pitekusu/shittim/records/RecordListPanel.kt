@@ -18,6 +18,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -32,6 +33,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -244,6 +247,18 @@ private fun RecordListCard(item: RecordListEntry, isSelected: Boolean, modifier:
       Text(item.questionPreview, style = MaterialTheme.typography.titleMedium,
         maxLines = 4, overflow = TextOverflow.Ellipsis,
         modifier = Modifier.testTag("journal-question-${item.recordId}"))
+      if (item.attachmentCount > 0) {
+        val description = stringResource(R.string.attachment_count, item.attachmentCount)
+        Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.small,
+          modifier = Modifier.testTag("journal-images-${item.recordId}")
+            .clearAndSetSemantics { contentDescription = description }) {
+          Row(Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(painterResource(R.drawable.ic_image), null, Modifier.size(18.dp))
+            Text(description, style = MaterialTheme.typography.labelMedium)
+          }
+        }
+      }
       Row(verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(ShittimSpacing.Small)) {
         ShittimParticipantAvatar(item.winnerName, item.winnerSlot, size = 24.dp, crowned = true,

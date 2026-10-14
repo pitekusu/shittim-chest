@@ -1,8 +1,6 @@
 package dev.pitekusu.shittim.records
 
 import android.annotation.SuppressLint
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
@@ -16,7 +14,6 @@ import dev.pitekusu.shittim.records.auth.RECORDS_ORIGIN
 import java.time.Instant
 
 internal const val RECORD_NOTIFICATION_BINDING = "record_notification_binding"
-internal const val RECORD_NOTIFICATION_CHANNEL = "record-published-v1"
 
 internal fun recordNotificationIntent(context: Context, hint: RecordPublishedHint): Intent =
   Intent(context, MainActivity::class.java).setAction(Intent.ACTION_VIEW)
@@ -65,16 +62,14 @@ internal fun showRecordNotification(context: Context, data: Map<String, String>)
       if (!notificationAllowed(hint, token, settings.optedIn, RecordNotifications.permitted(context),
           settings.binding, settings.sessionFingerprint, settings.registeredAt, settings.expiresAt,
           pendingLogout, Instant.now()) || settings.seen(hint.recordId)) return@synchronized false
-      val system = context.getSystemService(NotificationManager::class.java)
-      system.createNotificationChannel(NotificationChannel(RECORD_NOTIFICATION_CHANNEL,
-        context.getString(R.string.notification_channel), NotificationManager.IMPORTANCE_DEFAULT))
-      if (system.getNotificationChannel(RECORD_NOTIFICATION_CHANNEL)?.importance == NotificationManager.IMPORTANCE_NONE) {
+      val channel = ensureRecordNotificationChannel(context)
+      if (!notificationChannelAllowed(channel)) {
         return@synchronized false
       }
       val content = PendingIntent.getActivity(context, 0, recordNotificationIntent(context, hint),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
       val body = context.getString(R.string.notification_body, hint.requesterName)
-      val notification = NotificationCompat.Builder(context, RECORD_NOTIFICATION_CHANNEL)
+      val notification = NotificationCompat.Builder(context, channel.id)
         .setSmallIcon(R.drawable.ic_record_notification)
         .setContentTitle(context.getString(R.string.notification_title))
         .setContentText(body).setStyle(NotificationCompat.BigTextStyle().bigText(body))

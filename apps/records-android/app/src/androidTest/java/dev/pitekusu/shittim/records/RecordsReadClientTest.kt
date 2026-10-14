@@ -29,7 +29,10 @@ class RecordsReadClientTest {
     finally { bitmap.recycle() }
     val digest = attachmentDigest(bytes)
     val url = "https://shittim-chest-production-records-media-000000000000.s3.ap-northeast-1.amazonaws.com/debate-images/$discordId/original.png?signature=synthetic"
-    val payload = detail(id).replace("\"affection\":null", """"affection":null,"attachments":[{
+    val payload = detail(id).replace("\"affection\":null", """"affection":null,
+      "completedAt":"2026-09-24T00:00:00Z",
+      "requester":{"displayName":"架空の依頼者","avatar":{"kind":"placeholder",
+        "url":null,"alt":"架空の依頼者","fallbackVariant":"cyan"}},"attachments":[{
       "attachmentId":"$discordId","contentType":"image/png","sizeBytes":${bytes.size},
       "sha256":"$digest","width":24,"height":16,"url":"$url","urlExpiresAt":"2026-10-11T00:05:00Z"}]""")
     var calls = 0
@@ -44,7 +47,9 @@ class RecordsReadClientTest {
         respond(bytes, headers = headersOf(HttpHeaders.ContentType, "image/png"))
       }
     }).use { client ->
-      val preview = (client.firstRecord(token, "/records/$id") as RecordReadResult.Found).preview
+      val result = client.firstRecord(token, "/records/$id") as RecordReadResult.Found
+      assertEquals(1, result.listEntry?.attachmentCount)
+      val preview = result.preview
       val image = preview.attachments.single()
       assertEquals(discordId, image.attachmentId)
       org.junit.Assert.assertArrayEquals(bytes, client.attachment(image))

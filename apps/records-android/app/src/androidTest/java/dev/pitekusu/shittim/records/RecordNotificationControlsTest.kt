@@ -1,6 +1,8 @@
 package dev.pitekusu.shittim.records
 
 import android.content.Context
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOn
@@ -17,6 +19,8 @@ import com.google.firebase.FirebaseOptions
 import dev.pitekusu.shittim.records.ui.ShittimTheme
 import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -25,6 +29,36 @@ import org.junit.runner.RunWith
 @ScreenTest
 class RecordNotificationControlsTest {
   @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+
+  @Test fun legacyVibrationActionSelectsNewChannelWithoutEnablingAppNotifications() {
+    val context = compose.activity.applicationContext
+    val preferences = context.getSharedPreferences("record-notification-v1", Context.MODE_PRIVATE)
+    val system = context.getSystemService(NotificationManager::class.java)
+    val previous = system.getNotificationChannel(RECORD_NOTIFICATION_CHANNEL)
+    val newer = system.getNotificationChannel(RECORD_NOTIFICATION_VIBRATION_CHANNEL)
+    check(preferences.edit().clear().putBoolean("enabled", false).commit())
+    system.createNotificationChannel(NotificationChannel(RECORD_NOTIFICATION_CHANNEL,
+      "架空の議論結果", NotificationManager.IMPORTANCE_DEFAULT).apply { enableVibration(false) })
+    RecordNotifications.changed()
+    try {
+      compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+        ShittimTheme(false) { RecordNotificationControls() }
+      } }
+      compose.onNodeWithTag("record-notification-vibration").assertIsDisplayed().performClick()
+      compose.onNodeWithTag("record-notification-vibration").assertDoesNotExist()
+      assertTrue(RecordNotificationSettings(context).vibrationChannelSelected)
+      assertFalse(RecordNotificationSettings(context).optedIn)
+      assertEquals(RECORD_NOTIFICATION_VIBRATION_CHANNEL, activeRecordNotificationChannelId(context))
+      assertEquals(newer?.shouldVibrate() ?: true,
+        checkNotNull(system.getNotificationChannel(RECORD_NOTIFICATION_VIBRATION_CHANNEL)).shouldVibrate())
+    } finally {
+      compose.activityRule.scenario.onActivity { it.setContent {} }
+      if (previous == null) system.deleteNotificationChannel(RECORD_NOTIFICATION_CHANNEL)
+      if (newer == null) system.deleteNotificationChannel(RECORD_NOTIFICATION_VIBRATION_CHANNEL)
+      check(preferences.edit().clear().commit())
+      RecordNotifications.changed()
+    }
+  }
 
   @Test fun absentFirebaseConfigurationDoesNotOfferAnUnusablePermissionRequest() {
     val context = compose.activity.applicationContext
