@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -29,15 +31,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.pitekusu.shittim.records.ui.ShittimParticipantAvatar
@@ -185,14 +192,7 @@ private fun AffectionCard(change: RecordAffectionChange, cardKey: String?,
         Text(change.participantName, style = MaterialTheme.typography.titleSmallEmphasized,
           color = accent)
       }
-      val filled = (current.coerceIn(0, 1_000) / 100).coerceIn(0, 10)
-      FlowRow(maxItemsInEachRow = 5, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        repeat(10) { index ->
-          Text(if (index < filled) "♥" else "♡", color = if (index < filled) accent
-            else MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.titleLarge)
-        }
-      }
+      AffectionHearts(current, accent, Modifier.scale(scale))
       Box(Modifier.fillMaxWidth()) {
         // Reserve the maximum score's text height; moving digits never shift the reading position.
         Text(stringResource(R.string.record_affection_transition, change.before, 1_000),
@@ -221,6 +221,31 @@ private fun AffectionCard(change: RecordAffectionChange, cardKey: String?,
             signedScore(change.appliedDelta)), color = deltaColor,
             style = MaterialTheme.typography.labelMedium)
         }
+      }
+    }
+  }
+}
+
+@Composable
+private fun AffectionHearts(score: Int, accent: Color, modifier: Modifier = Modifier) {
+  val boundedScore = score.coerceIn(0, 1_000)
+  val heart = painterResource(R.drawable.ic_detail_heart)
+  FlowRow(modifier.fillMaxWidth().testTag("affection-hearts").clearAndSetSemantics {
+    progressBarRangeInfo = ProgressBarRangeInfo(boundedScore.toFloat(), 0f..1_000f)
+  }, maxItemsInEachRow = 5, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    repeat(10) { index ->
+      // Share the displayed score, rather than starting a second animation or rounding
+      // whole hearts. Fixed vector bounds also keep visibility stable across 100-point steps.
+      val fraction = ((boundedScore - index * 100) / 100f).coerceIn(0f, 1f)
+      Box(Modifier.size(24.dp)) {
+        Icon(heart, contentDescription = null,
+          tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = .35f),
+          modifier = Modifier.size(24.dp))
+        Icon(heart, contentDescription = null, tint = accent,
+          modifier = Modifier.size(24.dp).drawWithContent {
+            val content = this
+            clipRect(right = size.width * fraction) { content.drawContent() }
+          })
       }
     }
   }

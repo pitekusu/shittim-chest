@@ -16,6 +16,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import dev.pitekusu.shittim.records.ui.ShittimTheme
@@ -169,5 +170,58 @@ class RecordMotionTest {
     } finally {
       compose.mainClock.autoAdvance = true
     }
+  }
+
+  @Test fun heartsFollowSmallScoreIncreases() = assertHeartsFollowScore(501, 511)
+
+  @Test fun heartsFollowIncreasesAcrossAHundredPointBoundary() = assertHeartsFollowScore(90, 110)
+
+  @Test fun heartsFollowDecreasesAcrossAHundredPointBoundary() = assertHeartsFollowScore(110, 90)
+
+  private fun assertHeartsFollowScore(before: Int, after: Int) {
+    val played = mutableStateOf(emptySet<String>())
+    val affection = RecordAffection(RecordAffectionStatus.APPLIED, listOf(
+      RecordAffectionChange("アロナ", before, after - before, after - before, after)))
+    compose.mainClock.autoAdvance = false
+    try {
+      compose.activityRule.scenario.onActivity { activity ->
+        activity.setContent { ShittimTheme(false) {
+          Column {
+            RecordAffectionPanel(affection, "hearts", played.value,
+              animationsEnabled = true) { played.value = played.value + it }
+          }
+        } }
+      }
+      compose.mainClock.advanceTimeByFrame()
+      compose.waitForIdle()
+      compose.mainClock.advanceTimeBy(96)
+      val initial = displayedAffection()
+      assertTrue("Score must start before completion", initial != after)
+      val bounds = compose.onNodeWithTag("affection-hearts").fetchSemanticsNode().boundsInRoot
+      compose.mainClock.advanceTimeBy(450)
+      val middle = displayedAffection()
+      assertTrue("Score must move towards the saved value", if (after > before) middle > initial else middle < initial)
+      assertTrue("Score must still be in progress", middle != after)
+      compose.mainClock.advanceTimeBy(800)
+      assertEquals(after, displayedAffection())
+      compose.mainClock.advanceTimeBy(500)
+      assertEquals("Heart fill must not change the layout", bounds,
+        compose.onNodeWithTag("affection-hearts").fetchSemanticsNode().boundsInRoot)
+      // A recomposition caused by the seen callback must not restart the shared animation.
+      compose.runOnIdle { played.value = played.value + "unrelated" }
+      compose.mainClock.advanceTimeBy(200)
+      assertEquals(after, displayedAffection())
+    } finally {
+      compose.mainClock.autoAdvance = true
+    }
+  }
+
+  private fun displayedAffection(): Int {
+    val score = compose.onNodeWithTag("affection-score").fetchSemanticsNode()
+      .config[SemanticsProperties.Text].single().text.substringAfter(" → ").toInt()
+    val hearts = compose.onNodeWithTag("affection-hearts").fetchSemanticsNode()
+      .config[SemanticsProperties.ProgressBarRangeInfo].current
+    assertEquals("Hearts and digits must use the same score", score.toFloat(), hearts, 0f)
+    return score
   }
 }

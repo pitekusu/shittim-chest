@@ -58,6 +58,24 @@ class RecordAttachmentUiTest {
     compose.onNodeWithTag("detail-question-sheet").assertIsDisplayed()
   }
 
+  @Test fun openingViewerBeforeOriginalFinishesLoadingDoesNotOfferRetry() {
+    val original = edgeImage(80, 40, 1)
+    val images = mutableStateOf<List<RecordImagePresentation>>(emptyList())
+    val preview = RecordPreview("架空の画像付き議題", "架空の結論", "架空の参加者",
+      attachments = listOf(original.image))
+    compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+      ShittimTheme { RecordDetailScreen(RecordPreviewState.Ready(preview, images = images.value),
+        "r".repeat(43), {}) }
+    } }
+    compose.onNodeWithTag("detail-question-open").performClick()
+    compose.onNodeWithTag("attachment-0").performClick()
+    compose.onNodeWithText(compose.activity.getString(R.string.attachment_unavailable)).assertDoesNotExist()
+    compose.onNodeWithText(compose.activity.getString(R.string.session_retry)).assertDoesNotExist()
+    // The in-flight result updates the already open viewer without a retry or reopening.
+    compose.runOnIdle { images.value = listOf(original) }
+    waitForAllEdges(80, 40)
+  }
+
   @Test fun smallAndLargePortraitImagesInitiallyShowEveryEdge() {
     val images = listOf(edgeImage(80, 40, 1), edgeImage(1600, 3200, 2))
     showViewer(images)

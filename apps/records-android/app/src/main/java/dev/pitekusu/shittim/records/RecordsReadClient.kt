@@ -164,7 +164,8 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
   config {
     followRedirects(false)
     followSslRedirects(false)
-    retryOnConnectionFailure(false)
+    // GETs are safe to recover through OkHttp's standard stale-connection/route handling.
+    retryOnConnectionFailure(true)
     cookieJar(CookieJar.NO_COOKIES)
     cache(null)
   }
