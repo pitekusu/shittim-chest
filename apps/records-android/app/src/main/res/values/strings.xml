@@ -15,6 +15,10 @@
   <string name="debate_requests_more">さらに表示</string>
   <string name="debate_requests_online">進行状況の確認にはオンライン接続が必要です。</string>
   <string name="debate_status_title">議論の進行状況</string>
+  <string name="debate_stage_receipt">受付</string>
+  <string name="debate_stage_preparing">準備</string>
+  <string name="debate_stage_discussion">議論</string>
+  <string name="debate_stage_result">結果</string>
   <string name="debate_not_accepted">まだ受理されていないことを確認しました。同じ内容で再送できます。</string>
   <string name="debate_request_missing">この依頼の状態を確認できませんでした。</string>
   <string name="debate_open_result">議論の記録を読む</string>
