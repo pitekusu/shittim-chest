@@ -1064,14 +1064,14 @@ def image_operation(expected: DebateSnapshot) -> OutboxOperation:
 
 
 def image_message(
-    operation: OutboxOperation, *, missing_content_type: bool = False
+    operation: OutboxOperation, *, missing_content_type: bool = False, size_delta: int = 0
 ) -> discord.Message:
     received = cast(Any, message(operation))
     image = operation.attachments[0]
     received.attachments = [
         SimpleNamespace(
             filename=f"{image.attachment_id}-{image.sha256[:16]}.png",
-            size=image.size_bytes,
+            size=image.size_bytes + size_delta,
             content_type=None if missing_content_type else image.content_type,
             width=image.width,
             height=image.height,
@@ -1082,8 +1082,14 @@ def image_message(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("missing_content_type", [False, True])
+@pytest.mark.parametrize(
+    "size_delta",
+    [-1, 0, 1, 10 * 1024 * 1024],
+    ids=["smaller", "same", "larger", "above-input-limit"],
+)
 async def test_image_upload_uses_validated_original_and_neutral_filename(
     missing_content_type: bool,
+    size_delta: int,
 ) -> None:
     expected = snapshot()
     operation = image_operation(expected)
@@ -1105,7 +1111,9 @@ async def test_image_upload_uses_validated_original_and_neutral_filename(
         assert len(files) == 1
         assert files[0].filename.endswith(".png")
         transmitted.append(files[0].fp.read())
-        return image_message(operation, missing_content_type=missing_content_type)
+        return image_message(
+            operation, missing_content_type=missing_content_type, size_delta=size_delta
+        )
 
     send_mock.side_effect = send
     sent = await subject.publish_persisted(expected=expected, operation_id=operation.operation_id)
@@ -1115,8 +1123,14 @@ async def test_image_upload_uses_validated_original_and_neutral_filename(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("missing_content_type", [False, True])
+@pytest.mark.parametrize(
+    "size_delta",
+    [-1, 0, 1, 10 * 1024 * 1024],
+    ids=["smaller", "same", "larger", "above-input-limit"],
+)
 async def test_image_accepted_post_recovers_without_uploading_again(
     missing_content_type: bool,
+    size_delta: int,
 ) -> None:
     expected = snapshot()
     operation = replace(
@@ -1130,7 +1144,11 @@ async def test_image_accepted_post_recovers_without_uploading_again(
     subject, _, send_mock, _ = publisher(
         operation,
         repository,
-        history_messages=(image_message(operation, missing_content_type=missing_content_type),),
+        history_messages=(
+            image_message(
+                operation, missing_content_type=missing_content_type, size_delta=size_delta
+            ),
+        ),
     )
     sent = await subject.publish_persisted(expected=expected, operation_id=operation.operation_id)
     assert sent is not None and sent.status is OutboxStatus.SENT
@@ -1148,7 +1166,7 @@ async def test_image_same_nonce_with_changed_attachment_fails_closed() -> None:
         delivery_attempt=1,
     )
     received = image_message(operation)
-    cast(Any, received).attachments[0].size += 1
+    cast(Any, received).attachments[0].filename = "different.png"
     repository = FakeOutboxRepository(operation)
     subject, _, send_mock, _ = publisher(operation, repository, history_messages=(received,))
     with pytest.raises(DiscordDeliveryConflict):
@@ -1157,16 +1175,23 @@ async def test_image_same_nonce_with_changed_attachment_fails_closed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_terminating_image_reconciliation_accepts_missing_optional_mime_without_posting() -> (
-    None
-):
+@pytest.mark.parametrize(
+    "size_delta",
+    [-1, 0, 1, 10 * 1024 * 1024],
+    ids=["smaller", "same", "larger", "above-input-limit"],
+)
+async def test_terminating_image_reconciliation_accepts_provider_metadata_without_posting(
+    size_delta: int,
+) -> None:
     expected = snapshot()
     operation = replace(image_operation(expected), delivery_attempt=1)
     repository = FakeOutboxRepository(operation)
     subject, _, send_mock, _ = publisher(
         operation,
         repository,
-        history_messages=(image_message(operation, missing_content_type=True),),
+        history_messages=(
+            image_message(operation, missing_content_type=True, size_delta=size_delta),
+        ),
     )
 
     sent = await subject.reconcile_persisted(expected=expected, operation_id=operation.operation_id)
@@ -1178,13 +1203,14 @@ async def test_terminating_image_reconciliation_accepts_missing_optional_mime_wi
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("reconcile", [False, True], ids=["send-response", "history"])
+@pytest.mark.parametrize("mode", ["send-response", "history", "termination"])
 @pytest.mark.parametrize(
     ("changed_field", "changed_value", "reason"),
     [
         ("count", 0, "attachment_count_mismatch"),
         ("filename", "private-filename-sentinel.png", "attachment_filename_mismatch"),
-        ("size", 0, "attachment_size_mismatch"),
+        ("size", 0, "attachment_size_invalid"),
+        ("size", -1, "attachment_size_invalid"),
         ("content_type", "image/jpeg", "attachment_content_type_mismatch"),
         ("content_type", "application/octet-stream", "attachment_content_type_mismatch"),
         ("content_type", "", "attachment_content_type_mismatch"),
@@ -1192,14 +1218,14 @@ async def test_terminating_image_reconciliation_accepts_missing_optional_mime_wi
 )
 async def test_image_response_conflicts_identify_fixed_check_without_exposing_payload(
     caplog: pytest.LogCaptureFixture,
-    reconcile: bool,
+    mode: str,
     changed_field: str,
     changed_value: str | int,
     reason: str,
 ) -> None:
     expected = snapshot()
     operation = image_operation(expected)
-    if reconcile:
+    if mode == "history":
         operation = replace(
             operation,
             status=OutboxStatus.CLAIMED,
@@ -1207,6 +1233,8 @@ async def test_image_response_conflicts_identify_fixed_check_without_exposing_pa
             claim_expires_at=NOW - timedelta(seconds=1),
             delivery_attempt=1,
         )
+    elif mode == "termination":
+        operation = replace(operation, delivery_attempt=1)
     received = image_message(operation, missing_content_type=True)
     if changed_field == "count":
         cast(Any, received).attachments = []
@@ -1217,7 +1245,7 @@ async def test_image_response_conflicts_identify_fixed_check_without_exposing_pa
     subject, thread, send_mock, _ = publisher(
         operation,
         repository,
-        history_messages=(received,) if reconcile else (),
+        history_messages=(received,) if mode != "send-response" else (),
         image_store=cast(DebateImageStore, SimpleNamespace(load_original=load_original)),
     )
     cast(Any, thread).guild = SimpleNamespace(id=int(GUILD_ID), me=object())
@@ -1228,11 +1256,16 @@ async def test_image_response_conflicts_identify_fixed_check_without_exposing_pa
         caplog.at_level(logging.WARNING, logger="shittim_chest"),
         pytest.raises(DiscordDeliveryConflict),
     ):
-        await subject.publish_persisted(expected=expected, operation_id=operation.operation_id)
+        if mode == "termination":
+            await subject.reconcile_persisted(
+                expected=expected, operation_id=operation.operation_id
+            )
+        else:
+            await subject.publish_persisted(expected=expected, operation_id=operation.operation_id)
 
     assert repository.marks == []
     assert repository.retry_delays == []
-    if reconcile:
+    if mode != "send-response":
         send_mock.assert_not_awaited()
         load_original.assert_not_awaited()
     else:
@@ -1243,12 +1276,12 @@ async def test_image_response_conflicts_identify_fixed_check_without_exposing_pa
         "severity": "WARNING",
         "event": "discord_delivery_conflict",
         "debate_id": str(operation.debate_id),
-        "stage": "history_reconciliation" if reconcile else "send_response",
+        "stage": "send_response" if mode == "send-response" else "history_reconciliation",
         "reason": reason,
         "action": "attachment",
         "phase": "scoring_affection",
         "delivery_sequence": 0,
-        "delivery_attempt": 2 if reconcile else 1,
+        "delivery_attempt": 2 if mode == "history" else 1,
     }
     assert all(record.exc_info is None and record.stack_info is None for record in caplog.records)
     image = operation.attachments[0]
