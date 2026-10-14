@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-10-11
+updated: 2026-10-14
 ---
 
 # GitHub・CI-CD詳細設計
@@ -261,6 +261,40 @@ Webの`fast-uri`は修正版へ更新し、同じリスク受容へ混ぜない�
 | Android | Gradle Wrapperの配布版・SHA-256・生成ファイルを合わせる。Kotlin Gradle PluginとCompose Compiler、Compose BOMとMaterial 3はそれぞれ一組で確認 |
 | BuildKit/DynamoDB Local | `tools/containers/Dockerfile`の名前付きstageを共通の固定値とし、Dependabotでtag・digestを更新。CI・配信・ローカル試験は検証済みの参照を読み取る |
 | Buildx/直接取得CLI | バージョン、ダイジェスト、配布物チェックサム、署名主体を固定し、専用監視で追従 |
+
+### Python 3.15への移行評価（2026年10月14日）
+
+[Issue #599](https://github.com/pitekusu/shittim-chest/issues/599)の更新要求は未完了。
+[Python 3.15.0正式版](https://www.python.org/downloads/release/python-3150/)は10月9日公開済みだが、
+下記の配布条件を満たすまで現行3.14系列を維持する。新機能の提案と推奨理由は
+[アプリケーション設計](10_アプリケーション・Python詳細設計.md#9-python-315の新機能の採用候補)に集約する。
+
+| 対象 | 確認した状態 | 移行に必要なこと |
+|---|---|---|
+| Lambda | [AWSの対応表](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html#runtimes-supported)で3.15はpublic preview。本番利用は推奨されず、正式公開の目標は11月（変更あり） | 正式対応後にCoreの受付・監督LambdaとRecords API／workerのmanaged runtime、CDKの対応を確認する |
+| CoreのDHI | 認証済みの公開タグ一覧に3.15系列なし。3.15のDebian 13 builder／runtime候補はいずれも404で、現行3.14タグの取得は成功 | [DHIの公式配布](https://github.com/docker-hardened-images/catalog/tree/main/image/python/debian-13)からARM64 builder／runtime、digest、SBOM／VEXを確認する。別ベースへの置換で現行の検査を迂回しない |
+| 標準Python配布・uv | 既採用の0.12系列では正式版3.15のdownloadが見つからない。[uv 0.13](https://github.com/astral-sh/uv/releases/tag/0.13.0)経由の3.15正式版インストールは成功 | uvの対応系列・固定値・更新監視を合わせる。`uv_build`は公式の互換案内とlockで確認し、CLIと同じ番号だと決めつけない |
+| 実行依存wheel | 現在固定中の`aiohttp`・`jiter`・Recordsの`msgpack`にはARM64／3.15で使えるwheelがない。`aiohttp`によりCore依存のbinary限定dry-runが失敗 | 対応版へ必要な依存だけを更新し、両lockを再生成する。対応版は公開済みで、`aiohttp`が要求する`yarl`の更新も必要。`cp315`だけでなく`abi3`も評価する |
+| 開発・字体生成 | `grimp`や字体生成用`Brotli`の現行wheelにも同じ対象の不足あり | これらはsource buildを許可する工程であり、wheel不足だけで移行不能と断定せず、ビルドと字体の再生成を個別確認する。通常Web buildが成功しても字体生成の確認済みとは扱わない |
+
+`audioop-lts`は既存の`cp313-abi3` ARM64 wheelで3.15向けbinary限定dry-runが成功しており、阻害要因ではない。
+lockに`cp315`が記録されていないことだけで上流未対応と判定しない。上流の配布metadataと実際の解決結果を使う。
+既存の他の実行依存を固定したまま、上記のCore 3依存／Records 4依存だけを対応版へ変更した
+ARM64・binary限定dry-runはそれぞれ39／68packageの解決に成功した。lockへの変更はまだ適用していない。
+ここまでの3.15検証は標準機能の合成データsmokeと依存解決だけであり、アプリ全体の互換性、API性能、本番動作を確認したものではない。
+
+条件が揃ったら、次の順に更新・検証する。
+
+1. Core／Recordsの`requires-python`、Ruff対象、両lock、`.python-version`、uv、各workflow、tool監視を合わせる。
+   LambdaとCoreを段階移行する場合は、共有Core packageを両実行版で試験し、Lambda bundleのPython指定を実runtimeに合わせる。
+2. DHIのtag・digest、`container-policy.json`とvalidator、Docker内のPython path、CI／Releaseのsite-packages pathを一組で更新する。
+   Lambda runtimeとIaCの期待値も同時に更新する。
+3. 両projectのfrozen sync、lint・型・関連試験、警告の互換性、配布wheelのimport、ARM64 binary限定bundle、関連stackのtest／synthを確認する。
+   コンテナの起動・停止、再現性、SBOM／VEX／risk gateとAndroid配布ツールの関連試験を維持する。
+4. 同一SHAの必須CI・CodeQLを確認してからマージする。本番／Play配布は、その時点で依頼された範囲だけ進める。
+
+この評価ではバージョン固定、必須CI、binary限定条件、本番構成を変更していない。
+更新未完了のためIssueを閉じない。未公開のruntime／imageを推測で指定したり、失敗・未実施を成功として扱ったりしない。
 
 AndroidのGradle Wrapper・プラグイン・ライブラリは、`.github/dependabot.yml`で毎週月曜09:15（日本時間）に確認する。
 Kotlin関連、Compose関連、Bouncy Castle関連はそれぞれ同じ更新PRにまとめ、ビルド・Lint・Android計装テストを確認して取り込む。
