@@ -63,7 +63,7 @@ type _DeliveryConflictReason = Literal[
     "source_hash_mismatch",
     "attachment_count_mismatch",
     "attachment_filename_mismatch",
-    "attachment_size_mismatch",
+    "attachment_size_invalid",
     "attachment_content_type_mismatch",
     "message_target_mismatch",
     "message_author_mismatch",
@@ -379,10 +379,12 @@ class DiscordPyPublisher:
                 raise _delivery_conflict(
                     operation, stage=stage, reason="attachment_filename_mismatch"
                 )
-            if received.size != expected.size_bytes:
-                raise _delivery_conflict(operation, stage=stage, reason="attachment_size_mismatch")
+            # Discord may rewrite an image representation after upload. Source
+            # length/checksum are checked before POST; returned size need only be positive.
+            if received.size <= 0:
+                raise _delivery_conflict(operation, stage=stage, reason="attachment_size_invalid")
             # Discord's attachment content_type is optional response metadata.
-            # Persisted source bytes, returned filename/size, and any present MIME
+            # Persisted source bytes, returned filename, and any present MIME
             # still have to match; missing MIME does not invalidate the upload.
             if received.content_type is not None and received.content_type != expected.content_type:
                 raise _delivery_conflict(
