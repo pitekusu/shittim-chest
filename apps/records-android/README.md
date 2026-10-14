@@ -265,6 +265,18 @@ instrumentationは既存のdebug設定を維持する。`RuntimeDiscoveryTest`�
 
 `DebateScreensUiTest`を任意に実行し、架空の入力で[ダーク](screenshots/debate-versus-dark.png)、[ライト](screenshots/debate-versus-light.png)、[320dp・文字2倍](screenshots/debate-versus-large-text.png)を確認する。実Discord投稿・実機受入・内部テスト配布の証拠ではなく、重い画面試験CIは追加しない。
 
+## 議論進捗画面の待機演出
+
+進捗画面では既存の3人の顔と人格色を使い、顔の小さな上下運動、吹き出しの点、Material 3標準の`LoadingIndicator`で待機を示す。追加依存は設けない。架空の発言・勝者・投票、時間経過から求めた進捗率や完了予定時刻は表示しない。
+
+「受付・準備・議論・結果」の4段階は、サーバーのstatusと既知のphaseで確認できる現在段階だけを示す。未知のphaseや受付情報がない場合は段階を推測せず、既存の状態説明を残す。公開済みはチェックと既存の「結果を読む」導線へ切り替え、失敗・取消では演出を停止して状態説明を表示する。
+
+オフライン、通信失敗、背景、システムのアニメーション無効設定では静止し、状態説明を維持する。TalkBackにはstatusとphaseの固定説明だけをpolite通知し、装飾を読み上げない。同IDの明示再送・再認証・前景中のpoll・API・暗号化保存の処理は変更しない。
+
+`DebateProgressUiTest`は任意実行の`@ScreenTest`として、架空データのライト／ダーク、320dp・文字2倍、状態変化、エラー、未知phase、演出停止を確認する。通常CIへ重い画面試験は追加せず、実Discord投稿・実機受入・Play配布は別途確認する。
+
+API 36の架空データで[ライト](screenshots/progress-light.png)、[ダーク](screenshots/progress-dark.png)、[320dp・文字2倍](screenshots/progress-large-text.png)を確認した。`DebateProgressUiTest`へ`shittimCaptureProgress=true`を渡して再採取できる。
+
 ## Play内の更新案内
 
 - SnackbarのinverseSurfaceに合わせて、両操作のTextButtonへSnackbarDefaultsのactionContentColorを指定する。通常のprimaryを流用しない。[ダーク](screenshots/update-actions-dark.png)／[ライト](screenshots/update-actions-light.png)の実描画を確認し、有効な「更新」「あとで」の文字と背景のコントラスト4.5以上を回帰試験する。SDKの同意・保留・ダウンロード・再起動の制御は変更しない。

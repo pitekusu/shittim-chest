@@ -70,21 +70,17 @@ internal fun DebateRequestStatusScreen(id: String, state: DebateStatusState,
   demo: Boolean = false) {
   val receipt = debateReceipt(id, state, submission)
   val ownWorkspace = submission.workspace?.takeIf { it.requestId == id }
+  val failure = state.failure?.takeIf { it != DebateFailure.NOT_FOUND }
+    ?: submission.failure.takeIf { ownWorkspace != null }
   Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(ShittimSpacing.Medium)
     .testTag("debate-status"), verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
     Text(stringResource(R.string.debate_status_title), style = MaterialTheme.typography.headlineMediumEmphasized)
     val question = receipt?.question ?: ownWorkspace?.frozenQuestion
     if (question != null) ShittimPanel { Text(question) }
+    DebateProgressCard(receipt, motionAllowed = online && state.failure == null && failure == null)
     ShittimPanel {
-      Text(stringResource(if (receipt == null) R.string.debate_unknown else debateStatusLabel(receipt.status)),
-        style = MaterialTheme.typography.titleLargeEmphasized)
-      receipt?.takeIf { !it.terminal }?.phase?.let {
-        Text(stringResource(debatePhaseLabel(it)), color = MaterialTheme.colorScheme.primary)
-      }
-      if (state.loading || submission.busy) CircularProgressIndicator()
+      if (receipt == null && (state.loading || submission.busy)) CircularProgressIndicator()
       if (!online) Text(stringResource(R.string.debate_requests_online))
-      val failure = state.failure?.takeIf { it != DebateFailure.NOT_FOUND }
-        ?: submission.failure.takeIf { ownWorkspace != null }
       if (failure != null) {
         Text(stringResource(when (failure) {
           DebateFailure.REAUTH_REQUIRED -> R.string.debate_reauth
