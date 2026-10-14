@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, python, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-10-13
+updated: 2026-10-14
 ---
 
 # アプリケーション・Python詳細設計
@@ -266,10 +266,36 @@ API・画面は[メモリアルロビー設計](27_メモリアルロビー設�
 依存の正確な版はロックファイル、実行上限とフィールド制約はコードを正とする。
 文書は責務と不変条件を維持し、変更した契約に対応する試験だけを更新する。
 
+## 9. Python 3.15の新機能の採用候補
+
+[Issue #599](https://github.com/pitekusu/shittim-chest/issues/599)に対する2026年10月14日時点の評価。
+Python 3.15は正式公開済みだが、プロジェクトの実行版はまだ更新していない。
+移行条件と確認結果は[CI/CD設計の移行評価](15_GitHub・CI-CD詳細設計.md#python-315への移行評価2026年10月14日)を参照する。
+Web本体はTypeScript、Android本体はKotlin/Composeであり、Python更新の対象は共有API、Core、配布・検証ツール。
+画面の描画や端末操作が直接改善するとは扱わない。
+
+| 新機能・改善 | 実装上の候補 | 採用判断と理由 |
+|---|---|---|
+| UTF-8既定化 | 日本語の更新情報、契約生成、CI/CDのファイル入出力 | **移行時に採用**。localeによる差を減らせる。公開JSON・状態ファイルでは引き続き`encoding="utf-8"`を明示する |
+| `profiling.sampling`（Tachyon） | Recordsの画像処理、API、契約生成・ZIP作成の性能調査 | **必要時の調査手段として推奨**。標準機能でCPU処理と待機を切り分け、改善箇所を選べる。合成データのローカル実行から始め、通常CIや本番へ常時追加しない |
+| 明示的なlazy import | `services/records/src/shittim_records/lambda_handlers.py`のhandler固有依存、`tools/android_release.py`のGoogle API依存 | **起動時間を計測してから限定導入**。不要な依存の読み込みを遅らせられる。import時の副作用、例外発生時点、初回呼び出し時間を確認する。Lambdaの3.15対応が前提 |
+| `frozendict` | `admin_status_adapters.py`の固定対応表、Coreの`ParticipantProfiles`の設定snapshot | **小さな保守改善の候補**。既存の`MappingProxyType(dict(...))`を標準の不変辞書で表せる。既存実装も保護されており優先度は低い。深い不変性や`dict`との型互換性は仮定しない |
+| `sentinel` | `src/shittim_chest/adapters/openai/evidence.py`の`_MISSING = object()` | **低優先候補**。欠落値の名前・型を明確にできる。現状に不具合はなく、移行必須の置換にはしない |
+| `TypedDict`の`closed`／`extra_items` | CI/CDツールの状態辞書など、必要な箇所の型境界 | **必要箇所だけ検討**。実行時の入力検証は提供しない。公開契約は既存のPydanticと生成TypeScript/Kotlinを維持する |
+| `base64`／`binascii`の高速化 | 添付画像の変換とAPI cursor | **移行による改善候補**。既存の標準APIをそのまま使う。API全体の高速化は未計測であり、改善率を約束しない |
+
+優先するのはUTF-8既定化と標準profilerによる必要時の調査。lazy importは初回応答まで含めた計測後に選ぶ。
+一括の`PYTHON_LAZY_IMPORTS=all`、JIT、free-threaded buildは、既存SDK・ARM64 Linuxでの互換性と効果の根拠が不足するため今回の推奨に含めない。
+3.14で動かすLambda／共有コードに3.15専用構文や組み込みを先行導入しない。
+
+機能仕様は[Python 3.15の変更点](https://docs.python.org/3.15/whatsnew/3.15.html)、
+計測方法は[標準sampling profiler](https://docs.python.org/3.15/library/profiling.sampling.html)を参照する。
+
 ## 公式資料確認記録
 
 | 確認日 | 対象 | 公式資料 | 設計への反映 |
 |---|---|---|---|
+| 2026-10-14 | Python 3.15 | [正式版](https://www.python.org/downloads/release/python-3150/)、[新機能](https://docs.python.org/3.15/whatsnew/3.15.html) | 新機能の推奨と条件を整理。実行版の移行・高速化の実測は未完了 |
 | 2026-10-13 | Python 3.14の例外グループ | [TaskGroup](https://docs.python.org/3.14/library/asyncio-task.html#task-groups)、[split/subgroup](https://docs.python.org/3.14/library/exceptions.html#exception-groups) | 並列処理の保存競合を通常の復旧経路へ戻す |
 | 2026-08-14 | Python asyncio | [タスクとコルーチン](https://docs.python.org/3/library/asyncio-task.html) | 並行処理、期限、取り消し |
 | 2026-08-14 | Python typing | [型ヒント](https://docs.python.org/3/library/typing.html) | SDKに依存しないインターフェース境界 |
