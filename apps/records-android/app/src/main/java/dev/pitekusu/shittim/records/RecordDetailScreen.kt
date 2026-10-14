@@ -108,7 +108,7 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
       // Preserve attachment order and make unavailable images reachable without dropping a page.
       val recordImages = state.preview.attachments.map { attachment ->
         state.images.firstOrNull { it.image.attachmentId == attachment.attachmentId }
-          ?: RecordImagePresentation(attachment)
+          ?: RecordImagePresentation(attachment, loading = true)
       }
       LaunchedEffect(state.preview.attachments.isEmpty()) {
         if (state.preview.attachments.isEmpty()) imageIndex = -1

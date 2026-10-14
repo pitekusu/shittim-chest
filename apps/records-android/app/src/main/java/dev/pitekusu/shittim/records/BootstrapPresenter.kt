@@ -426,10 +426,14 @@ internal class BootstrapPresenter(
       onDispose { currentImages.forEach { it.bytes?.fill(0) } }
     }
     val imageReferences = (record as? RecordPreviewState.Ready)?.preview?.attachments.orEmpty()
+    val imageRecordReady = record is RecordPreviewState.Ready
     val imageIdentity = imageReferences.joinToString("|") { "${it.attachmentId}:${it.sha256}" }
-    LaunchedEffect(cacheAccountId, selectedRecordId, imageIdentity, signedIn, imageRetry) {
+    LaunchedEffect(cacheAccountId, selectedRecordId, imageRecordReady, imageIdentity, signedIn, imageRetry) {
       val owner = cacheAccountId ?: return@LaunchedEffect
       val id = selectedRecordId ?: return@LaunchedEffect
+      // Idle/Loading has no attachment manifest yet. Treating it as an empty record
+      // prunes the saved originals before the local detail read can use them.
+      if (!imageRecordReady) return@LaunchedEffect
       if (!runtime.isActive(owner)) return@LaunchedEffect
       val previous = recordImages.associateBy { it.image.attachmentId }
       var loaded = imageReferences.map { image ->
