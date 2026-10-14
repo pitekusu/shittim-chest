@@ -39,6 +39,7 @@ from shittim_chest.adapters.dynamodb.serializer import (
     deserialize_ingress_status_publication,
     ingress_request_sort_key,
     ingress_request_sort_key_from_identity,
+    migrate_item,
     serialize_ingress_active_pointer,
     serialize_ingress_operation_result,
     serialize_ingress_request,
@@ -597,7 +598,8 @@ class DynamoDbIngressRepository:
         response = self._client.query(**parameters)
         requests: list[IngressRequest] = []
         for raw in response.get("Items", []):
-            pointer = unmarshal_item(raw)
+            # Immutable owner pointers retain their admission schema after upgrades.
+            pointer = migrate_item(unmarshal_item(raw))
             if (
                 _text(pointer, "PK") != partition
                 or _text(pointer, "record_type") != "mobile_ingress_owner_pointer"
