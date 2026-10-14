@@ -74,8 +74,8 @@ internal class RecordsRepository(
         result.listEntry?.let { entry ->
           val savedEntry = RecordListEntry(entry.recordId, entry.questionPreview, entry.requesterName,
             RecordAvatar(entry.requesterAvatar.url, entry.requesterAvatar.fallbackVariant, revision = avatarRevision),
-            entry.completedAt, entry.winnerName, entry.winnerSlot)
-          save(accountId, recordId, CachedRecordPart.LIST) { json.encodeToString(CachedListEntry(1, savedEntry)) }
+            entry.completedAt, entry.winnerName, entry.winnerSlot, entry.attachmentCount)
+          save(accountId, recordId, CachedRecordPart.LIST) { json.encodeToString(CachedListEntry(2, savedEntry)) }
         }
         requireActive(accountId)
       }
@@ -182,7 +182,7 @@ internal class RecordsRepository(
           // Presigned URLs expire and offline browsing must not trigger image network requests.
           RecordListEntry(entry.recordId, entry.questionPreview, entry.requesterName,
             RecordAvatar(null, entry.requesterAvatar.fallbackVariant, bytes),
-            entry.completedAt, entry.winnerName, entry.winnerSlot)
+            entry.completedAt, entry.winnerName, entry.winnerSlot, entry.attachmentCount)
         }
         prepareRead(accountId)
         result
@@ -205,7 +205,7 @@ internal class RecordsRepository(
     requireActive(accountId)
     val previous = synchronized(memoLock) { listMemo[row.recordId] }
     return if (previous != null && previous.row.sameCiphertext(row)) previous.entry else {
-      val entry = decodeListEntry(row.recordId, cache.decryptRow(accountId, row, CachedRecordPart.LIST))
+      val entry = decodeListEntry(accountId, row.recordId, cache.decryptRow(accountId, row, CachedRecordPart.LIST))
       synchronized(memoLock) {
         requireActive(accountId)
         listMemo[row.recordId] = MemoizedListEntry(row, entry)
@@ -374,7 +374,7 @@ internal class RecordsRepository(
   // Offline readers use the session's persisted permit; they cannot activate another owner.
   suspend fun cachedListEntry(accountId: String, recordId: String): RecordListEntry? = accountLock.withLock {
     prepareRead(accountId)
-    val result = load(accountId, recordId, CachedRecordPart.LIST)?.let { decodeListEntry(recordId, it) }
+    val result = load(accountId, recordId, CachedRecordPart.LIST)?.let { decodeListEntry(accountId, recordId, it) }
     requireActive(accountId)
     result
   }
@@ -472,10 +472,24 @@ internal class RecordsRepository(
     bytes.fill(0)
   }
 
-  private fun decodeListEntry(recordId: String, bytes: ByteArray): RecordListEntry = decode(bytes) {
-    json.decodeFromString<CachedListEntry>(it).also { cached ->
-      check(cached.schemaVersion == 1 && cached.entry.recordId == recordId)
-    }.entry
+  private suspend fun decodeListEntry(accountId: String, recordId: String, bytes: ByteArray): RecordListEntry {
+    val cached = decode(bytes) {
+      json.decodeFromString<CachedListEntry>(it).also { cached ->
+        check(cached.schemaVersion in 1..2 && cached.entry.recordId == recordId && cached.entry.attachmentCount in 0..3)
+      }
+    }
+    if (cached.schemaVersion == 2) return cached.entry
+    // Legacy lists have no image count. Resolve it from the authenticated saved body once;
+    // the list memo keeps this projection, so rendering and refreshes do not decrypt bodies.
+    val count = load(accountId, recordId, CachedRecordPart.DETAIL)?.let { detailBytes ->
+      decode(detailBytes) {
+        json.decodeFromString<CachedDetail>(it).also { detail -> check(detail.schemaVersion == 1) }
+          .preview.attachments.size.also { count -> check(count in 0..3) }
+      }
+    } ?: 0
+    val entry = cached.entry
+    return RecordListEntry(entry.recordId, entry.questionPreview, entry.requesterName, entry.requesterAvatar,
+      entry.completedAt, entry.winnerName, entry.winnerSlot, count)
   }
 
   override fun close() {

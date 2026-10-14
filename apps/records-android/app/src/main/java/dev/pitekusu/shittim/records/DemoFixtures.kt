@@ -76,7 +76,7 @@ internal object DemoFixtures {
       DemoRecord(
         RecordListEntry(id, question, "デモの先生${index % 2 + 1}",
           RecordAvatar(null, if (index % 2 == 0) "blue" else "pink"), Instant.parse("2026-10-01T09:00:00Z").minusSeconds(index * 86_400L),
-          names[winner], slots[winner]),
+          names[winner], slots[winner], images.size),
         result(question, images, winner, when (index) {
           4 -> RecordAffectionReasonStatus.NOT_RECORDED
           5 -> RecordAffectionReasonStatus.UNAVAILABLE

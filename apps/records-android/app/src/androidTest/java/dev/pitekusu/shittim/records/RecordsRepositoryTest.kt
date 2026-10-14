@@ -31,6 +31,8 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -123,6 +125,33 @@ class RecordsRepositoryTest {
       val changes = records.cachedRecord(accountId, recordId)!!.affection!!.changes
       assertEquals(listOf(10, -20, 0), changes.map { it.appliedDelta })
       assertTrue(changes.all { it.reason == null && it.reasonStatus == null })
+    }
+  }
+
+  @Test fun freshSynchronizationKeepsImageCountsOfflineWithoutImageDownloadsOrDetailRefetches() = runBlocking {
+    val images = DemoFixtures.sampleImages.map { image ->
+      RecordAttachment(image.attachmentId, image.contentType, image.sizeBytes, image.sha256, image.width, image.height,
+        "https://shittim-chest-production-records-media-000000000000.s3.ap-northeast-1.amazonaws.com/debate-images/${image.attachmentId}/original.png")
+    }
+    val payload = detail().replace("\"affection\":null", "\"affection\":null,\"attachments\":${Json.encodeToString(images)}")
+    val paths = mutableListOf<String>()
+    repository(MockEngine { request ->
+      assertEquals("shittim.pitekusu.dev", request.url.host)
+      val path = request.url.encodedPath
+      paths += path
+      respond(if (path.endsWith("/sync-index")) index() else payload,
+        headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { records ->
+      records.synchronize(token, accountId)
+      assertEquals(3, records.cachedRecords(accountId).single().attachmentCount)
+      assertEquals(listOf("/api/v1/records/sync-index", "/api/v1/records/$recordId"), paths)
+      paths.clear()
+      records.synchronize(token, accountId)
+      assertEquals(listOf("/api/v1/records/sync-index"), paths)
+    }
+    repository(MockEngine { error("offline_must_not_request_network") }).use { records ->
+      assertEquals(3, records.cachedListEntry(accountId, recordId)?.attachmentCount)
+      assertEquals(3, records.cachedRecords(accountId).single().attachmentCount)
     }
   }
 

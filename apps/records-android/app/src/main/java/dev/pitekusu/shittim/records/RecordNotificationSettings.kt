@@ -40,6 +40,13 @@ internal class RecordNotificationSettings(context: Context) {
   val failureAttempt: Int get() = preferences.getInt("failureAttempt", 1).coerceIn(1, 4)
   val permissionDenied: Boolean get() = preferences.getBoolean("permissionDenied", false)
   val permissionRequested: Boolean get() = preferences.getBoolean("permissionRequested", false) || permissionDenied
+  val vibrationChannelSelected: Boolean get() = preferences.getBoolean("vibrationChannelSelected", false)
+
+  fun selectVibrationChannel() {
+    // A device notification choice survives session/binding cleanup and an app-side OFF.
+    check(preferences.edit().putBoolean("vibrationChannelSelected", true).commit())
+    RecordNotifications.changed()
+  }
 
   fun optIn() {
     // Explicitly re-enabling always creates a new generation, rejecting older queued messages.
@@ -140,7 +147,8 @@ internal object RecordNotifications {
     (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context,
       Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) &&
       NotificationManagerCompat.from(context).let { manager ->
-        manager.areNotificationsEnabled() && notificationChannelAllowed(manager.getNotificationChannel(RECORD_NOTIFICATION_CHANNEL))
+        manager.areNotificationsEnabled() && notificationChannelAllowed(
+          manager.getNotificationChannel(activeRecordNotificationChannelId(context)))
       }
 
   fun status(context: Context): RecordNotificationStatus = synchronized(lock) {

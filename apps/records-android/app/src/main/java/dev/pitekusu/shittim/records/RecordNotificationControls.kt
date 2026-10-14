@@ -16,6 +16,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -83,6 +84,9 @@ internal fun RecordNotificationControls(demoEntryId: String? = null) {
     if (demoEntryId == null) RecordNotificationSettings(context).optedIn else DemoNotifications.optedIn(context, demoEntryId)
   }
   val diagnostic = remember(generation, demoEntryId) { if (demoEntryId == null) RecordNotificationSettings(context) else null }
+  val vibrationUpgrade = remember(generation, demoEntryId) {
+    demoEntryId == null && ReviewDemoModeStore.productionAllowed(context) && needsVibrationUpgrade(context)
+  }
   LifecycleResumeEffect(demoEntryId) {
     if (demoEntryId == null) RecordNotifications.changed() else DemoNotifications.refresh()
     onPauseOrDispose { }
@@ -114,6 +118,15 @@ internal fun RecordNotificationControls(demoEntryId: String? = null) {
       }, colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
         Text(switchLabel)
       }
+    }
+    if (vibrationUpgrade) {
+      OutlinedButton(onClick = { upgradeRecordNotificationVibration(context) },
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("record-notification-vibration")) {
+        Text(stringResource(R.string.notification_vibration_upgrade))
+      }
+      Text(stringResource(R.string.notification_vibration_description),
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
     }
     if (status == RecordNotificationStatus.PERMISSION_DENIED) {
       TextButton(onClick = {

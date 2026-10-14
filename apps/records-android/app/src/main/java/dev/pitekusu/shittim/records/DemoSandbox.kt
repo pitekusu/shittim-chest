@@ -230,7 +230,7 @@ internal class DemoSandbox(
       text.substring(0, text.offsetByCodePoints(0, minOf(160, text.codePointCount(0, text.length))))
     }
     return DemoRecord(RecordListEntry(snapshot.recordId, summary, "デモ利用者", RecordAvatar(null, "default"),
-      Instant.parse(snapshot.request.updatedAt), "アロナ", "participant-a"),
+      Instant.parse(snapshot.request.updatedAt), "アロナ", "participant-a", snapshot.images.size),
       DemoFixtures.result(question, snapshot.images))
   }
 

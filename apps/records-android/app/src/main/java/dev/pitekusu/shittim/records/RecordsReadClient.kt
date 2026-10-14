@@ -141,6 +141,7 @@ internal class RecordListEntry(
   @Serializable(with = CachedRecordInstantSerializer::class) val completedAt: Instant,
   val winnerName: String,
   val winnerSlot: String? = null,
+  val attachmentCount: Int = 0,
 )
 
 @Serializable
@@ -239,7 +240,7 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
           RecordListEntry(recordId, question.substring(0, end),
             detail.requester.displayName.also { check(it.isNotBlank()) },
             mapAvatar(detail.requester.avatar), OffsetDateTime.parse(detail.completedAt).toInstant(),
-            winner.displayName, winner.slot)
+            winner.displayName, winner.slot, detail.attachments.size)
         } catch (_: Exception) { throw RecordReadException(RecordReadFailure.INVALID_RESPONSE) }
       } else null)
   }

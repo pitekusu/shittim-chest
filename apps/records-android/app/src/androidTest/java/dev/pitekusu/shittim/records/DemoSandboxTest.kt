@@ -72,6 +72,7 @@ class DemoSandboxTest {
     assertEquals(2, selected.size)
     val first = entries.first()
     val detail = requireNotNull(demo.cachedRecord(DEMO_ACCOUNT_ID, first.recordId))
+    assertEquals(detail.attachments.size, first.attachmentCount)
     assertEquals(3, detail.opinions.size)
     assertEquals(3, detail.voting?.votes?.size)
     assertEquals(RecordAffectionReasonStatus.AVAILABLE, detail.affection?.changes?.first()?.reasonStatus)
@@ -90,6 +91,7 @@ class DemoSandboxTest {
     finally { bytes.fill(0) }
     val multiple = entries.first { entry -> DemoFixtures.records.first { it.entry.recordId == entry.recordId }.preview.attachments.size == 3 }
     val images = requireNotNull(demo.cachedRecord(DEMO_ACCOUNT_ID, multiple.recordId)).attachments
+    assertEquals(3, multiple.attachmentCount)
     assertEquals(3, images.map { it.sha256 }.toSet().size)
     for (descriptor in images) {
       val original = requireNotNull(demo.cachedAttachment(DEMO_ACCOUNT_ID, multiple.recordId, descriptor))
@@ -133,6 +135,7 @@ class DemoSandboxTest {
     assertTrue(demo.load().attachments.isEmpty())
     val recordId = requireNotNull(result.recordId)
     val detail = requireNotNull(demo.cachedRecord(DEMO_ACCOUNT_ID, recordId))
+    assertEquals(1, demo.cachedRecords(DEMO_ACCOUNT_ID).first { it.recordId == recordId }.attachmentCount)
     val stored = requireNotNull(demo.cachedAttachment(DEMO_ACCOUNT_ID, recordId, detail.attachments.single()))
     val sample = DemoFixtures.sampleImageBytes()
     try { assertArrayEquals(sample, stored) } finally { sample.fill(0); stored.fill(0) }
