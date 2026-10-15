@@ -357,8 +357,15 @@ function Conversation({
   const followsBottom = useRef(true);
   const [awayFromBottom, setAwayFromBottom] = useState(false);
   const [imagePointerEntry, setImagePointerEntry] = useState(false);
-  const [imageMood, setImageMood] = useState<MomotalkImage["mood"] | null>(null);
-  const image = data.images.find((candidate) => candidate.mood === imageMood);
+  const [selectedImage, setSelectedImage] = useState<Pick<
+    MomotalkImage,
+    "participant" | "mood"
+  > | null>(null);
+  const image = data.images.find(
+    (candidate) =>
+      candidate.participant === selectedImage?.participant &&
+      candidate.mood === selectedImage?.mood,
+  );
 
   useEffect(() => {
     if (!followsBottom.current) return;
@@ -463,7 +470,11 @@ function Conversation({
               );
               if (!participant) return null;
               return (
-                <li key={item.mood} className={styles.message} data-participant={item.participant}>
+                <li
+                  key={`${item.participant}-${item.mood}`}
+                  className={styles.message}
+                  data-participant={item.participant}
+                >
                   <Avatar avatar={participant.avatar} />
                   <div>
                     <strong>{participant.displayName}</strong>
@@ -473,7 +484,7 @@ function Conversation({
                         type="button"
                         onClick={(event) => {
                           setImagePointerEntry(event.detail > 0);
-                          setImageMood(item.mood);
+                          setSelectedImage({ participant: item.participant, mood: item.mood });
                         }}
                         aria-label={`${participant.displayName}の画像を拡大`}
                       >
@@ -517,7 +528,7 @@ function Conversation({
         <ImageViewer
           image={image}
           pointerEntry={imagePointerEntry}
-          onClose={() => setImageMood(null)}
+          onClose={() => setSelectedImage(null)}
         />
       )}
     </section>

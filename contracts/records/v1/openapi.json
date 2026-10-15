@@ -3129,10 +3129,57 @@
         "additionalProperties": false,
         "properties": {
           "images": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "participant": {
+                      "const": "participant-a"
+                    }
+                  },
+                  "required": [
+                    "participant"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 0
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "participant": {
+                      "const": "participant-b"
+                    }
+                  },
+                  "required": [
+                    "participant"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 0
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "participant": {
+                      "const": "participant-c"
+                    }
+                  },
+                  "required": [
+                    "participant"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 0
+              }
+            ],
             "items": {
               "$ref": "#/components/schemas/MomotalkImage"
             },
-            "maxItems": 2,
+            "maxItems": 3,
             "title": "Images",
             "type": "array"
           },
@@ -7862,7 +7909,7 @@
     },
     "/api/v1/momotalk/weeks/{weekId}/rooms/{roomId}": {
       "get": {
-        "description": "認証必須。日曜20時以降のモモトークを返す。private, no-store。",
+        "description": "認証必須。日曜20時以降のモモトークを返す。private, no-store。contract=momotalk-images-v2で対象人格全員の最大3画像を返す。未指定時は保存順でmoodごとの最初の画像だけを返す。最大2画像。",
         "operationId": "getMomotalkRoom",
         "parameters": [
           {
@@ -7880,6 +7927,17 @@
             "required": true,
             "schema": {
               "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "contract",
+            "required": false,
+            "schema": {
+              "enum": [
+                "momotalk-images-v2"
+              ],
               "type": "string"
             }
           }

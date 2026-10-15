@@ -276,7 +276,17 @@ def test_discussion_switch_passes_only_the_current_question():
 
 
 @pytest.mark.parametrize(
-    "scores", [(500, 500, 500), (800, 500, 500), (500, 200, 500), (800, 200, 500)]
+    "scores",
+    [
+        (500, 500, 500),
+        (800, 500, 500),
+        (500, 200, 500),
+        (800, 200, 500),
+        (800, 800, 800),
+        (200, 200, 200),
+        (800, 800, 200),
+        (800, 200, 200),
+    ],
 )
 @pytest.mark.parametrize("final", [False, True])
 def test_preparation_fixes_image_slots_and_accepts_four_discussions(scores, final):
@@ -304,7 +314,9 @@ def test_preparation_fixes_image_slots_and_accepts_four_discussions(scores, fina
     brief = {"record_id": requester.questions[0].record_id, "brief": "架空の散歩道で自撮り"}
     payload: dict[str, Any] = {
         "summary": "架空の4つの相談。",
-        "image_briefs": [brief.copy() for _ in room.images],
+        "image_briefs": [
+            {**brief, "brief": f"架空の撮影場面{index}"} for index in range(len(room.images))
+        ],
         **({"turns": [turn.model_dump() for turn in turns]} if final else {}),
     }
     calls = []
@@ -324,6 +336,12 @@ def test_preparation_fixes_image_slots_and_accepts_four_discussions(scores, fina
     assert isinstance(result, ConversationPlan if final else WeekDigest)
     assert len(calls) == 1
     assert [image.mood for image in result.images] == [image.mood for image in room.images]
+    assert [image.brief for image in result.images] == [
+        brief["brief"] for brief in payload["image_briefs"]
+    ]
+    assert json.loads(calls[0]["input"])["imageTargets"] == [
+        image.model_dump() for image in room.images
+    ]
     schema = calls[0]["text_format"]
     # Wrong image counts fail at the provider schema, before any image API call.
     for briefs in (payload["image_briefs"] + [brief], payload["image_briefs"][:-1]):
@@ -349,15 +367,20 @@ def test_preparation_fixes_image_slots_and_accepts_four_discussions(scores, fina
             generator.prepare(value, requester, room, requester.questions, final=False)
 
 
-def test_stored_full_image_repairs_missing_thumbnail_without_overwriting_original():
+@pytest.mark.parametrize("scores", [(850, 150, 500), (850, 850, 850)])
+def test_stored_full_image_repairs_missing_thumbnail_without_overwriting_original(scores):
     buffer = io.BytesIO()
     Image.new("RGB", (1024, 1536), "skyblue").save(buffer, format="WEBP")
-    state = State()
+    state = State(snapshot(scores=scores))
     boundary = cast(Any, state)
     collect_week(WEEK, boundary, boundary, boundary, boundary)
     room = state.room
     assert room is not None
-    full = image_key(WEEK.week_id, room.room_id, "happy")
+    target = room.images[0]
+    full = image_key(room, target)
+    assert full.endswith(
+        f"/{target.participant}-happy.webp" if scores == (850, 850, 850) else "/happy.webp"
+    )
     writes = []
     client = SimpleNamespace(
         list_objects_v2=lambda **_: {"Contents": [{"Key": full}]},
@@ -365,9 +388,9 @@ def test_stored_full_image_repairs_missing_thumbnail_without_overwriting_origina
         put_object=lambda **kwargs: writes.append(kwargs),
     )
     assets = MomotalkAssets(cast(Any, client), "private-media")
-    assert assets.image_exists(room, "happy")
+    assert assets.image_exists(room, target)
     assert len(writes) == 1
-    assert writes[0]["Key"] == image_key(WEEK.week_id, room.room_id, "happy", thumbnail=True)
+    assert writes[0]["Key"] == image_key(room, target, thumbnail=True)
     assert writes[0]["ServerSideEncryption"] == "AES256"
     with Image.open(io.BytesIO(writes[0]["Body"])) as thumbnail:
         assert thumbnail.size == (320, 480)
@@ -387,6 +410,56 @@ def test_image_download_is_short_lived_and_input_cleanup_removes_exact_version()
     assets = MomotalkAssets(cast(Any, client), "private-media")
     assets.delete_input(WEEK.week_id, "exact-frozen-version")
     assert calls[0]["VersionId"] == "exact-frozen-version"
-    assets.image_url(cast(Any, state.room), "happy", download=True)
+    room = state.room
+    assert room is not None
+    assets.image_url(room, room.images[0], download=True)
     assert calls[1]["ExpiresIn"] == 300
     assert calls[1]["Params"]["ResponseContentDisposition"].startswith("attachment;")
+
+
+@pytest.mark.parametrize("scores", [(850, 850, 850), (150, 150, 150), (850, 850, 150)])
+def test_same_mood_images_are_stored_and_signed_independently(scores):
+    state = State(snapshot(scores=scores))
+    boundary = cast(Any, state)
+    collect_week(WEEK, boundary, boundary, boundary, boundary)
+    room = state.room
+    assert room is not None and len(room.images) == 3
+    stored: dict[str, bytes] = {}
+    writes = []
+    signed = []
+
+    def put_object(**kwargs):
+        writes.append(kwargs)
+        stored[kwargs["Key"]] = kwargs["Body"]
+
+    def presign(operation, **kwargs):
+        signed.append({"operation": operation, **kwargs})
+        return "https://media.example.invalid/" + kwargs["Params"]["Key"]
+
+    client = SimpleNamespace(
+        list_objects_v2=lambda **kwargs: {
+            "Contents": [{"Key": key} for key in stored if key.startswith(kwargs["Prefix"])]
+        },
+        put_object=put_object,
+        generate_presigned_url=presign,
+    )
+    assets = MomotalkAssets(cast(Any, client), "private-media")
+    for index, target in enumerate(room.images):
+        assert not assets.image_exists(room, target)
+        buffer = io.BytesIO()
+        Image.new("RGB", (256, 256), (index * 80, 100, 200)).save(buffer, format="PNG")
+        assets.store_image(room, target, buffer.getvalue())
+        assert assets.image_exists(room, target)
+
+    assert len(stored) == len(writes) == 6
+    assert len({stored[image_key(room, image)] for image in room.images}) == 3
+    originals = [assets.image_url(room, image) for image in room.images]
+    thumbnails = [assets.image_url(room, image, thumbnail=True) for image in room.images]
+    downloads = [assets.image_url(room, image, download=True) for image in room.images]
+    assert len(set(originals + thumbnails)) == 6
+    assert downloads == originals
+    filenames = [entry["Params"]["ResponseContentDisposition"] for entry in signed[-3:]]
+    assert len(set(filenames)) == 3
+    assert all(entry["ExpiresIn"] == 300 for entry in signed)
+    assert all(entry["ContentType"] == "image/webp" for entry in writes)
+    assert all(entry["ServerSideEncryption"] == "AES256" for entry in writes)

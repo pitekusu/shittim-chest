@@ -2856,10 +2856,57 @@
       "additionalProperties": false,
       "properties": {
         "images": {
+          "allOf": [
+            {
+              "contains": {
+                "properties": {
+                  "participant": {
+                    "const": "participant-a"
+                  }
+                },
+                "required": [
+                  "participant"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 0
+            },
+            {
+              "contains": {
+                "properties": {
+                  "participant": {
+                    "const": "participant-b"
+                  }
+                },
+                "required": [
+                  "participant"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 0
+            },
+            {
+              "contains": {
+                "properties": {
+                  "participant": {
+                    "const": "participant-c"
+                  }
+                },
+                "required": [
+                  "participant"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 0
+            }
+          ],
           "items": {
             "$ref": "#/$defs/MomotalkImage"
           },
-          "maxItems": 2,
+          "maxItems": 3,
           "title": "Images",
           "type": "array"
         },

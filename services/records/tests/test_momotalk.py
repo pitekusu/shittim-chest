@@ -18,6 +18,7 @@ from shittim_records.momotalk import (
     Question,
     RequesterInput,
     Room,
+    SavedImage,
     Turn,
     Utterance,
     WeeklyInput,
@@ -127,6 +128,9 @@ class State:
         self.deleted = []
         self.calls = []
         self.image_failures = set()
+        self.image_participant_calls = []
+        self.image_participant_failures = set()
+        self.stored_images = set()
 
     def collect(self, _week):
         return self.snapshot
@@ -203,17 +207,21 @@ class State:
         self.calls.append(len(room.messages))
         return Utterance(text=f"架空の発言{len(room.messages) + 1}です。")
 
-    def image_exists(self, *_args):
-        return False
+    def image_exists(self, _room, image):
+        return (image.participant, image.mood) in self.stored_images
 
     def selfie(self, _snapshot, _requester, image, _choice):
         self.calls.append(image.mood)
-        if image.mood in self.image_failures:
+        self.image_participant_calls.append(image.participant)
+        if (
+            image.mood in self.image_failures
+            or image.participant in self.image_participant_failures
+        ):
             raise MomotalkFailure("MOMOTALK_IMAGE_FAILED")
         return b"fake image"
 
-    def store_image(self, *_args):
-        pass
+    def store_image(self, _room, image, _content):
+        self.stored_images.add((image.participant, image.mood))
 
     def image_url(self, *_args, **_kwargs):
         return "https://media.example.invalid/signed-image"
@@ -226,12 +234,136 @@ class State:
         ((800, 500, 500), ["happy"]),
         ((500, 200, 500), ["unhappy"]),
         ((800, 200, 500), ["happy", "unhappy"]),
+        ((800, 800, 800), ["happy", "happy", "happy"]),
+        ((200, 200, 200), ["unhappy", "unhappy", "unhappy"]),
+        ((800, 800, 200), ["happy", "happy", "unhappy"]),
+        ((0, 1000, 201), ["happy", "unhappy"]),
     ],
 )
 def test_thresholds_and_zero_questions(scores, moods):
     requester = snapshot(scores=scores).requesters[0]
     assert [i.mood for i in image_targets(requester, WEEK.week_id)] == moods
     assert image_targets(requester.model_copy(update={"questions": []}), WEEK.week_id) == []
+
+
+@pytest.mark.parametrize(
+    "scores,slots",
+    [
+        ((850, 900, 800), ["participant-b", "participant-a", "participant-c"]),
+        ((200, 100, 0), ["participant-c", "participant-b", "participant-a"]),
+        ((800, 100, 900), ["participant-c", "participant-a", "participant-b"]),
+    ],
+)
+def test_all_eligible_images_keep_previous_extreme_first(scores, slots):
+    requester = snapshot(scores=scores).requesters[0]
+    assert [image.participant for image in image_targets(requester, WEEK.week_id)] == slots
+
+
+def test_checkpoint_rejects_multiple_images_for_the_same_participant():
+    state = State()
+    boundary = cast(Any, state)
+    collect_week(WEEK, boundary, boundary, boundary, boundary)
+    assert state.room is not None
+    state.room.images.append(SavedImage(participant="participant-a", mood="unhappy"))
+    with pytest.raises(ValidationError, match="duplicate image participant"):
+        Room.model_validate_json(state.room.model_dump_json())
+
+
+@pytest.mark.parametrize("failed", [None, "participant-b"])
+def test_same_mood_images_progress_independently_and_do_not_repeat_completed_work(failed):
+    state = cast(Any, State(snapshot(scores=(800, 800, 800))))
+    if failed:
+        state.image_participant_failures.add(failed)
+    collect_week(WEEK, state, state, state, state)
+    service = MomotalkGenerationService(state, state, state, state)
+    for _ in range(20):
+        service.run(WEEK.week_id, ROOM_ID, now=START)
+        if state.room.complete:
+            break
+        # Recreate the service at every checkpoint to exercise persisted image identity.
+        service = MomotalkGenerationService(state, state, state, state)
+    assert state.room.complete and state.room.state == "ready"
+    assert len(state.room.messages) == 9
+    assert [image.state for image in state.room.images] == [
+        "failed" if image.participant == failed else "ready" for image in state.room.images
+    ]
+    assert state.image_participant_calls == (
+        ["participant-a", "participant-b", "participant-b", "participant-b", "participant-c"]
+        if failed
+        else list(PARTICIPANTS)
+    )
+    before = state.image_participant_calls.copy()
+    service.run(WEEK.week_id, ROOM_ID, now=START)
+    assert state.image_participant_calls == before
+
+
+def test_existing_checkpoint_keeps_its_original_image_roster_and_reuses_saved_image():
+    state = cast(Any, State(snapshot(scores=(850, 900, 150))))
+    collect_week(WEEK, state, state, state, state)
+    # A pre-change checkpoint contains only the highest happy and lowest unhappy image.
+    state.room.images = [state.room.images[0], state.room.images[-1]]
+    state.stored_images.add(("participant-b", "happy"))
+    service = MomotalkGenerationService(state, state, state, state)
+    for _ in range(20):
+        service.run(WEEK.week_id, ROOM_ID, now=START)
+        if state.room.complete:
+            break
+    assert state.room.complete
+    assert [(image.participant, image.mood) for image in state.room.images] == [
+        ("participant-b", "happy"),
+        ("participant-c", "unhappy"),
+    ]
+    assert state.image_participant_calls == ["participant-c"]
+
+
+def test_saved_image_is_reused_after_its_checkpoint_save_fails(monkeypatch):
+    state = cast(Any, State(snapshot(scores=(800, 800, 800))))
+    collect_week(WEEK, state, state, state, state)
+    service = MomotalkGenerationService(state, state, state, state)
+    for _ in range(10):
+        service.run(WEEK.week_id, ROOM_ID, now=START)
+        if state.room.state == "ready":
+            break
+    original_save = state.save
+
+    def unavailable(_room):
+        raise RuntimeError("checkpoint unavailable")
+
+    monkeypatch.setattr(state, "save", unavailable)
+    with pytest.raises(RuntimeError, match="checkpoint unavailable"):
+        service.run(WEEK.week_id, ROOM_ID, now=START)
+    assert state.image_participant_calls == ["participant-a"]
+    assert state.room.images[0].state == "pending"
+    monkeypatch.setattr(state, "save", original_save)
+    for _ in range(3):
+        service.run(WEEK.week_id, ROOM_ID, now=START)
+    assert state.room.complete and all(image.state == "ready" for image in state.room.images)
+    assert state.image_participant_calls == list(PARTICIPANTS)
+
+
+def test_repair_selects_exact_participant_and_rejects_ambiguous_mood():
+    state = cast(Any, State(snapshot(scores=(800, 800, 800))))
+    state.image_participant_failures.add("participant-b")
+    collect_week(WEEK, state, state, state, state)
+    service = MomotalkGenerationService(state, state, state, state)
+    for _ in range(20):
+        service.run(WEEK.week_id, ROOM_ID, now=START)
+        if state.room.complete:
+            break
+    before = state.room.model_copy(deep=True)
+    state.image_participant_calls.clear()
+    state.image_participant_failures.clear()
+    with pytest.raises(MomotalkFailure, match="MOMOTALK_REPAIR_INVALID"):
+        service.retry_failed_image(WEEK.week_id, ROOM_ID, "happy", state, now=START)
+    assert state.image_participant_calls == []
+    assert service.retry_failed_image(
+        WEEK.week_id, ROOM_ID, "happy", state, now=START, participant="participant-b"
+    )
+    assert state.image_participant_calls == ["participant-b"]
+    assert state.room.images[0] == before.images[0]
+    assert state.room.images[2] == before.images[2]
+    assert state.room.messages == before.messages and state.room.plan == before.plan
+    assert all(image.state == "ready" for image in state.room.images)
 
 
 def test_graphemes_balancing_and_week_boundaries():

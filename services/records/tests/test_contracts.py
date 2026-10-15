@@ -20,6 +20,7 @@ from shittim_records.contracts import (
     MemorialStateResponse,
     MemorialUploadRequest,
     MemorialUploadResponse,
+    MomotalkRoomResponse,
     NonEmptyText,
     RankingsResponse,
     RecordDetailResponse,
@@ -29,6 +30,35 @@ from shittim_records.contracts import (
     SessionResponse,
     VoteView,
 )
+
+
+def test_momotalk_images_allow_three_independent_participants_and_reject_duplicates() -> None:
+    detail = _record_detail_payload()
+    payload = {
+        "week": {
+            "weekId": "2026-10-11",
+            "periodStart": "2026-10-04T09:00:00Z",
+            "periodEnd": "2026-10-11T09:00:00Z",
+            "publishAt": "2026-10-11T11:00:00Z",
+        },
+        "room": {
+            "roomId": "r" * 43,
+            "requester": detail["requester"],
+            "questionCount": 1,
+            "state": "ready",
+        },
+        "participants": detail["participants"],
+        "messages": [],
+        "images": [
+            {"participant": slot, "mood": "happy", "state": "pending"}
+            for slot in ("participant-a", "participant-b", "participant-c")
+        ],
+    }
+    assert len(MomotalkRoomResponse.model_validate(payload).images) == 3
+    with pytest.raises(ValidationError, match="each participant at most once"):
+        MomotalkRoomResponse.model_validate(
+            {**payload, "images": [payload["images"][0], payload["images"][0]]}
+        )
 
 
 def test_affection_rankings_require_nullable_next_cursor_property() -> None:

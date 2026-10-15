@@ -81,7 +81,9 @@ class MomotalkReadService:
             next_cursor=next_cursor,
         )
 
-    def get_room(self, *, week_id: str, room_id: str, now: datetime) -> MomotalkRoomResponse:
+    def get_room(
+        self, *, week_id: str, room_id: str, now: datetime, include_all_images: bool = False
+    ) -> MomotalkRoomResponse:
         # Gate before reading private state or signing a single media URL.
         week = self._week(week_id, now)
         self._room_id(room_id)
@@ -103,6 +105,10 @@ class MomotalkReadService:
         images = []
         if summary.state == "ready":
             for image in room.images:
+                # Existing Web clients identify images by mood and accept at most two.
+                # Select from the frozen roster without changing its paid image work.
+                if not include_all_images and any(saved.mood == image.mood for saved in images):
+                    continue
                 state = image.state
                 if state == "pending" and now >= week.publish_at + timedelta(days=1):
                     state = "failed"
@@ -111,11 +117,11 @@ class MomotalkReadService:
                         participant=image.participant,
                         mood=image.mood,
                         state=state,
-                        url=self.assets.image_url(room, image.mood) if state == "ready" else None,
-                        thumbnail_url=self.assets.image_url(room, image.mood, thumbnail=True)
+                        url=self.assets.image_url(room, image) if state == "ready" else None,
+                        thumbnail_url=self.assets.image_url(room, image, thumbnail=True)
                         if state == "ready"
                         else None,
-                        download_url=self.assets.image_url(room, image.mood, download=True)
+                        download_url=self.assets.image_url(room, image, download=True)
                         if state == "ready"
                         else None,
                     )

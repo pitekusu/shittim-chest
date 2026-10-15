@@ -55,7 +55,12 @@ def main() -> int:
             succeeded = MomotalkGenerationService(
                 store, assets, queue, generator
             ).retry_failed_image(
-                week_id, candidates[0].room_id, args.mood, source, now=datetime.now(UTC)
+                week_id,
+                candidates[0].room_id,
+                args.mood,
+                source,
+                now=datetime.now(UTC),
+                participant=args.participant,
             )
         finally:
             generator.close()

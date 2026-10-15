@@ -25,8 +25,16 @@ from shittim_records.momotalk_generation import (
 
 
 class FallbackState(State):
-    def __init__(self, *, reject_alternative=False, questions=2, both_images=False, turns=9):
-        value = snapshot()
+    def __init__(
+        self,
+        *,
+        reject_alternative=False,
+        questions=2,
+        both_images=False,
+        turns=9,
+        scores=(850, 150, 500),
+    ):
+        value = snapshot(scores=scores)
         original = value.requesters[0].questions[0]
         if questions == 2:
             value.requesters[0].questions.append(
@@ -324,10 +332,37 @@ def test_operator_claim_loss_keeps_the_rejection_for_the_next_repair(monkeypatch
     assert state.image_calls == [("unhappy", "q" * 43), ("unhappy", "r" * 43)]
 
 
+def test_same_mood_moderation_changes_only_the_rejected_participant():
+    class OneRejectedParticipant(FallbackState):
+        def selfie(self, _snapshot, _requester, image, _choice):
+            content = super().selfie(_snapshot, _requester, image, _choice)
+            if image.participant == "participant-b" and _choice.record_id == "q" * 43:
+                raise MomotalkFailure("MOMOTALK_IMAGE_MODERATION_BLOCKED")
+            return content
+
+    state = cast(Any, OneRejectedParticipant(scores=(800, 800, 800)))
+    service = published(state)
+    before = state.room.model_copy(deep=True)
+    for _ in range(5):
+        service.run(WEEK.week_id, ROOM_ID, now=START)
+    assert state.room.complete and all(image.state == "ready" for image in state.room.images)
+    assert state.image_participant_calls == [
+        "participant-a",
+        "participant-b",
+        "participant-b",
+        "participant-c",
+    ]
+    assert [image.alternate_topic_used for image in state.room.images] == [False, True, False]
+    assert [choice.record_id for choice in state.room.plan.images] == ["q" * 43, "r" * 43, "q" * 43]
+    assert state.room.messages == before.messages
+    assert state.room.plan.turns == before.plan.turns
+
+
 @pytest.mark.parametrize("chunk_count", [2, 12])
 @pytest.mark.parametrize("retry_preparation", [False, True])
+@pytest.mark.parametrize("scores", [(850, 150, 500), (800, 800, 800)])
 def test_long_preparation_and_image_fallbacks_resume_in_bounded_chains(
-    chunk_count, retry_preparation
+    chunk_count, retry_preparation, scores
 ):
     class QueuedState(FallbackState):
         def send(self, week_id, room_id, *, steps_remaining=MAX_CHAIN_STEPS):
@@ -340,7 +375,7 @@ def test_long_preparation_and_image_fallbacks_resume_in_bounded_chains(
             result = super().prepare(*args, final=True, **kwargs)
             return result if final else WeekDigest(summary=result.summary, images=result.images)
 
-    state = cast(Any, QueuedState(both_images=True, turns=15))
+    state = cast(Any, QueuedState(both_images=True, turns=15, scores=scores))
     requester = state.snapshot.requesters[0]
     original = requester.questions[0]
     # Each synthetic record fits one chunk; pairs exceed its byte budget.
@@ -386,7 +421,12 @@ def test_long_preparation_and_image_fallbacks_resume_in_bounded_chains(
     assert state.room.state == "ready" and len(state.room.messages) == 15
     assert all(image.state == "ready" for image in state.room.images)
     assert not state.room.continuation_pending
-    assert len(state.image_calls) == 4 and len(state.reselections) == 2
+    image_count = len(state.room.images)
+    assert len(state.image_calls) == image_count * 2
+    assert len(state.reselections) == image_count
+    assert all(
+        state.image_participant_calls.count(image.participant) == 2 for image in state.room.images
+    )
     assert continue_week(WEEK.week_id, state, state, now=START) == 0
 
 

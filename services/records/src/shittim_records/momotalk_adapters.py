@@ -19,6 +19,7 @@ from shittim_records.momotalk import (
     Question,
     RequesterInput,
     Room,
+    SavedImage,
     WeeklyInput,
     image_key,
     image_targets,
@@ -256,9 +257,9 @@ class MomotalkAssets:
             Bucket=self.bucket, Key=self.input_key(week_id), VersionId=version
         )
 
-    def image_exists(self, room: Room, mood: str) -> bool:
-        full_key = image_key(room.week_id, room.room_id, mood)
-        thumbnail_key = image_key(room.week_id, room.room_id, mood, thumbnail=True)
+    def image_exists(self, room: Room, image: SavedImage) -> bool:
+        full_key = image_key(room, image)
+        thumbnail_key = image_key(room, image, thumbnail=True)
         # A narrowly scoped ListBucket permission distinguishes absence from a 403.
         response = self.client.list_objects_v2(
             Bucket=self.bucket, Prefix=full_key.removesuffix(".webp"), MaxKeys=10
@@ -270,26 +271,26 @@ class MomotalkAssets:
             # Recover a failed thumbnail write without paying to generate the image again.
             response = self.client.get_object(Bucket=self.bucket, Key=full_key)
             with response["Body"] as body:
-                self.store_image(room, mood, body.read(), thumbnail_only=True)
+                self.store_image(room, image, body.read(), thumbnail_only=True)
         return True
 
     def store_image(
-        self, room: Room, mood: str, content: bytes, *, thumbnail_only: bool = False
+        self, room: Room, image: SavedImage, content: bytes, *, thumbnail_only: bool = False
     ) -> None:
         if len(content) > 20 * 1024 * 1024:
             raise MomotalkFailure("MOMOTALK_IMAGE_INVALID")
         with Image.open(io.BytesIO(content)) as source:
             if source.width * source.height > 16_000_000 or min(source.size) < 256:
                 raise MomotalkFailure("MOMOTALK_IMAGE_INVALID")
-            image = ImageOps.exif_transpose(source).convert("RGB")
+            decoded = ImageOps.exif_transpose(source).convert("RGB")
         for thumbnail in (True,) if thumbnail_only else (False, True):
-            output = image.copy()
+            output = decoded.copy()
             output.thumbnail((320, 480) if thumbnail else (1024, 1536))
             buffer = io.BytesIO()
             output.save(buffer, format="WEBP", quality=84 if thumbnail else 94, method=4)
             self.client.put_object(
                 Bucket=self.bucket,
-                Key=image_key(room.week_id, room.room_id, mood, thumbnail=thumbnail),
+                Key=image_key(room, image, thumbnail=thumbnail),
                 Body=buffer.getvalue(),
                 ContentType="image/webp",
                 ServerSideEncryption="AES256",
@@ -297,15 +298,16 @@ class MomotalkAssets:
             )
 
     def image_url(
-        self, room: Room, mood: str, *, thumbnail: bool = False, download: bool = False
+        self, room: Room, image: SavedImage, *, thumbnail: bool = False, download: bool = False
     ) -> str:
         parameters = {
             "Bucket": self.bucket,
-            "Key": image_key(room.week_id, room.room_id, mood, thumbnail=thumbnail),
+            "Key": image_key(room, image, thumbnail=thumbnail),
         }
         if download:
             parameters["ResponseContentDisposition"] = (
-                f'attachment; filename="momotalk-{room.week_id}-{mood}.webp"'
+                f'attachment; filename="momotalk-{room.week_id}-'
+                f'{image.participant}-{image.mood}.webp"'
             )
         return self.client.generate_presigned_url("get_object", Params=parameters, ExpiresIn=300)
 

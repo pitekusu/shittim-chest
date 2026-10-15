@@ -97,7 +97,7 @@ class ImageChoice(StoredModel):
 
 class WeekDigest(StoredModel):
     summary: str = Field(min_length=1, max_length=4000, repr=False)
-    images: list[ImageChoice] = Field(max_length=2)
+    images: list[ImageChoice] = Field(max_length=3)
 
 
 class ConversationPlan(WeekDigest):
@@ -165,8 +165,10 @@ class Room(StoredModel):
 
     @model_validator(mode="after")
     def valid_checkpoint(self) -> Self:
-        if len(self.messages) > 15 or len(self.images) > 2:
+        if len(self.messages) > 15 or len(self.images) > 3:
             raise ValueError("checkpoint limits exceeded")
+        if len({image.participant for image in self.images}) != len(self.images):
+            raise ValueError("duplicate image participant")
         if self.messages and self.plan is None:
             raise ValueError("conversation has no plan")
         if self.plan:
@@ -218,14 +220,19 @@ def image_targets(requester: RequesterInput, week_id: date) -> list[SavedImage]:
         return []
     rotation = (week_id - date(2026, 1, 4)).days // 7 % 3
     order = (*PARTICIPANTS[rotation:], *PARTICIPANTS[:rotation])
-    highest = max(order, key=lambda slot: requester.scores[slot])
-    lowest = min(order, key=lambda slot: requester.scores[slot])
-    images: list[SavedImage] = []
-    if requester.scores[highest] >= 800:
-        images.append(SavedImage(participant=highest, mood="happy"))
-    if requester.scores[lowest] <= 200:
-        images.append(SavedImage(participant=lowest, mood="unhappy"))
-    return images
+    # Keep the previous first image of each mood; ties use the weekly rotation.
+    return [
+        *(
+            SavedImage(participant=slot, mood="happy")
+            for slot in sorted(order, key=lambda slot: -requester.scores[slot])
+            if requester.scores[slot] >= 800
+        ),
+        *(
+            SavedImage(participant=slot, mood="unhappy")
+            for slot in sorted(order, key=lambda slot: requester.scores[slot])
+            if requester.scores[slot] <= 200
+        ),
+    ]
 
 
 def question_chunks(questions: list[Question]) -> list[list[Question]]:
@@ -253,10 +260,14 @@ def validate_image_choices(
         raise MomotalkFailure("MOMOTALK_OUTPUT_INVALID")
 
 
-def image_key(week_id: date, room_id: str, mood: str, *, thumbnail: bool = False) -> str:
+def image_key(room: Room, image: SavedImage, *, thumbnail: bool = False) -> str:
     # Identifiers have already passed the stored/public boundary validators.
+    # Room image targets are frozen at creation. Unique moods retain old keys so
+    # published images and interrupted checkpoints need no migration or regeneration.
+    repeated_mood = sum(target.mood == image.mood for target in room.images) > 1
+    name = f"{image.participant}-{image.mood}" if repeated_mood else image.mood
     suffix = "-thumb" if thumbnail else ""
-    return f"momotalk/images/{week_id}/{room_id}/{mood}{suffix}.webp"
+    return f"momotalk/images/{room.week_id}/{room.room_id}/{name}{suffix}.webp"
 
 
 def persona_checksum(personas: dict[ParticipantSlot, str]) -> str:

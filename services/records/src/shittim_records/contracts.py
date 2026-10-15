@@ -1131,7 +1131,29 @@ class MomotalkRoomResponse(PublicModel):
     room: MomotalkRoomSummary
     participants: ParticipantCollection
     messages: list[MomotalkMessage] = Field(max_length=15)
-    images: list[MomotalkImage] = Field(max_length=2)
+    images: list[MomotalkImage] = Field(
+        max_length=3,
+        json_schema_extra={
+            "allOf": [
+                {
+                    "contains": {
+                        "properties": {"participant": {"const": slot}},
+                        "required": ["participant"],
+                        "type": "object",
+                    },
+                    "maxContains": 1,
+                    "minContains": 0,
+                }
+                for slot in sorted(_ALL_PARTICIPANT_SLOTS)
+            ]
+        },
+    )
+
+    @model_validator(mode="after")
+    def unique_image_participants(self) -> MomotalkRoomResponse:
+        if len({image.participant for image in self.images}) != len(self.images):
+            raise ValueError("images must contain each participant at most once")
+        return self
 
 
 PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (

@@ -81,7 +81,7 @@ export function getMomotalkRoom(
   signal?: AbortSignal,
 ): Promise<MomotalkRoomResponse> {
   return requestJson(
-    `/api/v1/momotalk/weeks/${encodeURIComponent(week)}/rooms/${encodeURIComponent(room)}`,
+    `/api/v1/momotalk/weeks/${encodeURIComponent(week)}/rooms/${encodeURIComponent(room)}?contract=momotalk-images-v2`,
     (value): value is MomotalkRoomResponse => roomValidator(value),
     { signal },
   );

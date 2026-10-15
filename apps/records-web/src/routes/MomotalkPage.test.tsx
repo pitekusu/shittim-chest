@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -8,6 +8,7 @@ import {
   getMomotalkRooms,
   getMomotalkWeeks,
   type MomotalkRoomResponse,
+  type MomotalkImage,
   type MomotalkWeek,
 } from "../api/momotalk";
 import { placeholder, recordDetail } from "../test/recordsTestUtils";
@@ -97,4 +98,70 @@ describe("Momotalk week selection", () => {
     expect(screen.getByRole("heading", { name: "質問者を選択してください。" })).toBeVisible();
     client.clear();
   });
+});
+
+describe("Momotalk participant images", () => {
+  it.each(["happy", "unhappy"] as const)(
+    "opens and saves each participant's %s image independently",
+    async (mood) => {
+      Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
+        configurable: true,
+        value(this: HTMLDialogElement) {
+          this.setAttribute("open", "");
+        },
+      });
+      Object.defineProperty(HTMLDialogElement.prototype, "close", {
+        configurable: true,
+        value(this: HTMLDialogElement) {
+          this.removeAttribute("open");
+        },
+      });
+      const images: MomotalkImage[] = conversation.participants.map(({ slot }) => ({
+        participant: slot,
+        mood,
+        state: "ready",
+        url: `/selfie-${slot}.webp`,
+        thumbnailUrl: `/thumbnail-${slot}.webp`,
+        downloadUrl: `/download-${slot}.webp`,
+      }));
+      vi.mocked(getMomotalkWeeks).mockResolvedValue({
+        schemaVersion: 1,
+        weeks: [week],
+        nextCursor: null,
+      });
+      vi.mocked(getMomotalkRooms).mockResolvedValue({
+        schemaVersion: 1,
+        week,
+        rooms: [conversation.room],
+        nextCursor: null,
+      });
+      vi.mocked(getMomotalkRoom).mockResolvedValue({ ...conversation, images });
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={client}>
+          <MemoryRouter initialEntries={["/momotalk"]}>
+            <MomotalkPage />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+      fireEvent.click(await screen.findByRole("button", { name: /週の先生/ }));
+      fireEvent.click(await screen.findByRole("button", { name: "すべて表示" }));
+      for (const [index, participant] of conversation.participants.entries()) {
+        const trigger = screen.getByRole("button", {
+          name: `${participant.displayName}の画像を拡大`,
+        });
+        trigger.focus();
+        fireEvent.click(trigger);
+        const dialog = screen.getByRole("dialog", { name: "モモトークの画像" });
+        expect(within(dialog).getByRole("img")).toHaveAttribute("src", images[index]!.url);
+        expect(within(dialog).getByRole("link", { name: "画像を保存" })).toHaveAttribute(
+          "href",
+          images[index]!.downloadUrl,
+        );
+        fireEvent.click(within(dialog).getByRole("button", { name: "閉じる" }));
+        expect(trigger).toHaveFocus();
+      }
+      client.clear();
+    },
+  );
 });

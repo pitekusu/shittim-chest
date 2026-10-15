@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from typing import Any, Protocol
 
-from shittim_records.contracts import MomotalkWeek
+from shittim_records.contracts import MomotalkWeek, ParticipantSlot
 from shittim_records.momotalk import (
     MAX_ATTEMPTS,
     MAX_CHAIN_STEPS,
@@ -66,8 +66,8 @@ class Assets(Protocol):
     def freeze(self, snapshot: WeeklyInput) -> tuple[WeeklyInput, str]: ...
     def load_input(self, week_id: date, version: str | None = None) -> tuple[WeeklyInput, str]: ...
     def delete_input(self, week_id: date, version: str) -> None: ...
-    def image_exists(self, room: Room, mood: str) -> bool: ...
-    def store_image(self, room: Room, mood: str, content: bytes) -> None: ...
+    def image_exists(self, room: Room, image: SavedImage) -> bool: ...
+    def store_image(self, room: Room, image: SavedImage, content: bytes) -> None: ...
 
 
 class InputSource(Protocol):
@@ -217,15 +217,27 @@ class MomotalkGenerationService:
         return True
 
     def retry_failed_image(
-        self, week_id: date, room_id: str, mood: str, source: InputSource, *, now: datetime
+        self,
+        week_id: date,
+        room_id: str,
+        mood: str,
+        source: InputSource,
+        *,
+        now: datetime,
+        participant: ParticipantSlot | None = None,
     ) -> bool:
         """One repair, with one alternate subject only after a moderation rejection."""
         room = self.store.get_room(week_id, room_id)
         if room is None or room.state != "ready" or not room.complete or room.plan is None:
             raise MomotalkFailure("MOMOTALK_REPAIR_INVALID")
-        index = next((i for i, image in enumerate(room.images) if image.mood == mood), None)
-        if index is None:
+        candidates = [
+            i
+            for i, image in enumerate(room.images)
+            if image.mood == mood and (participant is None or image.participant == participant)
+        ]
+        if len(candidates) != 1:
             raise MomotalkFailure("MOMOTALK_REPAIR_INVALID")
+        index = candidates[0]
         if room.images[index].state == "ready":
             return True
         if room.images[index].state != "failed":
@@ -321,7 +333,7 @@ class MomotalkGenerationService:
             raise MomotalkFailure("MOMOTALK_OUTPUT_INVALID")
         image = room.images[index]
         choice = room.plan.images[index]
-        if self.assets.image_exists(room, image.mood):
+        if self.assets.image_exists(room, image):
             image.state = "ready"
             image.moderation_blocked = False
             return True
@@ -347,7 +359,7 @@ class MomotalkGenerationService:
                 image.state = "failed"
                 return True
             return False
-        self.assets.store_image(room, image.mood, content)
+        self.assets.store_image(room, image, content)
         image.state = "ready"
         return True
 

@@ -376,11 +376,23 @@ class ReadHttpController:
         if self._momotalk is None:
             raise ReadFailure("MOMOTALK_UNAVAILABLE", 503)
         query = _query(request.raw_query)
-        if not set(query).issubset({"limit", "cursor"}):
-            raise ReadFailure("REQUEST_INVALID", 400)
-        limit = _affection_limit(_optional_single(query, "limit"))
-        cursor = _optional_single(query, "cursor")
         try:
+            if request.route_key == "GET /api/v1/momotalk/weeks/{weekId}/rooms/{roomId}":
+                if not set(query).issubset({"contract"}):
+                    raise ReadFailure("REQUEST_INVALID", 400)
+                contract = _optional_single(query, "contract")
+                if contract not in {None, "momotalk-images-v2"}:
+                    raise ReadFailure("REQUEST_INVALID", 400)
+                return self._momotalk.get_room(
+                    week_id=request.path_parameters.get("weekId", ""),
+                    room_id=request.path_parameters.get("roomId", ""),
+                    now=now,
+                    include_all_images=contract == "momotalk-images-v2",
+                )
+            if not set(query).issubset({"limit", "cursor"}):
+                raise ReadFailure("REQUEST_INVALID", 400)
+            limit = _affection_limit(_optional_single(query, "limit"))
+            cursor = _optional_single(query, "cursor")
             if request.route_key == "GET /api/v1/momotalk/weeks":
                 return self._momotalk.list_weeks(limit=limit, cursor=cursor, now=now)
             week_id = request.path_parameters.get("weekId", "")
@@ -388,16 +400,10 @@ class ReadHttpController:
                 return self._momotalk.list_rooms(
                     week_id=week_id, limit=limit, cursor=cursor, now=now
                 )
-            if request.route_key == "GET /api/v1/momotalk/weeks/{weekId}/rooms/{roomId}":
-                if request.raw_query:
-                    raise ReadFailure("REQUEST_INVALID", 400)
-                return self._momotalk.get_room(
-                    week_id=week_id, room_id=request.path_parameters.get("roomId", ""), now=now
-                )
             raise ReadFailure("ROUTE_NOT_FOUND", 404)
         except MomotalkFailure as error:
             raise ReadFailure(error.code, error.status) from error
-        except ReadFailure:
+        except ReadFailure, AuthFailure:
             raise
         except Exception:
             # Storage and validation exceptions can contain generated/private text.
