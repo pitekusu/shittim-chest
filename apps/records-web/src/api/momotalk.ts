@@ -32,9 +32,12 @@ export interface MomotalkMessage {
   readonly participant: ParticipantSlot;
   readonly text: string;
 }
-export interface MomotalkImage {
+export interface MomotalkImageSubject {
   readonly participant: ParticipantSlot;
   readonly mood: "happy" | "unhappy";
+}
+export interface MomotalkImage extends MomotalkImageSubject {
+  readonly subjects?: readonly MomotalkImageSubject[] | null;
   readonly state: "pending" | "ready" | "failed";
   readonly url: string | null;
   readonly thumbnailUrl: string | null;
@@ -81,7 +84,7 @@ export function getMomotalkRoom(
   signal?: AbortSignal,
 ): Promise<MomotalkRoomResponse> {
   return requestJson(
-    `/api/v1/momotalk/weeks/${encodeURIComponent(week)}/rooms/${encodeURIComponent(room)}`,
+    `/api/v1/momotalk/weeks/${encodeURIComponent(week)}/rooms/${encodeURIComponent(room)}?contract=momotalk-selfie-v2`,
     (value): value is MomotalkRoomResponse => roomValidator(value),
     { signal },
   );

@@ -2,6 +2,8 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import { fileURLToPath } from "node:url";
 
+import type { MomotalkImage } from "../src/api/momotalk";
+
 const roomId = "a".repeat(43);
 const week = {
   weekId: "2026-09-13",
@@ -50,7 +52,20 @@ const messages = lines.map(([slot, text], index) => ({
   text,
 }));
 
-async function setup(page: Page, availableWeeks = [week]) {
+async function setup(
+  page: Page,
+  availableWeeks = [week],
+  images: readonly MomotalkImage[] = [
+    {
+      participant: "participant-a",
+      mood: "happy",
+      state: "ready",
+      url: "/test-selfie.svg",
+      thumbnailUrl: "/test-selfie.svg",
+      downloadUrl: "/test-selfie.svg?download=1",
+    },
+  ],
+) {
   for (const participant of participants) {
     participant.avatar = {
       ...participant.avatar,
@@ -87,31 +102,26 @@ async function setup(page: Page, availableWeeks = [week]) {
       }),
     );
   }
-  await page.route(`**/api/v1/momotalk/weeks/${week.weekId}/rooms/${roomId}`, (route) =>
-    route.fulfill({
-      json: {
-        schemaVersion: 1,
-        week,
-        room,
-        participants,
-        messages,
-        images: [
-          {
-            participant: "participant-a",
-            mood: "happy",
-            state: "ready",
-            url: "/test-selfie.svg",
-            thumbnailUrl: "/test-selfie.svg",
-            downloadUrl: "/test-selfie.svg?download=1",
-          },
-        ],
-      },
-    }),
+  await page.route(
+    `**/api/v1/momotalk/weeks/${week.weekId}/rooms/${roomId}?contract=momotalk-selfie-v2`,
+    (route) =>
+      route.fulfill({
+        json: {
+          schemaVersion: 1,
+          week,
+          room,
+          participants,
+          messages,
+          images,
+        },
+      }),
   );
-  await page.route("**/test-selfie.svg*", (route) =>
+  await page.route("**/test-selfie*.svg*", (route) =>
     route.fulfill({
       contentType: "image/svg+xml",
-      body: '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="480"><rect width="320" height="480" fill="#dff8fc"/><circle cx="160" cy="175" r="70" fill="#8ad6e5"/><text x="160" y="330" text-anchor="middle" fill="#183751">TEST IMAGE</text></svg>',
+      body: route.request().url().includes("-group")
+        ? '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="480"><rect width="320" height="480" fill="#dff8fc"/><path d="M25 340v-75a50 50 0 0 1 100 0v75" fill="#8ad6e5"/><path d="M110 340v-75a50 50 0 0 1 100 0v75" fill="#edafce"/><path d="M195 340v-75a50 50 0 0 1 100 0v75" fill="#c6b4ec"/><circle cx="75" cy="180" r="43" fill="#8ad6e5"/><circle cx="160" cy="180" r="43" fill="#edafce"/><circle cx="245" cy="180" r="43" fill="#c6b4ec"/><path d="M60 188q15 18 30 0m55 10q15-18 30 0m55-10q15 18 30 0" fill="none" stroke="#183751" stroke-width="3"/><text x="160" y="400" text-anchor="middle" fill="#183751">SAMPLE SELFIE</text></svg>'
+        : '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="480"><rect width="320" height="480" fill="#dff8fc"/><circle cx="160" cy="175" r="70" fill="#8ad6e5"/><text x="160" y="330" text-anchor="middle" fill="#183751">TEST IMAGE</text></svg>',
     }),
   );
   await page.goto("/momotalk");
@@ -153,6 +163,95 @@ test("replays on opening, supports skip and image save, with accessible responsi
   await expect(imageDialog).toHaveCount(0);
   await page.getByRole("button", { name: "もう一度再生" }).click();
   await expect(posts).toHaveCount(0);
+});
+
+test("keeps all qualifying people and their expressions in one selfie", async ({
+  page,
+}, testInfo) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const image: MomotalkImage = {
+    participant: "participant-a",
+    mood: "happy",
+    state: "ready",
+    subjects: [
+      { participant: "participant-a", mood: "happy" },
+      { participant: "participant-b", mood: "unhappy" },
+      { participant: "participant-c", mood: "happy" },
+    ],
+    url: "/test-selfie-group.svg",
+    thumbnailUrl: "/test-selfie-group.svg",
+    downloadUrl: "/test-selfie-group.svg?download=1",
+  };
+  await setup(page, [week], [image]);
+  const posts = page.getByRole("list", { name: "チャットの発言" }).getByRole("listitem");
+  await expect(posts).toHaveCount(10);
+  const trigger = page.getByRole("button", { name: "アロナ・プラナ・安倍晋三AIの画像を拡大" });
+  await expect(page.getByRole("button", { name: /画像を拡大/ })).toHaveCount(1);
+  await expect(
+    page.getByText("アロナ：楽しそう / プラナ：嫌そう / 安倍晋三AI：楽しそう"),
+  ).toBeVisible();
+  await trigger.click();
+  const dialog = page.getByRole("dialog", { name: "モモトークの画像" });
+  await expect(dialog.getByRole("img")).toHaveAttribute("src", image.url!);
+  await expect(dialog.getByRole("link", { name: "画像を保存" })).toHaveAttribute(
+    "href",
+    image.downloadUrl!,
+  );
+  await dialog.getByRole("button", { name: "閉じる" }).click();
+  await expect(trigger).toBeFocused();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath("momotalk-group-selfie.png"), fullPage: true });
+
+  for (const state of ["failed", "pending"] as const) {
+    await page.route(
+      `**/api/v1/momotalk/weeks/${week.weekId}/rooms/${roomId}?contract=momotalk-selfie-v2`,
+      (route) =>
+        route.fulfill({
+          json: {
+            schemaVersion: 1,
+            week,
+            room,
+            participants,
+            messages,
+            images: [{ ...image, state, url: null, thumbnailUrl: null, downloadUrl: null }],
+          },
+        }),
+    );
+    await page.reload();
+    await page.getByRole("button", { name: /散歩好きの先生/ }).click();
+    await expect(posts).toHaveCount(10);
+    await expect(
+      page.getByText(state === "failed" ? "画像を生成できませんでした" : "画像を準備しています"),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: /画像を拡大/ })).toHaveCount(0);
+    await expect(page.getByText("アロナ・プラナ・安倍晋三AI", { exact: true })).toBeVisible();
+  }
+});
+
+test("preserves both old single-person photos and their own save targets", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const images: MomotalkImage[] = participants.slice(0, 2).map((person, index) => ({
+    participant: person.slot as MomotalkImage["participant"],
+    mood: index === 0 ? "happy" : "unhappy",
+    state: "ready",
+    url: `/test-selfie-${person.slot}.svg`,
+    thumbnailUrl: `/test-selfie-${person.slot}.svg`,
+    downloadUrl: `/test-selfie-${person.slot}.svg?download=1`,
+  }));
+  await setup(page, [week], images);
+  await expect(
+    page.getByRole("list", { name: "チャットの発言" }).getByRole("listitem"),
+  ).toHaveCount(11);
+  for (const [index, participant] of participants.slice(0, 2).entries()) {
+    await page.getByRole("button", { name: `${participant.displayName}の画像を拡大` }).click();
+    const dialog = page.getByRole("dialog", { name: "モモトークの画像" });
+    await expect(dialog.getByRole("img")).toHaveAttribute("src", images[index]!.url!);
+    await expect(dialog.getByRole("link", { name: "画像を保存" })).toHaveAttribute(
+      "href",
+      images[index]!.downloadUrl!,
+    );
+    await dialog.getByRole("button", { name: "閉じる" }).click();
+  }
 });
 
 test("reduced motion reveals all messages immediately and dark mode remains readable", async ({
@@ -268,7 +367,7 @@ for (const boundary of ["rooms", "room"] as const) {
     const pattern =
       boundary === "rooms"
         ? `**/api/v1/momotalk/weeks/${week.weekId}/rooms?*`
-        : `**/api/v1/momotalk/weeks/${week.weekId}/rooms/${roomId}`;
+        : `**/api/v1/momotalk/weeks/${week.weekId}/rooms/${roomId}?contract=momotalk-selfie-v2`;
     await page.route(pattern, (route) => (failed ? route.abort("failed") : route.fallback()));
     await page.clock.fastForward(60_001);
     await expect(

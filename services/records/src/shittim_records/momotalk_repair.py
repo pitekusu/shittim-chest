@@ -35,9 +35,11 @@ def main() -> int:
             if room.complete
             and room.state == "ready"
             and any(
-                image.participant == args.participant
-                and image.mood == args.mood
-                and image.state == "failed"
+                image.state == "failed"
+                and any(
+                    subject.participant == args.participant and subject.mood == args.mood
+                    for subject in image.image_subjects
+                )
                 for image in room.images
             )
         ]
@@ -55,7 +57,12 @@ def main() -> int:
             succeeded = MomotalkGenerationService(
                 store, assets, queue, generator
             ).retry_failed_image(
-                week_id, candidates[0].room_id, args.mood, source, now=datetime.now(UTC)
+                week_id,
+                candidates[0].room_id,
+                args.mood,
+                source,
+                now=datetime.now(UTC),
+                participant=args.participant,
             )
         finally:
             generator.close()

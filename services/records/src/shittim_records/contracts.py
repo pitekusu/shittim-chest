@@ -1116,13 +1116,52 @@ class MomotalkMessage(PublicModel):
     text: NonEmptyText
 
 
+class MomotalkImageSubject(PublicModel):
+    participant: ParticipantSlot
+    mood: Literal["happy", "unhappy"]
+
+
 class MomotalkImage(PublicModel):
     participant: ParticipantSlot
     mood: Literal["happy", "unhappy"]
+    subjects: (
+        Annotated[
+            list[MomotalkImageSubject],
+            Field(
+                min_length=1,
+                max_length=3,
+                json_schema_extra={
+                    "allOf": [
+                        {
+                            "contains": {
+                                "properties": {"participant": {"const": slot}},
+                                "required": ["participant"],
+                                "type": "object",
+                            },
+                            "maxContains": 1,
+                            "minContains": 0,
+                        }
+                        for slot in sorted(_ALL_PARTICIPANT_SLOTS)
+                    ]
+                },
+            ),
+        ]
+        | None
+    ) = Field(default=None, exclude_if=lambda value: value is None)
     state: Literal["pending", "ready", "failed"]
     url: str | None = None
     thumbnail_url: str | None = None
     download_url: str | None = None
+
+    @model_validator(mode="after")
+    def valid_subjects(self) -> MomotalkImage:
+        if self.subjects is not None:
+            if len({subject.participant for subject in self.subjects}) != len(self.subjects):
+                raise ValueError("selfie subjects must contain each participant at most once")
+            lead = self.subjects[0]
+            if (lead.participant, lead.mood) != (self.participant, self.mood):
+                raise ValueError("selfie lead must match its first subject")
+        return self
 
 
 class MomotalkRoomResponse(PublicModel):
@@ -1131,6 +1170,7 @@ class MomotalkRoomResponse(PublicModel):
     room: MomotalkRoomSummary
     participants: ParticipantCollection
     messages: list[MomotalkMessage] = Field(max_length=15)
+    # Existing rooms may contain one single-person photo for each mood.
     images: list[MomotalkImage] = Field(max_length=2)
 
 

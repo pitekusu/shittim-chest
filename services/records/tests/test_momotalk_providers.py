@@ -1,5 +1,6 @@
 """Provider contracts and paid-image recovery use only fictional local fixtures."""
 
+import base64
 import io
 import json
 from collections import Counter
@@ -16,7 +17,9 @@ from tests.test_momotalk import WEEK, State, snapshot
 from shittim_records.momotalk import (
     PARTICIPANTS,
     ConversationPlan,
+    ImageChoice,
     MomotalkFailure,
+    SavedImage,
     SavedMessage,
     Turn,
     Utterance,
@@ -105,7 +108,7 @@ def test_image_reselection_uses_only_other_weekly_discussions(record_id):
         cast(Any, None),
         client=SimpleNamespace(responses=SimpleNamespace(parse=parse)),
     )
-    image = image_targets(requester, WEEK.week_id)[1]
+    image = image_targets(requester, WEEK.week_id)[0]
     if record_id == candidate.record_id:
         choice = generator.reselect_image(value, requester, image, [candidate])
         assert choice.record_id == candidate.record_id and choice.mood == image.mood
@@ -118,7 +121,68 @@ def test_image_reselection_uses_only_other_weekly_discussions(record_id):
     assert requester.questions[0].text not in request["input"]
     assert request["store"] is False and request["tools"] == []
     assert request["max_output_tokens"] == 1000
-    assert value.personas[image.participant] in request["instructions"]
+    assert all(
+        value.personas[subject.participant] in request["instructions"]
+        for subject in image.image_subjects
+    )
+
+
+@pytest.mark.parametrize("scores", [(850, 500, 500), (850, 850, 500), (850, 150, 850)])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_selfie_submits_all_frozen_references_for_one_photo(scores, legacy):
+    value = snapshot(scores=scores)
+    requester = value.requesters[0]
+    image = (
+        SavedImage(participant="participant-b", mood="unhappy")
+        if legacy
+        else image_targets(requester, WEEK.week_id)[0]
+    )
+    # A resumed room keeps its frozen subjects even if current affection changes.
+    requester.scores = dict.fromkeys(PARTICIPANTS, 500)
+    calls = []
+    loaded = []
+
+    def reference(slot):
+        loaded.append(slot)
+        return f"fictional-reference-{slot}".encode()
+
+    def edit(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(
+            data=[SimpleNamespace(b64_json=base64.b64encode(b"one-fictional-photo").decode())]
+        )
+
+    generator = OpenAIMomotalkGenerator(
+        cast(Any, None),
+        cast(Any, SimpleNamespace(load_participant_reference=reference)),
+        client=SimpleNamespace(images=SimpleNamespace(edit=edit)),
+    )
+    result = generator.selfie(
+        value,
+        requester,
+        image,
+        ImageChoice(
+            mood=image.mood, record_id=requester.questions[0].record_id, brief="公園で一緒に撮影"
+        ),
+    )
+    assert result == b"one-fictional-photo" and len(calls) == 1
+    request = calls[0]
+    slots = [subject.participant for subject in image.image_subjects]
+    assert len(slots) == (1 if legacy else sum(score <= 200 or score >= 800 for score in scores))
+    assert loaded == slots
+    assert request["image"] == [
+        (f"{slot}.png", f"fictional-reference-{slot}".encode(), "image/png") for slot in slots
+    ]
+    assert request["n"] == 1 and request["model"] == "gpt-image-2.5-sunburst"
+    assert request["size"] == "1024x1536" and request["quality"] == "high"
+    assert f"指定の{len(slots)}人全員が同じ場所で1枚" in request["prompt"]
+    assert request["output_format"] == "webp" and request["timeout"] == 240
+    for subject in image.image_subjects:
+        line = next(
+            line for line in request["prompt"].splitlines() if f"{subject.participant}.png" in line
+        )
+        assert ("嬉しそうな表情" if subject.mood == "happy" else "嫌そうな表情") in line
+        assert ("写実的" if subject.participant == "participant-c" else "アニメ調") in line
 
 
 @pytest.mark.parametrize(
@@ -276,7 +340,17 @@ def test_discussion_switch_passes_only_the_current_question():
 
 
 @pytest.mark.parametrize(
-    "scores", [(500, 500, 500), (800, 500, 500), (500, 200, 500), (800, 200, 500)]
+    "scores",
+    [
+        (500, 500, 500),
+        (800, 500, 500),
+        (500, 200, 500),
+        (800, 200, 500),
+        (800, 800, 800),
+        (200, 200, 200),
+        (800, 800, 200),
+        (800, 200, 200),
+    ],
 )
 @pytest.mark.parametrize("final", [False, True])
 def test_preparation_fixes_image_slots_and_accepts_four_discussions(scores, final):
@@ -304,7 +378,9 @@ def test_preparation_fixes_image_slots_and_accepts_four_discussions(scores, fina
     brief = {"record_id": requester.questions[0].record_id, "brief": "架空の散歩道で自撮り"}
     payload: dict[str, Any] = {
         "summary": "架空の4つの相談。",
-        "image_briefs": [brief.copy() for _ in room.images],
+        "image_briefs": [
+            {**brief, "brief": f"架空の撮影場面{index}"} for index in range(len(room.images))
+        ],
         **({"turns": [turn.model_dump() for turn in turns]} if final else {}),
     }
     calls = []
@@ -324,6 +400,12 @@ def test_preparation_fixes_image_slots_and_accepts_four_discussions(scores, fina
     assert isinstance(result, ConversationPlan if final else WeekDigest)
     assert len(calls) == 1
     assert [image.mood for image in result.images] == [image.mood for image in room.images]
+    assert [image.brief for image in result.images] == [
+        brief["brief"] for brief in payload["image_briefs"]
+    ]
+    assert json.loads(calls[0]["input"])["imageTargets"] == [
+        image.model_dump() for image in room.images
+    ]
     schema = calls[0]["text_format"]
     # Wrong image counts fail at the provider schema, before any image API call.
     for briefs in (payload["image_briefs"] + [brief], payload["image_briefs"][:-1]):
@@ -349,15 +431,20 @@ def test_preparation_fixes_image_slots_and_accepts_four_discussions(scores, fina
             generator.prepare(value, requester, room, requester.questions, final=False)
 
 
-def test_stored_full_image_repairs_missing_thumbnail_without_overwriting_original():
+@pytest.mark.parametrize("legacy", [False, True])
+def test_stored_full_image_repairs_missing_thumbnail_without_overwriting_original(legacy):
     buffer = io.BytesIO()
     Image.new("RGB", (1024, 1536), "skyblue").save(buffer, format="WEBP")
-    state = State()
+    state = State(snapshot(scores=(850, 150, 500)))
     boundary = cast(Any, state)
     collect_week(WEEK, boundary, boundary, boundary, boundary)
     room = state.room
     assert room is not None
-    full = image_key(WEEK.week_id, room.room_id, "happy")
+    if legacy:
+        room.images = [SavedImage(participant="participant-a", mood="happy")]
+    target = room.images[0]
+    full = image_key(room, target)
+    assert full.endswith("/happy.webp" if legacy else "/selfie.webp")
     writes = []
     client = SimpleNamespace(
         list_objects_v2=lambda **_: {"Contents": [{"Key": full}]},
@@ -365,9 +452,9 @@ def test_stored_full_image_repairs_missing_thumbnail_without_overwriting_origina
         put_object=lambda **kwargs: writes.append(kwargs),
     )
     assets = MomotalkAssets(cast(Any, client), "private-media")
-    assert assets.image_exists(room, "happy")
+    assert assets.image_exists(room, target)
     assert len(writes) == 1
-    assert writes[0]["Key"] == image_key(WEEK.week_id, room.room_id, "happy", thumbnail=True)
+    assert writes[0]["Key"] == image_key(room, target, thumbnail=True)
     assert writes[0]["ServerSideEncryption"] == "AES256"
     with Image.open(io.BytesIO(writes[0]["Body"])) as thumbnail:
         assert thumbnail.size == (320, 480)
@@ -387,6 +474,57 @@ def test_image_download_is_short_lived_and_input_cleanup_removes_exact_version()
     assets = MomotalkAssets(cast(Any, client), "private-media")
     assets.delete_input(WEEK.week_id, "exact-frozen-version")
     assert calls[0]["VersionId"] == "exact-frozen-version"
-    assets.image_url(cast(Any, state.room), "happy", download=True)
+    room = state.room
+    assert room is not None
+    assets.image_url(room, room.images[0], download=True)
     assert calls[1]["ExpiresIn"] == 300
     assert calls[1]["Params"]["ResponseContentDisposition"].startswith("attachment;")
+
+
+@pytest.mark.parametrize("scores", [(850, 850, 850), (150, 150, 150), (850, 850, 150)])
+def test_all_subjects_share_one_stored_image_and_one_download(scores):
+    state = State(snapshot(scores=scores))
+    boundary = cast(Any, state)
+    collect_week(WEEK, boundary, boundary, boundary, boundary)
+    room = state.room
+    assert room is not None and len(room.images) == 1
+    assert len(room.images[0].image_subjects) == 3
+    stored: dict[str, bytes] = {}
+    writes = []
+    signed = []
+
+    def put_object(**kwargs):
+        writes.append(kwargs)
+        stored[kwargs["Key"]] = kwargs["Body"]
+
+    def presign(operation, **kwargs):
+        signed.append({"operation": operation, **kwargs})
+        return "https://media.example.invalid/" + kwargs["Params"]["Key"]
+
+    client = SimpleNamespace(
+        list_objects_v2=lambda **kwargs: {
+            "Contents": [{"Key": key} for key in stored if key.startswith(kwargs["Prefix"])]
+        },
+        put_object=put_object,
+        generate_presigned_url=presign,
+    )
+    assets = MomotalkAssets(cast(Any, client), "private-media")
+    for index, target in enumerate(room.images):
+        assert not assets.image_exists(room, target)
+        buffer = io.BytesIO()
+        Image.new("RGB", (256, 256), (index * 80, 100, 200)).save(buffer, format="PNG")
+        assets.store_image(room, target, buffer.getvalue())
+        assert assets.image_exists(room, target)
+
+    assert len(stored) == len(writes) == 2
+    originals = [assets.image_url(room, image) for image in room.images]
+    thumbnails = [assets.image_url(room, image, thumbnail=True) for image in room.images]
+    downloads = [assets.image_url(room, image, download=True) for image in room.images]
+    assert len(set(originals + thumbnails)) == 2
+    assert downloads == originals
+    assert signed[-1]["Params"]["ResponseContentDisposition"] == (
+        f'attachment; filename="momotalk-{room.week_id}-selfie.webp"'
+    )
+    assert all(entry["ExpiresIn"] == 300 for entry in signed)
+    assert all(entry["ContentType"] == "image/webp" for entry in writes)
+    assert all(entry["ServerSideEncryption"] == "AES256" for entry in writes)

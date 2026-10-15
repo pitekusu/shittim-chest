@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -217,6 +218,155 @@ def session(*, avatar: bool = False, expired: bool = False) -> SessionRecord:
             (NOW + (-timedelta(seconds=1) if expired else timedelta(hours=1))).timestamp()
         ),
     )
+
+
+def _momotalk_image_controller(
+    grouped: bool,
+) -> tuple[ReadHttpController, list[str]]:
+    from shittim_records.momotalk import Room
+    from shittim_records.momotalk_read import MomotalkReadService
+
+    slots = ("participant-a", "participant-b", "participant-c")
+    order = (0, 1, 0, 2, 1, 2, 0, 1, 2)
+    subjects = [
+        {"participant": "participant-a", "mood": "happy"},
+        {"participant": "participant-b", "mood": "unhappy"},
+        {"participant": "participant-c", "mood": "happy"},
+    ]
+    images = (
+        [{**subjects[0], "subjects": subjects, "state": "ready"}]
+        if grouped
+        else [{**subject, "state": "ready"} for subject in subjects[:2]]
+    )
+    room = Room.model_validate(
+        {
+            "week_id": "2026-08-16",
+            "room_id": "r" * 43,
+            "display_name": "架空の先生",
+            "question_count": 1,
+            "state": "ready",
+            "plan": {
+                "summary": "架空の週次会話",
+                "turns": [{"participant": slots[index], "topic": "散歩"} for index in order],
+                "images": [
+                    {"mood": image["mood"], "record_id": "q" * 43, "brief": "散歩"}
+                    for image in images
+                ],
+            },
+            "messages": [{"participant": slots[index], "text": "会話"} for index in order],
+            "images": images,
+        }
+    )
+    signed: list[str] = []
+
+    def image_url(_room: Any, image: Any, **kwargs: Any) -> str:
+        signed.append(image.participant)
+        return f"https://media.example.invalid/{image.participant}/{kwargs}"
+
+    momotalk = MomotalkReadService(
+        cast(
+            Any,
+            SimpleNamespace(
+                get_week=lambda _: {
+                    "week": {
+                        "week_id": "2026-08-16",
+                        "period_start": "2026-08-09T09:00:00Z",
+                        "period_end": "2026-08-16T09:00:00Z",
+                        "publish_at": "2026-08-16T11:00:00Z",
+                    }
+                },
+                get_room=lambda *_: room,
+            ),
+        ),
+        cast(Any, SimpleNamespace(image_url=image_url)),
+        cast(Any, SimpleNamespace(avatar_url=lambda **_: "https://media.example.invalid/avatar")),
+    )
+    return (
+        ReadHttpController(
+            store=cast(Any, FakeSessionStore(session())),
+            session_key=SESSION_KEY,
+            records=cast(Any, None),
+            momotalk=momotalk,
+        ),
+        signed,
+    )
+
+
+@pytest.mark.parametrize("grouped", (False, True))
+@pytest.mark.parametrize("negotiated", (False, True))
+def test_momotalk_selfie_contract_adds_subjects_without_changing_legacy_images(
+    grouped: bool, negotiated: bool
+) -> None:
+    controller, signed = _momotalk_image_controller(grouped)
+    response = controller.handle(
+        event(
+            "GET /api/v1/momotalk/weeks/{weekId}/rooms/{roomId}",
+            query="contract=momotalk-selfie-v2" if negotiated else "",
+            path={"weekId": "2026-08-16", "roomId": "r" * 43},
+            cookies=[f"{SESSION_COOKIE_NAME}=session-token"],
+        ),
+        now=NOW,
+    )
+    assert response["statusCode"] == 200
+    assert response["headers"]["Cache-Control"] == "private, no-store"
+    payload = json.loads(response["body"])
+    expected = ["participant-a"] if grouped else ["participant-a", "participant-b"]
+    assert [image["participant"] for image in payload["images"]] == expected
+    assert signed == [participant for participant in expected for _ in range(3)]
+    assert len(payload["messages"]) == 9
+    if negotiated:
+        if grouped:
+            assert payload["images"][0]["subjects"] == [
+                {"participant": "participant-a", "mood": "happy"},
+                {"participant": "participant-b", "mood": "unhappy"},
+                {"participant": "participant-c", "mood": "happy"},
+            ]
+        else:
+            assert [image["subjects"] for image in payload["images"]] == [
+                [{"participant": "participant-a", "mood": "happy"}],
+                [{"participant": "participant-b", "mood": "unhappy"}],
+            ]
+    else:
+        for image in payload["images"]:
+            assert set(image) == {
+                "participant",
+                "mood",
+                "state",
+                "url",
+                "thumbnailUrl",
+                "downloadUrl",
+            }
+
+
+@pytest.mark.parametrize(
+    "query",
+    (
+        "contract=unknown",
+        "contract=momotalk-images-v2",
+        "contract=",
+        "contract=momotalk-selfie-v2&contract=momotalk-selfie-v2",
+        "contract=momotalk-selfie-v2&extra=private",
+        "limit=1",
+        "cursor=opaque",
+    ),
+)
+def test_momotalk_detail_rejects_invalid_image_contract_before_reading(query: str) -> None:
+    controller = ReadHttpController(
+        store=cast(Any, FakeSessionStore(session())),
+        session_key=SESSION_KEY,
+        records=cast(Any, None),
+        momotalk=object(),
+    )
+    response = controller.handle(
+        event(
+            "GET /api/v1/momotalk/weeks/{weekId}/rooms/{roomId}",
+            query=query,
+            path={"weekId": "2026-08-16", "roomId": "r" * 43},
+            cookies=[f"{SESSION_COOKIE_NAME}=session-token"],
+        ),
+        now=NOW,
+    )
+    assert response["statusCode"] == 400
 
 
 def test_anonymous_session_is_always_200_no_store_without_cookie() -> None:

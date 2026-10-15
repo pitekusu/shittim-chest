@@ -2786,6 +2786,70 @@
           "title": "State",
           "type": "string"
         },
+        "subjects": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "contains": {
+                    "properties": {
+                      "participant": {
+                        "const": "participant-a"
+                      }
+                    },
+                    "required": [
+                      "participant"
+                    ],
+                    "type": "object"
+                  },
+                  "maxContains": 1,
+                  "minContains": 0
+                },
+                {
+                  "contains": {
+                    "properties": {
+                      "participant": {
+                        "const": "participant-b"
+                      }
+                    },
+                    "required": [
+                      "participant"
+                    ],
+                    "type": "object"
+                  },
+                  "maxContains": 1,
+                  "minContains": 0
+                },
+                {
+                  "contains": {
+                    "properties": {
+                      "participant": {
+                        "const": "participant-c"
+                      }
+                    },
+                    "required": [
+                      "participant"
+                    ],
+                    "type": "object"
+                  },
+                  "maxContains": 1,
+                  "minContains": 0
+                }
+              ],
+              "items": {
+                "$ref": "#/$defs/MomotalkImageSubject"
+              },
+              "maxItems": 3,
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Subjects"
+        },
         "thumbnailUrl": {
           "anyOf": [
             {
@@ -2817,6 +2881,34 @@
         "state"
       ],
       "title": "MomotalkImage",
+      "type": "object"
+    },
+    "MomotalkImageSubject": {
+      "additionalProperties": false,
+      "properties": {
+        "mood": {
+          "enum": [
+            "happy",
+            "unhappy"
+          ],
+          "title": "Mood",
+          "type": "string"
+        },
+        "participant": {
+          "enum": [
+            "participant-a",
+            "participant-b",
+            "participant-c"
+          ],
+          "title": "Participant",
+          "type": "string"
+        }
+      },
+      "required": [
+        "participant",
+        "mood"
+      ],
+      "title": "MomotalkImageSubject",
       "type": "object"
     },
     "MomotalkMessage": {

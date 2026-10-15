@@ -8,6 +8,7 @@ from shittim_records.contracts import (
     AvatarRef,
     ImageAvatarRef,
     MomotalkImage,
+    MomotalkImageSubject,
     MomotalkMessage,
     MomotalkRoomResponse,
     MomotalkRoomsResponse,
@@ -81,7 +82,9 @@ class MomotalkReadService:
             next_cursor=next_cursor,
         )
 
-    def get_room(self, *, week_id: str, room_id: str, now: datetime) -> MomotalkRoomResponse:
+    def get_room(
+        self, *, week_id: str, room_id: str, now: datetime, include_image_subjects: bool = False
+    ) -> MomotalkRoomResponse:
         # Gate before reading private state or signing a single media URL.
         week = self._week(week_id, now)
         self._room_id(room_id)
@@ -110,12 +113,18 @@ class MomotalkReadService:
                     MomotalkImage(
                         participant=image.participant,
                         mood=image.mood,
+                        subjects=[
+                            MomotalkImageSubject(participant=subject.participant, mood=subject.mood)
+                            for subject in image.image_subjects
+                        ]
+                        if include_image_subjects
+                        else None,
                         state=state,
-                        url=self.assets.image_url(room, image.mood) if state == "ready" else None,
-                        thumbnail_url=self.assets.image_url(room, image.mood, thumbnail=True)
+                        url=self.assets.image_url(room, image) if state == "ready" else None,
+                        thumbnail_url=self.assets.image_url(room, image, thumbnail=True)
                         if state == "ready"
                         else None,
-                        download_url=self.assets.image_url(room, image.mood, download=True)
+                        download_url=self.assets.image_url(room, image, download=True)
                         if state == "ready"
                         else None,
                     )

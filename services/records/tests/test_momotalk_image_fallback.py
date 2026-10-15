@@ -25,14 +25,23 @@ from shittim_records.momotalk_generation import (
 
 
 class FallbackState(State):
-    def __init__(self, *, reject_alternative=False, questions=2, both_images=False, turns=9):
-        value = snapshot()
+    def __init__(
+        self,
+        *,
+        reject_alternative=False,
+        questions=2,
+        both_images=False,
+        turns=9,
+        scores=(850, 150, 500),
+        legacy_images=True,
+    ):
+        value = snapshot(scores=scores)
         original = value.requesters[0].questions[0]
         if questions == 2:
             value.requesters[0].questions.append(
                 original.model_copy(update={"record_id": "r" * 43, "text": "休日に読む本は?"})
             )
-        super().__init__(value)
+        super().__init__(value, legacy_images=legacy_images)
         self.image_calls = []
         self.reselections = []
         self.reject_alternative = reject_alternative
@@ -324,10 +333,41 @@ def test_operator_claim_loss_keeps_the_rejection_for_the_next_repair(monkeypatch
     assert state.image_calls == [("unhappy", "q" * 43), ("unhappy", "r" * 43)]
 
 
+@pytest.mark.parametrize("reject_alternative", [False, True])
+def test_group_moderation_changes_only_the_scene_and_keeps_every_expression(reject_alternative):
+    state = cast(
+        Any,
+        FallbackState(
+            scores=(800, 800, 200),
+            legacy_images=False,
+            both_images=True,
+            reject_alternative=reject_alternative,
+        ),
+    )
+    service = published(state)
+    before = state.room.model_copy(deep=True)
+    for _ in range(3):
+        service.run(WEEK.week_id, ROOM_ID, now=START)
+    assert state.room.complete and len(state.room.images) == 1
+    image = state.room.images[0]
+    assert image.state == ("failed" if reject_alternative else "ready")
+    assert image.subjects == before.images[0].subjects and image.alternate_topic_used
+    assert (
+        state.generated_subjects == [[subject.model_dump() for subject in image.image_subjects]] * 2
+    )
+    assert state.image_calls == [("happy", "q" * 43), ("happy", "r" * 43)]
+    assert state.room.plan.images[0].record_id == "r" * 43
+    assert state.room.messages == before.messages
+    assert state.room.plan.turns == before.plan.turns
+
+
 @pytest.mark.parametrize("chunk_count", [2, 12])
 @pytest.mark.parametrize("retry_preparation", [False, True])
+@pytest.mark.parametrize(
+    "scores,legacy_images", [((850, 150, 500), True), ((800, 800, 200), False)]
+)
 def test_long_preparation_and_image_fallbacks_resume_in_bounded_chains(
-    chunk_count, retry_preparation
+    chunk_count, retry_preparation, scores, legacy_images
 ):
     class QueuedState(FallbackState):
         def send(self, week_id, room_id, *, steps_remaining=MAX_CHAIN_STEPS):
@@ -340,7 +380,10 @@ def test_long_preparation_and_image_fallbacks_resume_in_bounded_chains(
             result = super().prepare(*args, final=True, **kwargs)
             return result if final else WeekDigest(summary=result.summary, images=result.images)
 
-    state = cast(Any, QueuedState(both_images=True, turns=15))
+    state = cast(
+        Any,
+        QueuedState(both_images=True, turns=15, scores=scores, legacy_images=legacy_images),
+    )
     requester = state.snapshot.requesters[0]
     original = requester.questions[0]
     # Each synthetic record fits one chunk; pairs exceed its byte budget.
@@ -386,7 +429,12 @@ def test_long_preparation_and_image_fallbacks_resume_in_bounded_chains(
     assert state.room.state == "ready" and len(state.room.messages) == 15
     assert all(image.state == "ready" for image in state.room.images)
     assert not state.room.continuation_pending
-    assert len(state.image_calls) == 4 and len(state.reselections) == 2
+    image_count = len(state.room.images)
+    assert len(state.image_calls) == image_count * 2
+    assert len(state.reselections) == image_count
+    assert all(
+        state.image_participant_calls.count(image.participant) == 2 for image in state.room.images
+    )
     assert continue_week(WEEK.week_id, state, state, now=START) == 0
 
 

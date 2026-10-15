@@ -212,11 +212,24 @@ def _momotalk_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
                     _parameter("cursor", "query", {"type": "string", "maxLength": 100}),
                 ]
             )
+        else:
+            parameters.append(
+                _parameter("contract", "query", {"type": "string", "enum": ["momotalk-selfie-v2"]})
+            )
         result[path] = {
             "get": {
                 "operationId": operation,
                 "parameters": parameters,
-                "description": "認証必須。日曜20時以降のモモトークを返す。private, no-store。",
+                "description": (
+                    "認証必須。日曜20時以降のモモトークを返す。private, no-store。"
+                    + (
+                        "contract=momotalk-selfie-v2で各画像のsubjectsに登場人格と個別の表情を返す。"
+                        "新しい会話は条件を満たす全人格を1枚に含める。既存の最大2画像も保持する。"
+                        "未指定時はsubjectsを省略し、従来の応答fieldを維持する。"
+                        if "roomId" in path_names
+                        else ""
+                    )
+                ),
                 "responses": {"200": _response(schema, "モモトーク"), **error_responses},
             }
         }

@@ -275,11 +275,13 @@ function usePlayback(messages: readonly MomotalkMessage[]) {
 
 function ImageViewer({
   image,
+  names,
   onClose,
   pointerEntry,
 }: {
   readonly pointerEntry: boolean;
   readonly image: MomotalkImage;
+  readonly names: string;
   readonly onClose: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -310,11 +312,18 @@ function ImageViewer({
       </div>
       <img
         src={image.url ?? undefined}
-        alt="AIが生成したモモトークの自撮り画像"
+        alt={`${names}の自撮り（AI生成）`}
         referrerPolicy="no-referrer"
       />
     </dialog>
   );
+}
+
+function imagePeople(image: MomotalkImage, participants: MomotalkRoomResponse["participants"]) {
+  return (image.subjects ?? [image]).flatMap((subject) => {
+    const participant = participants.find((person) => person.slot === subject.participant);
+    return participant ? [{ participant, mood: subject.mood }] : [];
+  });
 }
 
 const CompletedMessages = memo(function CompletedMessages({
@@ -458,15 +467,25 @@ function Conversation({
           )}
           {playback.done &&
             data.images.map((item) => {
-              const participant = data.participants.find(
-                (candidate) => candidate.slot === item.participant,
-              );
-              if (!participant) return null;
+              const people = imagePeople(item, data.participants);
+              const lead = people[0]?.participant;
+              if (!lead) return null;
+              const names = people.map(({ participant }) => participant.displayName).join("・");
               return (
                 <li key={item.mood} className={styles.message} data-participant={item.participant}>
-                  <Avatar avatar={participant.avatar} />
+                  <Avatar avatar={lead.avatar} />
                   <div>
-                    <strong>{participant.displayName}</strong>
+                    <strong>{names}</strong>
+                    {item.subjects && (
+                      <p className={styles.imageSubjects}>
+                        {people
+                          .map(
+                            ({ participant, mood }) =>
+                              `${participant.displayName}：${mood === "happy" ? "楽しそう" : "嫌そう"}`,
+                          )
+                          .join(" / ")}
+                      </p>
+                    )}
                     {item.state === "ready" && item.thumbnailUrl ? (
                       <button
                         className={styles.thumbnail}
@@ -475,11 +494,11 @@ function Conversation({
                           setImagePointerEntry(event.detail > 0);
                           setImageMood(item.mood);
                         }}
-                        aria-label={`${participant.displayName}の画像を拡大`}
+                        aria-label={`${names}の画像を拡大`}
                       >
                         <img
                           src={item.thumbnailUrl}
-                          alt={`${participant.displayName}の自撮り（AI生成）`}
+                          alt={`${names}の自撮り（AI生成）`}
                           referrerPolicy="no-referrer"
                           loading="lazy"
                           width={320}
@@ -516,6 +535,9 @@ function Conversation({
       {image?.state === "ready" && (
         <ImageViewer
           image={image}
+          names={imagePeople(image, data.participants)
+            .map(({ participant }) => participant.displayName)
+            .join("・")}
           pointerEntry={imagePointerEntry}
           onClose={() => setImageMood(null)}
         />
