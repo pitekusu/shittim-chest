@@ -97,7 +97,14 @@ class ImageChoice(StoredModel):
 
 class WeekDigest(StoredModel):
     summary: str = Field(min_length=1, max_length=4000, repr=False)
-    images: list[ImageChoice] = Field(max_length=3)
+    images: list[ImageChoice] = Field(max_length=2)
+
+    @field_validator("images")
+    @classmethod
+    def unique_moods(cls, value: list[ImageChoice]) -> list[ImageChoice]:
+        if len({image.mood for image in value}) != len(value):
+            raise ValueError("duplicate image mood")
+        return value
 
 
 class ConversationPlan(WeekDigest):
@@ -136,13 +143,34 @@ class SavedMessage(Utterance):
     participant: ParticipantSlot
 
 
-class SavedImage(StoredModel):
+class ImageSubject(StoredModel):
     participant: ParticipantSlot
     mood: Literal["happy", "unhappy"]
+
+
+class SavedImage(ImageSubject):
+    # None identifies pre-group checkpoints, whose original image keys remain valid.
+    subjects: list[ImageSubject] | None = Field(default=None, min_length=1, max_length=3)
     state: Literal["pending", "ready", "failed"] = "pending"
     # Persist the switch so SQS redelivery never resubmits the rejected subject.
     moderation_blocked: bool = False
     alternate_topic_used: bool = False
+
+    @model_validator(mode="after")
+    def valid_subjects(self) -> Self:
+        if self.subjects is not None:
+            if len({subject.participant for subject in self.subjects}) != len(self.subjects):
+                raise ValueError("duplicate image subject")
+            if (self.participant, self.mood) != (
+                self.subjects[0].participant,
+                self.subjects[0].mood,
+            ):
+                raise ValueError("image lead does not match its subjects")
+        return self
+
+    @property
+    def image_subjects(self) -> list[ImageSubject]:
+        return self.subjects or [ImageSubject(participant=self.participant, mood=self.mood)]
 
 
 class Room(StoredModel):
@@ -165,10 +193,12 @@ class Room(StoredModel):
 
     @model_validator(mode="after")
     def valid_checkpoint(self) -> Self:
-        if len(self.messages) > 15 or len(self.images) > 3:
+        if len(self.messages) > 15 or len(self.images) > 2:
             raise ValueError("checkpoint limits exceeded")
-        if len({image.participant for image in self.images}) != len(self.images):
-            raise ValueError("duplicate image participant")
+        if len({image.mood for image in self.images}) != len(self.images):
+            raise ValueError("duplicate image mood")
+        if len(self.images) > 1 and any(image.subjects is not None for image in self.images):
+            raise ValueError("a group selfie must be the room's only image")
         if self.messages and self.plan is None:
             raise ValueError("conversation has no plan")
         if self.plan:
@@ -220,18 +250,27 @@ def image_targets(requester: RequesterInput, week_id: date) -> list[SavedImage]:
         return []
     rotation = (week_id - date(2026, 1, 4)).days // 7 % 3
     order = (*PARTICIPANTS[rotation:], *PARTICIPANTS[:rotation])
-    # Keep the previous first image of each mood; ties use the weekly rotation.
-    return [
+    # Keep deterministic subject order; expressions belong to individual subjects.
+    subjects = [
         *(
-            SavedImage(participant=slot, mood="happy")
+            ImageSubject(participant=slot, mood="happy")
             for slot in sorted(order, key=lambda slot: -requester.scores[slot])
             if requester.scores[slot] >= 800
         ),
         *(
-            SavedImage(participant=slot, mood="unhappy")
+            ImageSubject(participant=slot, mood="unhappy")
             for slot in sorted(order, key=lambda slot: requester.scores[slot])
             if requester.scores[slot] <= 200
         ),
+    ]
+    if not subjects:
+        return []
+    return [
+        SavedImage(
+            participant=subjects[0].participant,
+            mood=subjects[0].mood,
+            subjects=subjects,
+        )
     ]
 
 
@@ -262,10 +301,9 @@ def validate_image_choices(
 
 def image_key(room: Room, image: SavedImage, *, thumbnail: bool = False) -> str:
     # Identifiers have already passed the stored/public boundary validators.
-    # Room image targets are frozen at creation. Unique moods retain old keys so
+    # New selfies contain the frozen group. Legacy checkpoints retain mood keys so
     # published images and interrupted checkpoints need no migration or regeneration.
-    repeated_mood = sum(target.mood == image.mood for target in room.images) > 1
-    name = f"{image.participant}-{image.mood}" if repeated_mood else image.mood
+    name = "selfie" if image.subjects is not None else image.mood
     suffix = "-thumb" if thumbnail else ""
     return f"momotalk/images/{room.week_id}/{room.room_id}/{name}{suffix}.webp"
 

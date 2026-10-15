@@ -3059,6 +3059,70 @@
             "title": "State",
             "type": "string"
           },
+          "subjects": {
+            "anyOf": [
+              {
+                "allOf": [
+                  {
+                    "contains": {
+                      "properties": {
+                        "participant": {
+                          "const": "participant-a"
+                        }
+                      },
+                      "required": [
+                        "participant"
+                      ],
+                      "type": "object"
+                    },
+                    "maxContains": 1,
+                    "minContains": 0
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "participant": {
+                          "const": "participant-b"
+                        }
+                      },
+                      "required": [
+                        "participant"
+                      ],
+                      "type": "object"
+                    },
+                    "maxContains": 1,
+                    "minContains": 0
+                  },
+                  {
+                    "contains": {
+                      "properties": {
+                        "participant": {
+                          "const": "participant-c"
+                        }
+                      },
+                      "required": [
+                        "participant"
+                      ],
+                      "type": "object"
+                    },
+                    "maxContains": 1,
+                    "minContains": 0
+                  }
+                ],
+                "items": {
+                  "$ref": "#/components/schemas/MomotalkImageSubject"
+                },
+                "maxItems": 3,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Subjects"
+          },
           "thumbnailUrl": {
             "anyOf": [
               {
@@ -3090,6 +3154,34 @@
           "state"
         ],
         "title": "MomotalkImage",
+        "type": "object"
+      },
+      "MomotalkImageSubject": {
+        "additionalProperties": false,
+        "properties": {
+          "mood": {
+            "enum": [
+              "happy",
+              "unhappy"
+            ],
+            "title": "Mood",
+            "type": "string"
+          },
+          "participant": {
+            "enum": [
+              "participant-a",
+              "participant-b",
+              "participant-c"
+            ],
+            "title": "Participant",
+            "type": "string"
+          }
+        },
+        "required": [
+          "participant",
+          "mood"
+        ],
+        "title": "MomotalkImageSubject",
         "type": "object"
       },
       "MomotalkMessage": {
@@ -3129,57 +3221,10 @@
         "additionalProperties": false,
         "properties": {
           "images": {
-            "allOf": [
-              {
-                "contains": {
-                  "properties": {
-                    "participant": {
-                      "const": "participant-a"
-                    }
-                  },
-                  "required": [
-                    "participant"
-                  ],
-                  "type": "object"
-                },
-                "maxContains": 1,
-                "minContains": 0
-              },
-              {
-                "contains": {
-                  "properties": {
-                    "participant": {
-                      "const": "participant-b"
-                    }
-                  },
-                  "required": [
-                    "participant"
-                  ],
-                  "type": "object"
-                },
-                "maxContains": 1,
-                "minContains": 0
-              },
-              {
-                "contains": {
-                  "properties": {
-                    "participant": {
-                      "const": "participant-c"
-                    }
-                  },
-                  "required": [
-                    "participant"
-                  ],
-                  "type": "object"
-                },
-                "maxContains": 1,
-                "minContains": 0
-              }
-            ],
             "items": {
               "$ref": "#/components/schemas/MomotalkImage"
             },
-            "maxItems": 3,
+            "maxItems": 2,
             "title": "Images",
             "type": "array"
           },
@@ -7909,7 +7954,7 @@
     },
     "/api/v1/momotalk/weeks/{weekId}/rooms/{roomId}": {
       "get": {
-        "description": "認証必須。日曜20時以降のモモトークを返す。private, no-store。contract=momotalk-images-v2で対象人格全員の最大3画像を返す。未指定時は保存順でmoodごとの最初の画像だけを返す。最大2画像。",
+        "description": "認証必須。日曜20時以降のモモトークを返す。private, no-store。contract=momotalk-selfie-v2で各画像のsubjectsに登場人格と個別の表情を返す。新しい会話は条件を満たす全人格を1枚に含める。既存の最大2画像も保持する。未指定時はsubjectsを省略し、従来の応答fieldを維持する。",
         "operationId": "getMomotalkRoom",
         "parameters": [
           {
@@ -7936,7 +7981,7 @@
             "required": false,
             "schema": {
               "enum": [
-                "momotalk-images-v2"
+                "momotalk-selfie-v2"
               ],
               "type": "string"
             }

@@ -20,19 +20,26 @@ function roomResponse(): MomotalkRoomResponse {
     room: { roomId: "r".repeat(43), requester: detail.requester, questionCount: 1, state: "ready" },
     participants: detail.participants,
     messages: [],
-    images: detail.participants.map(({ slot }) => ({
-      participant: slot,
-      mood: "happy",
-      state: "ready",
-      url: `/images/${slot}.webp`,
-      thumbnailUrl: `/images/${slot}-thumbnail.webp`,
-      downloadUrl: `/images/${slot}.webp?download=1`,
-    })),
+    images: [
+      {
+        participant: "participant-a",
+        mood: "happy",
+        subjects: [
+          { participant: "participant-a", mood: "happy" },
+          { participant: "participant-b", mood: "unhappy" },
+          { participant: "participant-c", mood: "happy" },
+        ],
+        state: "ready",
+        url: "/images/selfie.webp",
+        thumbnailUrl: "/images/selfie-thumbnail.webp",
+        downloadUrl: "/images/selfie.webp?download=1",
+      },
+    ],
   };
 }
 
 describe("Momotalk image contract", () => {
-  it("negotiates all three participants even when their moods match", async () => {
+  it("negotiates every subject and individual mood in one selfie", async () => {
     const payload = roomResponse();
     const fetchMock = vi
       .fn<typeof fetch>()
@@ -43,22 +50,45 @@ describe("Momotalk image contract", () => {
       payload,
     );
     expect(fetchMock.mock.calls[0]![0]).toBe(
-      `/api/v1/momotalk/weeks/${payload.week.weekId}/rooms/${payload.room.roomId}?contract=momotalk-images-v2`,
+      `/api/v1/momotalk/weeks/${payload.week.weekId}/rooms/${payload.room.roomId}?contract=momotalk-selfie-v2`,
     );
   });
 
-  it("rejects duplicate participant images even when their URLs differ", async () => {
+  it("still accepts existing two-photo rooms without subject metadata", async () => {
+    const payload = roomResponse();
+    const first = payload.images[0]!;
+    const { subjects: _subjects, ...legacy } = first;
+    const images = [legacy, { ...legacy, participant: "participant-b", mood: "unhappy" }];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ ...payload, images }))),
+    );
+    await expect(getMomotalkRoom(payload.week.weekId, payload.room.roomId)).resolves.toMatchObject({
+      images,
+    });
+  });
+
+  it("rejects duplicate participants inside the same selfie", async () => {
     const payload = roomResponse();
     const first = payload.images[0]!;
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn<typeof fetch>()
-        .mockResolvedValue(
-          new Response(
-            JSON.stringify({ ...payload, images: [first, { ...first, url: "/different.webp" }] }),
-          ),
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            ...payload,
+            images: [
+              {
+                ...first,
+                subjects: [
+                  { participant: "participant-a", mood: "happy" },
+                  { participant: "participant-a", mood: "unhappy" },
+                ],
+              },
+            ],
+          }),
         ),
+      ),
     );
 
     await expect(getMomotalkRoom(payload.week.weekId, payload.room.roomId)).rejects.toMatchObject({

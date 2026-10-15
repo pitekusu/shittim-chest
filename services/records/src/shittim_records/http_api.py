@@ -381,13 +381,13 @@ class ReadHttpController:
                 if not set(query).issubset({"contract"}):
                     raise ReadFailure("REQUEST_INVALID", 400)
                 contract = _optional_single(query, "contract")
-                if contract not in {None, "momotalk-images-v2"}:
+                if contract not in {None, "momotalk-selfie-v2"}:
                     raise ReadFailure("REQUEST_INVALID", 400)
                 return self._momotalk.get_room(
                     week_id=request.path_parameters.get("weekId", ""),
                     room_id=request.path_parameters.get("roomId", ""),
                     now=now,
-                    include_all_images=contract == "momotalk-images-v2",
+                    include_image_subjects=contract == "momotalk-selfie-v2",
                 )
             if not set(query).issubset({"limit", "cursor"}):
                 raise ReadFailure("REQUEST_INVALID", 400)

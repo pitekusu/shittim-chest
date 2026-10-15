@@ -35,9 +35,11 @@ def main() -> int:
             if room.complete
             and room.state == "ready"
             and any(
-                image.participant == args.participant
-                and image.mood == args.mood
-                and image.state == "failed"
+                image.state == "failed"
+                and any(
+                    subject.participant == args.participant and subject.mood == args.mood
+                    for subject in image.image_subjects
+                )
                 for image in room.images
             )
         ]

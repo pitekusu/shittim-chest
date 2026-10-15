@@ -8,6 +8,7 @@ from shittim_records.contracts import (
     AvatarRef,
     ImageAvatarRef,
     MomotalkImage,
+    MomotalkImageSubject,
     MomotalkMessage,
     MomotalkRoomResponse,
     MomotalkRoomsResponse,
@@ -82,7 +83,7 @@ class MomotalkReadService:
         )
 
     def get_room(
-        self, *, week_id: str, room_id: str, now: datetime, include_all_images: bool = False
+        self, *, week_id: str, room_id: str, now: datetime, include_image_subjects: bool = False
     ) -> MomotalkRoomResponse:
         # Gate before reading private state or signing a single media URL.
         week = self._week(week_id, now)
@@ -105,10 +106,6 @@ class MomotalkReadService:
         images = []
         if summary.state == "ready":
             for image in room.images:
-                # Existing Web clients identify images by mood and accept at most two.
-                # Select from the frozen roster without changing its paid image work.
-                if not include_all_images and any(saved.mood == image.mood for saved in images):
-                    continue
                 state = image.state
                 if state == "pending" and now >= week.publish_at + timedelta(days=1):
                     state = "failed"
@@ -116,6 +113,12 @@ class MomotalkReadService:
                     MomotalkImage(
                         participant=image.participant,
                         mood=image.mood,
+                        subjects=[
+                            MomotalkImageSubject(participant=subject.participant, mood=subject.mood)
+                            for subject in image.image_subjects
+                        ]
+                        if include_image_subjects
+                        else None,
                         state=state,
                         url=self.assets.image_url(room, image) if state == "ready" else None,
                         thumbnail_url=self.assets.image_url(room, image, thumbnail=True)

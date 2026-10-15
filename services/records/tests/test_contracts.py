@@ -20,6 +20,7 @@ from shittim_records.contracts import (
     MemorialStateResponse,
     MemorialUploadRequest,
     MemorialUploadResponse,
+    MomotalkImage,
     MomotalkRoomResponse,
     NonEmptyText,
     RankingsResponse,
@@ -32,7 +33,7 @@ from shittim_records.contracts import (
 )
 
 
-def test_momotalk_images_allow_three_independent_participants_and_reject_duplicates() -> None:
+def test_momotalk_selfie_contains_every_subject_and_keeps_the_legacy_lead() -> None:
     detail = _record_detail_payload()
     payload = {
         "week": {
@@ -50,15 +51,37 @@ def test_momotalk_images_allow_three_independent_participants_and_reject_duplica
         "participants": detail["participants"],
         "messages": [],
         "images": [
-            {"participant": slot, "mood": "happy", "state": "pending"}
-            for slot in ("participant-a", "participant-b", "participant-c")
+            {
+                "participant": "participant-a",
+                "mood": "happy",
+                "state": "pending",
+                "subjects": [
+                    {"participant": "participant-a", "mood": "happy"},
+                    {"participant": "participant-b", "mood": "unhappy"},
+                    {"participant": "participant-c", "mood": "happy"},
+                ],
+            }
         ],
     }
-    assert len(MomotalkRoomResponse.model_validate(payload).images) == 3
+    response = MomotalkRoomResponse.model_validate(payload)
+    assert len(response.images) == 1
+    assert response.images[0].subjects is not None and len(response.images[0].subjects) == 3
+    with pytest.raises(ValidationError, match="at most 2 items"):
+        MomotalkRoomResponse.model_validate({**payload, "images": payload["images"] * 3})
+
+
+def test_momotalk_selfie_rejects_duplicate_subjects_and_mismatched_lead() -> None:
+    subject = {"participant": "participant-a", "mood": "happy"}
+    payload = {**subject, "state": "pending"}
     with pytest.raises(ValidationError, match="each participant at most once"):
-        MomotalkRoomResponse.model_validate(
-            {**payload, "images": [payload["images"][0], payload["images"][0]]}
+        MomotalkImage.model_validate(
+            {**payload, "subjects": [subject, {**subject, "mood": "unhappy"}]}
         )
+    with pytest.raises(ValidationError, match="first subject"):
+        MomotalkImage.model_validate(
+            {**payload, "subjects": [{**subject, "participant": "participant-b"}]}
+        )
+    assert "subjects" not in MomotalkImage.model_validate(payload).model_dump()
 
 
 def test_affection_rankings_require_nullable_next_cursor_property() -> None:

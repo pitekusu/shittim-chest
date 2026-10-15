@@ -221,13 +221,23 @@ def session(*, avatar: bool = False, expired: bool = False) -> SessionRecord:
 
 
 def _momotalk_image_controller(
-    moods: tuple[str, str, str],
+    grouped: bool,
 ) -> tuple[ReadHttpController, list[str]]:
     from shittim_records.momotalk import Room
     from shittim_records.momotalk_read import MomotalkReadService
 
     slots = ("participant-a", "participant-b", "participant-c")
     order = (0, 1, 0, 2, 1, 2, 0, 1, 2)
+    subjects = [
+        {"participant": "participant-a", "mood": "happy"},
+        {"participant": "participant-b", "mood": "unhappy"},
+        {"participant": "participant-c", "mood": "happy"},
+    ]
+    images = (
+        [{**subjects[0], "subjects": subjects, "state": "ready"}]
+        if grouped
+        else [{**subject, "state": "ready"} for subject in subjects[:2]]
+    )
     room = Room.model_validate(
         {
             "week_id": "2026-08-16",
@@ -239,14 +249,12 @@ def _momotalk_image_controller(
                 "summary": "架空の週次会話",
                 "turns": [{"participant": slots[index], "topic": "散歩"} for index in order],
                 "images": [
-                    {"mood": mood, "record_id": "q" * 43, "brief": "散歩"} for mood in moods
+                    {"mood": image["mood"], "record_id": "q" * 43, "brief": "散歩"}
+                    for image in images
                 ],
             },
             "messages": [{"participant": slots[index], "text": "会話"} for index in order],
-            "images": [
-                {"participant": slot, "mood": mood, "state": "ready"}
-                for slot, mood in zip(slots, moods, strict=True)
-            ],
+            "images": images,
         }
     )
     signed: list[str] = []
@@ -284,16 +292,16 @@ def _momotalk_image_controller(
     )
 
 
-@pytest.mark.parametrize("moods", (("happy", "happy", "happy"), ("unhappy", "happy", "happy")))
+@pytest.mark.parametrize("grouped", (False, True))
 @pytest.mark.parametrize("negotiated", (False, True))
-def test_momotalk_image_contract_preserves_legacy_mood_selection_before_signing(
-    moods: tuple[str, str, str], negotiated: bool
+def test_momotalk_selfie_contract_adds_subjects_without_changing_legacy_images(
+    grouped: bool, negotiated: bool
 ) -> None:
-    controller, signed = _momotalk_image_controller(moods)
+    controller, signed = _momotalk_image_controller(grouped)
     response = controller.handle(
         event(
             "GET /api/v1/momotalk/weeks/{weekId}/rooms/{roomId}",
-            query="contract=momotalk-images-v2" if negotiated else "",
+            query="contract=momotalk-selfie-v2" if negotiated else "",
             path={"weekId": "2026-08-16", "roomId": "r" * 43},
             cookies=[f"{SESSION_COOKIE_NAME}=session-token"],
         ),
@@ -302,27 +310,42 @@ def test_momotalk_image_contract_preserves_legacy_mood_selection_before_signing(
     assert response["statusCode"] == 200
     assert response["headers"]["Cache-Control"] == "private, no-store"
     payload = json.loads(response["body"])
-    expected = (
-        ["participant-a", "participant-b", "participant-c"]
-        if negotiated
-        else ["participant-a"]
-        if len(set(moods)) == 1
-        else ["participant-a", "participant-b"]
-    )
+    expected = ["participant-a"] if grouped else ["participant-a", "participant-b"]
     assert [image["participant"] for image in payload["images"]] == expected
     assert signed == [participant for participant in expected for _ in range(3)]
     assert len(payload["messages"]) == 9
-    if not negotiated:
-        assert len({image["mood"] for image in payload["images"]}) == len(payload["images"]) <= 2
+    if negotiated:
+        if grouped:
+            assert payload["images"][0]["subjects"] == [
+                {"participant": "participant-a", "mood": "happy"},
+                {"participant": "participant-b", "mood": "unhappy"},
+                {"participant": "participant-c", "mood": "happy"},
+            ]
+        else:
+            assert [image["subjects"] for image in payload["images"]] == [
+                [{"participant": "participant-a", "mood": "happy"}],
+                [{"participant": "participant-b", "mood": "unhappy"}],
+            ]
+    else:
+        for image in payload["images"]:
+            assert set(image) == {
+                "participant",
+                "mood",
+                "state",
+                "url",
+                "thumbnailUrl",
+                "downloadUrl",
+            }
 
 
 @pytest.mark.parametrize(
     "query",
     (
         "contract=unknown",
+        "contract=momotalk-images-v2",
         "contract=",
-        "contract=momotalk-images-v2&contract=momotalk-images-v2",
-        "contract=momotalk-images-v2&extra=private",
+        "contract=momotalk-selfie-v2&contract=momotalk-selfie-v2",
+        "contract=momotalk-selfie-v2&extra=private",
         "limit=1",
         "cursor=opaque",
     ),

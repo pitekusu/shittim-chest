@@ -305,9 +305,9 @@ class MomotalkAssets:
             "Key": image_key(room, image, thumbnail=thumbnail),
         }
         if download:
+            name = "selfie" if image.subjects is not None else image.mood
             parameters["ResponseContentDisposition"] = (
-                f'attachment; filename="momotalk-{room.week_id}-'
-                f'{image.participant}-{image.mood}.webp"'
+                f'attachment; filename="momotalk-{room.week_id}-{name}.webp"'
             )
         return self.client.generate_presigned_url("get_object", Params=parameters, ExpiresIn=300)
 

@@ -233,7 +233,10 @@ class MomotalkGenerationService:
         candidates = [
             i
             for i, image in enumerate(room.images)
-            if image.mood == mood and (participant is None or image.participant == participant)
+            if any(
+                subject.mood == mood and (participant is None or subject.participant == participant)
+                for subject in image.image_subjects
+            )
         ]
         if len(candidates) != 1:
             raise MomotalkFailure("MOMOTALK_REPAIR_INVALID")
@@ -243,7 +246,7 @@ class MomotalkGenerationService:
         if room.images[index].state != "failed":
             raise MomotalkFailure("MOMOTALK_REPAIR_INVALID")
         # Completed weeks have no frozen input. Recollect original Archive questions;
-        # the saved plan owns the initial subject, speaker, mood and composition.
+        # the saved plan and image own the subject, complete roster and expressions.
         stored_week = self.store.get_week(week_id)
         if stored_week is None:
             raise MomotalkFailure("MOMOTALK_REPAIR_INVALID")

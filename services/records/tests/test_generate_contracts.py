@@ -131,7 +131,7 @@ def test_archive_search_keeps_private_criteria_in_body_and_uses_browser_auth() -
     assert [parameter["name"] for parameter in requesters["parameters"]] == ["cursor"]
 
 
-def test_momotalk_detail_documents_opt_in_multi_participant_images() -> None:
+def test_momotalk_detail_documents_opt_in_selfie_subjects() -> None:
     openapi = json.loads(expected_documents()["openapi.json"])
     detail = openapi["paths"]["/api/v1/momotalk/weeks/{weekId}/rooms/{roomId}"]["get"]
     contract = next(item for item in detail["parameters"] if item["name"] == "contract")
@@ -139,9 +139,9 @@ def test_momotalk_detail_documents_opt_in_multi_participant_images() -> None:
         "name": "contract",
         "in": "query",
         "required": False,
-        "schema": {"type": "string", "enum": ["momotalk-images-v2"]},
+        "schema": {"type": "string", "enum": ["momotalk-selfie-v2"]},
     }
-    assert "最大3画像" in detail["description"] and "最大2画像" in detail["description"]
+    assert "全人格を1枚" in detail["description"] and "既存の最大2画像" in detail["description"]
     for path in ("/api/v1/momotalk/weeks", "/api/v1/momotalk/weeks/{weekId}/rooms"):
         parameters = openapi["paths"][path]["get"]["parameters"]
         assert "contract" not in {item["name"] for item in parameters}

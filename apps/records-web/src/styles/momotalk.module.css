@@ -407,6 +407,13 @@
   margin: 0 0 8px;
   font-size: 0.8rem;
 }
+.imageSubjects {
+  margin: 0 0 8px;
+  color: var(--records-ink-600);
+  font-size: 0.8rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
 .bubble {
   position: relative;
   width: fit-content;
