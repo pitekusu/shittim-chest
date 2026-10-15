@@ -262,6 +262,41 @@ def test_record_list_requires_nonempty_next_cursor() -> None:
         RecordListResponse.model_validate({"schemaVersion": 1, "items": [], "nextCursor": ""})
 
 
+@pytest.mark.parametrize(
+    "extra,expected",
+    (
+        ({}, 0),
+        ({"attachmentCount": 0}, 0),
+        ({"attachmentCount": 1}, 1),
+        ({"attachmentCount": 3}, 3),
+        ({"attachmentCount": -1}, None),
+        ({"attachmentCount": 4}, None),
+        ({"attachmentCount": True}, None),
+        ({"attachmentCount": 1.0}, None),
+        ({"attachmentCount": "1"}, None),
+        ({"attachmentCount": None}, None),
+    ),
+)
+def test_record_list_attachment_count_is_optional_strict_and_bounded(
+    extra: dict[str, object], expected: int | None
+) -> None:
+    detail = _record_detail_payload()
+    payload = {
+        **{
+            key: detail[key]
+            for key in ("recordId", "completedAt", "requester", "participants", "result")
+        },
+        "schemaVersion": 1,
+        "questionPreview": detail["question"],
+        **extra,
+    }
+    if expected is None:
+        with pytest.raises(ValidationError):
+            RecordListItem.model_validate(payload)
+    else:
+        assert RecordListItem.model_validate(payload).attachment_count == expected
+
+
 def test_public_text_rejects_whitespace_only() -> None:
     adapter = TypeAdapter(NonEmptyText)
 

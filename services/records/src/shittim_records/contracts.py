@@ -210,6 +210,7 @@ class RecordListItem(PublicModel):
     record_id: RecordId
     completed_at: AwareDatetime
     question_preview: Annotated[str, Field(min_length=1, max_length=160, pattern=r"\S")]
+    attachment_count: Annotated[int, Field(strict=True, ge=0, le=3)] = 0
     requester: RequesterSummary
     participants: ParticipantCollection
     result: RecordResultSummary

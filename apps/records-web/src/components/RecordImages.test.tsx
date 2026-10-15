@@ -58,6 +58,32 @@ describe("record images", () => {
     expect(screen.getByRole("heading", { name: "最終決定" })).toBeVisible();
   });
 
+  it("places every attachment beside its question and opens the selected original", () => {
+    const images = [0, 1, 2].map((index) => ({
+      ...image,
+      attachmentId: `00000000-0000-4000-8000-00000000000${index}`,
+      url: `https://example.test/original-${index}.png`,
+    }));
+    renderRoute(<RecordDocument record={{ ...recordDetail(), attachments: images }} />);
+    const question = screen.getByRole("heading", { level: 1 });
+    const region = within(question.parentElement!).getByRole("region", { name: "添付画像 3枚" });
+    expect(within(region).getAllByRole("button")).toHaveLength(3);
+    const trigger = within(region).getByRole("button", { name: "添付画像 3を拡大" });
+    expect(trigger).toHaveAttribute("aria-haspopup", "dialog");
+    trigger.focus();
+    fireEvent.click(trigger);
+    const dialog = screen.getByRole("dialog", { name: "添付画像 3" });
+    expect(within(dialog).getByRole("img")).toHaveAttribute("src", images[2]!.url);
+    fireEvent.click(within(dialog).getByRole("button", { name: "閉じる" }));
+    expect(trigger).toHaveFocus();
+  });
+
+  it("omits attachment controls for legacy records without images", () => {
+    renderRoute(<RecordDocument record={recordDetail()} />);
+    expect(screen.queryByRole("region", { name: /添付画像/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "最終決定" })).toBeVisible();
+  });
+
   it("refreshes an expired URL without hiding the debate body", async () => {
     const updated = { ...image, url: "https://example.test/original.png?signature=new" };
     vi.mocked(getRecord).mockResolvedValue({ ...recordDetail(), attachments: [updated] });

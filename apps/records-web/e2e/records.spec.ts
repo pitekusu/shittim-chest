@@ -822,7 +822,10 @@ const PRODUCTION_CSP = [
 
 async function mockAuthenticatedApi(
   page: Page,
-  recordDetail: (typeof detail | typeof detailWithAffection) & { ogImageUrl?: string } = detail,
+  recordDetail: (typeof detail | typeof detailWithAffection) & {
+    ogImageUrl?: string;
+    attachments?: readonly { attachmentId: string }[];
+  } = detail,
   isAdmin = false,
 ): Promise<void> {
   let authenticated = true;
@@ -854,7 +857,7 @@ async function mockAuthenticatedApi(
       json: { schemaVersion: 1, items: [recordDetail.requester], nextCursor: null },
     }),
   );
-  await page.route("**/api/v1/records/search", (route) => {
+  await page.route("**/api/v1/records/search?contract=record-attachments-v1", (route) => {
     const body = route.request().postDataJSON() as {
       search: string;
       requester?: string;
@@ -884,6 +887,7 @@ async function mockAuthenticatedApi(
                 requester: recordDetail.requester,
                 participants: recordDetail.participants,
                 result: recordDetail.result,
+                attachmentCount: recordDetail.attachments?.length ?? 0,
               },
             ]
           : [],
@@ -904,6 +908,7 @@ async function mockAuthenticatedApi(
             requester: recordDetail.requester,
             participants: recordDetail.participants,
             result: recordDetail.result,
+            attachmentCount: recordDetail.attachments?.length ?? 0,
           },
         ],
         nextCursor: null,
@@ -2999,7 +3004,7 @@ test("archive restores its in-memory filters, focus and reading position", async
   await page.route("**/api/v1/records?*", (route) =>
     route.fulfill({ json: { schemaVersion: 1, items, nextCursor: null } }),
   );
-  await page.route("**/api/v1/records/search", (route) =>
+  await page.route("**/api/v1/records/search?contract=record-attachments-v1", (route) =>
     route.fulfill({ json: { schemaVersion: 1, items, nextCursor: null } }),
   );
   await page.goto("/");
@@ -3256,7 +3261,9 @@ test("accessibility preferences keep account surfaces opaque and keyboard action
   await page.keyboard.up("Space");
 });
 
-test("record attachments open independently and recover expired image URLs", async ({ page }) => {
+test("record attachments are visible in cards and the question and recover expired image URLs", async ({
+  page,
+}, testInfo) => {
   const png = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jWooAAAAASUVORK5CYII=",
     "base64",
@@ -3277,9 +3284,44 @@ test("record attachments open independently and recover expired image URLs", asy
   await page.route(`${MEMORIAL_MEDIA_ORIGIN}/debate-images/**`, (route) =>
     route.fulfill({ contentType: "image/png", body: png }),
   );
-  await page.goto(`/records/${RECORD_ID}`);
-  const trigger = page.getByRole("button", { name: "添付画像 2を拡大" });
-  await trigger.click();
+  const imageRequests: string[] = [];
+  page.on("request", (request) => {
+    if (
+      request.url().includes("/debate-images/") ||
+      /\/records\/[A-Za-z0-9_-]{43}\?/u.test(request.url())
+    ) {
+      imageRequests.push(request.url());
+    }
+  });
+  await page.goto("/");
+  let card = page.getByRole("link", { name: /画像3枚を添付/u });
+  await expect(card.getByText("3枚", { exact: true })).toBeVisible();
+  await expect(card.locator("svg")).not.toHaveCount(0);
+  await page.getByRole("searchbox").fill("休日");
+  card = page.getByRole("link", { name: /画像3枚を添付/u });
+  await expect(card.getByText("3枚", { exact: true })).toBeVisible();
+  expect(imageRequests).toEqual([]);
+  await card.click();
+  const question = page.getByRole("heading", { level: 1 }).locator("..");
+  const attachments = question.getByRole("region", { name: "添付画像 3枚" });
+  await expect(attachments.getByRole("button")).toHaveCount(3);
+  const trigger = attachments.getByRole("button", { name: "添付画像 2を拡大" });
+  const bounds = await trigger.boundingBox();
+  expect(bounds!.width).toBeGreaterThanOrEqual(48);
+  expect(bounds!.width).toBeLessThanOrEqual(80);
+  expect(bounds!.height).toBeGreaterThanOrEqual(48);
+  expect(bounds!.height).toBeLessThanOrEqual(80);
+  for (const theme of ["light", "dark"]) {
+    await page.evaluate(
+      (value) => document.documentElement.setAttribute("data-theme", value),
+      theme,
+    );
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+    await page.screenshot({ path: testInfo.outputPath(`attachments-${theme}.png`) });
+  }
+  await page.evaluate(() => document.documentElement.setAttribute("data-theme", "light"));
+  await trigger.focus();
+  await page.keyboard.press("Enter");
   let dialog = page.getByRole("dialog", { name: "添付画像 2", exact: true });
   await expect(dialog.getByRole("img")).toHaveAttribute("src", images[1]!.url);
   await dialog.getByRole("button", { name: "原寸で見る" }).click();
@@ -3325,7 +3367,7 @@ test("archive search reaches a full-question match after empty server segments w
   const finalSegment = new Promise<void>((resolve) => {
     finish = resolve;
   });
-  await page.route("**/api/v1/records/search", async (route) => {
+  await page.route("**/api/v1/records/search?contract=record-attachments-v1", async (route) => {
     expect(route.request().method()).toBe("POST");
     expect(route.request().headers()["x-csrf-token"]).toBe("csrf-token");
     const body = route.request().postDataJSON() as { search: string; cursor?: string };
@@ -3393,7 +3435,7 @@ test("archive requester options cover unloaded records and preserve selection th
     });
   });
   const bodies: { requester?: string; sort: string }[] = [];
-  await page.route("**/api/v1/records/search", (route) => {
+  await page.route("**/api/v1/records/search?contract=record-attachments-v1", (route) => {
     bodies.push(route.request().postDataJSON() as { requester?: string; sort: string });
     return route.fulfill({ json: { schemaVersion: 1, items: [], nextCursor: null } });
   });

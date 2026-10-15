@@ -213,6 +213,7 @@ class ReadHttpController:
         try:
             include_affection_reasons = False
             include_attachments = False
+            include_attachment_count = False
             session = None
             raw_token = _read_bearer_token(
                 event.get("headers") or {}, has_cookies=bool(event.get("cookies"))
@@ -243,8 +244,12 @@ class ReadHttpController:
                 result = self._momotalk_read(request, now)
             elif request.route_key == "GET /api/v1/records":
                 query = _query(request.raw_query)
-                if not set(query).issubset({"cursor", "limit", "sort", "winner"}):
+                if not set(query).issubset({"cursor", "limit", "sort", "winner", "contract"}):
                     raise ReadFailure("REQUEST_INVALID", 400)
+                contract = _optional_single(query, "contract")
+                if contract not in {None, "record-attachments-v1"}:
+                    raise ReadFailure("REQUEST_INVALID", 400)
+                include_attachment_count = contract == "record-attachments-v1"
                 result = self._records.list_records(
                     query=ListQuery(
                         limit=_limit(_optional_single(query, "limit")),
@@ -273,8 +278,13 @@ class ReadHttpController:
                     raw_csrf=request.cookies.get(CSRF_COOKIE_NAME),
                     csrf_header=request.headers.get("x-csrf-token"),
                 )
-                if request.raw_query or request.path_parameters:
+                query = _query(request.raw_query)
+                if not set(query).issubset({"contract"}) or request.path_parameters:
                     raise ReadFailure("REQUEST_INVALID", 400)
+                contract = _optional_single(query, "contract")
+                if contract not in {None, "record-attachments-v1"}:
+                    raise ReadFailure("REQUEST_INVALID", 400)
+                include_attachment_count = contract == "record-attachments-v1"
                 result = self._records.search_records(query=_search_body(event, request), now=now)
             elif request.route_key == "GET /api/v1/records/requesters":
                 query = _query(request.raw_query)
@@ -322,6 +332,17 @@ class ReadHttpController:
             else:
                 return error_response(404, "ROUTE_NOT_FOUND", request.request_id)
             payload = result.model_dump(by_alias=True, mode="json")
+            if (
+                request.route_key
+                in {
+                    "GET /api/v1/records",
+                    "POST /api/v1/records/search",
+                }
+                and not include_attachment_count
+            ):
+                # Existing Web clients reject response fields they did not negotiate.
+                for item in payload["items"]:
+                    item.pop("attachmentCount", None)
             if request.route_key == "GET /api/v1/records/{recordId}" and not include_attachments:
                 payload.pop("attachments", None)
             if (

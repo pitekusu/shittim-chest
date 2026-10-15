@@ -522,6 +522,11 @@ def build_openapi() -> dict[str, Any]:
                     "security": [{"sessionCookie": []}, {"mobileBearer": []}],
                     "parameters": [
                         _parameter(
+                            "contract",
+                            "query",
+                            {"type": "string", "enum": ["record-attachments-v1"]},
+                        ),
+                        _parameter(
                             "cursor",
                             "query",
                             {"type": "string", "minLength": 1, "maxLength": 4096},
@@ -549,6 +554,10 @@ def build_openapi() -> dict[str, Any]:
                             },
                         ),
                     ],
+                    "description": (
+                        "contract=record-attachments-v1 includes attachmentCount; "
+                        "omitting it preserves the legacy list item fields."
+                    ),
                     "responses": {
                         "200": _response("RecordListResponse", "Completed debate records"),
                         **error_responses,
@@ -560,6 +569,11 @@ def build_openapi() -> dict[str, Any]:
                     "operationId": "searchRecords",
                     "security": [{"sessionCookie": []}],
                     "parameters": [
+                        _parameter(
+                            "contract",
+                            "query",
+                            {"type": "string", "enum": ["record-attachments-v1"]},
+                        ),
                         _parameter(
                             "Origin",
                             "header",
@@ -578,7 +592,9 @@ def build_openapi() -> dict[str, Any]:
                         "Read-only full-question and winning-participant-name substring search. "
                         "Requester and winner filters are combined with the search condition. "
                         "Search criteria stay in the request body. An empty items array with a "
-                        "nextCursor means the search must continue; private, no-store."
+                        "nextCursor means the search must continue; private, no-store. "
+                        "contract=record-attachments-v1 includes attachmentCount; "
+                        "omitting it preserves the legacy list item fields."
                     ),
                     "responses": {
                         "200": _response("RecordListResponse", "Matching completed debate records"),

@@ -736,18 +736,7 @@ class RecordsReadService:
             if "voting_rules_version" in meta
             else None,
         }
-        attachments = meta.get("attachments", [])
-        if not isinstance(attachments, list) or any(
-            not isinstance(item, dict) for item in attachments
-        ):
-            raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
-        try:
-            images = tuple(
-                deserialize_debate_image(item) for item in cast(list[DynamoItem], attachments)
-            )
-            validate_images(images)
-        except ValueError, TypeError:
-            raise ReadFailure("ARCHIVE_UNAVAILABLE", 503) from None
+        images = _archive_images(meta)
         payload["attachments"] = tuple(
             {
                 "attachmentId": image.attachment_id,
@@ -1001,6 +990,7 @@ class RecordsReadService:
                     "recordId": _required_text(item, "record_id"),
                     "completedAt": _required_text(item, "completed_at"),
                     "questionPreview": question,
+                    "attachmentCount": len(_archive_images(item)),
                     "requester": self._requester(
                         item,
                         profiles.get(requester_key),
@@ -1238,6 +1228,22 @@ def _validate_meta_item(item: DynamoItem) -> None:
         or item.get("SK") != "META"
     ):
         raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+
+
+def _archive_images(meta: DynamoItem) -> tuple[DebateImage, ...]:
+    attachments = meta.get("attachments", [])
+    if not isinstance(attachments, list) or any(not isinstance(item, dict) for item in attachments):
+        raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+    try:
+        images = tuple(
+            deserialize_debate_image(item) for item in cast(list[DynamoItem], attachments)
+        )
+        validate_images(images)
+    except ValueError, TypeError:
+        raise ReadFailure("ARCHIVE_UNAVAILABLE", 503) from None
+    if (meta.get("schema_version") == 4) != bool(images):
+        raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+    return images
 
 
 def _validate_list_projection(

@@ -189,6 +189,11 @@ export function RecordDocument({
             <h1 className={JAPANESE_HEADING_CLASS} tabIndex={-1}>
               {record.question}
             </h1>
+            <RecordImages
+              key={record.recordId}
+              recordId={record.recordId}
+              attachments={record.attachments ?? []}
+            />
             <div className={detailStyles.recordMeta}>
               <Avatar avatar={record.requester.avatar} />
               <span>
@@ -229,11 +234,6 @@ export function RecordDocument({
           </aside>
         </div>
       </header>
-      <RecordImages
-        key={record.recordId}
-        recordId={record.recordId}
-        attachments={record.attachments ?? []}
-      />
       <DetailNavigation
         hasAffection={record.affection !== null && record.affection !== undefined}
       />
