@@ -112,10 +112,20 @@ def test_archive_search_keeps_private_criteria_in_body_and_uses_browser_auth() -
     assert search["requestBody"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/RecordSearchRequest"
     }
-    assert {parameter["name"] for parameter in search["parameters"]} == {"Origin", "X-CSRF-Token"}
+    assert {parameter["name"] for parameter in search["parameters"]} == {
+        "Origin",
+        "X-CSRF-Token",
+        "contract",
+    }
     assert all(
-        parameter["in"] == "header" and parameter["required"] for parameter in search["parameters"]
+        parameter["in"] == "header" and parameter["required"]
+        for parameter in search["parameters"]
+        if parameter["name"] != "contract"
     )
+    for operation in (openapi["paths"]["/api/v1/records"]["get"], search):
+        contract = next(item for item in operation["parameters"] if item["name"] == "contract")
+        assert contract["in"] == "query" and not contract["required"]
+        assert contract["schema"]["enum"] == ["record-attachments-v1"]
     requesters = openapi["paths"]["/api/v1/records/requesters"]["get"]
     assert requesters["security"] == [{"sessionCookie": []}]
     assert [parameter["name"] for parameter in requesters["parameters"]] == ["cursor"]

@@ -129,7 +129,9 @@ export function RecordImages({
   const selectedImage = index >= 0 ? (updated.get(selected!) ?? attachments[index]) : undefined;
   return (
     <section className={styles.attachments} aria-labelledby="attachments-title">
-      <h2 id="attachments-title">添付画像</h2>
+      <h2 id="attachments-title" className={styles.attachmentHeading}>
+        添付画像 <span>{attachments.length}枚</span>
+      </h2>
       <div className={styles.attachmentGrid}>
         {attachments.map((original, index) => {
           const image = updated.get(original.attachmentId) ?? original;
@@ -139,10 +141,11 @@ export function RecordImages({
                 type="button"
                 className={styles.attachmentButton}
                 aria-label={`添付画像 ${index + 1}を拡大`}
+                aria-haspopup="dialog"
                 onClick={() => setSelected(image.attachmentId)}
               >
                 {failed.has(image.attachmentId) ? (
-                  <span>画像を読み込めませんでした</span>
+                  <span className={styles.attachmentFallback}>画像を読み込めませんでした</span>
                 ) : (
                   <img
                     key={`${image.attachmentId}:${revision}`}
@@ -154,7 +157,9 @@ export function RecordImages({
                     onError={() => fail(image.attachmentId)}
                   />
                 )}
-                <span>画像 {index + 1}</span>
+                <span className={styles.attachmentNumber} aria-hidden="true">
+                  {index + 1}
+                </span>
               </button>
               {failed.has(image.attachmentId) && (
                 <button

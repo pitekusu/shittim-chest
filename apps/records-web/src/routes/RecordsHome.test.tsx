@@ -43,7 +43,7 @@ function searchMock(
     vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const path =
         typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      if (path === "/api/v1/records/search") {
+      if (path === "/api/v1/records/search?contract=record-attachments-v1") {
         const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as SearchBody;
         bodies.push(body);
         return Promise.resolve(handler(body, init));
@@ -114,9 +114,60 @@ describe("RecordsHome", () => {
       "2026-08-15T06:00:00Z",
     );
     expect(screen.queryByText(/所要時間|Evidence|外部根拠/)).not.toBeInTheDocument();
-    expect(requests).toContain("/api/v1/records?limit=12&sort=newest");
+    expect(requests).toContain(
+      "/api/v1/records?limit=12&contract=record-attachments-v1&sort=newest",
+    );
     fireEvent.click(screen.getByRole("radio", { name: "古い順" }));
-    await waitFor(() => expect(requests).toContain("/api/v1/records?limit=12&sort=oldest"));
+    await waitFor(() =>
+      expect(requests).toContain(
+        "/api/v1/records?limit=12&contract=record-attachments-v1&sort=oldest",
+      ),
+    );
+  });
+
+  it("identifies attached images in list and search cards without fetching details or images", async () => {
+    const records = [
+      { ...item(0), attachmentCount: 1 },
+      { ...item(1), attachmentCount: 3 },
+      { ...item(2), attachmentCount: 0 },
+      item(3),
+    ];
+    searchMock(() => response(page(records)));
+    const original = fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) =>
+        typeof input === "string" && input.startsWith("/api/v1/records?")
+          ? Promise.resolve(response(page(records)))
+          : original(input, init),
+      ),
+    );
+    renderRoute(home);
+    const oneImage = await screen.findByRole("link", {
+      name: "「記録 0」の記録を読む、画像1枚を添付",
+    });
+    expect(within(oneImage).getByText("1枚")).toBeVisible();
+    expect(within(oneImage).getByText("1枚").parentElement?.querySelector("svg")).not.toBeNull();
+    expect(
+      screen.getByRole("link", { name: "「記録 1」の記録を読む、画像3枚を添付" }),
+    ).toBeVisible();
+    expect(screen.getByRole("link", { name: "「記録 2」の記録を読む" })).toBeVisible();
+    expect(screen.getByRole("link", { name: "「記録 3」の記録を読む" })).toBeVisible();
+    expect(screen.queryByText("0枚")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "記録" } });
+    expect(
+      await screen.findByRole("link", { name: "「記録 1」の記録を読む、画像3枚を添付" }),
+    ).toBeVisible();
+    expect(
+      vi
+        .mocked(fetch)
+        .mock.calls.every(
+          ([input]) =>
+            typeof input === "string" &&
+            !/\/api\/v1\/records\/[A-Za-z0-9_-]{43}(?:\?|$)/u.test(input),
+        ),
+    ).toBe(true);
+    expect(screen.queryByRole("img", { name: /議論に添付された画像/ })).not.toBeInTheDocument();
   });
 
   it("keeps filters and expanded results through a remount using only React memory", async () => {

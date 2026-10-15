@@ -3989,6 +3989,13 @@
       "RecordListItem": {
         "additionalProperties": false,
         "properties": {
+          "attachmentCount": {
+            "default": 0,
+            "maximum": 3,
+            "minimum": 0,
+            "title": "Attachmentcount",
+            "type": "integer"
+          },
           "completedAt": {
             "format": "date-time",
             "title": "Completedat",
@@ -7963,8 +7970,20 @@
     },
     "/api/v1/records": {
       "get": {
+        "description": "contract=record-attachments-v1 includes attachmentCount; omitting it preserves the legacy list item fields.",
         "operationId": "listRecords",
         "parameters": [
+          {
+            "in": "query",
+            "name": "contract",
+            "required": false,
+            "schema": {
+              "enum": [
+                "record-attachments-v1"
+              ],
+              "type": "string"
+            }
+          },
           {
             "in": "query",
             "name": "cursor",
@@ -8212,9 +8231,20 @@
     },
     "/api/v1/records/search": {
       "post": {
-        "description": "Read-only full-question and winning-participant-name substring search. Requester and winner filters are combined with the search condition. Search criteria stay in the request body. An empty items array with a nextCursor means the search must continue; private, no-store.",
+        "description": "Read-only full-question and winning-participant-name substring search. Requester and winner filters are combined with the search condition. Search criteria stay in the request body. An empty items array with a nextCursor means the search must continue; private, no-store. contract=record-attachments-v1 includes attachmentCount; omitting it preserves the legacy list item fields.",
         "operationId": "searchRecords",
         "parameters": [
+          {
+            "in": "query",
+            "name": "contract",
+            "required": false,
+            "schema": {
+              "enum": [
+                "record-attachments-v1"
+              ],
+              "type": "string"
+            }
+          },
           {
             "in": "header",
             "name": "Origin",

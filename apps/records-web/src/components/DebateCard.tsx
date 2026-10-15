@@ -334,7 +334,9 @@ export function DebateCard({
           onOpen?.(record.recordId);
         }
       }}
-      aria-label={`「${record.questionPreview}」の記録を読む`}
+      aria-label={`「${record.questionPreview}」の記録を読む${
+        record.attachmentCount ? `、画像${record.attachmentCount}枚を添付` : ""
+      }`}
       data-route-motion-terminal={motionTerminal ? "" : undefined}
       ref={linkRef}
       style={
@@ -347,7 +349,31 @@ export function DebateCard({
         <CardDecoration recordId={record.recordId} />
         <div className={styles.cardMeta}>
           <time dateTime={record.completedAt}>{formatCompletedDateTime(record.completedAt)}</time>
-          {record.result.tieBreakApplied && <span className={styles.tieBadge}>既定ルール決着</span>}
+          <span className={styles.cardBadges}>
+            {record.result.tieBreakApplied && (
+              <span className={styles.tieBadge}>既定ルール決着</span>
+            )}
+            {!!record.attachmentCount && (
+              <span className={styles.attachmentBadge} aria-hidden="true">
+                <svg
+                  viewBox="0 0 24 24"
+                  width="16"
+                  height="16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  focusable="false"
+                >
+                  <rect x="3" y="3" width="18" height="18" rx="3" />
+                  <circle cx="8.5" cy="8.5" r="1.5" />
+                  <path d="m21 15-5-5L5 21" />
+                </svg>
+                {record.attachmentCount}枚
+              </span>
+            )}
+          </span>
         </div>
         <h2 className={commonStyles.japaneseText}>{record.questionPreview}</h2>
         <div className={styles.cardPeople}>

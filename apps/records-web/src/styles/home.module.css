@@ -480,12 +480,37 @@
 
 .cardMeta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
   color: var(--records-ink-600);
   font-size: 0.78rem;
   font-variant-numeric: tabular-nums;
+}
+
+.cardBadges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.attachmentBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border: 1px solid var(--records-line-strong);
+  border-radius: 999px;
+  background: var(--records-control-background-soft);
+  color: var(--records-ink-900);
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.attachmentBadge svg {
+  flex: none;
 }
 
 .tieBadge {

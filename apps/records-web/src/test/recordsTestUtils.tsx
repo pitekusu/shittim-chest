@@ -258,7 +258,7 @@ export function mockApi(
           }),
         );
       }
-      if (path === "/api/v1/records/search") {
+      if (path === "/api/v1/records/search?contract=record-attachments-v1") {
         const criteria = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
           search: string;
           requester?: string;

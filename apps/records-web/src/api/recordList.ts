@@ -18,12 +18,16 @@ export function searchRecords(
   csrfToken: string,
   signal?: AbortSignal,
 ): Promise<RecordListResponse> {
-  return requestJson("/api/v1/records/search", isRecordListResponse, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken },
-    body: JSON.stringify({ ...filters, limit: 12 }),
-    signal,
-  });
+  return requestJson(
+    "/api/v1/records/search?contract=record-attachments-v1",
+    isRecordListResponse,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken },
+      body: JSON.stringify({ ...filters, limit: 12 }),
+      signal,
+    },
+  );
 }
 
 export function getRecordRequesters(
@@ -43,7 +47,7 @@ export async function getRecords(
   filters: RecordListFilters,
   signal?: AbortSignal,
 ): Promise<RecordListResponse> {
-  const query = new URLSearchParams({ limit: "12" });
+  const query = new URLSearchParams({ limit: "12", contract: "record-attachments-v1" });
   for (const [key, value] of Object.entries(filters)) {
     if (value !== undefined && value !== "") {
       query.set(key, value);

@@ -19,6 +19,7 @@ from shittim_chest.adapters.assets.images import (
     validate_image,
 )
 from shittim_chest.adapters.dynamodb.codec import unmarshal_item
+from shittim_chest.adapters.dynamodb.serializer import serialize_debate_image
 from shittim_chest.application.models import PendingDiscordImage
 from shittim_chest.domain.attachments import DebateImage
 from tests.factories import NOW, completed_snapshot, presentation
@@ -712,13 +713,16 @@ def test_shared_core_store_serializes_image_decoding(monkeypatch) -> None:
     assert len(result) == 2 and maximum == 1
 
 
-def test_image_archive_is_searchable_without_loading_or_signing_image_bytes() -> None:
+@pytest.mark.parametrize("count", (0, 1, 3))
+def test_image_archive_is_searchable_without_loading_or_signing_image_bytes(count: int) -> None:
     from shittim_records.contracts import RecordSearchRequest
     from shittim_records.read_api import ArchivePage
 
     reader = FakeReader()
     source = replace(
-        completed_snapshot(), question="Fictional image search needle", attachments=(image(),)
+        completed_snapshot(),
+        question="Fictional image search needle",
+        attachments=tuple(image(f"00000000-0000-4000-8000-{index:012d}") for index in range(count)),
     )
     projection = project_completed_debate(
         source, identity_hmac_key=HMAC_KEY, presentation=presentation(), projected_at=NOW
@@ -728,12 +732,69 @@ def test_image_archive_is_searchable_without_loading_or_signing_image_bytes() ->
     cast(Any, reader).attachment_url = lambda *_args, **_kwargs: pytest.fail(
         "Search must not sign or load private images"
     )
+    cast(Any, reader).load_record = lambda **_kwargs: pytest.fail(
+        "List/search must use the already-read META image descriptors"
+    )
     service = RecordsReadService(reader=reader, cursor_codec=CursorCodec(SESSION_KEY))
     result = service.search_records(
         query=RecordSearchRequest(search="image search needle"), now=NOW
     )
     assert [record.record_id for record in result.items] == [projection.record_id]
+    assert result.items[0].attachment_count == count
     assert "attachments" not in result.model_dump_json(by_alias=True)
+    from shittim_records.read_api import ListQuery
+
+    listed = service.list_records(query=ListQuery(), now=NOW)
+    assert listed.items[0].attachment_count == count
+    assert len(reader.list_calls) == 2
+    payload = listed.model_dump_json(by_alias=True)
+    assert '"attachmentCount":' in payload
+    assert (
+        "attachments" not in payload
+        and "asset_key" not in payload
+        and "thumbnailUrl" not in payload
+    )
     requesters = service.list_requesters(cursor=None, now=NOW)
     assert len(requesters.items) == 1
     assert "attachments" not in requesters.model_dump_json(by_alias=True)
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    (None, "not-a-list", "not-a-descriptor", "invalid-descriptor", "duplicate", "too-many"),
+)
+@pytest.mark.parametrize("operation", ("list", "search"))
+def test_list_and_search_reject_corrupt_attachment_descriptors(
+    corruption: str | None, operation: str
+) -> None:
+    from shittim_records.contracts import RecordSearchRequest
+    from shittim_records.read_api import ArchivePage, ListQuery, ReadFailure
+
+    reader = FakeReader()
+    projection = project_completed_debate(
+        replace(completed_snapshot(), attachments=(image(),)),
+        identity_hmac_key=HMAC_KEY,
+        presentation=presentation(),
+        projected_at=NOW,
+    )
+    meta = projection.items[0]
+    descriptor = cast(list[dict[str, Any]], meta["attachments"])[0]
+    corruptions: dict[str | None, Any] = {
+        None: None,
+        "not-a-list": {},
+        "not-a-descriptor": ["image"],
+        "invalid-descriptor": [{**descriptor, "size_bytes": -1}],
+        "duplicate": [descriptor, descriptor],
+        "too-many": [
+            serialize_debate_image(image(f"00000000-0000-4000-8000-{index:012d}"))
+            for index in range(4)
+        ],
+    }
+    meta["attachments"] = corruptions[corruption]
+    reader.page = ArchivePage((meta,), None, "gsi1")
+    service = RecordsReadService(reader=reader, cursor_codec=CursorCodec(SESSION_KEY))
+    with pytest.raises(ReadFailure, match="ARCHIVE_UNAVAILABLE"):
+        if operation == "list":
+            service.list_records(query=ListQuery(), now=NOW)
+        else:
+            service.search_records(query=RecordSearchRequest(), now=NOW)

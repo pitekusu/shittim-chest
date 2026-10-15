@@ -636,6 +636,75 @@ def test_search_post_uses_private_cookie_session_and_existing_csrf() -> None:
     assert "Private" not in repr(records.search_query)
 
 
+@pytest.mark.parametrize("route", ("GET /api/v1/records", "POST /api/v1/records/search"))
+@pytest.mark.parametrize("count", (0, 3))
+def test_record_list_attachment_count_requires_contract_without_changing_legacy_fields(
+    route: str, count: int
+) -> None:
+    from shittim_chest.adapters.dynamodb.serializer import serialize_debate_image
+    from tests.test_debate_attachments import image
+    from tests.test_read_api import service
+
+    records, reader = service()
+    if count:
+        reader.meta["schema_version"] = 4
+        reader.meta["attachments"] = [
+            serialize_debate_image(image(f"00000000-0000-4000-8000-{index:012d}"))
+            for index in range(count)
+        ]
+    controller = ReadHttpController(
+        store=cast(Any, FakeSessionStore(session())),
+        session_key=SESSION_KEY,
+        allowed_origin="https://records.example.invalid",
+        records=records,
+    )
+    request = (
+        search_event()
+        if route.startswith("POST")
+        else event(route, cookies=[f"{SESSION_COOKIE_NAME}=session-token"])
+    )
+    legacy = controller.handle(request, now=NOW)
+    request["rawQueryString"] = "contract=record-attachments-v1"
+    negotiated = controller.handle(request, now=NOW)
+
+    assert legacy["statusCode"] == negotiated["statusCode"] == 200
+    old_payload, new_payload = (json.loads(response["body"]) for response in (legacy, negotiated))
+    assert set(old_payload["items"][0]) == {
+        "schemaVersion",
+        "recordId",
+        "completedAt",
+        "questionPreview",
+        "requester",
+        "participants",
+        "result",
+    }
+    assert new_payload["items"][0].pop("attachmentCount") == count
+    assert old_payload == new_payload
+
+
+@pytest.mark.parametrize("route", ("GET /api/v1/records", "POST /api/v1/records/search"))
+@pytest.mark.parametrize(
+    "query",
+    (
+        "contract=unknown",
+        "contract=",
+        "contract=record-attachments-v1&contract=record-attachments-v1",
+        "contract=record-attachments-v1&extra=private",
+    ),
+)
+def test_record_list_rejects_invalid_contract_before_loading(route: str, query: str) -> None:
+    records = FakeRecords()
+    request = (
+        search_event()
+        if route.startswith("POST")
+        else event(route, cookies=[f"{SESSION_COOKIE_NAME}=session-token"])
+    )
+    request["rawQueryString"] = query
+    result = search_controller(records).handle(request, now=NOW)
+    assert result["statusCode"] == 400
+    assert records.list_query is None and records.search_query is None
+
+
 @pytest.mark.parametrize(
     "change",
     (

@@ -22,7 +22,7 @@ import {
 } from "./admin";
 import { getAdminStatus, refreshAdminStatus } from "./adminStatus";
 import { getRecord } from "./recordDetail";
-import { getRecords } from "./recordList";
+import { getRecords, searchRecords } from "./recordList";
 import { getRankings } from "./rankings";
 import { getSession } from "./session";
 import type { AffectionRankingsResponse } from "./types";
@@ -172,10 +172,64 @@ describe("Records API endpoint validation", () => {
 
     await expect(getRecords({ sort: "newest" })).resolves.toEqual(listResponse());
     expect(fetch).toHaveBeenCalledWith(
-      "/api/v1/records?limit=12&sort=newest",
+      "/api/v1/records?limit=12&contract=record-attachments-v1&sort=newest",
       expect.objectContaining({ credentials: "same-origin" }),
     );
   });
+
+  it("negotiates attachment counts for search while keeping private criteria in the body", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(response(listResponse()))),
+    );
+    await expect(searchRecords({ search: "質問", sort: "newest" }, "csrf-token")).resolves.toEqual(
+      listResponse(),
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/records/search?contract=record-attachments-v1",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ search: "質問", sort: "newest", limit: 12 }),
+      }),
+    );
+  });
+
+  it.each([undefined, 0, 1, 3])("accepts an optional attachment count (%s)", async (count) => {
+    const payload = listResponse();
+    const value = {
+      ...payload,
+      items: payload.items.map((item) => ({
+        ...item,
+        ...(count === undefined ? {} : { attachmentCount: count }),
+      })),
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(response(value))),
+    );
+    await expect(getRecords({ sort: "newest" })).resolves.toEqual(value);
+  });
+
+  it.each([-1, 4, 1.5, true, "1", null])(
+    "rejects an invalid attachment count (%s)",
+    async (count) => {
+      const payload = listResponse();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() =>
+          Promise.resolve(
+            response({
+              ...payload,
+              items: payload.items.map((item) => ({ ...item, attachmentCount: count })),
+            }),
+          ),
+        ),
+      );
+      await expect(getRecords({ sort: "newest" })).rejects.toMatchObject({
+        code: "INVALID_API_RESPONSE",
+      });
+    },
+  );
 
   it("rejects a different endpoint's otherwise valid response", async () => {
     vi.stubGlobal(

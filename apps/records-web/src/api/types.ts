@@ -72,6 +72,7 @@ export interface RecordListItem {
   readonly recordId: string;
   readonly completedAt: string;
   readonly questionPreview: string;
+  readonly attachmentCount?: number;
   readonly requester: RequesterSummary;
   readonly participants: readonly ParticipantSummary[];
   readonly result: ResultSummary;
