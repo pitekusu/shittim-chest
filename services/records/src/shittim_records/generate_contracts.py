@@ -697,6 +697,15 @@ def build_openapi() -> dict[str, Any]:
                     "operationId": "getAffectionRankings",
                     "parameters": [
                         _parameter(
+                            "view",
+                            "query",
+                            {
+                                "type": "string",
+                                "enum": ["participants", "requesters"],
+                                "default": "participants",
+                            },
+                        ),
+                        _parameter(
                             "limit",
                             "query",
                             {
@@ -713,10 +722,31 @@ def build_openapi() -> dict[str, Any]:
                         ),
                     ],
                     "responses": {
-                        "200": _response(
-                            "AffectionRankingsResponse",
-                            "Requester affection rankings for all three participants",
-                        ),
+                        "200": {
+                            "description": (
+                                "Affection rankings by participant, "
+                                "or by requester when view=requesters"
+                            ),
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "oneOf": [
+                                            {
+                                                "$ref": (
+                                                    "#/components/schemas/AffectionRankingsResponse"
+                                                )
+                                            },
+                                            {
+                                                "$ref": (
+                                                    "#/components/schemas/"
+                                                    "RequesterAffectionRankingsResponse"
+                                                )
+                                            },
+                                        ]
+                                    }
+                                }
+                            },
+                        },
                         **error_responses,
                     },
                 }

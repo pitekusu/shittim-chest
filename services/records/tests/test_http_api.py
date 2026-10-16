@@ -35,6 +35,7 @@ from shittim_records.contracts import (
     RecordListResponse,
     RecordRequestersResponse,
     RecordSearchRequest,
+    RequesterAffectionRankingsResponse,
 )
 from shittim_records.http_api import AuthHttpController, ReadHttpController
 from shittim_records.read_api import ListQuery
@@ -178,6 +179,35 @@ class FakeRecords:
             max_score=1000,
             rankings=cast(Any, rankings),
             next_cursor=None,
+        )
+
+    def get_requester_affection_rankings(self, **kwargs: Any) -> RequesterAffectionRankingsResponse:
+        assert kwargs["query"].view == "requesters"
+        assert kwargs["query"].limit == 10
+        rankings = self.get_affection_rankings().model_dump(by_alias=True, mode="json")
+        return RequesterAffectionRankingsResponse.model_validate(
+            {
+                "schemaVersion": 1,
+                "generatedAt": NOW,
+                "defaultScore": 500,
+                "maxScore": 1000,
+                "requesters": [
+                    {
+                        "displayName": "Requester",
+                        "avatar": rankings["rankings"][0]["entries"][0]["avatar"],
+                        "participants": [
+                            {
+                                "participant": ranking["participant"],
+                                "displayName": ranking["displayName"],
+                                "score": 500,
+                                "resetCount": 0,
+                            }
+                            for ranking in rankings["rankings"]
+                        ],
+                    }
+                ],
+                "nextCursor": None,
+            }
         )
 
     def get_costs(self, **kwargs: Any) -> CostsResponse:
@@ -700,6 +730,34 @@ def test_affection_rankings_route_is_authenticated_no_store_and_has_no_internal_
     assert limited["statusCode"] == 200
     assert unknown["statusCode"] == 400
     assert duplicate["statusCode"] == 400
+
+
+def test_requester_affection_route_negotiates_view_without_changing_existing_wire_response() -> (
+    None
+):
+    controller = ReadHttpController(
+        store=cast(Any, FakeSessionStore(session())),
+        session_key=SESSION_KEY,
+        records=cast(Any, FakeRecords()),
+    )
+    route = "GET /api/v1/insights/affection-rankings"
+    cookies = [f"{SESSION_COOKIE_NAME}=session-token"]
+    response = controller.handle(
+        event(route, query="view=requesters&limit=10", cookies=cookies), now=NOW
+    )
+    assert response["statusCode"] == 200
+    assert response["headers"]["Cache-Control"] == "private, no-store"
+    payload = json.loads(response["body"])
+    assert "rankings" not in payload
+    assert len(payload["requesters"]) == 1
+    assert len(payload["requesters"][0]["participants"]) == 3
+    assert payload["requesters"][0]["participants"][0]["resetCount"] == 0
+    assert "requesterKey" not in response["body"]
+    existing = controller.handle(event(route, query="view=participants", cookies=cookies), now=NOW)
+    assert "requesters" not in json.loads(existing["body"])
+    for query in ("view=unknown", "view=requesters&view=participants", "view="):
+        invalid = controller.handle(event(route, query=query, cookies=cookies), now=NOW)
+        assert invalid["statusCode"] == 400
 
 
 def test_costs_route_defaults_to_week_and_rejects_unknown_or_duplicate_period() -> None:

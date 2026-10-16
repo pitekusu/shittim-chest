@@ -144,6 +144,26 @@ export interface AffectionRankingsResponse {
   readonly nextCursor: string | null;
 }
 
+export interface RequesterAffectionRanking {
+  readonly displayName: string;
+  readonly avatar: AvatarRef;
+  readonly participants: readonly {
+    readonly participant: ParticipantSlot;
+    readonly displayName: string;
+    readonly score: number;
+    readonly resetCount: number;
+  }[];
+}
+
+export interface RequesterAffectionRankingsResponse {
+  readonly schemaVersion: 1;
+  readonly generatedAt: string;
+  readonly defaultScore: 500;
+  readonly maxScore: 1000;
+  readonly requesters: readonly RequesterAffectionRanking[];
+  readonly nextCursor: string | null;
+}
+
 export interface ParticipantAffectionChange {
   readonly participant: ParticipantSlot;
   readonly before: number;

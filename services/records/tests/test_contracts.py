@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -28,6 +28,7 @@ from shittim_records.contracts import (
     RecordListItem,
     RecordListResponse,
     RecordResultSummary,
+    RequesterAffectionRankingsResponse,
     SessionResponse,
     VoteView,
 )
@@ -144,6 +145,35 @@ def test_affection_ranking_reset_count_is_public_and_defaults_for_old_pages() ->
 
     assert result.rankings[0].entries[0].reset_count == 2
     assert result.rankings[1].entries[0].reset_count == 0
+
+
+def test_requester_affection_contract_requires_three_ordered_participants() -> None:
+    requester = _record_detail_payload()["requester"]
+    payload: dict[str, Any] = {
+        "schemaVersion": 1,
+        "generatedAt": datetime(2026, 8, 30, tzinfo=UTC),
+        "defaultScore": 500,
+        "maxScore": 1000,
+        "requesters": [
+            {
+                **cast(dict[str, Any], requester),
+                "participants": [
+                    {
+                        "participant": slot,
+                        "displayName": slot,
+                        "score": 500,
+                        "resetCount": 0,
+                    }
+                    for slot in ("participant-a", "participant-b", "participant-c")
+                ],
+            }
+        ],
+        "nextCursor": None,
+    }
+    assert len(RequesterAffectionRankingsResponse.model_validate(payload).requesters) == 1
+    payload["requesters"][0]["participants"].reverse()
+    with pytest.raises(ValidationError, match="participant order"):
+        RequesterAffectionRankingsResponse.model_validate(payload)
 
 
 def _record_detail_payload() -> dict[str, object]:

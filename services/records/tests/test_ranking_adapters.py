@@ -224,6 +224,9 @@ def test_store_writes_immutable_pages_before_switching_active_pointer() -> None:
         "META",
         "PAGE#000000",
         "PAGE#000001",
+        "REQUESTERS#META",
+        "REQUESTERS#PAGE#000000",
+        "REQUESTERS#PAGE#000001",
     ]
     assert written[0]["PK"] == "RANKING#AFFECTION#CATALOG"
     assert written[2]["entry_count"] == 50
@@ -233,6 +236,34 @@ def test_store_writes_immutable_pages_before_switching_active_pointer() -> None:
     assert all(len(ranking["entries"]) == 50 for ranking in first_page)
     assert all(len(ranking["entries"]) == 1 for ranking in second_page)
     assert first_page[0]["entries"][1]["reset_count"] == 1
+    # Existing readers validate the legacy item fields strictly. Keep their
+    # shape unchanged even when the ranking writer is deployed first.
+    assert set(written[1]) == {
+        "PK",
+        "SK",
+        "schema_version",
+        "record_type",
+        "generation_id",
+        "generated_at",
+        "profile_count",
+        "page_count",
+        "page_size",
+        "checksum",
+        "participants",
+    }
+    assert set(written[2]) == {
+        "PK",
+        "SK",
+        "schema_version",
+        "record_type",
+        "generation_id",
+        "page_index",
+        "offset",
+        "entry_count",
+        "rankings",
+    }
+    assert len(cast(list[Any], written[5]["requesters"])) == 50
+    assert len(cast(list[Any], written[6]["requesters"])) == 1
 
     assert len(client.transactions) == 1
     switched = [
@@ -249,6 +280,49 @@ def test_store_writes_immutable_pages_before_switching_active_pointer() -> None:
     )
     assert switched[-1]["record_type"] == "affection_ranking_pointer"
     assert "rankings" not in switched[-1]
+
+
+def test_store_joins_requesters_by_identity_across_different_persona_rankings() -> None:
+    client = FakeDynamo()
+    snapshot = affection_snapshot(profile_count=2)
+    first, second, third = snapshot.affection
+    rankings = tuple(
+        replace(
+            ranking,
+            entries=tuple(replace(entry, display_name="同名") for entry in ranking.entries),
+        )
+        for ranking in (
+            first,
+            replace(
+                second,
+                entries=(
+                    replace(second.entries[1], score=900, rank=1),
+                    replace(second.entries[0], score=600, rank=2),
+                ),
+            ),
+            third,
+        )
+    )
+    snapshot_store(client).save_rankings(replace(snapshot, affection=rankings))
+
+    page = cast(
+        dict[str, Any],
+        next(
+            unmarshal_item(call["Item"])
+            for call in client.put_calls
+            if call["Item"]["SK"] == {"S": "REQUESTERS#PAGE#000000"}
+        ),
+    )
+    assert [row["requester_key"] for row in page["requesters"]] == [
+        "requester-000",
+        "requester-001",
+    ]
+    assert [row["display_name"] for row in page["requesters"]] == ["同名", "同名"]
+    assert [[item["score"] for item in row["participants"]] for row in page["requesters"]] == [
+        [1000, 600, 1000],
+        [999, 900, 999],
+    ]
+    assert page["requesters"][1]["participants"][0]["reset_count"] == 1
 
 
 def test_store_does_not_switch_pointer_when_immutable_page_write_fails() -> None:
@@ -283,8 +357,11 @@ def test_later_refresh_cleans_incomplete_generation_tracked_before_page_failure(
     ]
     assert deleted == [
         {"PK": f"RANKING#AFFECTION#GEN#{orphan_generation}", "SK": "META"},
+        {"PK": f"RANKING#AFFECTION#GEN#{orphan_generation}", "SK": "REQUESTERS#META"},
         {"PK": f"RANKING#AFFECTION#GEN#{orphan_generation}", "SK": "PAGE#000000"},
         {"PK": f"RANKING#AFFECTION#GEN#{orphan_generation}", "SK": "PAGE#000001"},
+        {"PK": f"RANKING#AFFECTION#GEN#{orphan_generation}", "SK": "REQUESTERS#PAGE#000000"},
+        {"PK": f"RANKING#AFFECTION#GEN#{orphan_generation}", "SK": "REQUESTERS#PAGE#000001"},
     ]
     assert unmarshal_item(retry.delete_calls[0]["Key"]) == {
         "PK": "RANKING#AFFECTION#CATALOG",
@@ -340,7 +417,14 @@ def test_store_cleans_expired_generation_pages_before_catalog_marker() -> None:
         unmarshal_item(request["DeleteRequest"]["Key"])
         for request in client.batch_write_calls[0]["RequestItems"]["statistics"]
     ]
-    assert [item["SK"] for item in deleted] == ["META", "PAGE#000000", "PAGE#000001"]
+    assert [item["SK"] for item in deleted] == [
+        "META",
+        "REQUESTERS#META",
+        "PAGE#000000",
+        "PAGE#000001",
+        "REQUESTERS#PAGE#000000",
+        "REQUESTERS#PAGE#000001",
+    ]
     assert unmarshal_item(client.delete_calls[0]["Key"]) == {
         "PK": "RANKING#AFFECTION#CATALOG",
         "SK": "a" * 32,

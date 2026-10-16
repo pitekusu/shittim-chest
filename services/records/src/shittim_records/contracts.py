@@ -606,6 +606,59 @@ class AffectionRankingsResponse(PublicModel):
         return self
 
 
+class RequesterAffectionParticipant(PublicModel):
+    participant: ParticipantSlot
+    display_name: NonEmptyText
+    score: Annotated[int, Field(ge=0, le=1000)]
+    reset_count: Annotated[int, Field(ge=0)]
+
+
+RequesterAffectionParticipantCollection = Annotated[
+    tuple[
+        RequesterAffectionParticipant,
+        RequesterAffectionParticipant,
+        RequesterAffectionParticipant,
+    ],
+    Field(
+        json_schema_extra={
+            "allOf": [
+                {
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "prefixItems": [
+                        {"type": "object", "properties": {"participant": {"const": slot}}}
+                        for slot in sorted(_ALL_PARTICIPANT_SLOTS)
+                    ],
+                }
+            ]
+        }
+    ),
+]
+
+
+class RequesterAffectionRanking(PublicModel):
+    display_name: NonEmptyText
+    avatar: AvatarRef
+    participants: RequesterAffectionParticipantCollection
+
+    @model_validator(mode="after")
+    def require_ordered_participants(self) -> RequesterAffectionRanking:
+        if tuple(item.participant for item in self.participants) != tuple(
+            sorted(_ALL_PARTICIPANT_SLOTS)
+        ):
+            raise ValueError("participants must contain every slot in participant order")
+        return self
+
+
+class RequesterAffectionRankingsResponse(PublicModel):
+    schema_version: Literal[1]
+    generated_at: AwareDatetime
+    default_score: Literal[500]
+    max_score: Literal[1000]
+    requesters: Annotated[tuple[RequesterAffectionRanking, ...], Field(max_length=50)]
+    next_cursor: Annotated[str, Field(min_length=1, max_length=4096)] | None
+
+
 MemorialSha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 MemorialCycle = Annotated[int, Field(ge=1, le=1_000_000_000)]
 
@@ -1185,6 +1238,7 @@ PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
     RecordDetailResponse,
     RankingsResponse,
     AffectionRankingsResponse,
+    RequesterAffectionRankingsResponse,
     CostsResponse,
     MemorialStateResponse,
     MemorialUploadResponse,

@@ -69,6 +69,28 @@ const samples = [
   ["RecordDetailResponse", "record-detail", detail],
   ["RankingsResponse", "rankings", rankingsResponse()],
   ["AffectionRankingsResponse", "affection-rankings", affectionRankingsResponse()],
+  [
+    "RequesterAffectionRankingsResponse",
+    "requester-affection-rankings",
+    {
+      schemaVersion: 1,
+      generatedAt: date,
+      defaultScore: 500,
+      maxScore: 1000,
+      requesters: [
+        {
+          ...detail.requester,
+          participants: detail.participants.map(({ slot, displayName }) => ({
+            participant: slot,
+            displayName,
+            score: 500,
+            resetCount: 0,
+          })),
+        },
+      ],
+      nextCursor: null,
+    },
+  ],
   ["CostsResponse", "costs", costsResponse()],
   [
     "AdminStatusResponse",
