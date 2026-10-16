@@ -312,15 +312,22 @@ class ReadHttpController:
                 result = self._records.get_rankings(now=now)
             elif request.route_key == "GET /api/v1/insights/affection-rankings":
                 query = _query(request.raw_query)
-                if not set(query).issubset({"cursor", "limit"}):
+                if not set(query).issubset({"cursor", "limit", "view"}):
                     raise ReadFailure("REQUEST_INVALID", 400)
-                result = self._records.get_affection_rankings(
-                    query=AffectionRankingQuery(
-                        limit=_affection_limit(_optional_single(query, "limit")),
-                        cursor=_optional_single(query, "cursor"),
-                    ),
-                    now=now,
+                view = _optional_single(query, "view")
+                if view not in {None, "participants", "requesters"}:
+                    raise ReadFailure("REQUEST_INVALID", 400)
+                ranking_query = AffectionRankingQuery(
+                    limit=_affection_limit(_optional_single(query, "limit")),
+                    cursor=_optional_single(query, "cursor"),
+                    view="requesters" if view == "requesters" else "participants",
                 )
+                if view == "requesters":
+                    result = self._records.get_requester_affection_rankings(
+                        query=ranking_query, now=now
+                    )
+                else:
+                    result = self._records.get_affection_rankings(query=ranking_query, now=now)
             elif request.route_key == "GET /api/v1/insights/costs":
                 query = _query(request.raw_query)
                 if not set(query).issubset({"period"}):

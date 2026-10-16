@@ -371,8 +371,13 @@ class DynamoRankingSnapshotStore:
                 self._batch_delete(
                     (
                         {"PK": partition_key, "SK": "META"},
+                        {"PK": partition_key, "SK": "REQUESTERS#META"},
                         *(
                             {"PK": partition_key, "SK": f"PAGE#{index:06d}"}
+                            for index in range(page_count)
+                        ),
+                        *(
+                            {"PK": partition_key, "SK": f"REQUESTERS#PAGE#{index:06d}"}
                             for index in range(page_count)
                         ),
                     )
@@ -415,9 +420,46 @@ def _affection_generation_items(
     ):
         raise ValueError("affection snapshot profile count is inconsistent")
     generated_at = snapshot.generated_at.isoformat()
+    # Join while the full snapshot is already in memory. Reads must not gather
+    # all persona pages just to reconstruct one requester's three scores.
+    requester_entries: dict[str, dict[str, Any]] = {}
+    for ranking in snapshot.affection:
+        seen: set[str] = set()
+        for entry in ranking.entries:
+            if entry.requester_key in seen:
+                raise ValueError("affection snapshot contains duplicate requesters")
+            seen.add(entry.requester_key)
+            requester = requester_entries.setdefault(
+                entry.requester_key,
+                {
+                    "requester_key": entry.requester_key,
+                    "display_name": entry.display_name,
+                    "participants": [],
+                },
+            )
+            if requester["display_name"] != entry.display_name:
+                raise ValueError("affection snapshot requester names are inconsistent")
+            requester["participants"].append(
+                {
+                    "participant": ranking.participant,
+                    "score": entry.score,
+                    "reset_count": entry.reset_count,
+                }
+            )
+    if len(requester_entries) != snapshot.affection_profile_count or any(
+        tuple(item["participant"] for item in requester["participants"])
+        != ("participant-a", "participant-b", "participant-c")
+        for requester in requester_entries.values()
+    ):
+        raise ValueError("affection snapshot requester participants are inconsistent")
+    requesters = sorted(
+        requester_entries.values(),
+        key=lambda requester: (requester["display_name"], requester["requester_key"]),
+    )
     canonical = {
         "generated_at": generated_at,
         "profile_count": snapshot.affection_profile_count,
+        "requesters": requesters,
         "rankings": [
             {
                 "participant": ranking.participant,
@@ -498,6 +540,31 @@ def _affection_generation_items(
         _validate_item_size(page)
         pages.append(page)
     _validate_item_size(meta)
+    # Keep the existing META/PAGE wire shape readable during rolling updates
+    # and reader rollbacks. The new view occupies separate sort keys only.
+    requester_meta = {
+        **meta,
+        "SK": "REQUESTERS#META",
+        "record_type": "requester_affection_ranking_generation",
+    }
+    _validate_item_size(requester_meta)
+    requester_pages: list[DynamoItem] = []
+    for page_index in range(page_count):
+        start = page_index * AFFECTION_PAGE_SIZE
+        stop = min(start + AFFECTION_PAGE_SIZE, snapshot.affection_profile_count)
+        requester_page: DynamoItem = {
+            "PK": partition_key,
+            "SK": f"REQUESTERS#PAGE#{page_index:06d}",
+            "schema_version": 1,
+            "record_type": "requester_affection_ranking_page",
+            "generation_id": generation_id,
+            "page_index": page_index,
+            "offset": start,
+            "entry_count": stop - start,
+            "requesters": cast(Any, requesters[start:stop]),
+        }
+        _validate_item_size(requester_page)
+        requester_pages.append(requester_page)
     pointer: DynamoItem = {
         "PK": "RANKING#AFFECTION",
         "SK": "CURRENT",
@@ -519,7 +586,7 @@ def _affection_generation_items(
         "page_count": page_count,
         "checksum": checksum,
     }
-    return (meta, *pages), catalog, pointer
+    return (meta, *pages, requester_meta, *requester_pages), catalog, pointer
 
 
 def _retired_catalog_item(

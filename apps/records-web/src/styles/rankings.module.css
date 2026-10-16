@@ -643,6 +643,55 @@
   transform: scale(0.98);
 }
 
+.affectionView {
+  width: min(100%, 240px);
+  margin-top: 20px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.affectionView label {
+  touch-action: manipulation;
+}
+
+.requesterAffectionDescription {
+  color: var(--records-ink-600);
+  font-size: 0.85rem;
+  line-height: 1.8;
+}
+
+.requesterAffectionGrid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+}
+
+.requesterAffectionGrid h3 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.requesterAffectionGrid .affectionRankingList li {
+  grid-template-columns: 22px 28px minmax(0, 1fr);
+}
+
+.requesterAffectionGrid .affectionMeta,
+.requesterAffectionGrid .affectionHearts {
+  grid-column: 3;
+}
+
+.requesterAffectionGrid .affectionHearts {
+  justify-self: end;
+}
+
+.requesterAffectionPagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding-top: 20px;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .costContent {
   display: grid;
   grid-template-columns: minmax(200px, 0.65fr) minmax(0, 1fr);

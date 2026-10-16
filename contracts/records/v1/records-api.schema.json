@@ -4223,6 +4223,179 @@
       "title": "RecordSyncReference",
       "type": "object"
     },
+    "RequesterAffectionParticipant": {
+      "additionalProperties": false,
+      "properties": {
+        "displayName": {
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Displayname",
+          "type": "string"
+        },
+        "participant": {
+          "enum": [
+            "participant-a",
+            "participant-b",
+            "participant-c"
+          ],
+          "title": "Participant",
+          "type": "string"
+        },
+        "resetCount": {
+          "minimum": 0,
+          "title": "Resetcount",
+          "type": "integer"
+        },
+        "score": {
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Score",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "participant",
+        "displayName",
+        "score",
+        "resetCount"
+      ],
+      "title": "RequesterAffectionParticipant",
+      "type": "object"
+    },
+    "RequesterAffectionRanking": {
+      "additionalProperties": false,
+      "properties": {
+        "avatar": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImageAvatarRef"
+            },
+            {
+              "$ref": "#/$defs/PlaceholderAvatarRef"
+            }
+          ],
+          "title": "Avatar"
+        },
+        "displayName": {
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Displayname",
+          "type": "string"
+        },
+        "participants": {
+          "allOf": [
+            {
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "properties": {
+                    "participant": {
+                      "const": "participant-a"
+                    }
+                  },
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "participant": {
+                      "const": "participant-b"
+                    }
+                  },
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "participant": {
+                      "const": "participant-c"
+                    }
+                  },
+                  "type": "object"
+                }
+              ]
+            }
+          ],
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/RequesterAffectionParticipant"
+            },
+            {
+              "$ref": "#/$defs/RequesterAffectionParticipant"
+            },
+            {
+              "$ref": "#/$defs/RequesterAffectionParticipant"
+            }
+          ],
+          "title": "Participants",
+          "type": "array"
+        }
+      },
+      "required": [
+        "displayName",
+        "avatar",
+        "participants"
+      ],
+      "title": "RequesterAffectionRanking",
+      "type": "object"
+    },
+    "RequesterAffectionRankingsResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "defaultScore": {
+          "const": 500,
+          "title": "Defaultscore",
+          "type": "integer"
+        },
+        "generatedAt": {
+          "format": "date-time",
+          "title": "Generatedat",
+          "type": "string"
+        },
+        "maxScore": {
+          "const": 1000,
+          "title": "Maxscore",
+          "type": "integer"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Nextcursor"
+        },
+        "requesters": {
+          "items": {
+            "$ref": "#/$defs/RequesterAffectionRanking"
+          },
+          "maxItems": 50,
+          "title": "Requesters",
+          "type": "array"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "generatedAt",
+        "defaultScore",
+        "maxScore",
+        "requesters",
+        "nextCursor"
+      ],
+      "title": "RequesterAffectionRankingsResponse",
+      "type": "object"
+    },
     "RequesterSummary": {
       "additionalProperties": false,
       "properties": {
@@ -4561,6 +4734,9 @@
     },
     {
       "$ref": "#/$defs/AffectionRankingsResponse"
+    },
+    {
+      "$ref": "#/$defs/RequesterAffectionRankingsResponse"
     },
     {
       "$ref": "#/$defs/CostsResponse"

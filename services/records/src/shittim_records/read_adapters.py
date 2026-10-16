@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
     from mypy_boto3_dynamodb.client import DynamoDBClient
@@ -150,13 +150,15 @@ class DynamoRecordsReader:
         raw = response.get("Item")
         return None if raw is None else unmarshal_item(raw)
 
-    def load_affection_ranking_generation(self, *, generation_id: str) -> DynamoItem | None:
+    def load_affection_ranking_generation(
+        self, *, generation_id: str, view: Literal["participants", "requesters"] = "participants"
+    ) -> DynamoItem | None:
         response = self._client.get_item(
             TableName=self._statistics_table,
             Key=marshal_item(
                 {
                     "PK": f"RANKING#AFFECTION#GEN#{generation_id}",
-                    "SK": "META",
+                    "SK": "REQUESTERS#META" if view == "requesters" else "META",
                 }
             ),
             ConsistentRead=True,
@@ -169,6 +171,7 @@ class DynamoRecordsReader:
         *,
         generation_id: str,
         page_indices: tuple[int, ...],
+        view: Literal["participants", "requesters"] = "participants",
     ) -> tuple[DynamoItem, ...]:
         if not page_indices:
             return ()
@@ -178,7 +181,11 @@ class DynamoRecordsReader:
                     marshal_item(
                         {
                             "PK": f"RANKING#AFFECTION#GEN#{generation_id}",
-                            "SK": f"PAGE#{index:06d}",
+                            "SK": (
+                                f"REQUESTERS#PAGE#{index:06d}"
+                                if view == "requesters"
+                                else f"PAGE#{index:06d}"
+                            ),
                         }
                     )
                     for index in page_indices

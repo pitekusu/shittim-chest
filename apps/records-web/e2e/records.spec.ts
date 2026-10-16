@@ -208,6 +208,29 @@ const affectionRankings = {
   nextCursor: "affection-next",
 };
 
+function requesterAffectionPage(names: readonly string[], nextCursor: string | null = null) {
+  return {
+    schemaVersion: 1,
+    generatedAt: affectionRankings.generatedAt,
+    defaultScore: 500,
+    maxScore: 1000,
+    requesters: names.map((displayName, requesterIndex) => ({
+      displayName,
+      avatar: placeholder(displayName, requesterIndex % 2 === 0 ? "cyan" : "pink"),
+      participants: participants.map((participant, participantIndex) => ({
+        participant: participant.slot,
+        displayName: participant.displayName,
+        score:
+          requesterIndex === 0
+            ? [800, 900, 900][participantIndex]
+            : [625, 755, 987][participantIndex],
+        resetCount: participantIndex === requesterIndex % 3 ? 2 : 0,
+      })),
+    })),
+    nextCursor,
+  };
+}
+
 const costs = {
   schemaVersion: 1,
   period: "week",
@@ -1626,6 +1649,145 @@ test("expands all affection ranks together, keeps cached pages and leaves lower 
   await page.setViewportSize({ width: 320, height: 900 });
   await expect(lowerRequests).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+});
+
+test("switches affection grouping explicitly and pages ten requesters without prefetching", async ({
+  page,
+}) => {
+  await mockAuthenticatedApi(page);
+  const requesterRequests: { limit: string | null; cursor: string | null }[] = [];
+  const firstPageNames = [
+    "同じ名前の先生",
+    "同じ名前の先生",
+    ...Array.from({ length: 8 }, (_, index) => `最初のページの先生${index + 3}`),
+  ];
+  const firstPage = requesterAffectionPage(firstPageNames, "requester-next");
+  const secondPage = requesterAffectionPage(["次のページの先生11", "次のページの先生12"]);
+  await page.route("**/api/v1/insights/affection-rankings?*", (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("view") !== "requesters") {
+      return route.fulfill({ json: affectionRankings });
+    }
+    requesterRequests.push({
+      limit: url.searchParams.get("limit"),
+      cursor: url.searchParams.get("cursor"),
+    });
+    return route.fulfill({
+      json: url.searchParams.has("cursor") ? secondPage : firstPage,
+    });
+  });
+
+  await page.goto("/insights");
+  const affection = page.getByRole("region", { name: "親愛度ランキング" });
+  const grouping = affection.getByRole("radiogroup", { name: "親愛度ランキングの表示方法" });
+  await expect(grouping.getByRole("radio", { name: "人格別", exact: true })).toBeChecked();
+  await expect(affection.getByRole("heading", { name: "アロナ", exact: true })).toBeVisible();
+  expect(requesterRequests).toEqual([]);
+  await grouping.getByRole("radio", { name: "依頼者別", exact: true }).focus();
+  await page.keyboard.press("Space");
+
+  await expect(grouping.getByRole("radio", { name: "依頼者別", exact: true })).toBeChecked();
+  await expect(affection.getByRole("heading", { level: 3 })).toHaveCount(10);
+  const sameNames = affection.getByRole("region", { name: "同じ名前の先生", exact: true });
+  await expect(sameNames).toHaveCount(2);
+  await expect(
+    sameNames.nth(0).getByRole("figure", {
+      name: "アロナから同じ名前の先生への親愛度 800点（1000点満点、ハート10個中8個）",
+    }),
+  ).toBeVisible();
+  await expect(
+    sameNames.nth(1).getByRole("figure", {
+      name: "アロナから同じ名前の先生への親愛度 625点（1000点満点、ハート10個中6個）",
+    }),
+  ).toBeVisible();
+  const firstRequesterRows = sameNames.nth(0).getByRole("listitem");
+  await expect(firstRequesterRows).toHaveCount(3);
+  await expect(firstRequesterRows.nth(0)).toContainText("プラナ");
+  await expect(firstRequesterRows.nth(1)).toContainText("安倍晋三AI");
+  await expect(firstRequesterRows.nth(2)).toContainText("アロナ");
+  await expect(sameNames.nth(0).getByText("1位", { exact: true })).toHaveCount(2);
+  await expect(sameNames.nth(0).getByText("3位", { exact: true })).toHaveCount(1);
+  await expect(firstRequesterRows.nth(2)).toContainText("メモリアルロビーのリセット 2回");
+  await expect(firstRequesterRows.nth(0)).not.toContainText("メモリアルロビーのリセット");
+  const previousPage = affection.getByRole("button", { name: "前の10人", exact: true });
+  const nextPage = affection.getByRole("button", { name: "次の10人", exact: true });
+  await expect(previousPage).toBeDisabled();
+  await expect(nextPage).toBeEnabled();
+  expect(requesterRequests).toEqual([{ limit: "10", cursor: null }]);
+
+  await nextPage.click();
+  await expect(affection.getByRole("heading", { level: 3 })).toHaveCount(2);
+  await expect(affection.getByRole("heading", { name: "次のページの先生11" })).toBeVisible();
+  await expect(sameNames).toHaveCount(0);
+  await expect(previousPage).toBeEnabled();
+  await expect(nextPage).toBeDisabled();
+  expect(requesterRequests).toEqual([
+    { limit: "10", cursor: null },
+    { limit: "10", cursor: "requester-next" },
+  ]);
+
+  await previousPage.click();
+  await expect(affection.getByRole("heading", { level: 3 })).toHaveCount(10);
+  await grouping.getByText("人格別", { exact: true }).click();
+  await expect(affection.getByRole("heading", { name: "アロナ", exact: true })).toBeVisible();
+  await expect(affection.getByRole("button", { name: "4位以下を表示" })).toBeVisible();
+  await grouping.getByText("依頼者別", { exact: true }).click();
+  await expect(sameNames).toHaveCount(2);
+  expect(requesterRequests).toHaveLength(2);
+});
+
+test("requester affection cards remain readable with long names, narrow widths and large text", async ({
+  page,
+}, testInfo) => {
+  await mockAuthenticatedApi(page);
+  const longName = "長い依頼者名でも三人の親愛度を確認できる架空の先生".repeat(3);
+  const requesterPage = requesterAffectionPage([longName, "別の架空の先生"]);
+  await page.route("**/api/v1/insights/affection-rankings?*", (route) =>
+    route.fulfill({
+      json:
+        new URL(route.request().url()).searchParams.get("view") === "requesters"
+          ? requesterPage
+          : affectionRankings,
+    }),
+  );
+
+  await page.goto("/insights");
+  const affection = page.getByRole("region", { name: "親愛度ランキング" });
+  await affection
+    .getByRole("radiogroup", { name: "親愛度ランキングの表示方法" })
+    .getByText("依頼者別", { exact: true })
+    .click();
+  const requester = affection.getByRole("region", { name: longName, exact: true });
+  await expect(requester).toBeVisible();
+  await expect(requester.getByRole("listitem")).toHaveCount(3);
+  await expect(requester.getByRole("figure")).toHaveCount(3);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.screenshot({
+    path: testInfo.outputPath("requester-affection.png"),
+    fullPage: true,
+    animations: "disabled",
+  });
+
+  await page.setViewportSize({ width: 320, height: 900 });
+  await page.evaluate(() => (document.documentElement.style.fontSize = "200%"));
+  await expect(requester.getByRole("heading", { name: longName, exact: true })).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    ),
+  ).toBeLessThanOrEqual(1);
+  const cardBox = await requester.boundingBox();
+  expect(cardBox).not.toBeNull();
+  expect(cardBox!.x).toBeGreaterThanOrEqual(0);
+  expect(cardBox!.x + cardBox!.width).toBeLessThanOrEqual(321);
+  await expect(affection.getByRole("button", { name: "前の10人", exact: true })).toBeDisabled();
+  await expect(affection.getByRole("button", { name: "次の10人", exact: true })).toBeDisabled();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.screenshot({
+    path: testInfo.outputPath("requester-affection-320-large-text.png"),
+    fullPage: true,
+    animations: "disabled",
+  });
 });
 
 test("English login product name keeps the approved two-line break at narrow widths", async ({

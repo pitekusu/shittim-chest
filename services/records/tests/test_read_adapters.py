@@ -162,6 +162,33 @@ def test_affection_pages_retry_only_unprocessed_batch_keys() -> None:
     assert client.batch_calls[1]["RequestItems"] == unprocessed
 
 
+def test_requester_affection_uses_separate_sort_keys_in_the_same_generation() -> None:
+    generation_id = "a" * 32
+    partition = f"RANKING#AFFECTION#GEN#{generation_id}"
+    meta = {"PK": partition, "SK": "REQUESTERS#META"}
+    page = {"PK": partition, "SK": "REQUESTERS#PAGE#000001"}
+    client = FakeDynamo(
+        [
+            {"Item": marshal_item(meta)},
+            {"Responses": {"statistics": [marshal_item(page)]}},
+        ]
+    )
+    records = reader(client)
+
+    assert (
+        records.load_affection_ranking_generation(generation_id=generation_id, view="requesters")
+        == meta
+    )
+    assert records.load_affection_ranking_pages(
+        generation_id=generation_id, page_indices=(1,), view="requesters"
+    ) == (page,)
+    assert client.get_calls[0]["Key"] == marshal_item(meta)
+    assert client.get_calls[0]["ConsistentRead"] is True
+    assert client.batch_calls[0]["RequestItems"] == {
+        "statistics": {"Keys": [marshal_item(page)], "ConsistentRead": True}
+    }
+
+
 def test_cost_ledger_queries_cost_and_fx_partitions_strongly_consistently() -> None:
     client = FakeDynamo(
         [

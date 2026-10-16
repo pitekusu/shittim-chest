@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   useInfiniteQuery,
   useQuery,
+  useQueryClient,
   type UseInfiniteQueryResult,
   type UseQueryResult,
 } from "@tanstack/react-query";
@@ -10,6 +11,10 @@ import { getAffectionRankings, mergeAffectionRankingPages } from "../api/affecti
 import { getCosts } from "../api/costs";
 import { RecordsApiError } from "../api/http";
 import { getRankings } from "../api/rankings";
+import {
+  getRequesterAffectionRankings,
+  REQUESTER_AFFECTION_PAGE_LIMIT,
+} from "../api/requesterAffectionRankings";
 import type {
   AffectionRankingsResponse,
   AvatarRef,
@@ -18,6 +23,7 @@ import type {
   ParticipantAffectionRanking,
   ParticipantSlot,
   RankingEntry,
+  RequesterAffectionRanking,
 } from "../api/types";
 import { Avatar } from "../components/Avatar";
 import { useAuthenticationRecovery } from "../hooks/useAuthenticationRecovery";
@@ -302,6 +308,7 @@ function AffectionRankings({
   readonly query: UseInfiniteQueryResult<AffectionRankingsResponse>;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [view, setView] = useState<"participants" | "requesters">("participants");
   const initialError = query.data === undefined ? query.error : null;
   const paginationError = query.isFetchNextPageError ? query.error : null;
   const refreshError = query.data !== undefined && !query.isFetchNextPageError ? query.error : null;
@@ -316,7 +323,7 @@ function AffectionRankings({
       className={`${rankingStyles.affectionPanel} ${routeStyles.routeMotionItem}`}
       style={routeMotionDelay(120)}
       aria-labelledby="affection-rankings-title"
-      aria-busy={query.isPending || query.isFetchingNextPage}
+      aria-busy={view === "participants" && (query.isPending || query.isFetchingNextPage)}
     >
       <header className={rankingStyles.affectionHeader}>
         <div>
@@ -327,7 +334,7 @@ function AffectionRankings({
             親愛度ランキング
           </h2>
         </div>
-        {query.data && (
+        {view === "participants" && query.data && (
           <p className={rankingStyles.affectionGeneratedAt}>
             最終集計:{" "}
             <time dateTime={query.data.generatedAt}>
@@ -336,105 +343,348 @@ function AffectionRankings({
           </p>
         )}
       </header>
-      {query.isPending && (
-        <p className={rankingStyles.affectionStatus} aria-live="polite">
-          親愛度を読み込んでいます。
-        </p>
-      )}
+      <div
+        role="radiogroup"
+        aria-label="親愛度ランキングの表示方法"
+        className={`${rankingStyles.costPeriod} ${rankingStyles.affectionView}`}
+      >
+        {(
+          [
+            ["participants", "人格別"],
+            ["requesters", "依頼者別"],
+          ] as const
+        ).map(([value, label]) => (
+          <label key={value}>
+            <input
+              type="radio"
+              name="affection-view"
+              value={value}
+              checked={view === value}
+              onChange={() => setView(value)}
+            />
+            <span>{label}</span>
+          </label>
+        ))}
+      </div>
+      <div hidden={view !== "participants"}>
+        {query.isPending && (
+          <p className={rankingStyles.affectionStatus} aria-live="polite">
+            親愛度を読み込んでいます。
+          </p>
+        )}
+        {preparing && (
+          <output className={rankingStyles.affectionStatus}>
+            <strong>親愛度ランキングを準備しています</strong>
+            <span>最初の集計が終わるまで、しばらくお待ちください。</span>
+          </output>
+        )}
+        {initialError && !preparing && (
+          <div className={rankingStyles.affectionStatus} role="alert">
+            <strong>親愛度ランキングを読み込めませんでした</strong>
+            <span>{apiError?.message ?? "通信状態を確認してください。"}</span>
+            <button
+              className={commonStyles.secondaryButton}
+              type="button"
+              onClick={() => void query.refetch()}
+            >
+              もう一度試す
+            </button>
+          </div>
+        )}
+        {query.data && (
+          <>
+            {refreshError && (
+              <div className={rankingStyles.affectionRefreshError} role="alert">
+                <span>
+                  {refreshError instanceof RecordsApiError
+                    ? refreshError.message
+                    : "親愛度ランキングを更新できませんでした。"}
+                </span>
+                <button
+                  className={commonStyles.secondaryButton}
+                  type="button"
+                  onClick={() => void query.refetch()}
+                >
+                  もう一度試す
+                </button>
+              </div>
+            )}
+            <div id="affection-rankings-content" className={rankingStyles.affectionRankingsGrid}>
+              {query.data.rankings.map((ranking) => (
+                <AffectionRankingCard
+                  key={ranking.participant}
+                  ranking={ranking}
+                  maxScore={query.data.maxScore}
+                  expanded={expanded}
+                />
+              ))}
+            </div>
+            {(expanded || hasLowerEntries || query.hasNextPage) && (
+              <div className={rankingStyles.affectionDisclosure}>
+                <button
+                  className={commonStyles.secondaryButton}
+                  type="button"
+                  aria-expanded={expanded}
+                  aria-controls="affection-rankings-content"
+                  onClick={() => setExpanded((current) => !current)}
+                >
+                  {expanded ? "3位までに戻す" : "4位以下を表示"}
+                </button>
+              </div>
+            )}
+            {expanded && (query.hasNextPage || paginationError) && (
+              <div
+                className={rankingStyles.affectionLoadMore}
+                aria-live="polite"
+                aria-busy={query.isFetchingNextPage}
+              >
+                {!hasLowerEntries && !paginationError && (
+                  <p>続きを読み込むと、まだ表示されていない順位を確認できます。</p>
+                )}
+                {paginationError && (
+                  <span role="alert">
+                    {paginationError instanceof RecordsApiError
+                      ? paginationError.message
+                      : "続きを読み込めませんでした。"}
+                  </span>
+                )}
+                <button
+                  className={commonStyles.secondaryButton}
+                  type="button"
+                  disabled={query.isFetchingNextPage}
+                  aria-label="親愛度ランキングの続きを読み込む"
+                  onClick={() => void query.fetchNextPage()}
+                >
+                  {query.isFetchingNextPage
+                    ? "続きを読み込んでいます"
+                    : paginationError
+                      ? "続きをもう一度読み込む"
+                      : "続きを読み込む"}
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+      <div hidden={view !== "requesters"}>
+        <RequesterAffectionRankings active={view === "requesters"} />
+      </div>
+    </section>
+  );
+}
+
+function RequesterAffectionRankings({ active }: { readonly active: boolean }) {
+  const [pageIndex, setPageIndex] = useState(0);
+  const client = useQueryClient();
+  const query = useInfiniteQuery({
+    queryKey: ["affection-rankings", "requesters"],
+    enabled: active,
+    // Keep the immutable snapshot while paging; refreshing every cached page
+    // on focus would make request volume grow with the browsing history.
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam, signal }) => getRequesterAffectionRankings(pageParam, signal),
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+  });
+  useAuthenticationRecovery(query.error);
+  const pages = query.data?.pages;
+  const currentIndex = Math.min(pageIndex, Math.max(0, (pages?.length ?? 1) - 1));
+  const page = pages?.[currentIndex];
+  const hasCachedNext = pages !== undefined && currentIndex + 1 < pages.length;
+  const initialError = page === undefined ? query.error : null;
+  const apiError = initialError instanceof RecordsApiError ? initialError : undefined;
+  const preparing = apiError?.status === 503 && apiError.code === "INSIGHTS_UNAVAILABLE";
+  const cursorExpired =
+    query.error instanceof RecordsApiError && query.error.code === "CURSOR_INVALID";
+
+  function restart() {
+    setPageIndex(0);
+    return client.resetQueries({ queryKey: ["affection-rankings", "requesters"], exact: true });
+  }
+
+  async function nextPage() {
+    if (hasCachedNext) {
+      setPageIndex(currentIndex + 1);
+      return;
+    }
+    const result = await query.fetchNextPage();
+    if (result.isSuccess && result.data.pages.length > currentIndex + 1) {
+      setPageIndex(currentIndex + 1);
+    }
+  }
+
+  return (
+    <div aria-busy={query.isFetching}>
+      <p className={rankingStyles.requesterAffectionDescription}>
+        依頼者の名前順に10人ずつ表示します。各依頼者への親愛度が高い人格から並びます。
+      </p>
+      {query.isPending && <output>依頼者別の親愛度を読み込んでいます。</output>}
       {preparing && (
-        <output className={rankingStyles.affectionStatus}>
-          <strong>親愛度ランキングを準備しています</strong>
-          <span>最初の集計が終わるまで、しばらくお待ちください。</span>
+        <output>
+          依頼者別の親愛度ランキングを準備しています。しばらくしてから再試行してください。
         </output>
       )}
       {initialError && !preparing && (
-        <div className={rankingStyles.affectionStatus} role="alert">
-          <strong>親愛度ランキングを読み込めませんでした</strong>
-          <span>{apiError?.message ?? "通信状態を確認してください。"}</span>
+        <p role="alert">依頼者別の親愛度ランキングを読み込めませんでした。</p>
+      )}
+      {query.error && (
+        <div className={rankingStyles.affectionRefreshError}>
+          {page && (
+            <span role="alert">
+              {cursorExpired
+                ? "ページの有効期限が切れました。最新の集計を最初から読み直してください。"
+                : query.isFetchNextPageError
+                  ? "次の依頼者を読み込めませんでした。表示中の依頼者はそのまま確認できます。"
+                  : "依頼者別の親愛度ランキングを更新できませんでした。"}
+            </span>
+          )}
           <button
             className={commonStyles.secondaryButton}
             type="button"
-            onClick={() => void query.refetch()}
+            disabled={query.isFetching}
+            onClick={() =>
+              void (query.isFetchNextPageError && !cursorExpired ? nextPage() : restart())
+            }
           >
-            もう一度試す
+            {cursorExpired ? "最初から読み直す" : "もう一度試す"}
           </button>
         </div>
       )}
-      {query.data && (
+      {page && (
         <>
-          {refreshError && (
-            <div className={rankingStyles.affectionRefreshError} role="alert">
-              <span>
-                {refreshError instanceof RecordsApiError
-                  ? refreshError.message
-                  : "親愛度ランキングを更新できませんでした。"}
-              </span>
-              <button
-                className={commonStyles.secondaryButton}
-                type="button"
-                onClick={() => void query.refetch()}
-              >
-                もう一度試す
-              </button>
-            </div>
-          )}
-          <div id="affection-rankings-content" className={rankingStyles.affectionRankingsGrid}>
-            {query.data.rankings.map((ranking) => (
-              <AffectionRankingCard
-                key={ranking.participant}
-                ranking={ranking}
-                maxScore={query.data.maxScore}
-                expanded={expanded}
-              />
-            ))}
-          </div>
-          {(expanded || hasLowerEntries || query.hasNextPage) && (
-            <div className={rankingStyles.affectionDisclosure}>
-              <button
-                className={commonStyles.secondaryButton}
-                type="button"
-                aria-expanded={expanded}
-                aria-controls="affection-rankings-content"
-                onClick={() => setExpanded((current) => !current)}
-              >
-                {expanded ? "3位までに戻す" : "4位以下を表示"}
-              </button>
-            </div>
-          )}
-          {expanded && (query.hasNextPage || paginationError) && (
+          <p className={rankingStyles.affectionGeneratedAt}>
+            最終集計:{" "}
+            <time dateTime={page.generatedAt}>{formatCompletedDateTime(page.generatedAt)}</time>
+          </p>
+          <button
+            className={commonStyles.secondaryButton}
+            type="button"
+            disabled={query.isFetching}
+            onClick={() => void restart()}
+          >
+            最新の集計に更新
+          </button>
+          {page.requesters.length === 0 ? (
+            <p className={rankingStyles.affectionEmpty}>まだ集計対象がありません。</p>
+          ) : (
             <div
-              className={rankingStyles.affectionLoadMore}
-              aria-live="polite"
-              aria-busy={query.isFetchingNextPage}
+              className={`${rankingStyles.affectionRankingsGrid} ${rankingStyles.requesterAffectionGrid}`}
             >
-              {!hasLowerEntries && !paginationError && (
-                <p>続きを読み込むと、まだ表示されていない順位を確認できます。</p>
-              )}
-              {paginationError && (
-                <span role="alert">
-                  {paginationError instanceof RecordsApiError
-                    ? paginationError.message
-                    : "続きを読み込めませんでした。"}
-                </span>
-              )}
-              <button
-                className={commonStyles.secondaryButton}
-                type="button"
-                disabled={query.isFetchingNextPage}
-                aria-label="親愛度ランキングの続きを読み込む"
-                onClick={() => void query.fetchNextPage()}
-              >
-                {query.isFetchingNextPage
-                  ? "続きを読み込んでいます"
-                  : paginationError
-                    ? "続きをもう一度読み込む"
-                    : "続きを読み込む"}
-              </button>
+              {page.requesters.map((requester, index) => (
+                <RequesterAffectionCard
+                  key={`${currentIndex}-${index}`}
+                  requester={requester}
+                  maxScore={page.maxScore}
+                />
+              ))}
             </div>
           )}
+          <nav
+            aria-label="依頼者別のページ送り"
+            className={rankingStyles.requesterAffectionPagination}
+          >
+            <button
+              className={commonStyles.secondaryButton}
+              type="button"
+              disabled={currentIndex === 0 || query.isFetching}
+              onClick={() => setPageIndex(currentIndex - 1)}
+            >
+              前の10人
+            </button>
+            <output>
+              {page.requesters.length === 0
+                ? "0人"
+                : `${currentIndex * REQUESTER_AFFECTION_PAGE_LIMIT + 1}〜${currentIndex * REQUESTER_AFFECTION_PAGE_LIMIT + page.requesters.length}人目`}
+            </output>
+            <button
+              className={commonStyles.secondaryButton}
+              type="button"
+              disabled={(!hasCachedNext && !query.hasNextPage) || query.isFetching}
+              onClick={() => void nextPage()}
+            >
+              {query.isFetchingNextPage ? "読み込んでいます" : "次の10人"}
+            </button>
+          </nav>
         </>
       )}
+    </div>
+  );
+}
+
+function RequesterAffectionCard({
+  requester,
+  maxScore,
+}: {
+  readonly requester: RequesterAffectionRanking;
+  readonly maxScore: number;
+}) {
+  const participants = [...requester.participants].sort((left, right) => right.score - left.score);
+  return (
+    <section className={rankingStyles.affectionRankingCard} aria-label={requester.displayName}>
+      <header>
+        <Avatar avatar={requester.avatar} />
+        <h3>{requester.displayName}</h3>
+      </header>
+      <ol className={rankingStyles.affectionRankingList}>
+        {participants.map((participant) => {
+          const rank = participants.findIndex((entry) => entry.score === participant.score) + 1;
+          return (
+            <li
+              key={participant.participant}
+              value={rank}
+              className={AFFECTION_VARIANTS[participant.participant]}
+            >
+              <span className={rankingStyles.affectionRank}>
+                <span aria-hidden="true">{rank}</span>
+                <span className={commonStyles.visuallyHidden}>{rank}位</span>
+              </span>
+              <Avatar
+                avatar={{
+                  ...AFFECTION_PERSONA_AVATARS[participant.participant],
+                  alt: `${participant.displayName}のアイコン`,
+                }}
+              />
+              <span className={rankingStyles.affectionName}>{participant.displayName}</span>
+              <AffectionScore score={participant.score} resetCount={participant.resetCount} />
+              <AffectionHearts
+                participantName={participant.displayName}
+                requesterName={requester.displayName}
+                score={participant.score}
+                maxScore={maxScore}
+              />
+            </li>
+          );
+        })}
+      </ol>
     </section>
+  );
+}
+
+function AffectionScore({
+  score,
+  resetCount = 0,
+}: {
+  readonly score: number;
+  readonly resetCount?: number;
+}) {
+  return (
+    <span className={rankingStyles.affectionMeta}>
+      {resetCount > 0 && (
+        <span className={rankingStyles.memorialCrown}>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m3 7 5 4 4-7 4 7 5-4-2 11H5Z" />
+            <path d="M6 21h12" />
+          </svg>
+          <span aria-hidden="true">×{resetCount}</span>
+          <span className={commonStyles.visuallyHidden}>
+            メモリアルロビーのリセット {resetCount}回
+          </span>
+        </span>
+      )}
+      <strong className={rankingStyles.affectionScore}>{score}</strong>
+    </span>
   );
 }
 
@@ -477,21 +727,7 @@ function AffectionRankingCard({
               </span>
               <Avatar avatar={entry.avatar} />
               <span className={rankingStyles.affectionName}>{entry.displayName}</span>
-              <span className={rankingStyles.affectionMeta}>
-                {(entry.resetCount ?? 0) > 0 && (
-                  <span className={rankingStyles.memorialCrown}>
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                      <path d="m3 7 5 4 4-7 4 7 5-4-2 11H5Z" />
-                      <path d="M6 21h12" />
-                    </svg>
-                    <span aria-hidden="true">×{entry.resetCount}</span>
-                    <span className={commonStyles.visuallyHidden}>
-                      メモリアルロビーのリセット {entry.resetCount}回
-                    </span>
-                  </span>
-                )}
-                <strong className={rankingStyles.affectionScore}>{entry.score}</strong>
-              </span>
+              <AffectionScore score={entry.score} resetCount={entry.resetCount} />
               <AffectionHearts
                 participantName={ranking.displayName}
                 requesterName={entry.displayName}
