@@ -4,19 +4,29 @@ ARG SOURCE_DATE_EPOCH=0
 
 FROM ghcr.io/astral-sh/uv:0.12.24@sha256:3af4716e991d6956a41e573eab705d0ee08500cd829ed30293eb8472f372c65a AS uv
 
-FROM dhi.io/python:3.14.8-debian13-dev@sha256:efbe85d819ebe4ffcd0c8447a4f8330bfd95dd99a6dcd0be5a8380ad15c64867 AS builder
+FROM dhi.io/python:3.14.8-debian13-dev@sha256:5b7724d3ca177d536fe88db1de8c900f29671f2cca613358e618567acfe526b2 AS builder
 
 ARG SOURCE_DATE_EPOCH
 
 COPY --from=uv /uv /uvx /usr/local/bin/
 
 ENV SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
-    UV_COMPILE_BYTECODE=1 \
+    UV_COMPILE_BYTECODE=0 \
     UV_LINK_MODE=copy \
     UV_NO_DEV=1 \
     UV_PYTHON_DOWNLOADS=0
 
 WORKDIR /app
+
+# The DHI builder has the Debian fix; its runtime still carries libexpat1 2.8.3.
+# APT authenticates the exact package installed below.
+COPY tools/install_runtime_expat.py /tmp/install_runtime_expat.py
+RUN mkdir /tmp/runtime-package \
+    && cd /tmp/runtime-package \
+    && apt-get update \
+    && apt-get download "libexpat1=$(python /tmp/install_runtime_expat.py --version)" \
+    && mv libexpat1_*.deb /tmp/libexpat1.deb \
+    && rm -rf /var/lib/apt/lists/* /tmp/runtime-package
 
 COPY pyproject.toml uv.lock ./
 
@@ -28,12 +38,16 @@ COPY src ./src
 COPY tools/canonicalize_wheel_records.py /tmp/canonicalize_wheel_records.py
 COPY tools/transfer_tree_deterministically.py /tmp/transfer_tree_deterministically.py
 
+# CPython's bytecode serialization can vary with uv's parallel interpreter state.
+# Compile once in a fixed order before normalizing the runtime tree.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     uv sync --frozen --no-dev --no-editable \
+    && PYTHONHASHSEED=0 /app/.venv/bin/python -m compileall -q -f -j 1 \
+        --invalidation-mode=checked-hash /app/.venv/lib \
     && python /tmp/canonicalize_wheel_records.py \
         --source-date-epoch "${SOURCE_DATE_EPOCH}" /app/.venv
 
-FROM dhi.io/python:3.14.8-debian13@sha256:f8863118abc71dbc1c5f2cc77c4e70fded20a1c06bff21d20eac2adcf87f450d AS runtime-base
+FROM dhi.io/python:3.14.8-debian13@sha256:b2dee88be07689a608f86c392dd863f20399f8ffcbe99eff6bdb4f04485d9298 AS runtime-base
 
 ARG SOURCE_DATE_EPOCH
 
@@ -43,6 +57,15 @@ ENV SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
     PYTHONUNBUFFERED=1
 
 WORKDIR /app
+
+USER 0:0
+RUN --mount=type=bind,from=builder,source=/usr/bin,target=/run/package-tools/bin,ro \
+    --mount=type=bind,from=builder,source=/usr/sbin,target=/run/package-tools/sbin,ro \
+    --mount=type=bind,from=builder,source=/usr/lib,target=/run/package-tools/lib,ro \
+    --mount=type=bind,from=builder,source=/tmp/libexpat1.deb,target=/run/libexpat1.deb,ro \
+    --mount=type=bind,from=builder,source=/tmp/install_runtime_expat.py,target=/tmp/install_runtime_expat.py,ro \
+    ["/usr/bin/python3.14", "/tmp/install_runtime_expat.py"]
+USER 65532:65532
 
 RUN --mount=type=bind,from=builder,source=/app/.venv,target=/tmp/source-venv,ro \
     --mount=type=bind,from=builder,source=/tmp/transfer_tree_deterministically.py,target=/tmp/transfer_tree_deterministically.py,ro \

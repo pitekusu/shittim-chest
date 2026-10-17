@@ -235,6 +235,22 @@ Core完了時は公開待ちを表示し、Archiveに対応する記録を確認
 Debug／Releaseビルド・Lint・必須CIを実施し、架空データの入力／進捗画面を確認する。重い画面試験CIは復活させない。
 六PRの実装完了と、本番での開始有効化・内部テスト配布・許可された一件の実受入は区別して記録する。
 
+### Androidからの議論中止・再試行
+
+本人の依頼の進捗画面で、サーバーが返す`canCancel`／`canRetry`に応じて「議論を中止」「同じ議論を再試行」を表示する。Material標準の確認Dialogで明示確定し、再試行は失敗した議論に限定し、同じ議題・添付画像で既存Coreの新しいattemptを開始して失敗した段階から再開する。未受理依頼の同ID再送とは区別する。完成記録の公開や結果表示は既存経路を維持し、Demoでは本番操作を呼び出さない。
+
+| API | 契約 |
+|---|---|
+| `POST /api/v1/debate-requests/{requestId}/cancel` | 本人の現在のattemptを中止 |
+| `POST /api/v1/debate-requests/{requestId}/retry` | 再試行可能な本人の議論を再実行 |
+| `GET /api/v1/debate-requests/{requestId}/operations/{operationId}` | 本人の操作受付・完了・失敗と最新依頼状態を照合 |
+
+POSTはUUIDv4の`operationId`と、GETで取得した不透明な`attemptToken`だけを送る。本人情報・投稿先・Core内部IDをクライアントから指定させない。既存のBearer認証、Guild／チャンネル権限、セッション失効確認を用い、本人の依頼だけを操作する。同じoperation IDの内容変更や別attemptを対象にした遅延操作は拒否する。受付は既存のdurable ingressへ保存し、既存Discordと同じcancel／retry・attempt fence・Outboxを使う。独立した討論エンジン・キュー・テーブルは増やさない。
+
+応答は`operationId`、`action`、`status`（`accepted`／`completed`／`failed`）、`errorCode`、最新の`request`を返す。操作受付だけで中止・再試行の完了とは表示しない。中止はCoreが終端配信を受付済みでも、現在のattemptの終端状態が見えるまで`accepted`を維持し、操作ボタンを無効化する。別attemptへ移った後は旧操作を完了扱いにして、新しい実行の操作を妨げない。Androidは送信前に操作IDと対象attemptを既存workspaceの暗号文へ保存する。依頼履歴からの操作でも別の下書き・添付画像を上書きしない。応答不明・再起動後はGETだけで照合し、自動POSTしない。操作受付が見つからない場合は、確認Dialogの「同じ操作を再送」から同じID・本文だけを明示再送する。
+
+操作中・照合中・オフラインでは新しい操作を無効化する。照合は前景の進捗画面だけで行い、操作が未確定なら元の依頼が終端でも照合を続ける。認可喪失時の非表示、端末内消去、下書きの暗号化と既存の非再送HTTP設定を維持する。関連試験は本人分離・古いattempt・二重操作・失効競合・応答不明からの復帰と、確認Dialog・狭幅／文字拡大・オフラインの操作制御を対象とする。本番反映・Play配布・実際のDiscord投稿や有料生成の受入は別の配信操作として扱う。
+
 #### 進捗画面の待機演出
 
 既存の3人の顔と人格色、小さな上下運動と吹き出しの点、Material 3標準の`LoadingIndicator`で待機を示し、追加依存は設けない。「受付・準備・議論・結果」の4段階はサーバーのstatusと既知のphaseで確認できる現在段階だけを表示する。未知phaseや受付情報がない場合は段階を推測せず、既存の状態説明を残す。時間経過による進捗率・完了予定時刻、架空の発言・勝者・投票は表示しない。

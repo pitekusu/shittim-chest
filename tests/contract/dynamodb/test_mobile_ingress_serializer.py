@@ -14,6 +14,7 @@ from shittim_chest.adapters.dynamodb.serializer import (
     serialize_ingress_status_publication,
 )
 from shittim_chest.application.scale_to_zero import (
+    IngressKind,
     IngressRequest,
     IngressSource,
     IngressStatusPublication,
@@ -21,10 +22,12 @@ from shittim_chest.application.scale_to_zero import (
     mobile_ingress_id,
 )
 from shittim_chest.application.status_publication import render_public_status
+from shittim_chest.domain import AttemptId, DebateId
 
 NOW = datetime(2026, 10, 4, tzinfo=UTC)
 OWNER = "a" * 43
 REQUEST_ID = "11111111-2222-4333-8444-55555555555a"
+CONTROL_ID = "11111111-2222-4333-8444-55555555555b"
 
 
 def mobile_request() -> IngressRequest:
@@ -53,6 +56,57 @@ def test_owner_scoped_operation_and_request_round_trip() -> None:
     assert deserialize_ingress_request(item) == request
 
 
+def mobile_control(kind: IngressKind) -> IngressRequest:
+    return IngressRequest.mobile_control(
+        request_id=CONTROL_ID,
+        target_request_id=REQUEST_ID,
+        owner_key=OWNER,
+        kind=kind,
+        application_id="application-id",
+        requester_id="requester-id",
+        requester_username="requester",
+        requester_display_name="Requester",
+        guild_id="guild-id",
+        channel_id="thread-id",
+        parent_channel_id="channel-id",
+        source_message_id="panel-message-id",
+        source_thread_id="thread-id",
+        target_debate_id=DebateId.new(),
+        expected_attempt_id=AttemptId.new(),
+        custom_id=f"shittim:v1:{kind.value}:operation",
+        created_at=NOW,
+    )
+
+
+@pytest.mark.parametrize("kind", [IngressKind.CANCEL, IngressKind.RETRY])
+def test_mobile_control_round_trip_binds_operation_and_target_separately(kind: IngressKind) -> None:
+    request = mobile_control(kind)
+    assert request.mobile_request_id == CONTROL_ID
+    assert request.mobile_target_request_id == REQUEST_ID
+    assert request.operation_id == request.interaction_id == mobile_ingress_id(OWNER, CONTROL_ID)
+    assert request.operation_id != mobile_request().operation_id
+    assert not request.requester_can_manage_messages
+    item = serialize_ingress_request(request)
+    assert item["mobile_target_request_id"] == REQUEST_ID
+    assert deserialize_ingress_request(item) == request
+
+
+@pytest.mark.parametrize("target", [None, "invalid", REQUEST_ID.upper()])
+def test_mobile_control_requires_canonical_target_request_id(target: str | None) -> None:
+    with pytest.raises(ValueError):
+        replace(mobile_control(IngressKind.CANCEL), mobile_target_request_id=target)
+
+
+def test_mobile_control_cannot_gain_discord_moderator_permission() -> None:
+    with pytest.raises(ValueError, match="manage-messages"):
+        replace(mobile_control(IngressKind.RETRY), requester_can_manage_messages=True)
+
+
+def test_mobile_new_debate_cannot_target_another_request() -> None:
+    with pytest.raises(ValueError, match="cannot target"):
+        replace(mobile_request(), mobile_target_request_id=REQUEST_ID)
+
+
 def test_legacy_record_omits_mobile_fields_and_reserializes_identically() -> None:
     request = IngressRequest.new_debate(
         interaction_id="legacy-interaction",
@@ -68,7 +122,9 @@ def test_legacy_record_omits_mobile_fields_and_reserializes_identically() -> Non
         created_at=NOW,
     )
     item = serialize_ingress_request(request)
-    assert not {"source", "owner_key", "mobile_request_id"} & item.keys()
+    assert (
+        not {"source", "owner_key", "mobile_request_id", "mobile_target_request_id"} & item.keys()
+    )
     assert serialize_ingress_request(deserialize_ingress_request(item)) == item
 
 

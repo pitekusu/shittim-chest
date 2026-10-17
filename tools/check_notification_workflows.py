@@ -745,6 +745,31 @@ def _validate_release(directory: Path) -> None:
         raise WorkflowPolicyError("Release must reuse the exact main CI image cache scopes")
     if text.count("--config-digest-only") != 1:
         raise WorkflowPolicyError("Release must validate the local config before push")
+    local_config_block = _workflow_step_block(text, "Validate release image configs before push")
+    push_block = _workflow_step_block(text, "Push the prevalidated image once")
+    references_block = _workflow_step_block(text, "Record immutable image references")
+    required_config_archive = (
+        "set -o pipefail",
+        "trap 'rm -f \"${archive}\"' EXIT",
+        'docker image save --output "${archive}" "${normal_image}"',
+        'config_path=$(tar -xOf "${archive}" manifest.json | jq --exit-status --raw-output',
+        r"select(length == 1) | .[0].Config | "
+        r'select(test("^(blobs/sha256/[0-9a-f]{64}|[0-9a-f]{64}\\.json)$"))',
+        'config_sha256=$(tar -xOf "${archive}" "${config_path}" | sha256sum | cut -d \' \' -f 1)',
+        'NORMAL_CONFIG_DIGEST="sha256:${config_sha256}"',
+        'printf \'%s\\n\' "${local_image_id}" > "${RUNNER_TEMP}/normal.local-id"',
+    )
+    if (
+        "steps.build-normal.outputs.imageid" in text
+        or any(marker not in local_config_block for marker in required_config_archive)
+        or 'NORMAL_CONFIG_DIGEST=$(cat "${RUNNER_TEMP}/normal.config-digest")' not in push_block
+        or '"$(cat "${RUNNER_TEMP}/normal.local-id")"' not in push_block
+        or 'test "${normal_config_digest}" = "$(cat "${RUNNER_TEMP}/normal.config-digest")"'
+        not in references_block
+    ):
+        raise WorkflowPolicyError(
+            "Release must preserve the saved raw config digest through push and ECR verification"
+        )
     release_risk_block = _workflow_step_block(
         text, "Apply signed vendor VEX and the time-bounded risk policy"
     )
@@ -1304,13 +1329,27 @@ def _validate_ci_container_risk(directory: Path) -> None:
     text = path.read_text(encoding="utf-8")
     required = (
         "name: Build and load the production image",
-        "steps.build-production.outputs.imageid",
+        'docker image save --output "${archive}" shittim-chest:step-08b-arm64',
         "--image-kind production",
         "--image-config-digest-file",
     )
     for marker in required:
         if marker not in text:
             raise WorkflowPolicyError(f"CI container risk gate lacks required marker: {marker}")
+    digest_block = _workflow_step_block(text, "Record the tested image digest and size")
+    required_config_archive = (
+        "set -o pipefail",
+        "trap 'rm -f \"${archive}\"' EXIT",
+        'config_path=$(tar -xOf "${archive}" manifest.json | jq --exit-status --raw-output',
+        r"select(length == 1) | .[0].Config | "
+        r'select(test("^(blobs/sha256/[0-9a-f]{64}|[0-9a-f]{64}\\.json)$"))',
+        'config_sha256=$(tar -xOf "${archive}" "${config_path}" | sha256sum | cut -d \' \' -f 1)',
+        'IMAGE_CONFIG_DIGEST="sha256:${config_sha256}"',
+    )
+    if "steps.build-production.outputs.imageid" in text or any(
+        marker not in digest_block for marker in required_config_archive
+    ):
+        raise WorkflowPolicyError("CI must derive its config digest from the saved raw config")
     if text.count('SOURCE_DATE_EPOCH: "0"') != 2:
         raise WorkflowPolicyError("CI must make production and fault image builds reproducible")
     reproducible_docker_exporter = (

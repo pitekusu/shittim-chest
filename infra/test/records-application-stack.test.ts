@@ -95,7 +95,12 @@ describe("RecordsApplicationStack", () => {
     const routes = Object.values(template.findResources("AWS::ApiGatewayV2::Route"));
     const native = routes.filter(route => route.Properties.RouteKey.includes("/debate-requests"));
     expect(native.map(route => route.Properties.RouteKey).sort()).toEqual([
-      "GET /api/v1/debate-requests", "GET /api/v1/debate-requests/{requestId}", "POST /api/v1/debate-requests",
+      "GET /api/v1/debate-requests",
+      "GET /api/v1/debate-requests/{requestId}",
+      "GET /api/v1/debate-requests/{requestId}/operations/{operationId}",
+      "POST /api/v1/debate-requests",
+      "POST /api/v1/debate-requests/{requestId}/cancel",
+      "POST /api/v1/debate-requests/{requestId}/retry",
     ]);
     expect(new Set(native.map(route => JSON.stringify(route.Properties.Target))).size).toBe(1);
     const policies = Object.values(template.findResources("AWS::IAM::Policy"));
@@ -124,6 +129,15 @@ describe("RecordsApplicationStack", () => {
       expect(statement.Condition?.StringEqualsIfExists).toEqual({ "dynamodb:Select": "SPECIFIC_ATTRIBUTES" });
       expect(JSON.stringify(statement.Condition)).not.toMatch(/responses|votes|persona|body/);
     }
+    const sourceProgress = progress.find(statement =>
+      JSON.stringify(statement.Condition).includes("DEBATE#*"));
+    expect(sourceProgress?.Condition?.["ForAllValues:StringEquals"]).toEqual({
+      "dynamodb:Attributes": [
+        "PK", "SK", "schema_version", "record_type", "debate_id", "requester_id",
+        "guild_id", "channel_id", "current_phase", "current_attempt_id", "thread_id",
+        "control_panel_message_id", "updated_at",
+      ],
+    });
     const revocation = database.filter(statement => actionsOf(statement).includes("dynamodb:DeleteItem"));
     expect(revocation).toHaveLength(1);
     expect(revocation[0]?.Condition).toEqual({
@@ -141,6 +155,34 @@ describe("RecordsApplicationStack", () => {
     const readerActions = readers.flatMap(policy => policy.Properties.PolicyDocument.Statement).flatMap(actionsOf);
     expect(readerActions).not.toContain("dynamodb:PutItem");
     expect(readerActions).not.toContain("dynamodb:UpdateItem");
+  });
+
+  test("allows mobile control bindings while retaining transaction and partition boundaries", () => {
+    const policies = Object.values(fixture.template.findResources("AWS::IAM::Policy"));
+    const mobilePolicies = policies.filter(policy =>
+      JSON.stringify(policy.Properties.Roles).includes("MobileDebateFunctionRole"));
+    const statements = mobilePolicies.flatMap(policy =>
+      policy.Properties.PolicyDocument.Statement) as PolicyStatement[];
+    const ingress = statements.filter(statement =>
+      JSON.stringify(statement.Condition?.["ForAllValues:StringLike"] ?? {}).includes("CONTROL#INGRESS"));
+    expect(ingress).toHaveLength(2);
+    for (const statement of ingress) {
+      expect(statement.Condition?.["ForAllValues:StringLike"]).toEqual({
+        "dynamodb:LeadingKeys": [
+          "CONTROL#INGRESS", "CONTROL#INGRESS#ACTIVE", "INGRESS_OPERATION#m_*",
+          "INGRESS_SEMANTIC_OPERATION#m_*", "MOBILE_INGRESS#*",
+        ],
+      });
+      expect(statement.Condition?.Null).toEqual({ "dynamodb:LeadingKeys": "false" });
+      expect(JSON.stringify(statement.Resource)).toContain("SourceDebateTableName");
+    }
+    const reads = ingress.find(statement => actionsOf(statement).includes("dynamodb:GetItem"));
+    expect(reads?.Action).toEqual(["dynamodb:GetItem", "dynamodb:Query"]);
+    const writes = ingress.find(statement => actionsOf(statement).includes("dynamodb:PutItem"));
+    expect(writes?.Action).toEqual(["dynamodb:PutItem", "dynamodb:UpdateItem"]);
+    expect(writes?.Condition?.StringEquals).toEqual({
+      "dynamodb:EnclosingOperation": "TransactWriteItems",
+    });
   });
 
   test("keeps debate image uploads, reads and cleanup private and isolated", () => {
@@ -508,7 +550,7 @@ describe("RecordsApplicationStack", () => {
     template.resourceCountIs("AWS::Lambda::Version", 7);
     template.resourceCountIs("AWS::Lambda::Alias", 7);
     template.resourceCountIs("AWS::ApiGatewayV2::Api", 1);
-    template.resourceCountIs("AWS::ApiGatewayV2::Route", 44);
+    template.resourceCountIs("AWS::ApiGatewayV2::Route", 47);
     template.resourceCountIs("AWS::ApiGatewayV2::Stage", 1);
     template.hasResourceProperties("AWS::ApiGatewayV2::Stage", {
       AutoDeploy: true,

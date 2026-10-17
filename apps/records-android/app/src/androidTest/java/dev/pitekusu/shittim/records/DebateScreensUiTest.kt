@@ -136,6 +136,71 @@ class DebateScreensUiTest {
     compose.runOnIdle { assertEquals("r".repeat(43), selected) }
   }
 
+  @Test fun cancelRequiresConfirmationAndUnavailableNetworkDisablesControl() {
+    val online = mutableStateOf(true)
+    val submission = mutableStateOf(DebateSubmissionState())
+    val receipt = controllable("running")
+    var action: String? = null
+    compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+      ShittimTheme(darkTheme = true) {
+        DebateRequestStatusScreen(id, DebateStatusState(id, receipt), submission.value, online.value,
+          onRetry = {}, onResult = {}, onReauth = {}, onNew = {}, onControl = { action = it })
+      }
+    } }
+    compose.onNodeWithTag("debate-restart").assertDoesNotExist()
+    compose.onNodeWithTag("debate-cancel").performScrollTo().performClick()
+    compose.runOnIdle { assertEquals(null, action) }
+    compose.onNodeWithTag("debate-control-confirm").performClick()
+    compose.runOnIdle { assertEquals("cancel", action); online.value = false }
+    compose.onNodeWithTag("debate-cancel").performScrollTo().assertIsNotEnabled()
+    compose.runOnIdle {
+      online.value = true
+      submission.value = DebateSubmissionState(DebateWorkspace(pendingControl = DebatePendingControl(
+        "99999999-2222-4333-8444-abcdefabcdef", "22222222-2222-4333-8444-abcdefabcdef", "retry", "b".repeat(64))))
+    }
+    compose.onNodeWithTag("debate-cancel").performScrollTo().assertIsNotEnabled()
+  }
+
+  @Test fun narrowLargeTextRetryCanBeConfirmedWithoutOverlappingControls() {
+    var action: String? = null
+    compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+      DeviceConfigurationOverride(DeviceConfigurationOverride.WindowSize(DpSize(320.dp, 640.dp))
+        then DeviceConfigurationOverride.FontScale(2f)) {
+        ShittimTheme(darkTheme = false) {
+          DebateRequestStatusScreen(id, DebateStatusState(id, controllable("failed")), DebateSubmissionState(), true,
+            onRetry = {}, onResult = {}, onReauth = {}, onNew = {}, onControl = { action = it },
+            modifier = Modifier.safeDrawingPadding())
+        }
+      }
+    } }
+    compose.onNodeWithTag("debate-cancel").assertDoesNotExist()
+    compose.onNodeWithTag("debate-restart").performScrollTo().assertIsDisplayed()
+    screenshot("debate-controls-large-text.png")
+    compose.onNodeWithTag("debate-restart").performClick()
+    compose.onNodeWithTag("debate-control-confirm").assertIsDisplayed().performClick()
+    compose.runOnIdle { assertEquals("retry", action) }
+  }
+
+  @Test fun pendingOperationAllowsOnlyConfirmedSameOperationResend() {
+    var resends = 0
+    compose.activityRule.scenario.onActivity { activity -> activity.setContent {
+      ShittimTheme(darkTheme = false) {
+        DebateRequestStatusScreen(id, DebateStatusState(id,
+          controlPending = true, controlCanResend = true), DebateSubmissionState(), true,
+          onRetry = {}, onResult = {}, onReauth = {}, onNew = {}, onResend = { resends++ })
+      }
+    } }
+    compose.onNodeWithTag("debate-cancel").assertDoesNotExist()
+    compose.onNodeWithTag("debate-control-resend").performScrollTo().performClick()
+    compose.runOnIdle { assertEquals(0, resends) }
+    compose.onNodeWithTag("debate-control-confirm").performClick()
+    compose.runOnIdle { assertEquals(1, resends) }
+  }
+
+  private fun controllable(status: String) = DebateRequest(id, question, status,
+    createdAt = "2026-10-04T00:00:00Z", updatedAt = "2026-10-04T00:01:00Z",
+    attemptToken = "a".repeat(64), canCancel = status == "running", canRetry = status == "failed")
+
   private fun screenshot(name: String) {
     compose.waitForIdle()
     val target = File(requireNotNull(compose.activity.getExternalFilesDir(null)), name)

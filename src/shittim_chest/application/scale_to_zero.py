@@ -240,6 +240,7 @@ class IngressRequest:
     source: IngressSource = IngressSource.DISCORD
     owner_key: str | None = None
     mobile_request_id: str | None = None
+    mobile_target_request_id: str | None = None
     history_after_snowflake: str | None = None
 
     def __post_init__(self) -> None:
@@ -260,15 +261,27 @@ class IngressRequest:
             expected = mobile_ingress_id(self.owner_key, self.mobile_request_id)
             if self.interaction_id != expected or self.operation_id != expected:
                 raise ValueError("mobile ingress operation identity is inconsistent")
-            if self.kind is not IngressKind.NEW_DEBATE:
-                raise ValueError("mobile ingress only supports new debates")
+            if self.requester_can_manage_messages:
+                raise ValueError("mobile ingress cannot persist manage-messages permission")
+            if self.kind is IngressKind.NEW_DEBATE:
+                if self.mobile_target_request_id is not None:
+                    raise ValueError("new mobile debate cannot target another request")
+            else:
+                if self.mobile_target_request_id is None:
+                    raise ValueError("mobile control requires its target request ID")
+                mobile_ingress_id(self.owner_key, self.mobile_target_request_id)
             if self.history_after_snowflake is not None:
                 _require_canonical_snowflake(
                     self.history_after_snowflake, label="mobile history lower bound"
                 )
         elif self.source is not IngressSource.DISCORD or any(
             value is not None
-            for value in (self.owner_key, self.mobile_request_id, self.history_after_snowflake)
+            for value in (
+                self.owner_key,
+                self.mobile_request_id,
+                self.mobile_target_request_id,
+                self.history_after_snowflake,
+            )
         ):
             raise ValueError("Discord ingress cannot contain mobile ownership")
         for label, value in (
@@ -412,6 +425,57 @@ class IngressRequest:
             source=IngressSource.MOBILE,
             owner_key=owner_key,
             mobile_request_id=request_id,
+        )
+
+    @classmethod
+    def mobile_control(
+        cls,
+        *,
+        request_id: str,
+        target_request_id: str,
+        owner_key: str,
+        kind: IngressKind,
+        application_id: str,
+        requester_id: str,
+        requester_username: str,
+        requester_display_name: str,
+        guild_id: str,
+        channel_id: str,
+        parent_channel_id: str,
+        source_message_id: str,
+        source_thread_id: str,
+        target_debate_id: DebateId,
+        expected_attempt_id: AttemptId,
+        custom_id: str,
+        created_at: datetime,
+    ) -> IngressRequest:
+        """Bind an owned mobile control to the existing debate panel context."""
+
+        operation_id = mobile_ingress_id(owner_key, request_id)
+        return replace(
+            cls.control_operation(
+                interaction_id=operation_id,
+                operation_id=operation_id,
+                kind=kind,
+                application_id=application_id,
+                requester_id=requester_id,
+                requester_username=requester_username,
+                requester_display_name=requester_display_name,
+                requester_can_manage_messages=False,
+                guild_id=guild_id,
+                channel_id=channel_id,
+                parent_channel_id=parent_channel_id,
+                source_message_id=source_message_id,
+                source_thread_id=source_thread_id,
+                target_debate_id=target_debate_id,
+                expected_attempt_id=expected_attempt_id,
+                custom_id=custom_id,
+                created_at=created_at,
+            ),
+            source=IngressSource.MOBILE,
+            owner_key=owner_key,
+            mobile_request_id=request_id,
+            mobile_target_request_id=target_request_id,
         )
 
     @classmethod

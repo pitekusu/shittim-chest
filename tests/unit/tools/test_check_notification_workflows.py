@@ -1984,6 +1984,76 @@ def test_release_checks_the_config_digest_before_push(directory: Path) -> None:
         validate_notification_workflows(directory)
 
 
+@pytest.mark.parametrize(
+    ("before", "after"),
+    (
+        (
+            'NORMAL_CONFIG_DIGEST="sha256:${config_sha256}"',
+            "NORMAL_CONFIG_DIGEST=${{ steps.build-normal.outputs.imageid }}",
+        ),
+        (
+            'NORMAL_CONFIG_DIGEST=$(cat "${RUNNER_TEMP}/normal.config-digest")',
+            'NORMAL_CONFIG_DIGEST="sha256:unverified"',
+        ),
+        (
+            'test "${normal_config_digest}" = "$(cat "${RUNNER_TEMP}/normal.config-digest")"',
+            'printf \'%s\\n\' "${normal_config_digest}" > "${RUNNER_TEMP}/normal.config-digest"',
+        ),
+    ),
+)
+def test_release_preserves_the_saved_config_digest(
+    directory: Path, before: str, after: str
+) -> None:
+    _replace(directory / RELEASE_WORKFLOW, before, after, 1)
+
+    with pytest.raises(WorkflowPolicyError, match="saved raw config digest"):
+        validate_notification_workflows(directory)
+
+
+def test_ci_rejects_the_build_action_manifest_as_a_config_digest(directory: Path) -> None:
+    _replace(
+        directory / "ci.yml",
+        'IMAGE_CONFIG_DIGEST="sha256:${config_sha256}"',
+        "IMAGE_CONFIG_DIGEST=${{ steps.build-production.outputs.imageid }}",
+        1,
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="config digest from the saved raw config"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize("workflow", ["ci.yml", RELEASE_WORKFLOW])
+@pytest.mark.parametrize(
+    ("before", "after"),
+    (
+        ("select(length == 1)", "select(length > 0)"),
+        ("set -o pipefail", "true"),
+        (r"[0-9a-f]{64}\\.json", r".*\\.json"),
+        ("trap 'rm -f \"${archive}\"' EXIT", "true"),
+        ('tar -xOf "${archive}" "${config_path}" | sha256sum', "printf unsafe | sha256sum"),
+    ),
+)
+def test_config_digest_archive_keeps_selection_and_cleanup_boundaries(
+    directory: Path, workflow: str, before: str, after: str
+) -> None:
+    _replace(directory / workflow, before, after, 1)
+
+    with pytest.raises(WorkflowPolicyError, match="saved raw config"):
+        validate_notification_workflows(directory)
+
+
+def test_release_keeps_the_saved_local_image_bound_to_the_pushed_tag(directory: Path) -> None:
+    _replace(
+        directory / RELEASE_WORKFLOW,
+        '"$(cat "${RUNNER_TEMP}/normal.local-id")"',
+        '"${NORMAL_CONFIG_DIGEST}"',
+        1,
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="saved raw config digest"):
+        validate_notification_workflows(directory)
+
+
 def test_release_gates_the_rebuilt_image_on_fixable_high_findings(
     directory: Path,
 ) -> None:

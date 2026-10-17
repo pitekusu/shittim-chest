@@ -10,12 +10,17 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -67,8 +72,9 @@ internal fun DebateRequestsScreen(state: DebateHistoryState, online: Boolean,
 internal fun DebateRequestStatusScreen(id: String, state: DebateStatusState,
   submission: DebateSubmissionState, online: Boolean, onRetry: () -> Unit,
   onResult: (String) -> Unit, onReauth: () -> Unit, onNew: () -> Unit, modifier: Modifier = Modifier,
-  demo: Boolean = false) {
+  demo: Boolean = false, onControl: (String) -> Unit = {}, onCheck: () -> Unit = {}, onResend: () -> Unit = {}) {
   val receipt = debateReceipt(id, state, submission)
+  var confirmation by remember(id, receipt?.attemptToken) { mutableStateOf<String?>(null) }
   val ownWorkspace = submission.workspace?.takeIf { it.requestId == id }
   val failure = state.failure?.takeIf { it != DebateFailure.NOT_FOUND }
     ?: submission.failure.takeIf { ownWorkspace != null }
@@ -103,10 +109,67 @@ internal fun DebateRequestStatusScreen(id: String, state: DebateStatusState,
           Text(stringResource(R.string.debate_open_result))
         }
       }
+      if (!demo) {
+        if (submission.workspace?.pendingControl?.let { it.requestId != id } == true) {
+          Text(stringResource(R.string.debate_control_other_pending))
+        }
+        if (state.controlBusy) CircularProgressIndicator()
+        if (state.controlPending) {
+          Text(stringResource(R.string.debate_control_pending))
+          TextButton(onClick = onCheck, enabled = online && !state.loading && !state.controlBusy) {
+            Text(stringResource(R.string.debate_control_check))
+          }
+          if (state.controlCanResend) TextButton(onClick = { confirmation = "resend" },
+            enabled = online && !state.loading && !state.controlBusy,
+            modifier = Modifier.testTag("debate-control-resend")) { Text(stringResource(R.string.debate_control_resend)) }
+        }
+        if (state.controlFailure != null) {
+          Text(stringResource(when (state.controlFailure) {
+            DebateFailure.REAUTH_REQUIRED -> R.string.debate_reauth
+            DebateFailure.FORBIDDEN -> R.string.debate_forbidden
+            DebateFailure.CONFLICT -> R.string.debate_control_conflict
+            DebateFailure.STORAGE -> R.string.debate_storage_error
+            else -> R.string.debate_control_failed
+          }), color = MaterialTheme.colorScheme.error)
+          if (state.controlFailure == DebateFailure.REAUTH_REQUIRED) TextButton(onClick = onReauth,
+            enabled = online && !state.controlBusy) { Text(stringResource(R.string.session_login)) }
+        }
+        val controlEnabled = online && !state.loading && !state.controlBusy && !state.controlPending &&
+          !submission.busy && state.failure == null && submission.workspace?.pendingControl == null
+        if (receipt?.canCancel == true) TextButton(onClick = { confirmation = "cancel" }, enabled = controlEnabled,
+          modifier = Modifier.testTag("debate-cancel")) { Text(stringResource(R.string.debate_cancel)) }
+        if (receipt?.canRetry == true) Button(onClick = { confirmation = "retry" }, enabled = controlEnabled,
+          modifier = Modifier.testTag("debate-restart")) { Text(stringResource(R.string.debate_restart)) }
+      }
       if (receipt?.terminal != true) Text(stringResource(if (demo) R.string.review_demo_progress_hint else R.string.debate_no_cancel),
         style = MaterialTheme.typography.bodySmall)
       if (receipt?.terminal == true) TextButton(onClick = onNew) { Text(stringResource(R.string.debate_new)) }
     }
+  }
+  val action = confirmation
+  if (action != null && online && !state.controlBusy &&
+    (if (action == "resend") state.controlCanResend else !state.controlPending &&
+      (if (action == "cancel") receipt?.canCancel == true else receipt?.canRetry == true))) {
+    AlertDialog(onDismissRequest = { confirmation = null },
+      title = { Text(stringResource(when (action) {
+        "cancel" -> R.string.debate_cancel_title
+        "resend" -> R.string.debate_control_resend_title
+        else -> R.string.debate_restart_title
+      })) },
+      text = { Text(stringResource(when (action) {
+        "cancel" -> R.string.debate_cancel_message
+        "resend" -> R.string.debate_control_resend_message
+        else -> R.string.debate_restart_message
+      })) },
+      confirmButton = { TextButton(onClick = { confirmation = null; if (action == "resend") onResend() else onControl(action) },
+        modifier = Modifier.testTag("debate-control-confirm")) {
+        Text(stringResource(when (action) {
+          "cancel" -> R.string.debate_cancel
+          "resend" -> R.string.debate_control_resend
+          else -> R.string.debate_restart
+        }))
+      } },
+      dismissButton = { TextButton(onClick = { confirmation = null }) { Text(stringResource(R.string.review_demo_cancel)) } })
   }
 }
 

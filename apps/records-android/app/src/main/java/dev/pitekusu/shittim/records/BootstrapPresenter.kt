@@ -103,6 +103,9 @@ internal data object BootstrapScreen : Screen {
     data object SubmitDebate : Event
     data object CheckDebate : Event
     data object RetryDebate : Event
+    data class ControlDebate(val requestId: String, val action: String) : Event
+    data class CheckDebateControl(val requestId: String) : Event
+    data class ResendDebateControl(val requestId: String) : Event
     data object ReauthenticateDebate : Event
     data object NewDebateDraft : Event
     data object ShowDebateRequests : Event
@@ -215,7 +218,20 @@ internal class BootstrapPresenter(
               uploads.prepare(token, id, images) { store.value.image(owner, it) }
               if (!runtime.isActive(owner)) throw DebateRequestException(DebateFailure.AUTH_REQUIRED)
               client.submit(token, id, question, images.map { it.attachmentId })
-            } ?: throw DebateRequestException(DebateFailure.AUTH_REQUIRED) })
+            } ?: throw DebateRequestException(DebateFailure.AUTH_REQUIRED) },
+            control = { id, action, operationId, attemptToken -> session?.withAuthorizedToken { token ->
+              if (!hasValidatedDebateNetwork(context)) throw DebateRequestException(DebateFailure.UNAVAILABLE)
+              if (!runtime.isActive(owner)) throw DebateRequestException(DebateFailure.AUTH_REQUIRED)
+              client.control(token, id, action, operationId, attemptToken)
+            } ?: throw DebateRequestException(DebateFailure.AUTH_REQUIRED) },
+            findControl = { id, operationId ->
+              class Lookup(val value: DebateControlResponse?)
+              val result = session?.withAuthorizedToken { token ->
+                if (!runtime.isActive(owner)) throw DebateRequestException(DebateFailure.AUTH_REQUIRED)
+                Lookup(client.findControl(token, id, operationId))
+              } ?: throw DebateRequestException(DebateFailure.AUTH_REQUIRED)
+              result.value
+            })
         } }
         ViewModelProvider(modelOwner, factory)["debate-${runtime.demoEntryId ?: owner}", DebateSubmissionModel::class.java]
       }
@@ -244,7 +260,9 @@ internal class BootstrapPresenter(
         backStack[backStack.lastIndex] = DebateRequestStatus(id)
       }
     }
-    LaunchedEffect(debateModel, debateRoute, debateOnline, historyRefresh, debate.busy) {
+    LaunchedEffect(debateModel, debateRoute, debateOnline, historyRefresh,
+      debate.busy && !debateStatus.controlPending && !debateStatus.controlBusy,
+      debateStatus.controlBusy, debateStatus.controlPending) {
       if (!debateOnline) return@LaunchedEffect
       foregroundLifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
         when (val route = debateRoute) {
@@ -252,7 +270,8 @@ internal class BootstrapPresenter(
             do {
               debateModel?.refreshStatus(route.requestId)
               val latest = debateModel?.status?.value
-              if (latest?.requestId == route.requestId && latest.request?.terminal == true) break
+              if (latest?.requestId == route.requestId && latest.request?.terminal == true &&
+                !latest.controlPending && !latest.controlBusy) break
               if (latest?.failure in setOf(DebateFailure.NOT_FOUND, DebateFailure.AUTH_REQUIRED,
                   DebateFailure.REAUTH_REQUIRED, DebateFailure.FORBIDDEN, DebateFailure.INVALID_RESPONSE)) break
               delay(if (demo != null) 1_000 else 5_000)
@@ -555,6 +574,18 @@ internal class BootstrapPresenter(
         BootstrapScreen.Event.DiscardMissingDebate -> if (debateOnline && cacheAccountId?.let(runtime::isActive) == true) debateModel?.discardMissing()
         BootstrapScreen.Event.SubmitDebate -> if (debateOnline && cacheAccountId?.let(runtime::isActive) == true) debateModel?.submit()
         BootstrapScreen.Event.CheckDebate -> if (debateOnline && cacheAccountId?.let(runtime::isActive) == true) debateModel?.reconcile()
+        is BootstrapScreen.Event.ControlDebate -> if (debateOnline && cacheAccountId?.let(runtime::isActive) == true &&
+          demo == null && backStack.lastOrNull() == DebateRequestStatus(event.requestId)) {
+          debateModel?.control(event.requestId, event.action)
+        }
+        is BootstrapScreen.Event.CheckDebateControl -> if (debateOnline && cacheAccountId?.let(runtime::isActive) == true &&
+          demo == null && backStack.lastOrNull() == DebateRequestStatus(event.requestId)) {
+          historyRefresh++
+        }
+        is BootstrapScreen.Event.ResendDebateControl -> if (debateOnline && cacheAccountId?.let(runtime::isActive) == true &&
+          demo == null && backStack.lastOrNull() == DebateRequestStatus(event.requestId)) {
+          debateModel?.resendControl(event.requestId)
+        }
         BootstrapScreen.Event.RetryDebate -> if (debateModel?.state?.value?.workspace == null) {
           debateModel?.restore() // Encrypted local recovery also works offline.
         } else if (debateOnline && cacheAccountId?.let(runtime::isActive) == true) debateModel?.retryConfirmedMissing()

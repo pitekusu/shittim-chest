@@ -226,6 +226,7 @@ def test_records_roots_are_not_reincluded_in_the_runtime_docker_context() -> Non
         "!uv.lock",
         "!tools/",
         "!tools/canonicalize_wheel_records.py",
+        "!tools/install_runtime_expat.py",
         "!tools/transfer_tree_deterministically.py",
         "!src/",
         "!src/**",

@@ -329,7 +329,41 @@ def _mobile_debate_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
             "討論の途中本文や内部識別子を返さず、Archive公開後だけrecordIdを返す。"
         ),
     }
+    request_parameter = _parameter(
+        "requestId", "path", {"type": "string", "format": "uuid"}, required=True
+    )
     return {
+        **{
+            f"/api/v1/debate-requests/{{requestId}}/{action}": {
+                "post": {
+                    **common,
+                    "operationId": f"{action}MobileDebate",
+                    "parameters": [request_parameter],
+                    "requestBody": _request_body("DebateControlRequest"),
+                    "responses": {
+                        "202": _response("DebateControlResponse", "Durable control receipt"),
+                        **error_responses,
+                    },
+                },
+            }
+            for action in ("cancel", "retry")
+        },
+        "/api/v1/debate-requests/{requestId}/operations/{operationId}": {
+            "get": {
+                **common,
+                "operationId": "getMobileDebateOperation",
+                "parameters": [
+                    request_parameter,
+                    _parameter(
+                        "operationId", "path", {"type": "string", "format": "uuid"}, required=True
+                    ),
+                ],
+                "responses": {
+                    "200": _response("DebateControlResponse", "Own control receipt and progress"),
+                    **error_responses,
+                },
+            },
+        },
         "/api/v1/debate-attachments/uploads": {
             "post": {
                 **common,

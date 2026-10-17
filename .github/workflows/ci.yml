@@ -641,9 +641,17 @@ jobs:
       - name: Record the tested image digest and size
         if: ${{ steps.scope.outputs.required == 'true' }}
         env:
-          IMAGE_CONFIG_DIGEST: ${{ steps.build-production.outputs.imageid }}
           IMAGE_DIGEST: ${{ steps.build-production.outputs.digest }}
         run: |
+          set -o pipefail
+          # The containerd image store reports a manifest ID; hash the saved raw config.
+          archive="${RUNNER_TEMP}/production-image.tar"
+          trap 'rm -f "${archive}"' EXIT
+          docker image save --output "${archive}" shittim-chest:step-08b-arm64
+          config_path=$(tar -xOf "${archive}" manifest.json | jq --exit-status --raw-output \
+            'select(length == 1) | .[0].Config | select(test("^(blobs/sha256/[0-9a-f]{64}|[0-9a-f]{64}\\.json)$"))')
+          config_sha256=$(tar -xOf "${archive}" "${config_path}" | sha256sum | cut -d ' ' -f 1)
+          IMAGE_CONFIG_DIGEST="sha256:${config_sha256}"
           test "$(printf '%s' "${IMAGE_CONFIG_DIGEST}" | grep -E '^sha256:[0-9a-f]{64}$')" = \
             "${IMAGE_CONFIG_DIGEST}"
           test "$(printf '%s' "${IMAGE_DIGEST}" | grep -E '^sha256:[0-9a-f]{64}$')" = \

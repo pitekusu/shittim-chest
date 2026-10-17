@@ -1887,6 +1887,78 @@
       "title": "DebateAttachmentUploadResponse",
       "type": "object"
     },
+    "DebateControlRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptToken": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Attempttoken",
+          "type": "string"
+        },
+        "operationId": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Operationid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operationId",
+        "attemptToken"
+      ],
+      "title": "DebateControlRequest",
+      "type": "object"
+    },
+    "DebateControlResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "enum": [
+            "cancel",
+            "retry"
+          ],
+          "title": "Action",
+          "type": "string"
+        },
+        "errorCode": {
+          "anyOf": [
+            {
+              "const": "DEBATE_CONTROL_FAILED",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Errorcode"
+        },
+        "operationId": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Operationid",
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/DebateRequestResponse"
+        },
+        "status": {
+          "enum": [
+            "accepted",
+            "completed",
+            "failed"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operationId",
+        "action",
+        "status",
+        "errorCode",
+        "request"
+      ],
+      "title": "DebateControlResponse",
+      "type": "object"
+    },
     "DebateRequestResponse": {
       "additionalProperties": false,
       "allOf": [
@@ -1929,6 +2001,29 @@
           "maxItems": 3,
           "title": "Attachmentids",
           "type": "array"
+        },
+        "attemptToken": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Attempttoken"
+        },
+        "canCancel": {
+          "default": false,
+          "title": "Cancancel",
+          "type": "boolean"
+        },
+        "canRetry": {
+          "default": false,
+          "title": "Canretry",
+          "type": "boolean"
         },
         "createdAt": {
           "format": "date-time",
@@ -4705,6 +4800,9 @@
   "$id": "https://shittim-chest.invalid/contracts/records/v1/records-api.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "oneOf": [
+    {
+      "$ref": "#/$defs/DebateControlResponse"
+    },
     {
       "$ref": "#/$defs/DebateAttachmentUploadResponse"
     },
