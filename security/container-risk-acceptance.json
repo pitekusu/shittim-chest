@@ -7,14 +7,14 @@
       "package": "libexpat1",
       "image_config_digests": {
         "production": [
-          "sha256:00fe4b5cab08dcb6d7b237bce900c18de9b77affa66452d3b90a2fa1c88077cc"
+          "sha256:7e0f22b365884eb37464ff74377120c4baedcddeb63bee72406ecd10534e5510"
         ]
       },
       "status": "under_investigation",
       "justification": "Debian trixie-security の正式修正版 2.9.0-1~deb13u1 を APT で認証し dpkg で実インストール済み。2026-10-16 の Grype DB は同 CVE の Debian 13 レコードに版数制約と修正版を持たず、修正版にも wont-fix として一致する。DB 反映待ちの期限付き例外。",
       "impact": "本番 ARM64 イメージの通常・wide 両 Expat は実ロードで 2.9.0。完成イメージの SBOM と dpkg/status.d も正式修正版に一致し、旧共有ライブラリは除去済み。例外はこの検出と実測設定 digest だけに限定する。",
       "exploitability": "CPython 内蔵コピーは Expat 2.8.5 を維持し、脆弱性修正境界 2.8.4 以上。OS 共有ライブラリも 2.9.0 へ更新済みで、正常 XML と不正 XML の挙動・非root runtime を検証済み。未修正版の受容ではない。",
-      "evidence": "https://security-tracker.debian.org/tracker/CVE-2026-76957 ; https://security-tracker.debian.org/tracker/data/json ; https://github.com/pitekusu/shittim-chest/actions/runs/39002787538 ; ARM64 SBOM libexpat1 2.9.0-1~deb13u1、Grype DB v6.1.10 built 2026-10-16T06:29:51Z の versionConstraint none (unknown)/wont-fix を照合。",
+      "evidence": "https://security-tracker.debian.org/tracker/CVE-2026-76957 ; https://security-tracker.debian.org/tracker/data/json ; https://github.com/pitekusu/shittim-chest/actions/runs/39005618874 ; ARM64 SBOM libexpat1 2.9.0-1~deb13u1、Grype DB v6.1.10 built 2026-10-16T06:29:51Z の versionConstraint none (unknown)/wont-fix を照合。BuildKitがexportした実configに限定し、imageidやinspect.Idが返すmanifest値を使用しない。",
       "approved_on": "2026-10-17",
       "expires_on": "2026-10-24",
       "reevaluation_conditions": "Grype DB が Debian の修正済み情報を取り込んだら例外を削除する。CVE、package、実バージョン、設定 digest、DHI VEX、XML 利用経路が変わった場合は再評価し、対象と期限を自動で広げない。",

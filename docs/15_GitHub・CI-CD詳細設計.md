@@ -430,7 +430,7 @@ builderの標準APTで署名済み索引に照合した固定版パッケージ�
 
 Coreのコンテナゲートで、実際にロードするsystem側の通常・wide双方のExpatが2.9.0以上であることを検証する。CPython内蔵の別コピーも2.8.4以上を要求し、正常XMLの解析と不正XMLの拒否を確認する。完成ARM64イメージのSBOM・署名済みVEX・Grypeによる判定を継続する。2026年10月17日の利用者承認により、Grype DB反映待ちの`CVE-2026-76957`／`libexpat1`だけを、確認済み設定digest 1個・2026年10月24日期限で例外登録する。実体は正式修正版に更新済みであり、DBに修正情報が反映されたら例外を削除する。対象・期限を自動拡大しない。DHI runtimeへ修正版が取り込まれたら、この一時的なパッケージ導入を撤去する。
 
-再ビルドでCPythonのbytecode直列化が変わることを避けるため、uvの並列bytecode生成を無効にし、builderだけで`PYTHONHASHSEED=0`を指定して標準`compileall`を単一worker・checked-hashで実行する。既存のRECORD・時刻・所有権の正規化と、runtimeのhash randomizationは維持する。CIとCore Releaseの設定digestはActionの`imageid`出力から推測せず、load済みイメージの標準`docker image inspect`から取得し、push後のECR manifestの`config.digest`とも一致させる。例外は旧digestを削除し、正式修正版・SBOM・動作を再検証した単一の設定digestへ置き換える。CVE・パッケージ・承認者・期限は変更しない。
+再ビルドでCPythonのbytecode直列化が変わることを避けるため、uvの並列bytecode生成を無効にし、builderだけで`PYTHONHASHSEED=0`を指定して標準`compileall`を単一worker・checked-hashで実行する。既存のRECORD・時刻・所有権の正規化と、runtimeのhash randomizationは維持する。Dockerの`imageid`や`inspect.Id`はストアによってmanifestを返すため、設定digestには使用しない。CIとCore Releaseは標準`docker image save`の`manifest.json`が指す単一configの実バイトをSHA-256で測定し、push後のECR manifestの`config.digest`とも一致させる。Coreは別に保存したローカルIDでpush直前のtag不変も確認し、保存用archiveはstep終了時に削除する。例外は旧digestを削除し、正式修正版・SBOM・動作を再検証した単一の設定digestへ置き換える。CVE・パッケージ・承認者・期限は変更しない。
 根拠は[Debianの修正版情報](https://security-tracker.debian.org/tracker/CVE-2026-76957)を参照する。
 
 通常PR/`main`では本番イメージの基本検証を行い、訓練用イメージを本番リスク承認の対象へ含めない。
