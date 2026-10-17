@@ -745,6 +745,21 @@ def _validate_release(directory: Path) -> None:
         raise WorkflowPolicyError("Release must reuse the exact main CI image cache scopes")
     if text.count("--config-digest-only") != 1:
         raise WorkflowPolicyError("Release must validate the local config before push")
+    local_config_block = _workflow_step_block(text, "Validate release image configs before push")
+    push_block = _workflow_step_block(text, "Push the prevalidated image once")
+    references_block = _workflow_step_block(text, "Record immutable image references")
+    if (
+        "steps.build-normal.outputs.imageid" in text
+        or "NORMAL_CONFIG_DIGEST=$(docker image inspect \"${normal_image}\" --format '{{.Id}}')"
+        not in local_config_block
+        or 'NORMAL_CONFIG_DIGEST=$(cat "${RUNNER_TEMP}/normal.config-digest")' not in push_block
+        or 'test "${normal_config_digest}" = "$(cat "${RUNNER_TEMP}/normal.config-digest")"'
+        not in references_block
+    ):
+        raise WorkflowPolicyError(
+            "Release must preserve the inspected local config digest "
+            "through push and ECR verification"
+        )
     release_risk_block = _workflow_step_block(
         text, "Apply signed vendor VEX and the time-bounded risk policy"
     )
@@ -1304,13 +1319,16 @@ def _validate_ci_container_risk(directory: Path) -> None:
     text = path.read_text(encoding="utf-8")
     required = (
         "name: Build and load the production image",
-        "steps.build-production.outputs.imageid",
+        "IMAGE_CONFIG_DIGEST=$(docker image inspect shittim-chest:step-08b-arm64",
         "--image-kind production",
         "--image-config-digest-file",
     )
     for marker in required:
         if marker not in text:
             raise WorkflowPolicyError(f"CI container risk gate lacks required marker: {marker}")
+    digest_block = _workflow_step_block(text, "Record the tested image digest and size")
+    if "steps.build-production.outputs.imageid" in text or "--format '{{.Id}}'" not in digest_block:
+        raise WorkflowPolicyError("CI must inspect the loaded image for its config digest")
     if text.count('SOURCE_DATE_EPOCH: "0"') != 2:
         raise WorkflowPolicyError("CI must make production and fault image builds reproducible")
     reproducible_docker_exporter = (

@@ -506,9 +506,12 @@ jobs:
           cache-to: type=gha,mode=max,scope=container-arm64-production,ignore-error=true
       - name: Validate release image configs before push
         env:
-          NORMAL_CONFIG_DIGEST: ${{ steps.build-normal.outputs.imageid }}
+          ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
         run: |
           digest_pattern='^sha256:[0-9a-f]{64}$'
+          normal_tag="release-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          normal_image="${ECR_REPOSITORY_URI}:${normal_tag}"
+          NORMAL_CONFIG_DIGEST=$(docker image inspect "${normal_image}" --format '{{.Id}}')
           [[ "${NORMAL_CONFIG_DIGEST}" =~ ${digest_pattern} ]]
           printf '%s\n' "${NORMAL_CONFIG_DIGEST}" > "${RUNNER_TEMP}/normal.config-digest"
           uv run --frozen python tools/check_container_risk_acceptance.py \
@@ -520,9 +523,10 @@ jobs:
         id: push-images
         env:
           ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
-          NORMAL_CONFIG_DIGEST: ${{ steps.build-normal.outputs.imageid }}
         run: |
           digest_pattern='^sha256:[0-9a-f]{64}$'
+          NORMAL_CONFIG_DIGEST=$(cat "${RUNNER_TEMP}/normal.config-digest")
+          [[ "${NORMAL_CONFIG_DIGEST}" =~ ${digest_pattern} ]]
           repository="${ECR_REPOSITORY_URI##*/}"
           normal_tag="release-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           normal_image="${ECR_REPOSITORY_URI}:${normal_tag}"
@@ -562,7 +566,7 @@ jobs:
           normal_config_digest=$(jq --exit-status --raw-output \
             '.config.digest | select(test("^sha256:[0-9a-f]{64}$"))' \
             "${RUNNER_TEMP}/normal.manifest.json")
-          printf '%s\n' "${normal_config_digest}" > "${RUNNER_TEMP}/normal.config-digest"
+          test "${normal_config_digest}" = "$(cat "${RUNNER_TEMP}/normal.config-digest")"
           {
             echo "NORMAL_DIGEST=${NORMAL_DIGEST}"
             echo "NORMAL_REFERENCE=${normal_reference}"

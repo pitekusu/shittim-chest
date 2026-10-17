@@ -11,7 +11,7 @@ ARG SOURCE_DATE_EPOCH
 COPY --from=uv /uv /uvx /usr/local/bin/
 
 ENV SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
-    UV_COMPILE_BYTECODE=1 \
+    UV_COMPILE_BYTECODE=0 \
     UV_LINK_MODE=copy \
     UV_NO_DEV=1 \
     UV_PYTHON_DOWNLOADS=0
@@ -38,8 +38,12 @@ COPY src ./src
 COPY tools/canonicalize_wheel_records.py /tmp/canonicalize_wheel_records.py
 COPY tools/transfer_tree_deterministically.py /tmp/transfer_tree_deterministically.py
 
+# CPython's bytecode serialization can vary with uv's parallel interpreter state.
+# Compile once in a fixed order before normalizing the runtime tree.
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     uv sync --frozen --no-dev --no-editable \
+    && PYTHONHASHSEED=0 /app/.venv/bin/python -m compileall -q -f -j 1 \
+        --invalidation-mode=checked-hash /app/.venv/lib \
     && python /tmp/canonicalize_wheel_records.py \
         --source-date-epoch "${SOURCE_DATE_EPOCH}" /app/.venv
 

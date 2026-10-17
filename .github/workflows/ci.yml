@@ -641,9 +641,10 @@ jobs:
       - name: Record the tested image digest and size
         if: ${{ steps.scope.outputs.required == 'true' }}
         env:
-          IMAGE_CONFIG_DIGEST: ${{ steps.build-production.outputs.imageid }}
           IMAGE_DIGEST: ${{ steps.build-production.outputs.digest }}
         run: |
+          IMAGE_CONFIG_DIGEST=$(docker image inspect shittim-chest:step-08b-arm64 \
+            --format '{{.Id}}')
           test "$(printf '%s' "${IMAGE_CONFIG_DIGEST}" | grep -E '^sha256:[0-9a-f]{64}$')" = \
             "${IMAGE_CONFIG_DIGEST}"
           test "$(printf '%s' "${IMAGE_DIGEST}" | grep -E '^sha256:[0-9a-f]{64}$')" = \
