@@ -1161,15 +1161,20 @@ def _normalize_discord_model_text(value: str) -> str:
     normalized = normalized.replace("\t", " ")
     if not normalized.strip():
         raise ValueError("model display text must not be empty")
+    display_characters: list[str] = []
     for character in normalized:
         codepoint = ord(character)
+        category = unicodedata.category(character)
         if character != "\n" and (
-            unicodedata.category(character) in {"Cc", "Cf", "Cs", "Co", "Cn"}
+            category in {"Cc", "Cf", "Cs", "Co"}
             or 0xFDD0 <= codepoint <= 0xFDEF
             or codepoint & 0xFFFF in {0xFFFE, 0xFFFF}
         ):
             raise ValueError("model display text contains a forbidden Unicode code point")
-    return normalized
+        # The runtime's Unicode database can lag model output. Replace unassigned
+        # scalars in this display copy without changing the persisted model text.
+        display_characters.append("\ufffd" if category == "Cn" else character)
+    return "".join(display_characters)
 
 
 def _escaped_discord_token(character: str) -> str:

@@ -656,9 +656,23 @@ def test_model_display_sanitizer_normalizes_escapes_and_rejects_controls() -> No
     assert sanitize_discord_model_text("e\u0301\r\n\t*bold* @everyone") == (
         "é\n \\*bold\\* @everyone"
     )
-    for unsafe in ("bad\x00text", "bad\u202etext", "bad\ufdd0text"):
+    for unsafe in (
+        "bad\x00text",
+        "bad\u202etext",
+        "bad\ud800text",
+        "bad\ue000text",
+        "bad\ufdd0text",
+        "bad\ufffetext",
+        "bad\U0010fffftext",
+    ):
         with pytest.raises(ValueError, match="forbidden Unicode"):
             sanitize_discord_model_text(unsafe)
+
+
+def test_model_display_sanitizer_replaces_unassigned_scalars_in_display_copy() -> None:
+    original = "e\u0301\u0378\U00040000\U0001f35c\r\n\t*bold* @everyone"
+
+    assert sanitize_discord_model_text(original) == "é\ufffd\ufffd\U0001f35c\n \\*bold\\* @everyone"
 
 
 def test_outbox_v2_abandonment_is_bounded_and_cannot_retain_delivery_state() -> None:

@@ -697,6 +697,54 @@ async def test_generated_phases_are_persisted_then_delivered_by_each_participant
 
 
 @pytest.mark.asyncio
+async def test_unassigned_final_proposal_text_is_preserved_and_delivered_before_voting(
+    dependencies: Dependencies,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    openai = dependencies[5]
+    repository = dependencies[6]
+    generate_final_proposal = openai.generate_final_proposal
+    generated: dict[ParticipantSlot, FinalProposal] = {}
+
+    async def generate_with_unassigned_text(**kwargs) -> FinalProposal:
+        proposal = await generate_final_proposal(**kwargs)
+        generated[proposal.participant] = replace(
+            proposal,
+            title=proposal.title + "\u0378",
+            proposal=proposal.proposal + "\u0378",
+        )
+        return generated[proposal.participant]
+
+    monkeypatch.setattr(openai, "generate_final_proposal", generate_with_unassigned_text)
+    app = make_application(dependencies)
+    accepted = await accept_bound_debate(app)
+
+    await app.run_debate(accepted.debate_id)
+
+    completed = repository.current[accepted.debate_id]
+    assert completed.state.phase is DebatePhase.COMPLETED
+    assert completed.error_code is None
+    assert completed.final_proposals == tuple(generated[slot] for slot in PARTICIPANTS)
+    final_delivery = next(
+        stage
+        for stage in repository.terminal_stages
+        if isinstance(stage.terminal_delivery, PhaseDeliveryPlan)
+        and stage.terminal_delivery.plan_id == "final-proposals"
+    )
+    assert final_delivery.final_proposals == completed.final_proposals
+    operations = tuple(
+        operation
+        for operation in repository.terminal_operations.values()
+        if operation.plan_id == "final-proposals"
+    )
+    assert len(operations) == 3
+    assert all("\u0378" not in operation.content for operation in operations)
+    assert all(operation.content.count("\ufffd") == 2 for operation in operations)
+    assert {voter for voter, _ in openai.vote_calls} == set(PARTICIPANTS)
+    assert len(completed.votes) == 3
+
+
+@pytest.mark.asyncio
 async def test_final_proposal_preflight_failure_stops_before_every_proposal_call(
     dependencies: Dependencies,
 ) -> None:
