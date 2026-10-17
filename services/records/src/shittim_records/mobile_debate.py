@@ -490,10 +490,20 @@ class MobileDebateService:
             raise DebateRequestFailure("DEBATE_OPERATION_NOT_FOUND", 404)
         status = "accepted"
         error_code = None
-        response = self._view(request)
+        progress = self._repository.progress(request)
+        response = self._view(request, progress=progress)
         if operation.status in {IngressStatus.REJECTED, IngressStatus.FAILED}:
             status, error_code = "failed", "DEBATE_CONTROL_FAILED"
-        elif operation.status in {IngressStatus.ACCEPTED, IngressStatus.COMPLETED}:
+        # Core accepts cancellation when terminal delivery is staged. Keep the
+        # current attempt locked until its terminal phase is visible.
+        elif operation.status in {IngressStatus.ACCEPTED, IngressStatus.COMPLETED} and (
+            operation.kind is not IngressKind.CANCEL
+            or (progress.phase is not None and progress.phase.is_terminal)
+            or (
+                progress.attempt_id is not None
+                and progress.attempt_id != operation.expected_attempt_id
+            )
+        ):
             status = "completed"
         if status == "accepted":
             response = response.model_copy(update={"can_cancel": False, "can_retry": False})
@@ -541,10 +551,13 @@ class MobileDebateService:
         self._still_authorized(token, session)
         return DebateRequestsResponse(items=items, next_cursor=next_cursor)
 
-    def _view(self, request: IngressRequest) -> DebateRequestResponse:
+    def _view(
+        self, request: IngressRequest, *, progress: DebateProgress | None = None
+    ) -> DebateRequestResponse:
         if request.mobile_request_id is None or request.question is None:
             raise DebateRequestFailure("DEBATE_REQUESTS_UNAVAILABLE", 503)
-        progress = self._repository.progress(request)
+        if progress is None:
+            progress = self._repository.progress(request)
         status: DebateRequestStatus
         error_code = None
         if progress.record_id is not None:

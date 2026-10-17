@@ -456,7 +456,10 @@ def test_stale_attempt_and_invalid_phase_never_enqueue_control(setup):
         (PanelAction.RETRY, DebatePhase.FAILED),
     ],
 )
-def test_operation_poll_tracks_acceptance_failure_and_owner_boundary(setup, action, phase):
+@pytest.mark.parametrize("ingress_status", [IngressStatus.ACCEPTED, IngressStatus.COMPLETED])
+def test_operation_poll_tracks_acceptance_failure_and_owner_boundary(
+    setup, action, phase, ingress_status
+):
     service, sessions, repository, _ = setup
     receipt = prepared_control(setup, phase)
     submit_control(service, receipt, action=action)
@@ -464,9 +467,10 @@ def test_operation_poll_tracks_acceptance_failure_and_owner_boundary(setup, acti
     operation = repository.requests[key]
     repository.requests[key] = replace(
         operation,
-        status=IngressStatus.ACCEPTED,
+        status=ingress_status,
         accepted_debate_id=operation.target_debate_id,
         accepted_attempt_id=operation.expected_attempt_id,
+        completed_at=NOW if ingress_status.is_terminal else None,
     )
     if action is PanelAction.CANCEL:
         pending = asyncio.run(
@@ -476,7 +480,8 @@ def test_operation_poll_tracks_acceptance_failure_and_owner_boundary(setup, acti
                 operation_id=OPERATION_ID,
             )
         )
-        assert pending.status == "completed"
+        assert pending.status == "accepted"
+        assert not pending.request.can_cancel and not pending.request.can_retry
         repository.phase = replace(repository.phase, phase=DebatePhase.CANCELLED)
     result = asyncio.run(
         service.get_operation(
@@ -591,6 +596,29 @@ def test_cancel_operation_completion_survives_later_current_attempt(setup):
     )
     assert result.status == "completed"
     assert result.request.attempt_token != receipt.attempt_token
+
+
+@pytest.mark.parametrize("status", [IngressStatus.ACCEPTED, IngressStatus.COMPLETED])
+@pytest.mark.parametrize("phase", [DebatePhase.FAILED, DebatePhase.COMPLETED])
+def test_cancel_operation_completion_tracks_other_terminal_outcomes(setup, status, phase):
+    service, sessions, repository, _ = setup
+    receipt = prepared_control(setup)
+    submit_control(service, receipt)
+    key = (sessions.session.requester_key, OPERATION_ID)
+    operation = repository.requests[key]
+    repository.requests[key] = replace(
+        operation,
+        status=status,
+        accepted_debate_id=operation.target_debate_id,
+        accepted_attempt_id=operation.expected_attempt_id,
+        completed_at=NOW if status.is_terminal else None,
+    )
+    repository.phase = replace(repository.phase, phase=phase)
+    result = asyncio.run(
+        service.get_operation(token=TOKEN, request_id=REQUEST_ID, operation_id=OPERATION_ID)
+    )
+    assert result.status == "completed"
+    assert not result.request.can_cancel
 
 
 @pytest.mark.parametrize("same_binding", [True, False])

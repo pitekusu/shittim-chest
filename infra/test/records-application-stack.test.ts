@@ -157,6 +157,34 @@ describe("RecordsApplicationStack", () => {
     expect(readerActions).not.toContain("dynamodb:UpdateItem");
   });
 
+  test("allows mobile control bindings while retaining transaction and partition boundaries", () => {
+    const policies = Object.values(fixture.template.findResources("AWS::IAM::Policy"));
+    const mobilePolicies = policies.filter(policy =>
+      JSON.stringify(policy.Properties.Roles).includes("MobileDebateFunctionRole"));
+    const statements = mobilePolicies.flatMap(policy =>
+      policy.Properties.PolicyDocument.Statement) as PolicyStatement[];
+    const ingress = statements.filter(statement =>
+      JSON.stringify(statement.Condition?.["ForAllValues:StringLike"] ?? {}).includes("CONTROL#INGRESS"));
+    expect(ingress).toHaveLength(2);
+    for (const statement of ingress) {
+      expect(statement.Condition?.["ForAllValues:StringLike"]).toEqual({
+        "dynamodb:LeadingKeys": [
+          "CONTROL#INGRESS", "CONTROL#INGRESS#ACTIVE", "INGRESS_OPERATION#m_*",
+          "INGRESS_SEMANTIC_OPERATION#m_*", "MOBILE_INGRESS#*",
+        ],
+      });
+      expect(statement.Condition?.Null).toEqual({ "dynamodb:LeadingKeys": "false" });
+      expect(JSON.stringify(statement.Resource)).toContain("SourceDebateTableName");
+    }
+    const reads = ingress.find(statement => actionsOf(statement).includes("dynamodb:GetItem"));
+    expect(reads?.Action).toEqual(["dynamodb:GetItem", "dynamodb:Query"]);
+    const writes = ingress.find(statement => actionsOf(statement).includes("dynamodb:PutItem"));
+    expect(writes?.Action).toEqual(["dynamodb:PutItem", "dynamodb:UpdateItem"]);
+    expect(writes?.Condition?.StringEquals).toEqual({
+      "dynamodb:EnclosingOperation": "TransactWriteItems",
+    });
+  });
+
   test("keeps debate image uploads, reads and cleanup private and isolated", () => {
     const { template } = fixture;
     const routes = Object.values(template.findResources("AWS::ApiGatewayV2::Route"));

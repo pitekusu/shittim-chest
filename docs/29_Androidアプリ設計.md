@@ -247,7 +247,7 @@ Debug／Releaseビルド・Lint・必須CIを実施し、架空データの入�
 
 POSTはUUIDv4の`operationId`と、GETで取得した不透明な`attemptToken`だけを送る。本人情報・投稿先・Core内部IDをクライアントから指定させない。既存のBearer認証、Guild／チャンネル権限、セッション失効確認を用い、本人の依頼だけを操作する。同じoperation IDの内容変更や別attemptを対象にした遅延操作は拒否する。受付は既存のdurable ingressへ保存し、既存Discordと同じcancel／retry・attempt fence・Outboxを使う。独立した討論エンジン・キュー・テーブルは増やさない。
 
-応答は`operationId`、`action`、`status`（`accepted`／`completed`／`failed`）、`errorCode`、最新の`request`を返す。操作受付だけで中止・再試行の完了とは表示しない。Androidは送信前に操作IDと対象attemptを既存workspaceの暗号文へ保存する。依頼履歴からの操作でも別の下書き・添付画像を上書きしない。応答不明・再起動後はGETだけで照合し、自動POSTしない。操作受付が見つからない場合は、確認Dialogの「同じ操作を再送」から同じID・本文だけを明示再送する。
+応答は`operationId`、`action`、`status`（`accepted`／`completed`／`failed`）、`errorCode`、最新の`request`を返す。操作受付だけで中止・再試行の完了とは表示しない。中止はCoreが終端配信を受付済みでも、現在のattemptの終端状態が見えるまで`accepted`を維持し、操作ボタンを無効化する。別attemptへ移った後は旧操作を完了扱いにして、新しい実行の操作を妨げない。Androidは送信前に操作IDと対象attemptを既存workspaceの暗号文へ保存する。依頼履歴からの操作でも別の下書き・添付画像を上書きしない。応答不明・再起動後はGETだけで照合し、自動POSTしない。操作受付が見つからない場合は、確認Dialogの「同じ操作を再送」から同じID・本文だけを明示再送する。
 
 操作中・照合中・オフラインでは新しい操作を無効化する。照合は前景の進捗画面だけで行い、操作が未確定なら元の依頼が終端でも照合を続ける。認可喪失時の非表示、端末内消去、下書きの暗号化と既存の非再送HTTP設定を維持する。関連試験は本人分離・古いattempt・二重操作・失効競合・応答不明からの復帰と、確認Dialog・狭幅／文字拡大・オフラインの操作制御を対象とする。本番反映・Play配布・実際のDiscord投稿や有料生成の受入は別の配信操作として扱う。
 

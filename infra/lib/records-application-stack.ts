@@ -1985,7 +1985,8 @@ export class RecordsApplicationStack extends Stack {
     });
 
     const ingressPartitions = [
-      "CONTROL#INGRESS", "CONTROL#INGRESS#ACTIVE", "INGRESS_OPERATION#m_*", "MOBILE_INGRESS#*",
+      "CONTROL#INGRESS", "CONTROL#INGRESS#ACTIVE", "INGRESS_OPERATION#m_*",
+      "INGRESS_SEMANTIC_OPERATION#m_*", "MOBILE_INGRESS#*",
     ];
     const sourceMetaFields = [
       "PK", "SK", "schema_version", "record_type", "debate_id", "requester_id",
