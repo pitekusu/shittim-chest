@@ -124,17 +124,37 @@ def validate_image_configuration(document: object, expected_architecture: str) -
 def _validate_runtime_security(image: str) -> None:
     script = f"""
 import asyncio
+import ctypes
 import getpass
 import os
 import pathlib
 import pwd
+import pyexpat
 import shutil
 import sys
+from xml.etree import ElementTree
 import shittim_chest
 from shittim_chest.healthcheck import HealthStatus, heartbeat_status
 from shittim_chest.runtime.health import EventLoopHeartbeat, heartbeat_is_healthy
 
 async def verify():
+    # Check the actually loaded library, not only package inventory: botocore's
+    # S3 response parsing must keep working after the Expat security update.
+    # CPython bundles its own Expat; also inspect both updated system variants.
+    assert pyexpat.version_info >= (2, 8, 4)
+    for name in ("libexpat.so.1", "libexpatw.so.1"):
+        library = ctypes.CDLL(name)
+        library.XML_ExpatVersion.restype = ctypes.c_char_p
+        version = library.XML_ExpatVersion().decode("ascii").removeprefix("expat_")
+        assert tuple(map(int, version.split("."))) >= (2, 9, 0)
+    document = ElementTree.fromstring(b"<Error><Code>NoSuchKey</Code></Error>")
+    assert document.findtext("Code") == "NoSuchKey"
+    try:
+        ElementTree.fromstring(b"<Error><Code></Error>")
+    except ElementTree.ParseError:
+        pass
+    else:
+        raise AssertionError("malformed XML was accepted")
     assert os.getuid() == {EXPECTED_IDENTITY.uid}
     assert os.getgid() == {EXPECTED_IDENTITY.gid}
     account = pwd.getpwuid(os.getuid())
