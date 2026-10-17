@@ -10,17 +10,20 @@ from shittim_chest.application.discord import (
     DiscordBotSlot,
     DiscordIdentityConfig,
     DiscordRuntimeConfig,
+    PanelAction,
 )
 from shittim_chest.application.ports import RepositoryIdentityConflict, RepositoryQueueFull
 from shittim_chest.application.scale_to_zero import (
     EnqueuedIngress,
+    IngressKind,
     IngressOperationResult,
+    IngressStatus,
 )
-from shittim_chest.domain import DebatePhase
+from shittim_chest.domain import AttemptId, DebateId, DebatePhase
 
 from shittim_records.archive import derive_requester_key
 from shittim_records.auth import AuthFailure, _digest
-from shittim_records.contracts import DebateStartRequest
+from shittim_records.contracts import DebateControlRequest, DebateStartRequest
 from shittim_records.mobile_auth import MOBILE_SESSION_TTL_SECONDS, MobileSessionRecord
 from shittim_records.mobile_debate import (
     DebateProgress,
@@ -351,3 +354,262 @@ def test_http_accepts_astral_codepoints_then_replays_and_requires_bearer(setup):
     assert http.handle(data)["statusCode"] == 202 and len(repository.saved) == 1
     data["headers"].pop("authorization")
     assert http.handle(data)["statusCode"] == 401
+
+
+OPERATION_ID = "00000000-0000-4000-8000-00000000000b"
+SECOND_OPERATION_ID = "00000000-0000-4000-8000-00000000000c"
+
+
+def prepared_control(setup, phase=DebatePhase.DISCUSSING):
+    service, _, repository, _ = setup
+    start(service)
+    key, request = next(iter(repository.requests.items()))
+    attempt_id = AttemptId.new()
+    repository.requests[key] = replace(
+        request,
+        accepted_debate_id=DebateId.new(),
+        accepted_attempt_id=attempt_id,
+    )
+    repository.phase = DebateProgress(
+        phase=phase,
+        updated_at=NOW,
+        attempt_id=attempt_id,
+        thread_id=str(10**17 + 40),
+        control_panel_message_id=str(10**17 + 41),
+    )
+    return asyncio.run(service.get(token=TOKEN, request_id=REQUEST_ID))
+
+
+def submit_control(service, receipt, *, action=PanelAction.CANCEL, operation_id=OPERATION_ID):
+    return asyncio.run(
+        service.control(
+            token=TOKEN,
+            request_id=REQUEST_ID,
+            action=action,
+            payload=DebateControlRequest(
+                operation_id=operation_id,
+                attempt_token=receipt.attempt_token,
+            ),
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "action,phase",
+    [
+        (PanelAction.CANCEL, DebatePhase.DISCUSSING),
+        (PanelAction.RETRY, DebatePhase.FAILED),
+    ],
+)
+def test_control_reuses_durable_ingress_and_replays_original_attempt(setup, action, phase):
+    service, _, repository, permissions = setup
+    receipt = prepared_control(setup, phase)
+    assert receipt.can_cancel == (action is PanelAction.CANCEL)
+    assert receipt.can_retry == (action is PanelAction.RETRY)
+    assert len(receipt.attempt_token) == 64
+    result = submit_control(service, receipt, action=action)
+    assert result.status == "accepted" and result.action == action.value
+    assert not result.request.can_cancel and not result.request.can_retry
+    operation = repository.requests[(next(iter(repository.requests))[0], OPERATION_ID)]
+    assert operation.kind is IngressKind(action.value)
+    assert not operation.requester_can_manage_messages
+    assert operation.mobile_target_request_id == REQUEST_ID
+    assert operation.expected_attempt_id == repository.phase.attempt_id
+    assert operation.source_thread_id == repository.phase.thread_id
+    assert operation.source_message_id == repository.phase.control_panel_message_id
+    assert len(repository.saved) == 2 and permissions.checked == [USER, USER]
+    # Ambiguous response retries resolve frozen content even after the attempt,
+    # enabled flag, mutable profile or Discord authorization changes.
+    repository.phase = replace(repository.phase, attempt_id=AttemptId.new())
+    service._enabled = False
+    permissions.fail = "DISCORD_UNAVAILABLE"
+    replay = submit_control(service, receipt, action=action)
+    assert replay.operation_id == OPERATION_ID and len(repository.saved) == 2
+    assert permissions.checked == [USER, USER]
+    with pytest.raises(DebateRequestFailure, match="REQUEST_ID_CONFLICT"):
+        submit_control(
+            service,
+            receipt,
+            action=(PanelAction.RETRY if action is PanelAction.CANCEL else PanelAction.CANCEL),
+        )
+
+
+def test_stale_attempt_and_invalid_phase_never_enqueue_control(setup):
+    service, _, repository, _ = setup
+    receipt = prepared_control(setup)
+    repository.phase = replace(repository.phase, attempt_id=AttemptId.new())
+    with pytest.raises(DebateRequestFailure, match="DEBATE_CONTROL_STALE"):
+        submit_control(service, receipt)
+    receipt = asyncio.run(service.get(token=TOKEN, request_id=REQUEST_ID))
+    with pytest.raises(DebateRequestFailure, match="DEBATE_CONTROL_NOT_ALLOWED"):
+        submit_control(service, receipt, action=PanelAction.RETRY)
+    repository.phase = replace(repository.phase, phase=DebatePhase.COMPLETED)
+    with pytest.raises(DebateRequestFailure, match="DEBATE_CONTROL_NOT_ALLOWED"):
+        submit_control(service, receipt)
+    assert len(repository.saved) == 1
+
+
+@pytest.mark.parametrize(
+    "action,phase",
+    [
+        (PanelAction.CANCEL, DebatePhase.DISCUSSING),
+        (PanelAction.RETRY, DebatePhase.FAILED),
+    ],
+)
+def test_operation_poll_tracks_acceptance_failure_and_owner_boundary(setup, action, phase):
+    service, sessions, repository, _ = setup
+    receipt = prepared_control(setup, phase)
+    submit_control(service, receipt, action=action)
+    key = (sessions.session.requester_key, OPERATION_ID)
+    operation = repository.requests[key]
+    repository.requests[key] = replace(
+        operation,
+        status=IngressStatus.ACCEPTED,
+        accepted_debate_id=operation.target_debate_id,
+        accepted_attempt_id=operation.expected_attempt_id,
+    )
+    if action is PanelAction.CANCEL:
+        pending = asyncio.run(
+            service.get_operation(
+                token=TOKEN,
+                request_id=REQUEST_ID,
+                operation_id=OPERATION_ID,
+            )
+        )
+        assert pending.status == "completed"
+        repository.phase = replace(repository.phase, phase=DebatePhase.CANCELLED)
+    result = asyncio.run(
+        service.get_operation(
+            token=TOKEN,
+            request_id=REQUEST_ID,
+            operation_id=OPERATION_ID,
+        )
+    )
+    assert result.status == "completed"
+    repository.requests[key] = replace(
+        operation,
+        status=IngressStatus.REJECTED,
+        completed_at=NOW,
+        error_code="private_detail",
+    )
+    failed = asyncio.run(
+        service.get_operation(
+            token=TOKEN,
+            request_id=REQUEST_ID,
+            operation_id=OPERATION_ID,
+        )
+    )
+    assert failed.status == "failed" and failed.error_code == "DEBATE_CONTROL_FAILED"
+    assert "private_detail" not in failed.model_dump_json(by_alias=True)
+    sessions.session = sessions.session.model_copy(update={"requester_key": "another-owner"})
+    with pytest.raises(DebateRequestFailure, match="DEBATE_REQUEST_NOT_FOUND"):
+        asyncio.run(
+            service.get_operation(
+                token=TOKEN,
+                request_id=REQUEST_ID,
+                operation_id=OPERATION_ID,
+            )
+        )
+
+
+def test_control_revoked_session_and_lost_channel_permission_do_not_enqueue(setup):
+    service, sessions, repository, permissions = setup
+    receipt = prepared_control(setup)
+    permissions.fail = "CHANNEL_PERMISSION_REQUIRED"
+    with pytest.raises(DebateRequestFailure, match="CHANNEL_PERMISSION_REQUIRED"):
+        submit_control(service, receipt)
+    permissions.fail = None
+    permissions.before_return = lambda: sessions.delete_session(
+        session_hash=_digest(KEY, "mobile-session", TOKEN),
+    )
+    with pytest.raises(AuthFailure, match="session_required"):
+        submit_control(service, receipt)
+    assert len(repository.saved) == 1
+
+
+def test_control_http_receipt_lookup_and_strict_boundary(setup):
+    service, _, repository, _ = setup
+    receipt = prepared_control(setup)
+    http = MobileDebateHttpController(service, allowed_origin="https://records.example")
+    body = {"operationId": OPERATION_ID, "attemptToken": receipt.attempt_token}
+    request = event(body=json.dumps(body), suffix="/{requestId}/cancel")
+    assert http.handle(request)["statusCode"] == 202
+    lookup = event(
+        method="GET",
+        body="",
+        suffix="/{requestId}/operations/{operationId}",
+        pathParameters={"requestId": REQUEST_ID, "operationId": OPERATION_ID},
+    )
+    response = http.handle(lookup)
+    assert response["statusCode"] == 200
+    assert json.loads(response["body"])["operationId"] == OPERATION_ID
+    assert response["headers"]["Cache-Control"] == "private, no-store"
+    for invalid in (
+        {**body, "requesterId": USER},
+        {**body, "canManageMessages": True},
+        {**body, "attemptToken": "invalid"},
+        {**body, "operationId": REQUEST_ID},
+    ):
+        response = http.handle(event(body=json.dumps(invalid), suffix="/{requestId}/cancel"))
+        assert response["statusCode"] in {400, 409}
+    lookup["pathParameters"]["operationId"] = SECOND_OPERATION_ID
+    assert http.handle(lookup)["statusCode"] == 404
+    assert len(repository.saved) == 2
+
+
+@pytest.mark.parametrize("old_status", [IngressStatus.FAILED, IngressStatus.COMPLETED])
+def test_retried_current_phase_overrides_original_ingress_terminal_status(setup, old_status):
+    service, _, repository, _ = setup
+    prepared_control(setup)
+    key, request = next(iter(repository.requests.items()))
+    repository.requests[key] = replace(request, status=old_status, completed_at=NOW)
+    response = asyncio.run(service.get(token=TOKEN, request_id=REQUEST_ID))
+    assert response.status == "running" and response.can_cancel
+    repository.phase = replace(repository.phase, phase=DebatePhase.ACCEPTED)
+    assert asyncio.run(service.get(token=TOKEN, request_id=REQUEST_ID)).status == "queued"
+
+
+def test_cancel_operation_completion_survives_later_current_attempt(setup):
+    service, sessions, repository, _ = setup
+    receipt = prepared_control(setup)
+    submit_control(service, receipt)
+    key = (sessions.session.requester_key, OPERATION_ID)
+    operation = repository.requests[key]
+    repository.requests[key] = replace(
+        operation,
+        status=IngressStatus.ACCEPTED,
+        accepted_debate_id=operation.target_debate_id,
+        accepted_attempt_id=operation.expected_attempt_id,
+    )
+    repository.phase = replace(repository.phase, attempt_id=AttemptId.new())
+    result = asyncio.run(
+        service.get_operation(
+            token=TOKEN,
+            request_id=REQUEST_ID,
+            operation_id=OPERATION_ID,
+        )
+    )
+    assert result.status == "completed"
+    assert result.request.attempt_token != receipt.attempt_token
+
+
+@pytest.mark.parametrize("same_binding", [True, False])
+def test_concurrent_control_submission_replays_only_identical_binding(
+    setup, monkeypatch, same_binding
+):
+    service, _, repository, _ = setup
+    receipt = prepared_control(setup)
+    captured = repository.enqueue
+
+    async def race(request, **kwargs):
+        competing = request if same_binding else replace(request, kind=IngressKind.RETRY)
+        await captured(competing, **kwargs)
+        raise RepositoryIdentityConflict()
+
+    monkeypatch.setattr(repository, "enqueue", race)
+    if same_binding:
+        assert submit_control(service, receipt).operation_id == OPERATION_ID
+    else:
+        with pytest.raises(DebateRequestFailure, match="REQUEST_ID_CONFLICT"):
+            submit_control(service, receipt)
+    assert len(repository.saved) == 2

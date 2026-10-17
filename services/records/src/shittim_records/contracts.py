@@ -1065,6 +1065,13 @@ class DebateStartRequest(PublicModel):
         return self
 
 
+class DebateControlRequest(PublicModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    operation_id: DebateRequestId
+    attempt_token: str = Field(pattern=r"^[a-f0-9]{64}$", repr=False)
+
+
 class DebateAttachmentUploadRequest(PublicModel):
     request_id: DebateRequestId
     attachment_id: DebateRequestId
@@ -1119,6 +1126,9 @@ class DebateRequestResponse(PublicModel):
     updated_at: AwareDatetime
     record_id: RecordId | None
     error_code: Literal["DEBATE_REJECTED", "DEBATE_FAILED", "DEBATE_CANCELLED"] | None
+    attempt_token: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$", repr=False)
+    can_cancel: bool = False
+    can_retry: bool = False
 
     @model_validator(mode="after")
     def published_record_only(self) -> DebateRequestResponse:
@@ -1132,6 +1142,14 @@ class DebateRequestResponse(PublicModel):
 class DebateRequestsResponse(PublicModel):
     items: list[DebateRequestResponse]
     next_cursor: str | None
+
+
+class DebateControlResponse(PublicModel):
+    operation_id: DebateRequestId
+    action: Literal["cancel", "retry"]
+    status: Literal["accepted", "completed", "failed"]
+    error_code: Literal["DEBATE_CONTROL_FAILED"] | None
+    request: DebateRequestResponse
 
 
 class MomotalkWeek(PublicModel):
@@ -1228,6 +1246,7 @@ class MomotalkRoomResponse(PublicModel):
 
 
 PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
+    DebateControlResponse,
     DebateAttachmentUploadResponse,
     DebateAttachmentStatusResponse,
     DebateRequestResponse,
@@ -1256,6 +1275,7 @@ PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
 )
 
 PUBLIC_REQUEST_MODELS: tuple[type[BaseModel], ...] = (
+    DebateControlRequest,
     DebateAttachmentUploadRequest,
     RecordSearchRequest,
     DebateStartRequest,

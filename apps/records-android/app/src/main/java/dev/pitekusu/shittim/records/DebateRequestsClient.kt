@@ -49,6 +49,9 @@ internal class DebateRequest(
   val recordId: String? = null,
   val errorCode: String? = null,
   val attachmentIds: List<String> = emptyList(),
+  val attemptToken: String? = null,
+  val canCancel: Boolean = false,
+  val canRetry: Boolean = false,
 ) {
   val terminal: Boolean get() = status in setOf("published", "failed", "cancelled")
   fun validate() {
@@ -61,11 +64,29 @@ internal class DebateRequest(
     check(recordId == null || mobileOpaqueValue.matches(recordId))
     check((status == "published") == (recordId != null))
     check(errorCode == null || errorCode.matches(Regex("[A-Z_]{1,64}")))
+    check(attemptToken == null || validDebateAttemptToken(attemptToken))
+    check(!canCancel || (attemptToken != null && status in setOf("accepted", "queued", "starting", "running", "publishing")))
+    check(!canRetry || (attemptToken != null && status == "failed"))
   }
   override fun toString(): String = "DebateRequest(<redacted>)"
 }
 
 @Serializable internal class DebateRequestPage(val items: List<DebateRequest>, val nextCursor: String? = null)
+internal fun validDebateAttemptToken(value: String): Boolean = Regex("[a-f0-9]{64}").matches(value)
+internal fun validDebateControlAction(value: String): Boolean = value == "cancel" || value == "retry"
+
+@Serializable
+internal class DebateControlResponse(val operationId: String, val action: String, val status: String,
+  val errorCode: String? = null, val request: DebateRequest) {
+  fun validate() {
+    check(validDebateRequestId(operationId) && validDebateControlAction(action))
+    check(status in setOf("accepted", "completed", "failed"))
+    check(errorCode == null || errorCode.matches(Regex("[A-Z_]{1,64}")))
+    check((status == "failed") == (errorCode != null))
+    request.validate()
+  }
+  override fun toString(): String = "DebateControlResponse(<redacted>)"
+}
 internal enum class DebateFailure { AUTH_REQUIRED, REAUTH_REQUIRED, FORBIDDEN, NOT_FOUND, CONFLICT, QUEUE_FULL, UNAVAILABLE, INVALID_RESPONSE, STORAGE, ATTACHMENT_INVALID, ATTACHMENT_EXPIRED, ATTACHMENT_NOT_READY }
 internal class DebateRequestException(val failure: DebateFailure) : Exception("debate_request_${failure.name.lowercase()}")
 
@@ -117,6 +138,36 @@ internal class DebateRequestsClient(private val engine: HttpClientEngine = OkHtt
     catch (_: Exception) { throw DebateRequestException(DebateFailure.INVALID_RESPONSE) }
   }
 
+  suspend fun control(token: String, requestId: String, action: String, operationId: String,
+    attemptToken: String): DebateControlResponse {
+    check(validDebateRequestId(requestId) && validDebateRequestId(operationId) &&
+      validDebateControlAction(action) && validDebateAttemptToken(attemptToken))
+    return call<DebateControlResponse>(token, HttpMethod.Post, "/$requestId/$action",
+      json.encodeToString(Control(operationId, attemptToken))).also {
+      validateControl(it, requestId, operationId, action)
+    }
+  }
+
+  suspend fun findControl(token: String, requestId: String, operationId: String): DebateControlResponse? {
+    check(validDebateRequestId(requestId) && validDebateRequestId(operationId))
+    return try {
+      call<DebateControlResponse>(token, HttpMethod.Get, "/$requestId/operations/$operationId").also {
+        validateControl(it, requestId, operationId)
+      }
+    } catch (error: DebateRequestException) {
+      if (error.failure == DebateFailure.NOT_FOUND) null else throw error
+    }
+  }
+
+  private fun validateControl(value: DebateControlResponse, requestId: String, operationId: String,
+    action: String? = null) {
+    try {
+      value.validate()
+      check(value.request.requestId == requestId && value.operationId == operationId &&
+        (action == null || value.action == action))
+    } catch (_: Exception) { throw DebateRequestException(DebateFailure.INVALID_RESPONSE) }
+  }
+
   private suspend inline fun <reified T> call(token: String, method: HttpMethod, path: String,
     body: String? = null, cursor: String? = null): T {
     try {
@@ -145,7 +196,7 @@ internal class DebateRequestsClient(private val engine: HttpClientEngine = OkHtt
           throw DebateRequestException(when (response.status.value) {
             401 -> DebateFailure.AUTH_REQUIRED
             403 -> when (code) {
-              "DEBATE_START_REAUTH_REQUIRED" -> DebateFailure.REAUTH_REQUIRED
+              "DEBATE_START_REAUTH_REQUIRED", "DEBATE_CONTROL_REAUTH_REQUIRED" -> DebateFailure.REAUTH_REQUIRED
               // A known guild removal invalidates saved reads; a channel-only denial does not.
               "GUILD_MEMBERSHIP_REQUIRED" -> DebateFailure.AUTH_REQUIRED
               else -> DebateFailure.FORBIDDEN
@@ -166,6 +217,7 @@ internal class DebateRequestsClient(private val engine: HttpClientEngine = OkHtt
 
   override fun close() { client.close(); engine.close() }
   @Serializable private class Start(val requestId: String, val question: String, val attachmentIds: List<String> = emptyList())
+  @Serializable private class Control(val operationId: String, val attemptToken: String)
   @Serializable private class ErrorEnvelope(val error: ErrorBody)
   @Serializable private class ErrorBody(val code: String)
 }

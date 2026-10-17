@@ -19,7 +19,12 @@ from shittim_chest.application.ports import (
     RepositoryIdentityConflict,
     RepositoryQuotaExceeded,
 )
-from shittim_chest.application.scale_to_zero import IngressClaimFence, IngressRequest, IngressStatus
+from shittim_chest.application.scale_to_zero import (
+    IngressClaimFence,
+    IngressKind,
+    IngressRequest,
+    IngressStatus,
+)
 from shittim_chest.domain import AttemptId, DebateId, DebateState
 
 NOW = datetime(2026, 10, 4, tzinfo=UTC)
@@ -92,6 +97,57 @@ async def test_replay_owner_isolation_and_public_pagination(
         TableName=dynamodb_table, Key=marshal_item({"PK": "CONTROL#INGRESS", "SK": "COUNTER"})
     )
     assert unmarshal_item(counter["Item"])["count"] == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", [IngressKind.CANCEL, IngressKind.RETRY])
+async def test_mobile_controls_replay_by_operation_and_stay_out_of_request_history(
+    kind: IngressKind, dynamodb_client: DynamoDBClient, dynamodb_table: str
+) -> None:
+    repository = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
+    original = (await repository.enqueue_mobile(request(1))).request
+    assert original.mobile_request_id is not None
+    control = IngressRequest.mobile_control(
+        request_id="11111111-2222-4333-8444-55555555555a",
+        target_request_id=original.mobile_request_id,
+        owner_key=OWNER,
+        kind=kind,
+        application_id=original.application_id,
+        requester_id=original.requester_id,
+        requester_username=original.requester_username,
+        requester_display_name=original.requester_display_name,
+        guild_id=original.guild_id,
+        channel_id="thread-id",
+        parent_channel_id=original.channel_id,
+        source_message_id="panel-message-id",
+        source_thread_id="thread-id",
+        target_debate_id=DebateId.new(),
+        expected_attempt_id=AttemptId.new(),
+        custom_id=f"shittim:v1:{kind.value}:operation",
+        created_at=NOW + timedelta(seconds=1),
+    )
+    first = await repository.enqueue_mobile(control)
+    replay = await repository.enqueue_mobile(control)
+    assert first.created and not replay.created
+    assert first.request == replay.request
+    assert control.mobile_request_id is not None
+    assert (
+        await repository.get_mobile_request(owner_key=OWNER, request_id=control.mobile_request_id)
+        == first.request
+    )
+    assert (
+        await repository.get_mobile_request(
+            owner_key="b" * 43, request_id=control.mobile_request_id
+        )
+        is None
+    )
+    assert (await repository.list_mobile_requests(owner_key=OWNER, since=NOW)).requests == (
+        original,
+    )
+    with pytest.raises(RepositoryIdentityConflict):
+        await repository.enqueue_mobile(
+            replace(control, mobile_target_request_id=request(2).mobile_request_id)
+        )
 
 
 @pytest.mark.asyncio

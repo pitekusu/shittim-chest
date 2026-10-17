@@ -1366,6 +1366,7 @@ def serialize_ingress_request(request: IngressRequest) -> DynamoItem:
         item["source"] = request.source.value
         _put_optional(item, "owner_key", request.owner_key)
         _put_optional(item, "mobile_request_id", request.mobile_request_id)
+        _put_optional(item, "mobile_target_request_id", request.mobile_target_request_id)
         _put_optional(item, "history_after_snowflake", request.history_after_snowflake)
     return _validated_item(item)
 
@@ -1420,6 +1421,7 @@ def deserialize_ingress_request(raw_item: Mapping[str, DynamoValue]) -> IngressR
             source=IngressSource(_optional_text(item, "source") or IngressSource.DISCORD.value),
             owner_key=_optional_text(item, "owner_key"),
             mobile_request_id=_optional_text(item, "mobile_request_id"),
+            mobile_target_request_id=_optional_text(item, "mobile_target_request_id"),
             history_after_snowflake=_optional_text(item, "history_after_snowflake"),
         )
     except ValueError as error:

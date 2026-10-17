@@ -485,7 +485,7 @@ class DynamoDbIngressRepository:
             actions.append(
                 self._put_new(serialize_ingress_semantic_binding(_binding_for_request(request)))
             )
-        if request.source is IngressSource.MOBILE:
+        if request.source is IngressSource.MOBILE and request.kind is IngressKind.NEW_DEBATE:
             actions.append(self._put_new(_mobile_owner_pointer(request)))
         session_index = None
         write_floor = len(actions) - 1
@@ -614,6 +614,7 @@ class DynamoDbIngressRepository:
             if (
                 request is None
                 or request.source is not IngressSource.MOBILE
+                or request.kind is not IngressKind.NEW_DEBATE
                 or request.owner_key != owner_key
                 or pointer != _mobile_owner_pointer(request)
             ):
@@ -2974,6 +2975,7 @@ def _assert_common_identity(
         incoming.source,
         incoming.owner_key,
         incoming.mobile_request_id,
+        incoming.mobile_target_request_id,
         incoming.operation_id,
         incoming.kind,
         incoming.application_id,
@@ -3000,6 +3002,7 @@ def _assert_common_identity(
         persisted.source,
         persisted.owner_key,
         persisted.mobile_request_id,
+        persisted.mobile_target_request_id,
         persisted.operation_id,
         persisted.kind,
         persisted.application_id,

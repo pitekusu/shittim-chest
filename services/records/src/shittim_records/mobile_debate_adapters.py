@@ -12,7 +12,7 @@ from shittim_chest.adapters.dynamodb.ingress import DynamoDbIngressRepository
 from shittim_chest.adapters.dynamodb.serializer import SUPPORTED_SCHEMA_VERSIONS
 from shittim_chest.application.ports import MobileIngressSessionInvalid
 from shittim_chest.application.scale_to_zero import EnqueuedIngress, IngressRequest
-from shittim_chest.domain import DebatePhase
+from shittim_chest.domain import AttemptId, DebatePhase
 
 from shittim_records.archive import ARCHIVE_SCHEMA_VERSION, derive_record_key
 from shittim_records.auth import AuthFailure
@@ -186,9 +186,20 @@ class DynamoMobileDebateRepository:
             raise DebateRequestFailure("DEBATE_REQUESTS_UNAVAILABLE", 503)
         try:
             phase = DebatePhase(meta["current_phase"])
+            attempt_id = AttemptId.parse(meta["current_attempt_id"])
             updated = datetime.fromisoformat(meta["updated_at"])
             if updated.tzinfo is None or updated.utcoffset() is None:
                 raise ValueError
+            for name in ("thread_id", "control_panel_message_id"):
+                value = meta.get(name)
+                if value is not None and (
+                    not isinstance(value, str)
+                    or not value.isascii()
+                    or not value.isdecimal()
+                    or not 0 < int(value) < 2**64
+                    or str(int(value)) != value
+                ):
+                    raise ValueError
         except ValueError, TypeError, KeyError:
             raise DebateRequestFailure("DEBATE_REQUESTS_UNAVAILABLE", 503) from None
         record_id = None
@@ -206,7 +217,14 @@ class DynamoMobileDebateRepository:
                 ):
                     raise DebateRequestFailure("DEBATE_REQUESTS_UNAVAILABLE", 503)
                 record_id = public_id
-        return DebateProgress(phase, updated, record_id)
+        return DebateProgress(
+            phase,
+            updated,
+            record_id,
+            attempt_id,
+            meta.get("thread_id"),
+            meta.get("control_panel_message_id"),
+        )
 
     def _get(self, table: str, pk: str) -> dict[str, Any] | None:
         # META-only projection is mirrored by IAM's allowed attribute boundary.
@@ -221,6 +239,9 @@ class DynamoMobileDebateRepository:
                 "guild_id",
                 "channel_id",
                 "current_phase",
+                "current_attempt_id",
+                "thread_id",
+                "control_panel_message_id",
                 "updated_at",
             )
             if table == self._source

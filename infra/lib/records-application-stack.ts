@@ -1989,7 +1989,8 @@ export class RecordsApplicationStack extends Stack {
     ];
     const sourceMetaFields = [
       "PK", "SK", "schema_version", "record_type", "debate_id", "requester_id",
-      "guild_id", "channel_id", "current_phase", "updated_at",
+      "guild_id", "channel_id", "current_phase", "current_attempt_id", "thread_id",
+      "control_panel_message_id", "updated_at",
     ];
     const runtimeParameterName = `/shittim-chest/production/runtime/${legacyRuntimeConfigVersion.valueAsString}`;
     this.mobileDebateFunction = this.httpFunctionWithRole({
@@ -2170,6 +2171,9 @@ export class RecordsApplicationStack extends Stack {
     );
     api.addRoutes({ path: "/api/v1/debate-requests", methods: [apigatewayv2.HttpMethod.GET, apigatewayv2.HttpMethod.POST], integration: mobileDebateIntegration });
     api.addRoutes({ path: "/api/v1/debate-requests/{requestId}", methods: [apigatewayv2.HttpMethod.GET], integration: mobileDebateIntegration });
+    api.addRoutes({ path: "/api/v1/debate-requests/{requestId}/cancel", methods: [apigatewayv2.HttpMethod.POST], integration: mobileDebateIntegration });
+    api.addRoutes({ path: "/api/v1/debate-requests/{requestId}/retry", methods: [apigatewayv2.HttpMethod.POST], integration: mobileDebateIntegration });
+    api.addRoutes({ path: "/api/v1/debate-requests/{requestId}/operations/{operationId}", methods: [apigatewayv2.HttpMethod.GET], integration: mobileDebateIntegration });
     api.addRoutes({ path: "/api/v1/debate-attachments/uploads", methods: [apigatewayv2.HttpMethod.POST], integration: mobileDebateIntegration });
     api.addRoutes({ path: "/api/v1/debate-attachments/uploads/{attachmentId}", methods: [apigatewayv2.HttpMethod.GET], integration: mobileDebateIntegration });
     api.addRoutes({ path: "/api/v1/debate-attachments/uploads/{attachmentId}/complete", methods: [apigatewayv2.HttpMethod.POST], integration: mobileDebateIntegration });

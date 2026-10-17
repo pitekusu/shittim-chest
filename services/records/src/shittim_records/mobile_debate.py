@@ -11,19 +11,27 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 
-from shittim_chest.application.discord import DiscordBotSlot, DiscordRuntimeConfig
+from shittim_chest.application.discord import (
+    DiscordBotSlot,
+    DiscordRuntimeConfig,
+    PanelAction,
+    PanelCustomId,
+)
 from shittim_chest.application.ports import RepositoryIdentityConflict, RepositoryQueueFull
 from shittim_chest.application.scale_to_zero import (
     EnqueuedIngress,
+    IngressKind,
     IngressRequest,
     IngressStatus,
     StatusMessageState,
 )
-from shittim_chest.domain import DebatePhase
+from shittim_chest.domain import AttemptId, DebatePhase
 
 from shittim_records.archive import derive_requester_key
 from shittim_records.auth import AuthFailure, _digest
 from shittim_records.contracts import (
+    DebateControlRequest,
+    DebateControlResponse,
     DebateRequestResponse,
     DebateRequestsResponse,
     DebateRequestStatus,
@@ -46,6 +54,9 @@ class DebateProgress:
     phase: DebatePhase | None = None
     updated_at: datetime | None = None
     record_id: str | None = None
+    attempt_id: AttemptId | None = None
+    thread_id: str | None = None
+    control_panel_message_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -318,11 +329,181 @@ class MobileDebateService:
     async def get(self, *, token: str | None, request_id: str) -> DebateRequestResponse:
         session = self._authenticate(token)
         request = await self._repository.get(owner_key=session.requester_key, request_id=request_id)
-        if request is None:
+        if request is None or request.kind is not IngressKind.NEW_DEBATE:
             raise DebateRequestFailure("DEBATE_REQUEST_NOT_FOUND", 404)
         response = self._view(request)
         self._still_authorized(token, session)
         return response
+
+    async def control(
+        self,
+        *,
+        token: str | None,
+        request_id: str,
+        action: PanelAction,
+        payload: DebateControlRequest,
+    ) -> DebateControlResponse:
+        session = self._authenticate(token)
+        request = await self._owned_request(session, request_id)
+        existing = await self._repository.get(
+            owner_key=session.requester_key, request_id=payload.operation_id
+        )
+        if existing is not None:
+            if not self._matches_control(request, existing, action, payload):
+                raise DebateRequestFailure("REQUEST_ID_CONFLICT", 409)
+            response = self._operation_view(request, existing)
+            self._still_authorized(token, session)
+            return response
+
+        # Reuse the start/upload permission gate; ownership never grants a
+        # manage-messages override, and no client Discord identity is accepted.
+        session = await self.authenticate_upload(token)
+        progress = self._repository.progress(request)
+        if progress.attempt_id is None or not hmac.compare_digest(
+            payload.attempt_token, self._attempt_token(request, progress.attempt_id)
+        ):
+            raise DebateRequestFailure("DEBATE_CONTROL_STALE", 409)
+        if (
+            request.accepted_debate_id is None
+            or progress.thread_id is None
+            or progress.control_panel_message_id is None
+            or request.guild_id != self._runtime.guild_id
+            or request.channel_id != self._channel_id
+            or request.requester_id != session.discord_user_id
+            or (
+                action is PanelAction.CANCEL
+                and (progress.phase is None or progress.phase.is_terminal)
+            )
+            or (action is PanelAction.RETRY and progress.phase is not DebatePhase.FAILED)
+        ):
+            raise DebateRequestFailure("DEBATE_CONTROL_NOT_ALLOWED", 409)
+        operation = IngressRequest.mobile_control(
+            request_id=payload.operation_id,
+            target_request_id=request_id,
+            owner_key=session.requester_key,
+            kind=IngressKind(action.value),
+            application_id=request.application_id,
+            requester_id=request.requester_id,
+            requester_username=request.requester_username,
+            requester_display_name=request.requester_display_name,
+            guild_id=request.guild_id,
+            channel_id=progress.thread_id,
+            parent_channel_id=request.channel_id,
+            source_thread_id=progress.thread_id,
+            source_message_id=progress.control_panel_message_id,
+            target_debate_id=request.accepted_debate_id,
+            expected_attempt_id=progress.attempt_id,
+            custom_id=PanelCustomId.for_attempt(
+                debate_id=request.accepted_debate_id,
+                attempt_id=progress.attempt_id,
+                action=action,
+            ).encode(),
+            created_at=self._clock(),
+        )
+        try:
+            accepted = await self._repository.enqueue(
+                operation,
+                session_hash=_digest(self._session_key, "mobile-session", token or ""),
+                session=session,
+                now=self._clock(),
+            )
+        except RepositoryQueueFull:
+            raise DebateRequestFailure("DEBATE_QUEUE_FULL", 429) from None
+        except RepositoryIdentityConflict:
+            # A concurrent same-ID POST won. Resolve its immutable binding via
+            # the same replay path instead of manufacturing another operation.
+            existing = await self._repository.get(
+                owner_key=session.requester_key, request_id=payload.operation_id
+            )
+            if existing is None or not self._matches_control(request, existing, action, payload):
+                raise DebateRequestFailure("REQUEST_ID_CONFLICT", 409) from None
+            response = self._operation_view(request, existing)
+            self._still_authorized(token, session)
+            return response
+        response = self._operation_view(request, accepted.request)
+        self._still_authorized(token, session)
+        return response
+
+    async def get_operation(
+        self, *, token: str | None, request_id: str, operation_id: str
+    ) -> DebateControlResponse:
+        session = self._authenticate(token)
+        request = await self._owned_request(session, request_id)
+        operation = await self._repository.get(
+            owner_key=session.requester_key, request_id=operation_id
+        )
+        if operation is None or operation.mobile_target_request_id != request_id:
+            raise DebateRequestFailure("DEBATE_OPERATION_NOT_FOUND", 404)
+        response = self._operation_view(request, operation)
+        self._still_authorized(token, session)
+        return response
+
+    async def _owned_request(self, session: MobileSessionRecord, request_id: str) -> IngressRequest:
+        request = await self._repository.get(owner_key=session.requester_key, request_id=request_id)
+        if request is None or request.kind is not IngressKind.NEW_DEBATE:
+            raise DebateRequestFailure("DEBATE_REQUEST_NOT_FOUND", 404)
+        return request
+
+    def _attempt_token(self, request: IngressRequest, attempt_id: AttemptId) -> str:
+        return hmac.new(
+            self._session_key,
+            (
+                f"mobile-debate:attempt:{request.owner_key}:{request.mobile_request_id}:"
+                f"{request.accepted_debate_id}:{attempt_id}"
+            ).encode(),
+            hashlib.sha256,
+        ).hexdigest()
+
+    def _matches_control(
+        self,
+        request: IngressRequest,
+        operation: IngressRequest,
+        action: PanelAction,
+        payload: DebateControlRequest,
+    ) -> bool:
+        return (
+            operation.kind.value == action.value
+            and operation.mobile_target_request_id == request.mobile_request_id
+            and operation.target_debate_id == request.accepted_debate_id
+            and operation.requester_id == request.requester_id
+            and operation.guild_id == request.guild_id
+            and operation.parent_channel_id == request.channel_id
+            and operation.expected_attempt_id is not None
+            and hmac.compare_digest(
+                payload.attempt_token, self._attempt_token(request, operation.expected_attempt_id)
+            )
+        )
+
+    def _operation_view(
+        self, request: IngressRequest, operation: IngressRequest
+    ) -> DebateControlResponse:
+        if (
+            operation.mobile_request_id is None
+            or operation.kind not in {IngressKind.CANCEL, IngressKind.RETRY}
+            or (
+                operation.target_debate_id != request.accepted_debate_id
+                or operation.requester_id != request.requester_id
+                or operation.guild_id != request.guild_id
+                or operation.parent_channel_id != request.channel_id
+            )
+        ):
+            raise DebateRequestFailure("DEBATE_OPERATION_NOT_FOUND", 404)
+        status = "accepted"
+        error_code = None
+        response = self._view(request)
+        if operation.status in {IngressStatus.REJECTED, IngressStatus.FAILED}:
+            status, error_code = "failed", "DEBATE_CONTROL_FAILED"
+        elif operation.status in {IngressStatus.ACCEPTED, IngressStatus.COMPLETED}:
+            status = "completed"
+        if status == "accepted":
+            response = response.model_copy(update={"can_cancel": False, "can_retry": False})
+        return DebateControlResponse(
+            operation_id=operation.mobile_request_id,
+            action=operation.kind.value,
+            status=status,
+            error_code=error_code,
+            request=response,
+        )
 
     async def list(
         self,
@@ -370,19 +551,21 @@ class MobileDebateService:
             status = "published"
         elif progress.phase is DebatePhase.CANCELLED:
             status, error_code = "cancelled", "DEBATE_CANCELLED"
-        elif request.status in {IngressStatus.REJECTED, IngressStatus.FAILED}:
-            status = "failed"
-            error_code = (
-                "DEBATE_REJECTED" if request.status is IngressStatus.REJECTED else "DEBATE_FAILED"
-            )
         elif progress.phase is DebatePhase.FAILED:
             status, error_code = "failed", "DEBATE_FAILED"
-        elif progress.phase is DebatePhase.COMPLETED or request.status is IngressStatus.COMPLETED:
+        elif progress.phase is DebatePhase.COMPLETED:
             status = "publishing"
         elif progress.phase is not None and progress.phase is not DebatePhase.ACCEPTED:
             status = "running"
         elif progress.phase is DebatePhase.ACCEPTED or request.status is IngressStatus.ACCEPTED:
             status = "queued"
+        elif request.status in {IngressStatus.REJECTED, IngressStatus.FAILED}:
+            status = "failed"
+            error_code = (
+                "DEBATE_REJECTED" if request.status is IngressStatus.REJECTED else "DEBATE_FAILED"
+            )
+        elif request.status is IngressStatus.COMPLETED:
+            status = "publishing"
         elif (
             request.status_message_state is StatusMessageState.STARTING
             and request.status_message_id is not None
@@ -404,4 +587,26 @@ class MobileDebateService:
             updated_at=max(request.updated_at, progress.updated_at or request.updated_at),
             record_id=progress.record_id,
             error_code=error_code,
+            attempt_token=None
+            if progress.attempt_id is None
+            else self._attempt_token(request, progress.attempt_id),
+            can_cancel=(
+                self._control_available(request, progress)
+                and progress.phase is not None
+                and not progress.phase.is_terminal
+            ),
+            can_retry=(
+                self._control_available(request, progress) and progress.phase is DebatePhase.FAILED
+            ),
+        )
+
+    def _control_available(self, request: IngressRequest, progress: DebateProgress) -> bool:
+        return (
+            self._enabled
+            and request.guild_id == self._runtime.guild_id
+            and request.channel_id == self._channel_id
+            and request.channel_id in self._runtime.allowed_channel_ids
+            and progress.attempt_id is not None
+            and progress.thread_id is not None
+            and progress.control_panel_message_id is not None
         )

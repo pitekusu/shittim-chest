@@ -61,6 +61,7 @@ class MetadataClient:
             "guild_id": GUILD,
             "channel_id": CHANNEL,
             "current_phase": "completed",
+            "current_attempt_id": str(request.accepted_attempt_id),
             "updated_at": (NOW + timedelta(seconds=1)).isoformat(),
         }
         self.archive = None
@@ -299,3 +300,27 @@ def test_rest_guard_uses_sdk_roles_overwrites_and_bot_permissions(monkeypatch, m
         with pytest.raises(DebateRequestFailure, match=expected):
             asyncio.run(guard.check(requester_id=USER))
     assert calls == ["login"]  # Never Client.start/connect: no second Gateway connection.
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("current_attempt_id", "invalid"),
+        ("thread_id", "001"),
+        ("control_panel_message_id", str(2**64)),
+        ("thread_id", 123),
+    ],
+)
+def test_control_context_fails_closed_for_invalid_saved_identity(field, value):
+    owned = request()
+    client = MetadataClient(owned)
+    client.meta[field] = value
+    repo = DynamoMobileDebateRepository(
+        client=cast("DynamoDBClient", client),
+        source_table="source",
+        session_table="sessions",
+        archive_table="archive",
+        identity_key=KEY,
+    )
+    with pytest.raises(DebateRequestFailure, match="DEBATE_REQUESTS_UNAVAILABLE"):
+        repo.progress(owned)

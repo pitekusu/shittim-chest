@@ -256,6 +256,9 @@ internal fun AdaptiveRecordsUi(
             onResult = { state.eventSink(BootstrapScreen.Event.OpenDebateResult(it)) },
             onReauth = { state.eventSink(BootstrapScreen.Event.ReauthenticateDebate) },
             onNew = { state.eventSink(BootstrapScreen.Event.NewDebateDraft) },
+            onControl = { state.eventSink(BootstrapScreen.Event.ControlDebate(route.requestId, it)) },
+            onCheck = { state.eventSink(BootstrapScreen.Event.CheckDebateControl(route.requestId)) },
+            onResend = { state.eventSink(BootstrapScreen.Event.ResendDebateControl(route.requestId)) },
             demo = state.demoEntryId != null,
             modifier = Modifier.widthIn(max = 760.dp).align(Alignment.TopCenter))
         }

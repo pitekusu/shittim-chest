@@ -13,11 +13,14 @@ import io.ktor.utils.io.readBuffer
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.io.IOException
 
 @RunWith(AndroidJUnit4::class)
 class DebateRequestsClientTest {
   private val id = "11111111-2222-4333-8444-abcdefabcdef"
   private val token = "t".repeat(43)
+  private val operation = "99999999-2222-4333-8444-abcdefabcdef"
+  private val attempt = "a".repeat(64)
   private val headers = headersOf(HttpHeaders.ContentType, "application/json")
   private fun receipt(status: String = "queued") = """{"requestId":"$id","question":"架空の相談","status":"$status","phase":null,"createdAt":"2026-10-04T00:00:00Z","updatedAt":"2026-10-04T00:00:00Z","recordId":null,"errorCode":null}"""
 
@@ -86,6 +89,61 @@ class DebateRequestsClientTest {
         try { client.submit(token, id, "架空の相談"); fail("denial accepted") }
         catch (error: DebateRequestException) { assertEquals(expected, error.failure) }
       }
+    }
+  }
+
+  @Test fun controlPostAndOperationLookupUseTheBoundAttemptAndOneShotBody() = runBlocking {
+    var calls = 0
+    DebateRequestsClient(MockEngine { request ->
+      calls++
+      assertEquals("Bearer $token", request.headers[HttpHeaders.Authorization])
+      assertFalse(request.headers.contains(HttpHeaders.Cookie))
+      assertEquals("no-store", request.headers[HttpHeaders.CacheControl])
+      if (calls == 1) {
+        assertEquals("POST", request.method.value)
+        assertEquals("/api/v1/debate-requests/$id/cancel", request.url.encodedPath)
+        val body = (request.body as OutgoingContent.ReadChannelContent).readFrom()
+          .readBuffer().readByteArray().decodeToString()
+        assertEquals("""{"operationId":"$operation","attemptToken":"$attempt"}""", body)
+      } else {
+        assertEquals("GET", request.method.value)
+        assertEquals("/api/v1/debate-requests/$id/operations/$operation", request.url.encodedPath)
+      }
+      respond("""{"operationId":"$operation","action":"cancel","status":"accepted","errorCode":null,"request":${receipt()}}""",
+        HttpStatusCode.Accepted, headers)
+    }).use { client ->
+      assertEquals("accepted", client.control(token, id, "cancel", operation, attempt).status)
+      assertEquals(operation, client.findControl(token, id, operation)?.operationId)
+    }
+    assertEquals(2, calls)
+  }
+
+  @Test fun controlTransportFailureDoesNotReplayAndMismatchedOperationIsRejected() = runBlocking<Unit> {
+    var calls = 0
+    DebateRequestsClient(MockEngine { calls++; throw IOException("synthetic_connection_failure") }).use { client ->
+      try { client.control(token, id, "cancel", operation, attempt); fail("transport accepted") }
+      catch (error: DebateRequestException) { assertEquals(DebateFailure.UNAVAILABLE, error.failure) }
+    }
+    assertEquals(1, calls)
+    DebateRequestsClient(MockEngine {
+      respond("""{"operationId":"$id","action":"retry","status":"completed","request":${receipt()}}""",
+        headers = headers)
+    }).use { client ->
+      try { client.control(token, id, "cancel", operation, attempt); fail("mismatched operation accepted") }
+      catch (error: DebateRequestException) { assertEquals(DebateFailure.INVALID_RESPONSE, error.failure) }
+    }
+  }
+
+  @Test fun pendingOperationLookupDistinguishesMissingFromPermissionDenial() = runBlocking<Unit> {
+    var calls = 0
+    DebateRequestsClient(MockEngine {
+      val missing = calls++ == 0
+      respond("""{"error":{"code":"${if (missing) "DEBATE_OPERATION_NOT_FOUND" else "DEBATE_CONTROL_REAUTH_REQUIRED"}"}}""",
+        if (missing) HttpStatusCode.NotFound else HttpStatusCode.Forbidden, headers)
+    }).use { client ->
+      assertNull(client.findControl(token, id, operation))
+      try { client.control(token, id, "retry", operation, attempt); fail("permission denial accepted") }
+      catch (error: DebateRequestException) { assertEquals(DebateFailure.REAUTH_REQUIRED, error.failure) }
     }
   }
 }

@@ -224,6 +224,39 @@ def test_control_conversion_fails_closed_on_inconsistent_source_context() -> Non
         command_from_ingress(replace(control_request(IngressKind.CANCEL), channel_id="other"))
 
 
+@pytest.mark.parametrize("kind", [IngressKind.CANCEL, IngressKind.RETRY])
+def test_mobile_control_uses_existing_owner_command_and_source_validation(
+    kind: IngressKind,
+) -> None:
+    source = control_request(kind)
+    request = IngressRequest.mobile_control(
+        request_id="11111111-2222-4333-8444-55555555555a",
+        target_request_id="11111111-2222-4333-8444-55555555555b",
+        owner_key="a" * 43,
+        kind=kind,
+        application_id=source.application_id,
+        requester_id=source.requester_id,
+        requester_username=source.requester_username,
+        requester_display_name=source.requester_display_name,
+        guild_id=source.guild_id,
+        channel_id="thread-id",
+        parent_channel_id="channel-id",
+        source_message_id="panel-message-id",
+        source_thread_id="thread-id",
+        target_debate_id=DebateId.new(),
+        expected_attempt_id=AttemptId.new(),
+        custom_id=f"shittim:v1:{kind.value}:operation",
+        created_at=NOW,
+    )
+    command = command_from_ingress(request)
+    assert isinstance(command, RetryDebateCommand | CancelDebateCommand)
+    assert command.actor_id == source.requester_id
+    assert command.operation_id == request.operation_id
+    assert not command.can_manage_messages
+    with pytest.raises(InvalidApplicationOperation, match="source context"):
+        command_from_ingress(replace(request, channel_id="other"))
+
+
 @pytest.mark.parametrize(
     "changes",
     [

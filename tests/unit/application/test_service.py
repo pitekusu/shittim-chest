@@ -25,7 +25,10 @@ from shittim_chest.application import (
     DiscordDeliveryTarget,
     GenerationProviderError,
     IngressClaimFence,
+    IngressCommandAdapter,
     IngressKind,
+    IngressRequest,
+    IngressStatus,
     InvalidApplicationOperation,
     OutboxRecoveryAbandoned,
     OutboxRecoveryFailed,
@@ -1488,6 +1491,89 @@ async def test_cancel_is_authorized_idempotent_and_terminal(
     assert cancelled == repeated
     assert repository.current[accepted.debate_id].state.phase is DebatePhase.CANCELLED
     assert repository.current[accepted.debate_id].terminal_delivery_complete
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", [IngressKind.CANCEL, IngressKind.RETRY])
+async def test_mobile_control_applies_existing_use_case_with_operation_and_claim_fences(
+    dependencies: Dependencies, kind: IngressKind
+) -> None:
+    app = make_application(dependencies)
+    clock, ids, _, _, _, _, repository, _ = dependencies
+    accepted = await accept_bound_debate(app)
+    source = repository.current[accepted.debate_id]
+    if kind is IngressKind.RETRY:
+        failed = replace(
+            source,
+            state=source.state.transition_to(DebatePhase.FAILED, at=clock.now()),
+            error_code="test_failure",
+        )
+        await repository.replace(expected=source, updated=failed)
+    created_at = clock.now()
+    control = IngressRequest.mobile_control(
+        request_id="11111111-2222-4333-8444-55555555555a",
+        target_request_id="11111111-2222-4333-8444-55555555555b",
+        owner_key="a" * 43,
+        kind=kind,
+        application_id="application-id",
+        requester_id=source.requester_id,
+        requester_username=source.requester_username,
+        requester_display_name=source.requester_display_name,
+        guild_id=source.guild_id,
+        channel_id="102",
+        parent_channel_id=source.channel_id,
+        source_message_id="103",
+        source_thread_id="102",
+        target_debate_id=accepted.debate_id,
+        expected_attempt_id=accepted.attempt_id,
+        custom_id=f"shittim:v1:{kind.value}:operation",
+        created_at=created_at,
+    )
+    claimed = replace(
+        control,
+        status=IngressStatus.CLAIMED,
+        claim_owner="worker-1",
+        claim_expires_at=created_at + timedelta(minutes=2),
+        delivery_attempt=1,
+    )
+    adapter = IngressCommandAdapter(app)
+    before = repository.current[accepted.debate_id]
+    with pytest.raises(RepositoryConflict, match="no longer owned"):
+        await adapter.apply(claimed, claim_owner="other-worker", at=clock.now())
+    assert repository.current[accepted.debate_id] == before
+    assert claimed.operation_id not in repository.operations
+
+    applied = await adapter.apply(claimed, claim_owner="worker-1", at=clock.now())
+    repeated = await adapter.apply(claimed, claim_owner="worker-1", at=clock.now())
+    assert repeated == applied
+    assert applied.kind is kind and applied.debate_id == accepted.debate_id
+    fences = [claim for claim in repository.ingress_claims if claim is not None]
+    assert fences
+    assert all(
+        claim.interaction_id == claimed.interaction_id
+        and claim.operation_id == claimed.operation_id
+        and claim.kind is kind
+        and claim.claim_owner == "worker-1"
+        and claim.delivery_attempt == 1
+        and claim.write_at < claim.claim_expires_at
+        for claim in fences
+    )
+    current = repository.current[accepted.debate_id]
+    assert repository.operations[claimed.operation_id].state.attempt_id == applied.attempt_id
+    if kind is IngressKind.CANCEL:
+        assert applied.attempt_id == accepted.attempt_id
+        assert current.terminal_delivery is not None
+        assert current.terminal_delivery.target_phase is DebatePhase.CANCELLED
+        await app.run_debate(accepted.debate_id)
+        assert repository.current[accepted.debate_id].state.phase is DebatePhase.CANCELLED
+        assert len(ids.attempt_ids) == 1
+    else:
+        assert applied.attempt_id != accepted.attempt_id
+        assert current.state.phase is DebatePhase.ACCEPTED
+        assert current.state.retry_of == accepted.attempt_id
+        assert current.state.attempt_id == applied.attempt_id
+        assert current.origin_ingress_interaction_id == claimed.interaction_id
+        assert len(ids.attempt_ids) == 2
 
 
 @pytest.mark.asyncio
