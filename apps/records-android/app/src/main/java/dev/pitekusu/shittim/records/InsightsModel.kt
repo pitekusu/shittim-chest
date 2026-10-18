@@ -199,4 +199,3 @@ internal class InsightsModel(
 
   override fun onCleared() { endSession() }
 }
-
