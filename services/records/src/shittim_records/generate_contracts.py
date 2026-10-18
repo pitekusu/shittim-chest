@@ -720,6 +720,7 @@ def build_openapi() -> dict[str, Any]:
             "/api/v1/insights/rankings": {
                 "get": {
                     "operationId": "getRankings",
+                    "security": [{"sessionCookie": []}, {"mobileBearer": []}],
                     "responses": {
                         "200": _response("RankingsResponse", "Current Records rankings"),
                         **error_responses,
@@ -729,6 +730,7 @@ def build_openapi() -> dict[str, Any]:
             "/api/v1/insights/affection-rankings": {
                 "get": {
                     "operationId": "getAffectionRankings",
+                    "security": [{"sessionCookie": []}, {"mobileBearer": []}],
                     "parameters": [
                         _parameter(
                             "view",
@@ -788,6 +790,7 @@ def build_openapi() -> dict[str, Any]:
             "/api/v1/insights/costs": {
                 "get": {
                     "operationId": "getCosts",
+                    "security": [{"sessionCookie": []}, {"mobileBearer": []}],
                     "parameters": [
                         _parameter(
                             "period",

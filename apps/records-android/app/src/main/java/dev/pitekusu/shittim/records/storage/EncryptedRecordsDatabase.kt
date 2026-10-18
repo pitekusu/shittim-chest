@@ -38,6 +38,9 @@ internal interface EncryptedRecordDao {
   @Query("DELETE FROM encrypted_records WHERE account_key = :accountKey AND record_id IN (:recordIds)")
   suspend fun deleteRecords(accountKey: String, recordIds: List<String>)
 
+  @Query("DELETE FROM encrypted_records WHERE account_key = :accountKey AND part = :part AND record_id IN (:recordIds)")
+  suspend fun deletePartRecords(accountKey: String, part: String, recordIds: List<String>)
+
   @Query("DELETE FROM encrypted_records WHERE account_key = :accountKey")
   suspend fun deleteAccount(accountKey: String)
 

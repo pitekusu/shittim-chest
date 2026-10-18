@@ -18,7 +18,7 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class RuntimeDiscoveryTest {
   @Test fun everyRouteSurvivesTheSavedStateSerializerUsedByRememberNavBackStack() {
-    val original = NavBackStack<NavKey>(RecordsList, DebateCompose, DebateRequests,
+    val original = NavBackStack<NavKey>(RecordsList, Insights, DebateCompose, DebateRequests,
       DebateRequestStatus("00000000-0000-4000-8000-000000000000"), RecordDetail("a".repeat(43)))
     // Concrete route serializers are intentionally not supplied here. Navigation 3 resolves them
     // from runtime class information, including objects and classes with a companion serializer.

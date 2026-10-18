@@ -273,6 +273,13 @@ internal fun AdaptiveRecordsUi(
             }
           }) + ListDetailSceneStrategy.preferredPaneSize(width = 400.dp)) { listContent.value() }
           entry<RecordDetail>(metadata = ListDetailSceneStrategy.detailPane()) { detailContent.value(it) }
+          entry<Insights> {
+            ShittimBackdrop(Modifier.fillMaxSize()) {
+              InsightsScreen(currentState.value.insights, { event ->
+                currentState.value.eventSink(BootstrapScreen.Event.InsightsAction(event))
+              }, Modifier.fillMaxSize(), showAppBar = false)
+            }
+          }
           entry<DebateCompose> { composeContent.value() }
           entry<DebateRequests> { requestsContent.value() }
           entry<DebateRequestStatus> { statusContent.value(it) }

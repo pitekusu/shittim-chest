@@ -272,9 +272,9 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     return RecordAvatar(url, avatar.fallbackVariant)
   }
 
-  suspend fun avatar(url: String): ByteArray? {
+  suspend fun avatar(url: String, allowParticipants: Boolean = false): ByteArray? {
     // S3 is a separate, credential-free transport boundary; never attach Bearer/Cookies.
-    if (!validStoredAvatarUrl(url)) throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+    if (!validStoredAvatarUrl(url, allowParticipants)) throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
     return try {
       client.prepareGet(url) { header(HttpHeaders.CacheControl, "no-store") }.execute { response ->
         when (response.status.value) {
@@ -492,7 +492,7 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
   } catch (_: Exception) { false }
 
   private suspend inline fun <reified T> read(
-    path: String, accessToken: String, cursor: String? = null, contract: String? = null,
+    path: String, accessToken: String, cursor: String? = null, contract: String? = null, insights: Boolean = false,
   ): T {
     try {
       val response = client.get("$RECORDS_ORIGIN$path") {
@@ -511,6 +511,15 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
           throw RecordReadException(if (error.error.code == "CURSOR_INVALID")
             RecordReadFailure.CURSOR_INVALID else RecordReadFailure.INVALID_RESPONSE)
         }
+        503 -> {
+          if (insights) {
+            val error = try { response.body<RecordErrorResponse>() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { null }
+            if (error?.error?.code == "INSIGHTS_UNAVAILABLE") throw InsightsException(InsightsFailure.PREPARING)
+          }
+          throw RecordReadException(RecordReadFailure.UNAVAILABLE)
+        }
         429, in 500..599 -> throw RecordReadException(RecordReadFailure.UNAVAILABLE)
         else -> throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
       }
@@ -520,6 +529,8 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
       return response.body()
     } catch (error: CancellationException) {
       throw error
+    } catch (error: InsightsException) {
+      throw error
     } catch (error: RecordReadException) {
       throw error
     } catch (_: IOException) {
@@ -527,6 +538,42 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     } catch (_: Exception) {
       throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
     }
+  }
+
+  suspend fun insightsRankings(accessToken: String): InsightsRankings =
+    insightRead("/api/v1/insights/rankings", accessToken) { it.validate() }
+
+  suspend fun insightsParticipants(accessToken: String, cursor: String? = null): InsightsAffectionPage =
+    insightRead("/api/v1/insights/affection-rankings?limit=50", accessToken, cursor) {
+      it.validate(); check(it.nextCursor != cursor || cursor == null)
+    }
+
+  suspend fun insightsRequesters(accessToken: String, cursor: String? = null): InsightsRequesterPage =
+    insightRead("/api/v1/insights/affection-rankings?view=requesters&limit=10", accessToken, cursor) {
+      it.validate(); check(it.nextCursor != cursor || cursor == null)
+    }
+
+  suspend fun insightsCosts(accessToken: String, period: InsightsPeriod): InsightsCosts =
+    insightRead("/api/v1/insights/costs?period=${period.wireValue}", accessToken) {
+      it.validate(); check(it.period == period)
+    }
+
+  private suspend inline fun <reified T> insightRead(path: String, token: String, cursor: String? = null,
+    validate: (T) -> Unit): T {
+    if (!mobileOpaqueValue.matches(token)) throw InsightsException(InsightsFailure.AUTH_REQUIRED)
+    if (cursor != null && !validInsightCursor(cursor)) throw InsightsException(InsightsFailure.INVALID_RESPONSE)
+    try {
+      return read<T>(path, token, cursor, insights = true).also(validate)
+    } catch (error: CancellationException) { throw error }
+    catch (error: InsightsException) { throw error }
+    catch (error: RecordReadException) {
+      throw InsightsException(when (error.failure) {
+        RecordReadFailure.AUTH_REQUIRED -> InsightsFailure.AUTH_REQUIRED
+        RecordReadFailure.UNAVAILABLE -> InsightsFailure.UNAVAILABLE
+        RecordReadFailure.CURSOR_INVALID -> InsightsFailure.CURSOR_INVALID
+        else -> InsightsFailure.INVALID_RESPONSE
+      })
+    } catch (_: Exception) { throw InsightsException(InsightsFailure.INVALID_RESPONSE) }
   }
 
   override fun close() {

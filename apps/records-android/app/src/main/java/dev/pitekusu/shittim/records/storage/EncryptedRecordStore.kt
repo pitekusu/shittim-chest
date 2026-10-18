@@ -12,7 +12,9 @@ import kotlinx.coroutines.withContext
 
 internal enum class CachedRecordPart(val code: String) {
   LIST("list"), DETAIL("detail"), SYNC_PROGRESS("sync-progress"), AVATAR("avatar"), REVISION("revision"),
-  DEBATE_WORKSPACE("debate-workspace"), DEMO_SANDBOX("demo-sandbox")
+  DEBATE_WORKSPACE("debate-workspace"), DEMO_SANDBOX("demo-sandbox"),
+  INSIGHTS_RANKINGS("insights-rankings"), INSIGHTS_AFFECTION("insights-affection"),
+  INSIGHTS_REQUESTERS("insights-requesters"), INSIGHTS_COSTS("insights-costs"), INSIGHTS_AVATAR("insights-avatar")
 }
 
 internal class RecordCacheException : Exception("record_cache_unavailable")
@@ -81,6 +83,12 @@ internal class EncryptedRecordStore(
     recordIds.forEach { validateIds(accountId, it) }
     // Stay below SQLite's bind-variable limit; each delete removes list and detail together.
     recordIds.chunked(200).forEach { database.records().deleteRecords(accountKey(accountId), it) }
+  }
+
+  /** Dedicated feature parts must never prune another consumer's encrypted rows. */
+  suspend fun deletePartRecords(accountId: String, part: CachedRecordPart, recordIds: Collection<String>): Unit = guarded {
+    recordIds.forEach { validateIds(accountId, it) }
+    recordIds.chunked(200).forEach { database.records().deletePartRecords(accountKey(accountId), part.code, it) }
   }
 
   /** Removes ciphertext only; account lifecycle coordinates Keystore key invalidation. */

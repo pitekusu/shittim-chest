@@ -57,7 +57,14 @@ REDIRECT_HEADERS = {
     "X-Content-Type-Options": "nosniff",
 }
 MOBILE_READ_ROUTES = frozenset(
-    {"GET /api/v1/records", "GET /api/v1/records/{recordId}", "GET /api/v1/records/sync-index"}
+    {
+        "GET /api/v1/records",
+        "GET /api/v1/records/{recordId}",
+        "GET /api/v1/records/sync-index",
+        "GET /api/v1/insights/rankings",
+        "GET /api/v1/insights/affection-rankings",
+        "GET /api/v1/insights/costs",
+    }
 )
 MAX_SEARCH_BODY_BYTES = 16 * 1024
 

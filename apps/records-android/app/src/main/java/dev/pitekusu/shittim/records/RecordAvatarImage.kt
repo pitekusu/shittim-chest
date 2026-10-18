@@ -19,12 +19,13 @@ internal fun requesterAvatarInitial(name: String): String {
   return text.substring(0, boundary)
 }
 
-internal fun validStoredAvatarUrl(url: String): Boolean = try {
+internal fun validStoredAvatarUrl(url: String, allowParticipants: Boolean = false): Boolean = try {
   val uri = URI(url)
   url.length <= 4096 && uri.scheme == "https" && uri.port in listOf(-1, 443) &&
     uri.userInfo == null && uri.fragment == null &&
     Regex("[a-z0-9.-]+\\.s3(?:\\.ap-northeast-1)?\\.amazonaws\\.com").matches(uri.host.orEmpty()) &&
-    uri.rawPath.startsWith("/requesters/") && uri.normalize().rawPath == uri.rawPath
+    (uri.rawPath.startsWith("/requesters/") || (allowParticipants && uri.rawPath.startsWith("/participants/"))) &&
+    uri.normalize().rawPath == uri.rawPath
 } catch (_: Exception) { false }
 
 // Ignore signature/expiry parameters; an unchanged icon is never downloaded again.

@@ -7502,7 +7502,15 @@
             },
             "description": "Records service unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "mobileBearer": []
+          }
+        ]
       }
     },
     "/api/v1/insights/costs": {
@@ -7606,7 +7614,15 @@
             },
             "description": "Records service unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "mobileBearer": []
+          }
+        ]
       }
     },
     "/api/v1/insights/rankings": {
@@ -7693,7 +7709,15 @@
             },
             "description": "Records service unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "mobileBearer": []
+          }
+        ]
       }
     },
     "/api/v1/logout": {
