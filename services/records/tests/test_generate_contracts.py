@@ -53,11 +53,19 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
         ("get", "/api/v1/records"),
         ("get", "/api/v1/records/sync-index"),
         ("get", "/api/v1/records/{recordId}"),
+        ("get", "/api/v1/insights/rankings"),
+        ("get", "/api/v1/insights/affection-rankings"),
+        ("get", "/api/v1/insights/costs"),
         ("get", "/api/v1/auth/mobile/session"),
         ("post", "/api/v1/auth/mobile/logout"),
         ("put", "/api/v1/auth/mobile/notifications/device"),
         ("delete", "/api/v1/auth/mobile/notifications/device"),
     }
+    for route in ("rankings", "affection-rankings", "costs"):
+        assert openapi["paths"][f"/api/v1/insights/{route}"]["get"]["security"] == [
+            {"sessionCookie": []},
+            {"mobileBearer": []},
+        ]
     mobile_paths = {path for path in openapi["paths"] if "/auth/mobile/" in path}
     assert mobile_paths == {
         f"/api/v1/auth/mobile/{name}"

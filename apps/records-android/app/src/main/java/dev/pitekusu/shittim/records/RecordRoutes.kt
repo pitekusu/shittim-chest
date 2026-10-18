@@ -10,6 +10,9 @@ import kotlinx.serialization.Serializable
 internal data object RecordsList : NavKey
 
 @Serializable
+internal data object Insights : NavKey
+
+@Serializable
 internal data object DebateCompose : NavKey
 
 @Serializable
@@ -28,6 +31,7 @@ internal data class RecordDetail(val recordId: String) : NavKey {
 // Preserve the existing list + one detail behavior, including links received in two-pane mode.
 internal fun NavBackStack<NavKey>.openRecord(recordId: String) {
   val detail = RecordDetail(recordId)
+  if (lastOrNull() == Insights) removeLastOrNull()
   if (lastOrNull() == detail) return
   if (size > 1) this[lastIndex] = detail else add(detail)
 }

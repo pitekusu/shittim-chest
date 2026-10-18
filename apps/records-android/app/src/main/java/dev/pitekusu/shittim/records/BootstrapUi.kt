@@ -99,7 +99,11 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
       var playedSections by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
       LaunchedEffect(state.canReadRecords) { if (!state.canReadRecords) menuOpen = false }
       Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding()) {
-        if (state.canReadRecords) RecordsAppBar(onMenuClick = { menuOpen = true })
+        if (state.canReadRecords) {
+          if (state.backStack.lastOrNull() == Insights) InsightsAppBar(state.insights) {
+            state.eventSink(BootstrapScreen.Event.InsightsAction(it))
+          } else RecordsAppBar(onMenuClick = { menuOpen = true })
+        }
         if (state.demoEntryId != null) ReviewDemoBanner()
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
           val listScrollState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }

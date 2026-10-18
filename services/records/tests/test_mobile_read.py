@@ -46,20 +46,51 @@ def read():
 
 
 @pytest.mark.parametrize(
-    "route",
-    ["GET /api/v1/records", "GET /api/v1/records/{recordId}", "GET /api/v1/records/sync-index"],
+    "route,query",
+    [
+        ("GET /api/v1/records", ""),
+        ("GET /api/v1/records/{recordId}", ""),
+        ("GET /api/v1/records/sync-index", ""),
+        ("GET /api/v1/insights/rankings", ""),
+        ("GET /api/v1/insights/affection-rankings", ""),
+        ("GET /api/v1/insights/affection-rankings", "view=requesters&limit=10"),
+        *(
+            ("GET /api/v1/insights/costs", f"period={period}")
+            for period in ("today", "week", "month", "all")
+        ),
+    ],
 )
-def test_cookie_and_bearer_return_the_same_public_records_without_cookies(read, route):
+def test_cookie_and_bearer_return_the_same_public_reads_without_cookies(read, route, query):
     controller, store, _records = read
     path = {"recordId": "r" * 43}
-    cookie = controller.handle(event(route, cookies=COOKIE, path=path), now=NOW)
-    bearer = controller.handle(event(route, headers=BEARER, path=path), now=NOW)
+    cookie = controller.handle(event(route, query=query, cookies=COOKIE, path=path), now=NOW)
+    bearer = controller.handle(event(route, query=query, headers=BEARER, path=path), now=NOW)
     assert bearer == cookie and bearer["statusCode"] == 200
     assert bearer["headers"]["Cache-Control"] == "private, no-store"
     assert "cookies" not in bearer
     assert TOKEN not in bearer["body"] and DIGEST not in bearer["body"]
     assert store.reads == [DIGEST]
     assert len(store.sessions) == 1 and not store.deleted
+
+
+@pytest.mark.parametrize(
+    "route,query",
+    [
+        ("GET /api/v1/insights/rankings", "unexpected=value"),
+        ("GET /api/v1/insights/affection-rankings", "limit=1&limit=2"),
+        ("GET /api/v1/insights/affection-rankings", "view=requesters&view=participants"),
+        ("GET /api/v1/insights/affection-rankings", "view=unknown"),
+        ("GET /api/v1/insights/costs", "period=week&period=all"),
+        ("GET /api/v1/insights/costs", "period=week&internal=true"),
+    ],
+)
+def test_insights_bearer_auth_preserves_query_validation(read, route, query):
+    controller, store, _records = read
+    assert controller.handle(event(route, query=query), now=NOW)["statusCode"] == 401
+    bearer = controller.handle(event(route, query=query, headers=BEARER), now=NOW)
+    cookie = controller.handle(event(route, query=query, cookies=COOKIE), now=NOW)
+    assert bearer == cookie and bearer["statusCode"] == 400
+    assert store.reads == [DIGEST]
 
 
 def test_sync_index_requires_auth_and_rejects_unknown_or_duplicate_parameters(read):
@@ -87,11 +118,20 @@ def test_sync_index_requires_auth_and_rejects_unknown_or_duplicate_parameters(re
         ({**BEARER, "Cookie": COOKIE[0]}, [], 400),
     ],
 )
-def test_mixed_or_malformed_credentials_never_fall_back_to_cookie(read, headers, cookies, status):
+@pytest.mark.parametrize(
+    "route",
+    [
+        "GET /api/v1/records",
+        "GET /api/v1/insights/rankings",
+        "GET /api/v1/insights/affection-rankings",
+        "GET /api/v1/insights/costs",
+    ],
+)
+def test_mixed_or_malformed_credentials_never_fall_back_to_cookie(
+    read, headers, cookies, status, route
+):
     controller, store, records = read
-    response = controller.handle(
-        event("GET /api/v1/records", headers=headers, cookies=cookies), now=NOW
-    )
+    response = controller.handle(event(route, headers=headers, cookies=cookies), now=NOW)
     assert response["statusCode"] == status
     assert response["headers"]["Cache-Control"] == "private, no-store"
     assert TOKEN not in response["body"]
@@ -115,7 +155,18 @@ def test_bearer_scheme_is_case_insensitive_and_query_validation_is_unchanged(rea
 
 
 @pytest.mark.parametrize("state", ["expired", "deleted", "corrupt"])
-def test_mobile_revocation_expiry_and_corruption_never_read_records(read, state, monkeypatch):
+@pytest.mark.parametrize(
+    "route",
+    [
+        "GET /api/v1/records",
+        "GET /api/v1/insights/rankings",
+        "GET /api/v1/insights/affection-rankings",
+        "GET /api/v1/insights/costs",
+    ],
+)
+def test_mobile_revocation_expiry_and_corruption_never_read_records(
+    read, state, monkeypatch, route
+):
     controller, store, records = read
     if state == "expired":
         controller._clock = lambda: datetime.fromtimestamp(store.sessions[DIGEST].expires_at, UTC)
@@ -127,7 +178,7 @@ def test_mobile_revocation_expiry_and_corruption_never_read_records(read, state,
             raise AuthFailure("mobile_session_record_invalid")
 
         monkeypatch.setattr(store, "get_session", corrupt)
-    response = controller.handle(event("GET /api/v1/records", headers=BEARER), now=NOW)
+    response = controller.handle(event(route, headers=BEARER), now=NOW)
     assert response["statusCode"] == (503 if state == "corrupt" else 401)
     assert records.list_query is None
     assert json.loads(response["body"])["error"]["code"] == (
@@ -138,7 +189,9 @@ def test_mobile_revocation_expiry_and_corruption_never_read_records(read, state,
 @pytest.mark.parametrize(
     "route",
     [
-        "GET /api/v1/insights/rankings",
+        "GET /api/v1/records/requesters",
+        "POST /api/v1/records/search",
+        "POST /api/v1/insights/rankings",
         "GET /api/v1/momotalk/weeks",
         "GET /api/v1/admin/status",
         "POST /api/v1/admin/prompts/apply",

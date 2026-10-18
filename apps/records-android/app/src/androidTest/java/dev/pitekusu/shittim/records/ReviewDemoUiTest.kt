@@ -1,6 +1,9 @@
 package dev.pitekusu.shittim.records
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
@@ -83,6 +86,28 @@ class ReviewDemoUiTest {
     compose.waitUntil(10_000) { compose.onAllNodesWithTag("review-demo-enter").fetchSemanticsNodes().isNotEmpty() }
     compose.onNodeWithTag("review-demo-banner").assertDoesNotExist()
     enter()
+  }
+
+  @Test fun nativeInsightsUsesFictionalDataKeepsTabsOnRotationAndReturnsToTheSameDetail() {
+    enter()
+    val question = DemoFixtures.records.first().entry.questionPreview
+    compose.onNodeWithText(question).performScrollTo().performClick()
+    compose.waitUntil(10_000) { compose.onAllNodesWithTag("detail-question-open").fetchSemanticsNodes().isNotEmpty() }
+    compose.onNodeWithTag("records-menu-open").performClick()
+    compose.onNodeWithTag("insights-open").performScrollTo().performClick()
+    compose.waitUntil(10_000) { compose.onAllNodesWithTag("insights-screen").fetchSemanticsNodes().isNotEmpty() }
+    compose.onNodeWithTag("insights-tab-Affection").assertIsSelected()
+    compose.onNodeWithTag("insights-content").performScrollToNode(hasText("1000 / 1000"))
+    compose.onNodeWithText("1000 / 1000").assertIsDisplayed()
+    compose.onNodeWithTag("insights-tab-Costs").performClick()
+    compose.onNodeWithTag("insights-tab-Costs").assertIsSelected()
+    compose.activityRule.scenario.recreate()
+    compose.onNodeWithTag("insights-tab-Costs").assertIsSelected()
+    compose.onNodeWithTag("review-demo-banner").assertIsDisplayed()
+    back()
+    compose.waitUntil(10_000) { compose.onAllNodesWithTag("detail-question-open").fetchSemanticsNodes().isNotEmpty() }
+    compose.onNodeWithTag("detail-question-open").assertIsDisplayed()
+    compose.onNodeWithTag("insights-screen").assertDoesNotExist()
   }
 
   private fun enter() {

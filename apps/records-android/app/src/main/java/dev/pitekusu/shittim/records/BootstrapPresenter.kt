@@ -6,7 +6,9 @@ import kotlin.coroutines.cancellation.CancellationException
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -69,6 +71,7 @@ internal data object BootstrapScreen : Screen {
     val debateImages: List<RecordImagePresentation> = emptyList(),
     val demoEntryId: String? = null,
     val publicPageError: Boolean = false,
+    val insights: InsightsUiState = InsightsUiState(),
     val eventSink: (Event) -> Unit,
   ) : CircuitUiState
 
@@ -108,6 +111,8 @@ internal data object BootstrapScreen : Screen {
     data class ResendDebateControl(val requestId: String) : Event
     data object ReauthenticateDebate : Event
     data object NewDebateDraft : Event
+    data object ShowInsights : Event
+    data class InsightsAction(val action: InsightsEvent) : Event
     data object ShowDebateRequests : Event
     data class OpenDebateRequest(val requestId: String) : Event
     data object LoadMoreDebateRequests : Event
@@ -161,7 +166,7 @@ internal class BootstrapPresenter(
       val id = demoDestination ?: return@LaunchedEffect
       if (demo != null && runtime.consumeDemoRecord(id)) backStack.openRecord(id)
     }
-    val selectedRoute = backStack.lastOrNull() as? RecordDetail
+    val selectedRoute = backStack.lastOrNull { it is RecordDetail } as? RecordDetail
     val selectedRecordId = selectedRoute?.recordId.takeIf { cacheAccountId != null }
     val context = LocalContext.current
     val signedIn = sessionState is SessionState.SignedIn
@@ -177,6 +182,28 @@ internal class BootstrapPresenter(
     }
     val launcher = rememberLauncherForActivityResult(MobileLoginContract()) { session?.loginResult(it) }
     val modelOwner = requireNotNull(LocalViewModelStoreOwner.current)
+    var insightsSelection by remember(cacheAccountId) { mutableStateOf(InsightsSelection()) }
+    val insightsModel = remember(cacheAccountId, cachePermit, modelOwner) {
+      cacheAccountId?.let { owner ->
+        val factory = viewModelFactory { initializer {
+          createInsightsModel(context.applicationContext, runtime, owner, cachePermit, insightsSelection)
+        } }
+        ViewModelProvider(modelOwner.viewModelStore, factory)[
+          "insights-${runtime.demoEntryId ?: System.identityHashCode(cachePermit)}", InsightsModel::class.java]
+      }
+    }
+    DisposableEffect(insightsModel) {
+      val expectedPermit = cachePermit
+      onDispose {
+        if (cacheAccountId == null || !runtime.isActive(cacheAccountId) ||
+          (demo == null && session?.cachePermit?.value !== expectedPermit)) insightsModel?.endSession()
+      }
+    }
+    val insights = key(insightsModel) { insightsModel?.state?.collectAsState()?.value ?: InsightsUiState() }
+    SideEffect { if (cacheAccountId != null && runtime.isActive(cacheAccountId)) insightsSelection = insights.selection() }
+    LaunchedEffect(insightsModel, backStack.lastOrNull() == Insights, debateOnline) {
+      if (backStack.lastOrNull() == Insights) insightsModel?.beginVisit(debateOnline)
+    }
     val debateModel = remember(cacheAccountId, modelOwner) {
       cacheAccountId?.let { owner ->
         val factory = viewModelFactory { initializer {
@@ -501,7 +528,7 @@ internal class BootstrapPresenter(
       loginCompletion = loginCompletion, backStack = backStack.toList(), recordOwner = cacheAccountId,
       debate = debate, debateStatus = debateStatus, debateHistory = debateHistory,
       debateOnline = debateOnline, debateImages = debateImages, demoEntryId = runtime.demoEntryId,
-      publicPageError = publicPageError) { event ->
+      publicPageError = publicPageError, insights = insights) { event ->
       when (event) {
         is BootstrapScreen.Event.SelectTheme -> themeChoice = event.choice
         BootstrapScreen.Event.EnterDemo -> runtime.enterDemo()
@@ -594,6 +621,16 @@ internal class BootstrapPresenter(
             backStack.closeRecord()
             backStack.add(DebateCompose)
           }
+        }
+        BootstrapScreen.Event.ShowInsights -> if (cacheAccountId != null && runtime.isActive(cacheAccountId) &&
+          stackOwner == cacheAccountId && session?.pendingDestination?.value == null && backStack.lastOrNull() != Insights) {
+          if (backStack.lastOrNull() == DebateCompose) debateModel?.flush { backStack.add(Insights) }
+          else backStack.add(Insights)
+        }
+        is BootstrapScreen.Event.InsightsAction -> if (cacheAccountId != null && runtime.isActive(cacheAccountId) &&
+          stackOwner == cacheAccountId && backStack.lastOrNull() == Insights) {
+          if (event.action == InsightsEvent.Back) backStack.removeLastOrNull()
+          else insightsModel?.event(event.action)
         }
         BootstrapScreen.Event.ShowDebateRequests -> if (cacheAccountId != null && runtime.isActive(cacheAccountId)) {
           val show = { backStack.closeRecord(); backStack.add(DebateRequests); Unit }
