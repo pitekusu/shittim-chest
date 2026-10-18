@@ -17,6 +17,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -41,8 +43,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
@@ -72,6 +76,12 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlinx.coroutines.flow.filterNotNull
+
+private data class InsightsPage(val tab: InsightsTab, val participant: String? = null)
+
+private fun InsightsUiState.page() = InsightsPage(tab,
+  participant.takeIf { tab == InsightsTab.Affection && view == InsightsAffectionView.Participants })
 
 /** Only navigation choices and list positions enter saved state; rankings stay in authorized memory. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -79,48 +89,107 @@ import java.util.Locale
 internal fun InsightsScreen(state: InsightsUiState, onEvent: (InsightsEvent) -> Unit,
   modifier: Modifier = Modifier, showAppBar: Boolean = true) {
   val largeText = LocalDensity.current.fontScale >= 1.5f
-  val active = state.activeResource()
   val scrollStates = rememberSaveableStateHolder()
+  // A single finite pager lets the final persona lead naturally into the next tab.
+  val pages = buildList {
+    if (state.view == InsightsAffectionView.Participants) {
+      INSIGHTS_PARTICIPANTS.forEach { add(InsightsPage(InsightsTab.Affection, it)) }
+    } else add(InsightsPage(InsightsTab.Affection))
+    add(InsightsPage(InsightsTab.Rankings))
+    add(InsightsPage(InsightsTab.Costs))
+  }
+  val selection = state.page()
+  val currentPages by rememberUpdatedState(pages)
+  val pager = rememberPagerState(initialPage = pages.indexOf(selection), pageCount = { currentPages.size })
+  val currentState by rememberUpdatedState(state)
+  val sendEvent by rememberUpdatedState(onEvent)
+  var requestedPage by remember { mutableStateOf<InsightsPage?>(null) }
+  var appliedSelection by remember { mutableStateOf<Pair<InsightsAffectionView, InsightsPage>?>(null) }
+  fun select(event: InsightsEvent) {
+    requestedPage = when (event) {
+      is InsightsEvent.Tab -> state.copy(tab = event.value).page()
+      is InsightsEvent.Participant -> state.copy(participant = event.value).page()
+      is InsightsEvent.View -> state.copy(view = event.value).page()
+      else -> requestedPage
+    }
+    sendEvent(event)
+  }
+  LaunchedEffect(pages, selection, requestedPage) {
+    val target = state.view to selection
+    if (requestedPage != null && requestedPage != selection && appliedSelection == target) return@LaunchedEffect
+    // Direct choices skip intermediate tabs and respect disabled animations.
+    pager.scrollToPage(pages.indexOf(selection))
+    appliedSelection = target
+    // A newer model choice also acknowledges mixed controls pressed before the next frame.
+    requestedPage = null
+  }
+  LaunchedEffect(pager) {
+    // Only a settled swipe opens content. Prefetch, restoration and cancelled drags do not fetch.
+    snapshotFlow {
+      currentPages.getOrNull(pager.settledPage).takeIf {
+        !pager.isScrollInProgress && requestedPage == null &&
+          appliedSelection == (currentState.view to currentState.page())
+      }
+    }.filterNotNull().collect { page ->
+      if (page != currentState.page()) {
+        requestedPage = page
+        page.participant?.takeIf { it != currentState.participant }?.let {
+          sendEvent(InsightsEvent.Participant(it))
+        }
+        if (page.tab != currentState.tab) sendEvent(InsightsEvent.Tab(page.tab))
+      }
+    }
+  }
   Surface(modifier.fillMaxSize().testTag("insights-screen"), color = MaterialTheme.colorScheme.background,
     contentColor = MaterialTheme.colorScheme.onBackground) {
     Column(Modifier.fillMaxSize()) {
       if (showAppBar) InsightsAppBar(state, onEvent)
       val tabs: @Composable () -> Unit = {
         InsightsTab.entries.forEach { tab ->
-          Tab(selected = state.tab == tab, onClick = { onEvent(InsightsEvent.Tab(tab)) },
+          Tab(selected = state.tab == tab, onClick = { select(InsightsEvent.Tab(tab)) },
             modifier = Modifier.heightIn(min = 56.dp).testTag("insights-tab-${tab.name}"),
             text = { Text(stringResource(tab.title()), maxLines = 1, softWrap = false) })
         }
       }
       if (largeText) PrimaryScrollableTabRow(selectedTabIndex = state.tab.ordinal, edgePadding = 0.dp, tabs = tabs)
       else PrimaryTabRow(selectedTabIndex = state.tab.ordinal, tabs = tabs)
-      BoxWithConstraints(Modifier.fillMaxSize()) {
+      BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
         val wide = maxWidth >= 840.dp && !largeText
-        // Keys contain finite UI choices, never names, API cursors or decrypted response text.
-        val scrollKey = when (state.tab) {
-          InsightsTab.Affection -> if (state.view == InsightsAffectionView.Participants)
-            "affection-person-${state.participant}" else "affection-requester-${state.requesterPage}"
-          InsightsTab.Rankings -> "rankings"
-          InsightsTab.Costs -> "costs-${state.period.name}"
-        }
-        scrollStates.SaveableStateProvider(scrollKey) {
-          // Wait for decrypted cache restoration before consuming the saved list position.
-          val savedListState = rememberLazyListState()
-          val listState = if (active.data != null) savedListState else remember { LazyListState() }
-          val generation = state.generation()?.let { "$it|${active.revision}" }
-          var displayedGeneration by remember { mutableStateOf(generation) }
-          LaunchedEffect(generation) {
-            if (generation != null && displayedGeneration != null && generation != displayedGeneration) {
-              listState.scrollToItem(0)
-            }
-            displayedGeneration = generation
+        HorizontalPager(pager, Modifier.fillMaxSize().testTag("insights-pager"),
+          // A 5-to-3 page change can briefly retain requests for old lazy-layout indices.
+          key = { index -> pages.getOrNull(index)?.let { "${it.tab}:${it.participant}" } ?: "removed-$index" }) { page ->
+          val entry = pages.getOrNull(page) ?: return@HorizontalPager
+          val pageState = state.copy(tab = entry.tab, participant = entry.participant ?: state.participant)
+          val active = pageState.activeResource()
+          val selectedPage = pager.settledPage == page
+          // Keys contain finite UI choices, never names, API cursors or decrypted response text.
+          val scrollKey = when (pageState.tab) {
+            InsightsTab.Affection -> if (pageState.view == InsightsAffectionView.Participants)
+              "affection-person-${pageState.participant}" else "affection-requester-${pageState.requesterPage}"
+            InsightsTab.Rankings -> "rankings"
+            InsightsTab.Costs -> "costs-${pageState.period.name}"
           }
-          LazyColumn(state = listState, modifier = Modifier.fillMaxSize().testTag("insights-content"),
-            contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            when (state.tab) {
-              InsightsTab.Affection -> affectionContent(state, wide, onEvent)
-              InsightsTab.Rankings -> rankingsContent(state, wide, onEvent)
-              InsightsTab.Costs -> costsContent(state, wide, onEvent)
+          scrollStates.SaveableStateProvider(scrollKey) {
+            // Wait for decrypted cache restoration before consuming the saved list position.
+            val savedListState = rememberLazyListState()
+            val listState = if (active.data != null) savedListState else remember { LazyListState() }
+            val generation = pageState.generation()?.let { "$it|${active.revision}" }
+            var displayedGeneration by remember { mutableStateOf(generation) }
+            LaunchedEffect(generation) {
+              if (generation != null && displayedGeneration != null && generation != displayedGeneration) {
+                listState.scrollToItem(0)
+              }
+              displayedGeneration = generation
+            }
+            LazyColumn(state = listState, modifier = Modifier.fillMaxSize()
+              .testTag(if (selectedPage) "insights-content" else "insights-inactive-$page")
+              .then(if (selectedPage) Modifier else Modifier.clearAndSetSemantics {}),
+              contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+              when (pageState.tab) {
+                InsightsTab.Affection -> affectionContent(pageState, wide, ::select)
+                InsightsTab.Rankings -> rankingsContent(pageState, wide, ::select)
+                InsightsTab.Costs -> costsContent(pageState, wide, ::select)
+              }
             }
           }
         }
