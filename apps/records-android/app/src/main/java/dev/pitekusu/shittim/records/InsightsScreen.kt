@@ -60,7 +60,9 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.pitekusu.shittim.records.ui.ShittimParticipantAvatar
 import dev.pitekusu.shittim.records.ui.ShittimProgress
@@ -395,9 +397,9 @@ private fun AffectionRankingCard(entry: InsightsAffectionEntry, participant: Str
 @Composable
 private fun RequesterAffectionCard(requester: InsightsRequester, modifier: Modifier = Modifier) {
   val largeText = LocalDensity.current.fontScale >= 1.5f
-  InsightsCard(modifier.testTag("insights-requester-card")) {
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-      RequesterAvatar(requester.displayName, requester.avatar, size = 40.dp)
+  InsightsCard(modifier.testTag("insights-requester-card"), contentPadding = 12.dp, contentSpacing = 8.dp) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+      RequesterAvatar(requester.displayName, requester.avatar, size = 32.dp)
       if (!largeText) Text(requester.displayName, style = MaterialTheme.typography.titleMediumEmphasized,
         modifier = Modifier.weight(1f).semantics { heading() })
     }
@@ -407,16 +409,40 @@ private fun RequesterAffectionCard(requester: InsightsRequester, modifier: Modif
     participants.forEachIndexed { index, person ->
       if (index > 0) HorizontalDivider()
       val rank = participants.indexOfFirst { it.score == person.score } + 1
-      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-          RankBadge(rank)
-          ShittimParticipantAvatar(person.displayName, person.participant, 32.dp)
-          if (!largeText) Text(person.displayName, style = MaterialTheme.typography.titleSmallEmphasized,
-            modifier = Modifier.weight(1f))
+      RequesterAffectionComparison(person, rank)
+    }
+  }
+}
+
+@Composable
+private fun RequesterAffectionComparison(person: InsightsRequesterParticipant, rank: Int) {
+  val accent = shittimParticipantColor("", person.participant)
+  val summary = stringResource(R.string.insights_requester_person_summary,
+    person.displayName, rank, person.score, person.score / 100, person.resetCount)
+  BoxWithConstraints(Modifier.fillMaxWidth().testTag("insights-requester-person-${person.participant}")
+    .clearAndSetSemantics { contentDescription = summary }) {
+    val separateScore = maxWidth < 280.dp || LocalDensity.current.fontScale >= 1.5f
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+      Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Text(stringResource(R.string.insights_rank, rank), style = MaterialTheme.typography.labelMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant)
+        ShittimParticipantAvatar(person.displayName, person.participant, 24.dp)
+        Text(person.displayName, Modifier.weight(1f), style = MaterialTheme.typography.titleSmallEmphasized)
+        if (!separateScore) Text(stringResource(R.string.insights_score, person.score),
+          style = MaterialTheme.typography.titleSmallEmphasized, color = accent, softWrap = false)
+      }
+      if (separateScore) Text(stringResource(R.string.insights_score, person.score),
+        modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.End,
+        style = MaterialTheme.typography.titleSmallEmphasized, color = accent)
+      FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        AffectionHearts(person.score, person.participant, Modifier.heightIn(min = 20.dp), size = 12.dp, spacing = 2.dp)
+        if (person.resetCount > 0) Row(horizontalArrangement = Arrangement.spacedBy(4.dp),
+          verticalAlignment = Alignment.CenterVertically) {
+          Icon(painterResource(R.drawable.ic_crown), null, Modifier.size(14.dp), tint = accent)
+          Text(stringResource(R.string.insights_crowns, person.resetCount),
+            style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        if (largeText) Text(person.displayName, style = MaterialTheme.typography.titleSmallEmphasized,
-          modifier = Modifier.fillMaxWidth())
-        ScorePresentation(person.score, person.resetCount, person.participant)
       }
     }
   }
@@ -425,22 +451,29 @@ private fun RequesterAffectionCard(requester: InsightsRequester, modifier: Modif
 @Composable
 private fun ScorePresentation(score: Int, resets: Int, participant: String) {
   val accent = shittimParticipantColor("", participant)
-  val heartCount = score / 100
-  val heartsDescription = stringResource(R.string.insights_hearts, heartCount)
   Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
     Text(stringResource(R.string.insights_score, score), style = MaterialTheme.typography.titleLarge,
       color = accent)
-    Row(Modifier.clearAndSetSemantics { contentDescription = heartsDescription },
-      horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-      repeat(10) { index ->
-        Icon(painterResource(R.drawable.ic_detail_heart), null, Modifier.size(18.dp),
-          tint = if (index < heartCount) accent else MaterialTheme.colorScheme.outlineVariant)
-      }
-    }
+    AffectionHearts(score, participant)
     if (resets > 0) Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
       Icon(painterResource(R.drawable.ic_crown), null, Modifier.size(20.dp), tint = accent)
       Text(stringResource(R.string.insights_crowns, resets), style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+  }
+}
+
+@Composable
+private fun AffectionHearts(score: Int, participant: String, modifier: Modifier = Modifier,
+  size: Dp = 18.dp, spacing: Dp = 3.dp) {
+  val accent = shittimParticipantColor("", participant)
+  val heartCount = score / 100
+  val description = stringResource(R.string.insights_hearts, heartCount)
+  Row(modifier.clearAndSetSemantics { contentDescription = description },
+    horizontalArrangement = Arrangement.spacedBy(spacing), verticalAlignment = Alignment.CenterVertically) {
+    repeat(10) { index ->
+      Icon(painterResource(R.drawable.ic_detail_heart), null, Modifier.size(size),
+        tint = if (index < heartCount) accent else MaterialTheme.colorScheme.outlineVariant)
     }
   }
 }
@@ -633,10 +666,11 @@ private fun EmptyInsights() {
 }
 
 @Composable
-private fun InsightsCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+private fun InsightsCard(modifier: Modifier = Modifier, contentPadding: Dp = 16.dp,
+  contentSpacing: Dp = 16.dp, content: @Composable ColumnScope.() -> Unit) {
   Surface(modifier.fillMaxWidth(), shape = MaterialTheme.shapes.large,
     color = MaterialTheme.colorScheme.surfaceContainerLow) {
-    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp), content = content)
+    Column(Modifier.padding(contentPadding), verticalArrangement = Arrangement.spacedBy(contentSpacing), content = content)
   }
 }
 

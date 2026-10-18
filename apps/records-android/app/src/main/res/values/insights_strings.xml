@@ -29,6 +29,7 @@
   <string name="insights_scheduled">定期集計のため、直近の記録がまだ含まれない場合があります。</string>
   <string name="insights_affection_guide">ハート1個は100点。王冠は、この人格を選んでリセットした回数です。</string>
   <string name="insights_requester_guide">名前順に表示します。カード内では、親愛度が高い人格から並びます。</string>
+  <string name="insights_requester_person_summary">%1$s、%2$d位、%3$d / 1000、ハート %4$d / 10、王冠 %5$d回</string>
   <string name="insights_rank">%1$d位</string>
   <string name="insights_score">%1$d / 1000</string>
   <string name="insights_hearts">ハート %1$d / 10</string>
