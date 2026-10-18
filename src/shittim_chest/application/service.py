@@ -975,7 +975,9 @@ class DebateApplication:
                         participant=participant,
                         question=snapshot.question,
                         **image_arguments,
-                    )
+                    ),
+                    snapshot=snapshot,
+                    participant=participant,
                 ),
                 name=f"affection:{participant.value}",
             )
@@ -1013,7 +1015,8 @@ class DebateApplication:
             evidence = await self._within_phase(
                 self._evidence.prepare_evidence(
                     question=snapshot.question, **await self._image_arguments(snapshot)
-                )
+                ),
+                snapshot=snapshot,
             )
         at = self._clock.now()
         if snapshot.deliberation_version >= 1:
@@ -1173,6 +1176,11 @@ class DebateApplication:
         *,
         coordination: bool,
     ) -> DebateSnapshot | None:
+        async def within(
+            operation: Awaitable[DebateSnapshot], participant: ParticipantSlot | None
+        ) -> DebateSnapshot:
+            return await self._within_phase(operation, snapshot=snapshot, participant=participant)
+
         def validate(current: DebateSnapshot) -> None:
             self._require_owned_active_lease(current, at=self._clock.now())
             self._remaining_generation_seconds(current)
@@ -1189,7 +1197,7 @@ class DebateApplication:
                 repository=self._repository,
                 openai=self._openai,
                 clock=self._clock,
-                within=self._within_phase,
+                within=within,
                 validate=validate,
             )
         except GenerationProviderError as error:
@@ -1217,7 +1225,9 @@ class DebateApplication:
                         participant=participant,
                         question=snapshot.question,
                         **await self._image_arguments(snapshot),
-                    )
+                    ),
+                    snapshot=snapshot,
+                    participant=participant,
                 )
             else:
                 frame = snapshot.preference_for(participant)
@@ -1230,7 +1240,9 @@ class DebateApplication:
                         **await self._image_arguments(snapshot),
                         evidence=self._require_evidence(snapshot),
                         preference_frame=frame,
-                    )
+                    ),
+                    snapshot=snapshot,
+                    participant=participant,
                 )
         except GenerationProviderError as error:
             return error.code
@@ -1808,7 +1820,9 @@ class DebateApplication:
                     voting_result=voting_result,
                     affection_score=_affection_score(snapshot, voting_result.winner),
                     preference_frame=snapshot.preference_for(voting_result.winner),
-                )
+                ),
+                snapshot=snapshot,
+                participant=voting_result.winner,
             )
         except asyncio.CancelledError:
             raise
@@ -1959,7 +1973,9 @@ class DebateApplication:
                     affection_score=_affection_score(snapshot, participant),
                     preference_frame=snapshot.preference_for(participant),
                     candidate_plan=snapshot.candidates_for(participant),
-                )
+                ),
+                snapshot=snapshot,
+                participant=participant,
             )
         except GenerationProviderError as error:
             return error.code
@@ -2114,7 +2130,9 @@ class DebateApplication:
                         affection_score=_affection_score(snapshot, participant),
                         preference_frame=snapshot.preference_for(participant),
                         candidate_plan=snapshot.candidates_for(participant),
-                    )
+                    ),
+                    snapshot=snapshot,
+                    participant=participant,
                 )
             except GenerationProviderError as error:
                 return error.code
@@ -2323,7 +2341,9 @@ class DebateApplication:
                     voting_rules_version=snapshot.voting_rules_version,
                     debate_key=str(snapshot.state.debate_id),
                     initial_opinions=snapshot.initial_opinions,
-                )
+                ),
+                snapshot=snapshot,
+                participant=participant,
             )
         except GenerationProviderError as error:
             return error.code
@@ -2406,11 +2426,36 @@ class DebateApplication:
             operations=operations,
         )
 
-    async def _within_phase(self, operation: Awaitable[_T]) -> _T:
+    async def _within_phase(
+        self,
+        operation: Awaitable[_T],
+        *,
+        snapshot: DebateSnapshot,
+        participant: ParticipantSlot | None = None,
+    ) -> _T:
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        deadline = asyncio.timeout(self._phase_timeout_seconds)
         try:
-            async with asyncio.timeout(self._phase_timeout_seconds):
+            async with deadline:
                 return await operation
         except TimeoutError as error:
+            if deadline.expired():
+                _LOGGER.warning(
+                    json.dumps(
+                        {
+                            "severity": "WARNING",
+                            "event": "generation_deadline_exceeded",
+                            "debate_id": str(snapshot.state.debate_id),
+                            "phase": snapshot.state.phase.value,
+                            "participant": participant.value if participant is not None else None,
+                            "timeout_seconds": self._phase_timeout_seconds,
+                            "elapsed_ms": round((loop.time() - started) * 1_000),
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                )
             raise _PhaseDeadlineExceeded from error
 
     async def _advance(

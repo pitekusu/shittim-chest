@@ -17,7 +17,7 @@ from shittim_chest.application.ports import (
     OpenAIService,
     RepositoryConflict,
 )
-from shittim_chest.domain import PARTICIPANTS, InitialOpinion
+from shittim_chest.domain import PARTICIPANTS, InitialOpinion, ParticipantSlot
 from shittim_chest.domain.attachments import ImageInput
 
 
@@ -29,7 +29,9 @@ async def run_reconsideration(
     repository: DebateRepository,
     openai: OpenAIService,
     clock: Clock,
-    within: Callable[[Awaitable[DebateSnapshot]], Awaitable[DebateSnapshot]],
+    within: Callable[
+        [Awaitable[DebateSnapshot], ParticipantSlot | None], Awaitable[DebateSnapshot]
+    ],
     validate: Callable[[DebateSnapshot], None],
 ) -> DebateSnapshot:
     field = "candidate_coordination" if coordination else "opinion_reconsideration"
@@ -64,7 +66,10 @@ async def run_reconsideration(
                 snapshot, **{field: claimed}, state=replace(snapshot.state, updated_at=clock.now())
             ),
         )
-        proposed = await within(_step(snapshot, claimed, coordination, rotation, openai, images))
+        proposed = await within(
+            _step(snapshot, claimed, coordination, rotation, openai, images),
+            None if progress.step == "classify" else participant,
+        )
         current = await repository.get(snapshot.state.debate_id)
         if current is None or (
             current.state.attempt_id != snapshot.state.attempt_id
