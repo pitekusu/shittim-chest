@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
@@ -47,16 +48,19 @@ import androidx.test.platform.app.InstrumentationRegistry
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import coil3.annotation.DelicateCoilApi
+import coil3.compose.AsyncImage
 import coil3.intercept.Interceptor
 import coil3.request.CachePolicy
 import coil3.request.ErrorResult
 import coil3.request.ImageResult
+import coil3.request.ImageRequest
 import com.mikepenz.markdown.model.MarkdownState
 import com.mikepenz.markdown.model.rememberMarkdownState
 import dev.pitekusu.shittim.records.ui.ShittimBackdrop
 import dev.pitekusu.shittim.records.ui.ShittimTheme
 import java.io.File
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.Dispatchers
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
@@ -162,14 +166,22 @@ class RecordMarkdownHighlightTest {
       "==![画像の代替文]($imageUrl)==\n\n表示の最後"
     val opened = mutableListOf<String>()
     val imageRequests = AtomicInteger()
+    val controlRequests = AtomicInteger()
+    val controlErrors = AtomicInteger()
+    val showControl = mutableStateOf(false)
     val context = InstrumentationRegistry.getInstrumentation().targetContext
+    val controlUrl = "https://example.com/markdown-image-control.webp"
+    val controlRequest = ImageRequest.Builder(context).data(controlUrl).size(1).build()
     val previousLoader = SingletonImageLoader.get(context)
     val recordingLoader = ImageLoader.Builder(context)
       .memoryCachePolicy(CachePolicy.DISABLED).diskCachePolicy(CachePolicy.DISABLED)
+      // Keep the non-suspending sentinel on the same main dispatcher as Compose image requests.
+      .interceptorCoroutineContext(Dispatchers.Main.immediate)
       .components {
         add(object : Interceptor {
           override suspend fun intercept(chain: Interceptor.Chain): ImageResult {
             if (chain.request.data.toString() == imageUrl) imageRequests.incrementAndGet()
+            if (chain.request.data.toString() == controlUrl) controlRequests.incrementAndGet()
             // Stop before any network or disk access even if Markdown starts requesting images.
             return ErrorResult(null, chain.request, IllegalStateException("markdown_image_request_forbidden"))
           }
@@ -181,7 +193,12 @@ class RecordMarkdownHighlightTest {
         CompositionLocalProvider(LocalUriHandler provides object : UriHandler {
           override fun openUri(uri: String) { opened += uri }
         }) {
-          Column(Modifier.width(320.dp).verticalScroll(rememberScrollState())) { RecordMarkdown(source) }
+          Column(Modifier.width(320.dp).verticalScroll(rememberScrollState())) {
+            RecordMarkdown(source)
+            if (showControl.value) AsyncImage(model = controlRequest, imageLoader = recordingLoader,
+              contentDescription = null, modifier = Modifier.size(1.dp),
+              onError = { controlErrors.incrementAndGet() })
+          }
         }
       } } }
       for (text in listOf("参考ページ", "拒否リンク", "表示の最後")) waitForText(text)
@@ -190,8 +207,15 @@ class RecordMarkdownHighlightTest {
       for (text in listOf("参考ページ", "拒否リンク")) {
         compose.onAllNodesWithText(text).onFirst().performScrollTo().performClick()
       }
+      // Start the positive control only after Markdown parsing, placement, and link interaction.
+      // Its completed request proves the active loader pipeline ran before the zero-request check.
+      compose.runOnIdle { showControl.value = true }
+      compose.waitUntil(10_000) { controlErrors.get() == 1 }
+      compose.waitForIdle()
+      InstrumentationRegistry.getInstrumentation().waitForIdleSync()
       compose.runOnIdle {
         assertEquals(listOf(url), opened)
+        assertEquals("The image sentinel must observe its positive control", 1, controlRequests.get())
         assertEquals(0, imageRequests.get())
       }
     } finally {
