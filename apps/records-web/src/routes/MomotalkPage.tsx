@@ -494,7 +494,6 @@ function Conversation({
                           setImagePointerEntry(event.detail > 0);
                           setImageMood(item.mood);
                         }}
-                        aria-label={`${names}の画像を拡大`}
                       >
                         <img
                           src={item.thumbnailUrl}

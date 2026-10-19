@@ -137,7 +137,8 @@ describe("App shell", () => {
     expect(screen.queryByRole("heading", { name: "ACCESS DENIED" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: "サービス状態確認" })).toHaveLength(2);
     expect(screen.getAllByRole("link", { name: "プロンプト管理" })).toHaveLength(2);
-    expect(screen.getAllByRole("link", { name: "メモリアルロビー" })).toHaveLength(2);
+    expect(screen.getByRole("link", { name: "メモリアルロビー" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "メモリアル" })).toBeInTheDocument();
     expect(screen.getByText("SYSTEM ACCESS")).toBeVisible();
     expect(requests).toEqual(["/api/v1/session?contract=admin-v1", "/api/v1/admin/status"]);
   });
@@ -164,7 +165,7 @@ describe("App shell", () => {
     expect(initialScene).toHaveAttribute("data-route-motion", "idle");
     expect(initialScene?.parentElement).toHaveAttribute("data-route-kind", "archive");
     expect(
-      await screen.findByRole("link", { name: "「休日の過ごし方を決める」の記録を読む" }),
+      await screen.findByRole("link", { name: /休日の過ごし方を決める.*記録を読む/ }),
     ).toHaveStyle("--route-motion-delay: 60ms");
     expect(archiveHeading).not.toHaveFocus();
 

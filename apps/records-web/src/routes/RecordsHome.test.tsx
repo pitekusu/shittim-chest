@@ -113,6 +113,9 @@ describe("RecordsHome", () => {
       "datetime",
       "2026-08-15T06:00:00Z",
     );
+    expect(card.closest("a")).toHaveAccessibleName(
+      /2026年8月15日 15:00 休日の過ごし方を決める 依頼者\s*依頼者\s*勝者\s*アロナ 記録を読む/,
+    );
     expect(screen.queryByText(/所要時間|Evidence|外部根拠/)).not.toBeInTheDocument();
     expect(requests).toContain(
       "/api/v1/records?limit=12&contract=record-attachments-v1&sort=newest",
@@ -144,20 +147,21 @@ describe("RecordsHome", () => {
     );
     renderRoute(home);
     const oneImage = await screen.findByRole("link", {
-      name: "「記録 0」の記録を読む、画像1枚を添付",
+      name: /記録 0.*記録を読む/,
     });
+    expect(oneImage).toHaveAccessibleName(/画像\s*1枚/);
     expect(within(oneImage).getByText("1枚")).toBeVisible();
     expect(within(oneImage).getByText("1枚").parentElement?.querySelector("svg")).not.toBeNull();
-    expect(
-      screen.getByRole("link", { name: "「記録 1」の記録を読む、画像3枚を添付" }),
-    ).toBeVisible();
-    expect(screen.getByRole("link", { name: "「記録 2」の記録を読む" })).toBeVisible();
-    expect(screen.getByRole("link", { name: "「記録 3」の記録を読む" })).toBeVisible();
+    expect(screen.getByRole("link", { name: /記録 1.*記録を読む/ })).toHaveAccessibleName(
+      /画像\s*3枚/,
+    );
+    expect(screen.getByRole("link", { name: /記録 2.*記録を読む/ })).toBeVisible();
+    expect(screen.getByRole("link", { name: /記録 3.*記録を読む/ })).toBeVisible();
     expect(screen.queryByText("0枚")).not.toBeInTheDocument();
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: "記録" } });
-    expect(
-      await screen.findByRole("link", { name: "「記録 1」の記録を読む、画像3枚を添付" }),
-    ).toBeVisible();
+    expect(await screen.findByRole("link", { name: /記録 1.*記録を読む/ })).toHaveAccessibleName(
+      /画像\s*3枚/,
+    );
     expect(
       vi
         .mocked(fetch)

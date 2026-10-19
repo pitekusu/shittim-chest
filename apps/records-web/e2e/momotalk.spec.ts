@@ -144,7 +144,7 @@ test("replays on opening, supports skip and image save, with accessible responsi
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await posts.first().scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("momotalk-light.png"), fullPage: true });
-  await page.getByRole("button", { name: /画像を拡大/ }).click();
+  await page.getByRole("button", { name: /タップして拡大・保存/ }).click();
   const imageDialog = page.getByRole("dialog");
   await expect(imageDialog).toBeVisible();
   await expect(imageDialog).toHaveAttribute("data-pointer-entry", "true");
@@ -155,7 +155,7 @@ test("replays on opening, supports skip and image save, with accessible responsi
   );
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /画像を拡大/ })).toBeFocused();
+  await expect(page.getByRole("button", { name: /タップして拡大・保存/ })).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(imageDialog).toHaveAttribute("data-pointer-entry", "false");
   await expect(imageDialog).toHaveCSS("transition-duration", "0s");
@@ -185,8 +185,10 @@ test("keeps all qualifying people and their expressions in one selfie", async ({
   await setup(page, [week], [image]);
   const posts = page.getByRole("list", { name: "チャットの発言" }).getByRole("listitem");
   await expect(posts).toHaveCount(10);
-  const trigger = page.getByRole("button", { name: "アロナ・プラナ・安倍晋三AIの画像を拡大" });
-  await expect(page.getByRole("button", { name: /画像を拡大/ })).toHaveCount(1);
+  const trigger = page.getByRole("button", {
+    name: "アロナ・プラナ・安倍晋三AIの自撮り（AI生成） タップして拡大・保存",
+  });
+  await expect(page.getByRole("button", { name: /タップして拡大・保存/ })).toHaveCount(1);
   await expect(
     page.getByText("アロナ：楽しそう / プラナ：嫌そう / 安倍晋三AI：楽しそう"),
   ).toBeVisible();
@@ -223,7 +225,7 @@ test("keeps all qualifying people and their expressions in one selfie", async ({
     await expect(
       page.getByText(state === "failed" ? "画像を生成できませんでした" : "画像を準備しています"),
     ).toBeVisible();
-    await expect(page.getByRole("button", { name: /画像を拡大/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /タップして拡大・保存/ })).toHaveCount(0);
     await expect(page.getByText("アロナ・プラナ・安倍晋三AI", { exact: true })).toBeVisible();
   }
 });
@@ -243,7 +245,11 @@ test("preserves both old single-person photos and their own save targets", async
     page.getByRole("list", { name: "チャットの発言" }).getByRole("listitem"),
   ).toHaveCount(11);
   for (const [index, participant] of participants.slice(0, 2).entries()) {
-    await page.getByRole("button", { name: `${participant.displayName}の画像を拡大` }).click();
+    await page
+      .getByRole("button", {
+        name: `${participant.displayName}の自撮り（AI生成） タップして拡大・保存`,
+      })
+      .click();
     const dialog = page.getByRole("dialog", { name: "モモトークの画像" });
     await expect(dialog.getByRole("img")).toHaveAttribute("src", images[index]!.url!);
     await expect(dialog.getByRole("link", { name: "画像を保存" })).toHaveAttribute(

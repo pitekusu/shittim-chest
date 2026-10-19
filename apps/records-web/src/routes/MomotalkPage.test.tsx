@@ -160,8 +160,11 @@ describe("Momotalk selfies", () => {
       .slice(0, count)
       .map((participant) => participant.displayName)
       .join("・");
-    expect(screen.getAllByRole("button", { name: /画像を拡大/ })).toHaveLength(1);
-    const trigger = screen.getByRole("button", { name: `${names}の画像を拡大` });
+    expect(screen.getAllByRole("button", { name: /タップして拡大・保存/ })).toHaveLength(1);
+    const trigger = screen.getByRole("button", {
+      name: (name) =>
+        name.replaceAll(/\s/gu, "") === `${names}の自撮り（AI生成）タップして拡大・保存`,
+    });
     const expressions = image.subjects
       .map(
         (subject, index) =>
@@ -197,7 +200,11 @@ describe("Momotalk selfies", () => {
     const client = await openConversation(images);
     for (const [index, participant] of conversation.participants.slice(0, 2).entries()) {
       fireEvent.click(
-        screen.getByRole("button", { name: `${participant.displayName}の画像を拡大` }),
+        screen.getByRole("button", {
+          name: (name) =>
+            name.replaceAll(/\s/gu, "") ===
+            `${participant.displayName}の自撮り（AI生成）タップして拡大・保存`,
+        }),
       );
       const dialog = screen.getByRole("dialog", { name: "モモトークの画像" });
       expect(within(dialog).getByRole("img")).toHaveAttribute("src", images[index]!.url);

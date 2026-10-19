@@ -215,7 +215,7 @@ describe("BrandedRouteStage", () => {
       </QueryClientProvider>,
     );
 
-    const recordLabel = `「${record.questionPreview}」の記録を読む`;
+    const recordLabel = new RegExp(`${record.questionPreview}.*記録を読む`);
     fireEvent.click(await screen.findByRole("link", { name: recordLabel }));
     await waitFor(() => expect(screen.getByRole("heading", { name: "議論詳細" })).toHaveFocus());
     await act(async () => {
@@ -245,9 +245,7 @@ describe("BrandedRouteStage", () => {
     });
     await waitFor(() => expect(screen.getByRole("heading", { name: "議論の記録" })).toHaveFocus());
     expect(cachedCard).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("link", { name: "「更新後に追加された記録」の記録を読む" }),
-    ).toBeVisible();
+    expect(screen.getByRole("link", { name: /更新後に追加された記録.*記録を読む/ })).toBeVisible();
     expect(scroll).not.toHaveBeenCalled();
   });
 

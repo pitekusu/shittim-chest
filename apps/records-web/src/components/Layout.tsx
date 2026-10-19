@@ -123,7 +123,7 @@ export function Layout({
     <div className={styles.appShell}>
       <div className={commonStyles.backgroundGrid} aria-hidden="true" />
       <header className={styles.mobileHeader}>
-        <Link className={styles.mobileBrand} to="/" aria-label="記録一覧へ">
+        <Link className={styles.mobileBrand} to="/">
           <BrandMark compact />
           <ProductName />
         </Link>
@@ -281,7 +281,6 @@ export function Layout({
           <span>モモトーク</span>
         </NavLink>
         <NavLink
-          aria-label="メモリアルロビー"
           className={({ isActive }) =>
             `${isActive ? styles.navActive : styles.navLink} ${styles.mobileMemorialLink}`
           }
