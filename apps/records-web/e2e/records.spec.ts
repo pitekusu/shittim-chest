@@ -3455,11 +3455,11 @@ test("record attachments are visible in cards and the question and recover expir
   });
   await page.goto("/");
   let card = page.getByRole("link", { name: detail.question });
-  await expect(card.getByText("3枚", { exact: true })).toBeVisible();
+  await expect(card.getByText(/^画像\s*3枚$/u)).toBeVisible();
   await expect(card.locator("svg")).not.toHaveCount(0);
   await page.getByRole("searchbox").fill("休日");
   card = page.getByRole("link", { name: detail.question });
-  await expect(card.getByText("3枚", { exact: true })).toBeVisible();
+  await expect(card.getByText(/^画像\s*3枚$/u)).toBeVisible();
   expect(imageRequests).toEqual([]);
   await card.click();
   const question = page.getByRole("heading", { level: 1 }).locator("..");
