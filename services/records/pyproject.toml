@@ -23,7 +23,7 @@ dev = [
     "boto3-stubs[ce,dynamodb,ecr,inspector2,s3,sqs,ssm]>=1.43.66,<2",
     "pip-audit>=2.10.1,<3",
     "pytest>=9.1.1,<10",
-    "ruff>=0.16.2,<0.17",
+    "ruff>=0.16.2,<0.18",
     "ty>=0.0.69,<0.1",
 ]
 

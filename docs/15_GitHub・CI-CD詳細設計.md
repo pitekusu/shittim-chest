@@ -115,7 +115,7 @@ step outcomeとconclusionを検査し、未実行・失敗・キャンセルやc
 対象外と実行成功は各ジョブのSummaryで区別する。主要3ワークフローの全対象時は20ジョブとなる。
 CodeQLは`.github/workflows/codeql.yml`のadvanced setupでPython、JavaScript/TypeScript、
 GitHub Actions、Java/Kotlinを解析し、`ubuntu-26.04`と`security-extended`を使う。
-CodeQL Action v4.38.3はCLI 2.27.2を同梱する。Java/Kotlinだけ`manual`モードでAndroidをビルドし、既存3言語の`none`モードは維持する。
+CodeQL Action v4.39.0はCLI 2.27.2を同梱する。Java/Kotlinだけ`manual`モードでAndroidをビルドし、既存3言語の`none`モードは維持する。
 PR、mainへのpush、週次定期実行、手動実行を対象にする。
 2026年10月11日にKotlin 2.4.20のローカルmanual抽出を確認した。C04完了にはPRとマージ後のmainで4言語の解析・upload成功を確認する。
 既存3言語の解析・必須チェックを維持し、Androidの失敗を成功や対象外に置き換えない。

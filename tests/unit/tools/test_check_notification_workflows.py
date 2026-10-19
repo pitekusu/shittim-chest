@@ -880,7 +880,7 @@ def test_records_ci_retains_only_playwright_comparison_pngs(
 def test_records_web_setup_requires_the_reviewed_commit(directory: Path, workflow: str) -> None:
     _replace(
         directory / workflow,
-        "voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1",
+        "voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2",
         "voidzero-dev/setup-vp@313600b80b104eadebb9111787d37a2e83e014ca # v1.17.0",
         1,
     )
@@ -1876,7 +1876,7 @@ def test_repeated_action_version_requires_one_commit_pin(directory: Path) -> Non
 def test_release_requires_the_locked_node_version(directory: Path) -> None:
     _replace(
         directory / RELEASE_WORKFLOW,
-        '          node-version: "24.21.0"',
+        '          node-version: "24.22.0"',
         "          node-version-file: .node-version",
         1,
     )

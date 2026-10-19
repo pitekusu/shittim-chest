@@ -332,7 +332,7 @@ jobs:
         if: ${{ steps.scope.outputs.required == 'true' }}
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.0"
           cache: npm
       - name: Install locked CDK dependencies
         if: ${{ steps.scope.outputs.required == 'true' }}
@@ -374,7 +374,7 @@ jobs:
           python3 tools/check_ci_scope.py --github-output "${GITHUB_OUTPUT}"
       - name: Install the same JDK as local development
         if: ${{ steps.scope.outputs.required == 'true' }}
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version-file: apps/records-android/.java-version
@@ -926,14 +926,14 @@ jobs:
       - name: Upload the source SBOM SARIF to code scanning
         if: ${{ steps.scope.outputs.required == 'true' && (always()) }}
         id: source-sarif
-        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           sarif_file: ${{ runner.temp }}/grype-sarif/grype-source.sarif
           category: grype-source-sbom
       - name: Upload the image SBOM SARIF to code scanning
         if: ${{ steps.scope.outputs.required == 'true' && (always()) }}
         id: image-sarif
-        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           sarif_file: ${{ runner.temp }}/grype-sarif/grype-image-arm64.sarif
           category: grype-image-sbom

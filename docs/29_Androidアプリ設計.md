@@ -83,7 +83,7 @@ C04はCodeQLの対応後に独立したPRで再開し、C02・C03の機能は混
 
 現行アプリのKotlin／Compose CompilerはVersion Catalogに従い2.4.21を使う。単独の[Kotlin更新PR](https://github.com/pitekusu/shittim-chest/pull/565)ではCodeQL 2.27.2のmanualビルド・解析・uploadを確認済み。これはKotlinだけを更新した構成の結果であり、依存更新の統合時は同一SHAのPRとマージ後のmainで4言語の解析・uploadを改めて確認する。
 
-既存の`.github/workflows/codeql.yml`へ`java-kotlin`の`manual`モード解析を追加し、CodeQL Action v4.38.3（同梱CLI 2.27.2）を使う。
+既存の`.github/workflows/codeql.yml`へ`java-kotlin`の`manual`モード解析を追加し、CodeQL Action v4.39.0（同梱CLI 2.27.2）を使う。
 TemurinはAndroidの`.java-version`から読み、SDK Platform 37.2とBuild Tools 37.0.0を用意する。
 CodeQL初期化後にWrapperから`:app:assembleDebug`を実行する。Gradle Actionのキャッシュを無効にし、`--no-daemon --no-build-cache --no-configuration-cache --rerun-tasks -Pkotlin.incremental=false`で再コンパイルを保証する。
 エミュレーター、署名鍵、認証情報は使用しない。通常のAndroid CI（C03）とは役割を分ける。
@@ -951,7 +951,7 @@ APIの1時間で期限切れになるcursorが`CURSOR_INVALID`になった場合
 
 詳細APIの3人の初回意見・最終案を、既存の議題・勝者・結論とともに表示する。各人格と本文の対応を検証し、欠落・重複・空本文は不正応答として扱う。投票の内訳・評価・親愛度の変化はC24・C25へ残す。
 
-本文のMarkdownはMaterial 3対応のCompose Markdown Rendererへ任せる。ブラウザーへのリンクはアプリ側で絶対HTTPS URLだけに制限し、`intent:`・`file:`・`content:`・認証情報付きURLを開かない。本文中の画像URLへはローダーを接続せず、外部画像を自動取得しない。本文は画面のメモリにだけ置き、ログや端末の永続保存へ流さない。
+本文のMarkdownはMaterial 3対応のCompose Markdown Rendererへ任せる。`==強調==`はrenderer標準のテーマ色で描画し、通常の等号やコード内の文字は保持する。Webとの表示契約をそろえるまでは生成側へ強調記法の追加を要求しない。ブラウザーへのリンクはアプリ側で絶対HTTPS URLだけに制限し、`intent:`・`file:`・`content:`・認証情報付きURLを開かない。本文中の画像URLへはローダーを接続せず、外部画像を自動取得しない。本文は画面のメモリにだけ置き、ログや端末の永続保存へ流さない。
 
 ### 日本語の自然な折り返し
 
