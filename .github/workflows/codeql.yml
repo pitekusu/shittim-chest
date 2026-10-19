@@ -46,7 +46,7 @@ jobs:
           persist-credentials: false
       - name: Install the same JDK as local development
         if: ${{ matrix.language == 'java-kotlin' }}
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version-file: apps/records-android/.java-version
@@ -61,7 +61,7 @@ jobs:
           "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
           "platforms;android-37.2" "build-tools;37.0.0"
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
@@ -73,6 +73,6 @@ jobs:
           --no-daemon --no-build-cache --no-configuration-cache --rerun-tasks
           -Pkotlin.incremental=false :app:assembleDebug
       - name: Analyze the selected language
-        uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           category: /language:${{ matrix.language }}
