@@ -22,11 +22,11 @@
     "constructs": "10.8.1"
   },
   "devDependencies": {
-    "@types/node": "24.19.1",
+    "@types/node": "24.19.2",
     "aws-cdk": "2.1145.0",
     "cdk-nag": "3.0.2",
     "tsx": "4.23.15",
     "typescript": "7.0.2",
-    "vitest": "5.0.3"
+    "vitest": "5.0.5"
   }
 }
