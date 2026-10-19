@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Mapping
 from dataclasses import replace
 from datetime import datetime, timedelta
 from types import MappingProxyType
-from typing import Literal, TypeVar, cast
+from typing import Literal, TypedDict, TypeVar, cast
 from uuid import uuid7
 
 from shittim_chest.application.discord import (
@@ -92,6 +92,11 @@ from shittim_chest.domain.attachments import ImageInput
 from shittim_chest.domain.composite_voting import COMPOSITE_VOTING_VERSION
 
 _T = TypeVar("_T")
+
+
+class _FinalProposalImageKwargs(TypedDict, total=False):
+    images: tuple[ImageInput, ...]
+
 
 type _AttemptExceptionStage = Literal[
     "attempt",
@@ -2233,13 +2238,14 @@ class DebateApplication:
         images: tuple[ImageInput, ...] = (),
     ) -> tuple[FinalProposal, ...]:
         tasks: dict[ParticipantSlot, asyncio.Task[FinalProposal]] = {}
+        image_kwargs: _FinalProposalImageKwargs = {"images": images} if images else {}
         async with asyncio.TaskGroup() as task_group:
             for participant in PARTICIPANTS:
                 tasks[participant] = task_group.create_task(
                     self._openai.generate_final_proposal(
                         participant=participant,
                         question=question,
-                        **({"images": images} if images else {}),
+                        **image_kwargs,
                         evidence=evidence,
                         initial_opinions=initial_opinions,
                         affection_score=DEFAULT_AFFECTION_SCORE,

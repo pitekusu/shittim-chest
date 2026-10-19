@@ -545,7 +545,7 @@ def _validate_release(directory: Path) -> None:
         "group: production-release",
         "cancel-in-progress: false",
         "runs-on: ubuntu-26.04-arm",
-        'node-version: "24.21.0"',
+        'node-version: "24.22.0"',
         'EXPECTED_REPOSITORY_ID: "1302516701"',
         ".use_immutable_subject == true",
         "ACTIONS_ID_TOKEN_REQUEST_URL",
@@ -1569,7 +1569,7 @@ def _validate_ci_path_isolation(directory: Path) -> None:
     records_web = _workflow_job_block(records_text, "records-web")
     setup = _workflow_step_block(records_web, "Set up the pinned Records Web toolchain")
     required_setup = (
-        "uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1",
+        "uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2",
         "node-version: ${{ env.NODE_VERSION }}",
         "working-directory: apps/records-web",
         "run-install: false",
@@ -1734,7 +1734,7 @@ def _validate_records_workflows(directory: Path) -> None:
 
     setup = _workflow_step_block(release, "Set up the pinned Records Web toolchain")
     required_setup = (
-        "uses: voidzero-dev/setup-vp@3754dd7dbdb32bd8f6d28b6043de13ad3a75f21f # v1.21.1",
+        "uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2",
         "node-version: ${{ env.NODE_VERSION }}",
         "working-directory: apps/records-web",
         "run-install: false",

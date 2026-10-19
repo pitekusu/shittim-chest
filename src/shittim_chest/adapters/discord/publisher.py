@@ -10,7 +10,7 @@ import logging
 import math
 from collections.abc import Mapping
 from datetime import timedelta
-from typing import Literal
+from typing import Literal, TypedDict
 
 import discord
 
@@ -73,6 +73,10 @@ type _DeliveryConflictReason = Literal[
     "history_duplicate_match",
     "history_limit_reached",
 ]
+
+
+class _AttachmentSendKwargs(TypedDict, total=False):
+    files: list[discord.File]
 
 
 class DiscordPyPublisher:
@@ -420,13 +424,14 @@ class DiscordPyPublisher:
                         description="討論の参考画像",
                     )
                 )
+        send_kwargs: _AttachmentSendKwargs = {"files": files} if files else {}
         try:
             message = await target.send(
                 operation.content,
                 nonce=operation.nonce,
                 allowed_mentions=discord.AllowedMentions.none(),
                 suppress_embeds=True,
-                **({"files": files} if files else {}),
+                **send_kwargs,
             )
         finally:
             for file in files:
