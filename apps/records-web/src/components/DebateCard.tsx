@@ -1,4 +1,4 @@
-import { useEffect, useRef, type CSSProperties } from "react";
+import { useEffect, useId, useRef, type CSSProperties } from "react";
 import { Link } from "react-router-dom";
 
 import type { RecordListItem } from "../api/types";
@@ -295,6 +295,7 @@ export function DebateCard({
   readonly onAppendAnimationEnd?: (recordId: string) => void;
   readonly onOpen?: (recordId: string) => void;
 }) {
+  const labelId = useId();
   const linkRef = useRef<HTMLAnchorElement>(null);
   const winner = record.participants.find(
     (participant) => participant.slot === record.result.winner,
@@ -323,6 +324,7 @@ export function DebateCard({
       }`}
       to={`/records/${record.recordId}`}
       data-record-id={record.recordId}
+      aria-labelledby={labelId}
       onClick={(event) => {
         if (
           !event.metaKey &&
@@ -334,9 +336,6 @@ export function DebateCard({
           onOpen?.(record.recordId);
         }
       }}
-      aria-label={`「${record.questionPreview}」の記録を読む${
-        record.attachmentCount ? `、画像${record.attachmentCount}枚を添付` : ""
-      }`}
       data-route-motion-terminal={motionTerminal ? "" : undefined}
       ref={linkRef}
       style={
@@ -345,7 +344,7 @@ export function DebateCard({
           : ({ "--route-motion-delay": `${motionDelay}ms` } as CSSProperties)
       }
     >
-      <article className={styles.debateCard}>
+      <article id={labelId} className={styles.debateCard}>
         <CardDecoration recordId={record.recordId} />
         <div className={styles.cardMeta}>
           <time dateTime={record.completedAt}>{formatCompletedDateTime(record.completedAt)}</time>
@@ -354,7 +353,7 @@ export function DebateCard({
               <span className={styles.tieBadge}>既定ルール決着</span>
             )}
             {!!record.attachmentCount && (
-              <span className={styles.attachmentBadge} aria-hidden="true">
+              <span className={styles.attachmentBadge}>
                 <svg
                   viewBox="0 0 24 24"
                   width="16"
@@ -364,12 +363,14 @@ export function DebateCard({
                   strokeWidth="2"
                   strokeLinecap="round"
                   strokeLinejoin="round"
+                  aria-hidden="true"
                   focusable="false"
                 >
                   <rect x="3" y="3" width="18" height="18" rx="3" />
                   <circle cx="8.5" cy="8.5" r="1.5" />
                   <path d="m21 15-5-5L5 21" />
                 </svg>
+                <span className={commonStyles.visuallyHidden}>画像</span>
                 {record.attachmentCount}枚
               </span>
             )}
@@ -378,7 +379,7 @@ export function DebateCard({
         <h2 className={commonStyles.japaneseText}>{record.questionPreview}</h2>
         <div className={styles.cardPeople}>
           <span className={styles.personSummary}>
-            <Avatar avatar={record.requester.avatar} />
+            <Avatar avatar={{ ...record.requester.avatar, alt: "" }} />
             <span>
               <small>依頼者</small>
               {record.requester.displayName}
@@ -386,7 +387,7 @@ export function DebateCard({
           </span>
           {winner && (
             <span className={styles.personSummary}>
-              <Avatar avatar={winner.avatar} />
+              <Avatar avatar={{ ...winner.avatar, alt: "" }} />
               <span>
                 <small>勝者</small>
                 {winner.displayName}
@@ -394,7 +395,7 @@ export function DebateCard({
             </span>
           )}
         </div>
-        <span className={styles.cardAction} aria-hidden="true">
+        <span className={styles.cardAction}>
           記録を読む
           <svg
             viewBox="0 0 24 24"

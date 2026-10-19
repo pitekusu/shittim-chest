@@ -1078,7 +1078,7 @@ test("authenticated member can browse the completed archive", async ({ page }) =
     maxDiffPixels: 20,
   });
   const cardLink = page.getByRole("link", {
-    name: `「${detail.question}」の記録を読む`,
+    name: detail.question,
   });
   await expect(cardLink).toContainText("記録を読む");
   const cardBox = await card.boundingBox();
@@ -1116,7 +1116,7 @@ test("individual OGP follows detail navigation and returns to common preview", a
   const ogImageUrl = `https://shittim.pitekusu.dev/og/records/${RECORD_ID}/${"a".repeat(32)}.png`;
   await mockAuthenticatedApi(page, { ...detail, ogImageUrl });
   await page.goto("/");
-  await page.getByRole("link", { name: `「${detail.question}」の記録を読む` }).click();
+  await page.getByRole("link", { name: detail.question }).click();
   await expect(page.getByRole("heading", { name: detail.question, level: 1 })).toBeVisible();
   await expect(page.locator('meta[property="og:image"]')).toHaveAttribute("content", ogImageUrl);
   await page.reload();
@@ -1214,7 +1214,7 @@ test("record card opens from its native keyboard link", async ({ page }) => {
   await page.goto("/");
 
   const cardLink = page.getByRole("link", {
-    name: `「${detail.question}」の記録を読む`,
+    name: detail.question,
   });
   await cardLink.focus();
   await expect(cardLink).toBeFocused();
@@ -1235,12 +1235,10 @@ test("internal navigation keeps route headings focused", async ({ page }, testIn
   const archiveHeading = page.getByRole("heading", { name: "議論の記録" });
   await expect(archiveHeading).toBeFocused();
 
-  await page.getByRole("link", { name: `「${detail.question}」の記録を読む` }).click();
+  await page.getByRole("link", { name: detail.question }).click();
   await expect(page.getByRole("heading", { name: detail.question, level: 1 })).toBeFocused();
   await page.getByRole("link", { name: "← 記録一覧へ" }).click();
-  await expect(
-    page.getByRole("link", { name: `「${detail.question}」の記録を読む` }),
-  ).toBeFocused();
+  await expect(page.getByRole("link", { name: detail.question })).toBeFocused();
 });
 
 test("archive controls remain usable across responsive breakpoints", async ({ page }) => {
@@ -1256,9 +1254,7 @@ test("archive controls remain usable across responsive breakpoints", async ({ pa
     await page.setViewportSize(viewport);
     const sortBox = await page.locator("[data-sort]").boundingBox();
     const sortLegendBox = await page.getByText("並び順", { exact: true }).boundingBox();
-    const cardBox = await page
-      .getByRole("link", { name: `「${detail.question}」の記録を読む` })
-      .boundingBox();
+    const cardBox = await page.getByRole("link", { name: detail.question }).boundingBox();
 
     expect(sortBox).not.toBeNull();
     expect(sortLegendBox).not.toBeNull();
@@ -1313,7 +1309,7 @@ test("dark theme covers login, archive, detail, and rankings", async ({ page }, 
     maxDiffPixelRatio: DARK_THEME_SNAPSHOT_MAX_DIFF_RATIO,
   });
 
-  await page.getByRole("link", { name: `「${detail.question}」の記録を読む` }).click();
+  await page.getByRole("link", { name: detail.question }).click();
   await expect(page.getByRole("heading", { name: detail.question, level: 1 })).toBeVisible();
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await revealVoteGraphBeforeFullPageCapture(page);
@@ -1885,14 +1881,14 @@ test("loads the next archive page automatically near the end of the loaded cards
   await page.goto("/");
   await expect(page.getByText("読み込み済みの議論 12")).toBeVisible();
   const pausedAppendMotionStyle = await page.addStyleTag({
-    content: `a[aria-label="「自動で追加された議論」の記録を読む"] {
+    content: `a[data-record-id="${nextRecord.recordId}"] {
       animation-play-state: paused !important;
     }`,
   });
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
 
   const appendedCard = page.getByRole("link", {
-    name: "「自動で追加された議論」の記録を読む",
+    name: "自動で追加された議論",
   });
   await expect(appendedCard).toBeVisible();
   await expect(appendedCard).toHaveCSS("animation-duration", "0.18s");
@@ -2225,7 +2221,9 @@ test("Memorial and SYSTEM ACCESS keep usable targets in the narrow mobile naviga
   await expect(mobileNavigation).toBeVisible();
   await expect(mobileNavigation.getByRole("link")).toHaveCount(4);
   await expect(mobileNavigation.getByRole("link", { name: "モモトーク" })).toBeVisible();
-  await expect(mobileNavigation.getByRole("link", { name: "メモリアルロビー" })).toBeVisible();
+  await expect(
+    mobileNavigation.getByRole("link", { name: "メモリアル", exact: true }),
+  ).toBeVisible();
   const accountToggle = page.getByLabel("アカウントメニュー", { exact: true });
   await accountToggle.click();
   const accountNavigation = page.getByRole("navigation", { name: "アカウント操作" });
@@ -3172,7 +3170,7 @@ test("archive restores its in-memory filters, focus and reading position", async
   await page.goto("/");
   const search = page.getByRole("searchbox", { name: "フリーワード検索" });
   await search.fill("休日");
-  const target = page.getByRole("link", { name: `「${detail.question}」の記録を読む` });
+  const target = page.getByRole("link", { name: detail.question });
   await target.scrollIntoViewIfNeeded();
   const top = await page.evaluate(() => window.scrollY);
   await target.click();
@@ -3456,11 +3454,11 @@ test("record attachments are visible in cards and the question and recover expir
     }
   });
   await page.goto("/");
-  let card = page.getByRole("link", { name: /画像3枚を添付/u });
+  let card = page.getByRole("link", { name: detail.question });
   await expect(card.getByText("3枚", { exact: true })).toBeVisible();
   await expect(card.locator("svg")).not.toHaveCount(0);
   await page.getByRole("searchbox").fill("休日");
-  card = page.getByRole("link", { name: /画像3枚を添付/u });
+  card = page.getByRole("link", { name: detail.question });
   await expect(card.getByText("3枚", { exact: true })).toBeVisible();
   expect(imageRequests).toEqual([]);
   await card.click();
