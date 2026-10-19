@@ -191,8 +191,12 @@ pnpm 12の環境用lock documentは[GitHubの静的依存検出に未対応の�
 `pmOnFail: ignore`でproject依存の単一documentを維持する。pnpm自身によるversion切替・検査は無効になるので、
 ローカルもVite+経由で実行する。CIとRecords Releaseはinstall直前に実行中のpnpmと`packageManager`の完全一致を検査し、
 不一致は停止する。この検査を既存のworkflow方針検証でも必須とする。
+
 `lockfile.includeResolutionSettings`で依存解決設定をlockへ記録し、設定が違うfrozen installを拒否する。
 `autoDedupe`を有効にし、互換範囲の重複版を通常install時に集約する。直接依存の固定とfrozen CIは維持する。
+
+Vite+ 1.3.0のタスクキャッシュは、ローカルでも採用を保留する。同一端末の単発計測ではcheckが2.675秒から0.528秒、単体試験が7.509秒から0.545秒へ短縮したが、workspace外の`contracts/records/v1/records-invariants.ts`とリポジトリ直下の`.npmrc`の変更時に古い成功結果を再利用した。契約コードへ意図的な失敗を加えた対照試験では、cache有効時だけ成功し、cache無効時には失敗した。[採用版の標準input glob実装](https://github.com/voidzero-dev/vite-task/blob/9ba4cc93379cf2d7a6c7e657285bb8a00e8339dc/crates/vt_graph/src/config/mod.rs#L280-L308)もworkspace外を拒否する。Webのworkspace構成で外部入力を安全に追跡できるようになるまでは、通常の`pnpm run check`・`pnpm run test`・build前後の検証・監査を毎回実行する。
+
 Webのpackage・lock・workspace設定またはroot/Webの`.npmrc`変更時は、固定install直後に
 `pnpm audit signatures`でlockのintegrityとregistry署名を照合する。手動の全検証でも実行する。
 署名の不正・欠落・取得失敗はCIを失敗させる。脆弱性監査用のnpm障害時skipは署名監査へ流用しない。
