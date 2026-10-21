@@ -110,6 +110,36 @@ class ReviewDemoUiTest {
     compose.onNodeWithTag("insights-screen").assertDoesNotExist()
   }
 
+  @Test fun nativeMomotalkKeepsTheRoomOnRotationAndBackReturnsThroughTheRoomList() {
+    enter()
+    val question = DemoFixtures.records.first().entry.questionPreview
+    compose.onNodeWithText(question).performScrollTo().performClick()
+    compose.waitUntil(10_000) { compose.onAllNodesWithTag("detail-question-open").fetchSemanticsNodes().isNotEmpty() }
+    compose.onNodeWithTag("records-menu-open").performClick()
+    compose.onNodeWithTag("momotalk-open").performScrollTo().performClick()
+    val detail = requireNotNull(momotalkSampleState().detail.data)
+    val roomTag = "momotalk-room-${detail.room.roomId}"
+    compose.waitUntil(10_000) { compose.onAllNodesWithTag(roomTag).fetchSemanticsNodes().isNotEmpty() }
+    compose.onNodeWithTag("momotalk-content").performScrollToNode(androidx.compose.ui.test.hasTestTag(roomTag))
+    compose.onNodeWithTag(roomTag).performClick()
+    compose.waitUntil(10_000) { compose.onAllNodesWithTag("momotalk-message-1").fetchSemanticsNodes().isNotEmpty() }
+    compose.onNodeWithTag("momotalk-content").performScrollToNode(hasText(detail.messages.first().text))
+    compose.onNodeWithText(detail.messages.first().text).assertIsDisplayed()
+    compose.activityRule.scenario.recreate()
+    compose.waitUntil(10_000) { compose.onAllNodesWithTag("momotalk-message-1").fetchSemanticsNodes().isNotEmpty() }
+    compose.onNodeWithTag("momotalk-content").performScrollToNode(hasText(detail.messages.first().text))
+    compose.onNodeWithText(detail.messages.first().text).assertIsDisplayed()
+    compose.onNodeWithTag("review-demo-banner").assertIsDisplayed()
+    back()
+    compose.waitUntil(10_000) { compose.onAllNodesWithTag("momotalk-week-picker").fetchSemanticsNodes().isNotEmpty() }
+    compose.onNodeWithTag("momotalk-content").performScrollToNode(androidx.compose.ui.test.hasTestTag(roomTag))
+    compose.onNodeWithTag(roomTag).assertIsDisplayed()
+    back()
+    compose.waitUntil(10_000) { compose.onAllNodesWithTag("detail-question-open").fetchSemanticsNodes().isNotEmpty() }
+    compose.onNodeWithTag("detail-question-open").assertIsDisplayed()
+    compose.onNodeWithTag("momotalk-screen").assertDoesNotExist()
+  }
+
   private fun enter() {
     compose.waitUntil(10_000) { compose.onAllNodesWithTag("review-demo-enter").fetchSemanticsNodes().isNotEmpty() }
     compose.onNodeWithTag("review-demo-enter").performScrollTo().performClick()

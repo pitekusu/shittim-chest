@@ -6,7 +6,6 @@ import dev.pitekusu.shittim.records.auth.RECORDS_ORIGIN
 /** Fixed browser destinations; web login and administrator access remain web responsibilities. */
 internal enum class RecordsWebPage(@StringRes val title: Int, private val path: String,
   val administrator: Boolean = false) {
-  Momotalk(R.string.menu_momotalk, "/momotalk"),
   Memorial(R.string.menu_memorial, "/memorial"),
   Status(R.string.menu_status, "/admin", administrator = true),
   Prompts(R.string.menu_prompts, "/admin/prompts", administrator = true);

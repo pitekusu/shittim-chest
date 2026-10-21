@@ -219,9 +219,11 @@ def _momotalk_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
         result[path] = {
             "get": {
                 "operationId": operation,
+                "security": [{"sessionCookie": []}, {"mobileBearer": []}],
                 "parameters": parameters,
                 "description": (
-                    "認証必須。日曜20時以降のモモトークを返す。private, no-store。"
+                    "Web CookieまたはモバイルBearer認証必須。日曜20時以降のモモトークを返す。"
+                    "CookieとAuthorizationの混在を拒否。private, no-store。"
                     + (
                         "contract=momotalk-selfie-v2で各画像のsubjectsに登場人格と個別の表情を返す。"
                         "新しい会話は条件を満たす全人格を1枚に含める。既存の最大2画像も保持する。"

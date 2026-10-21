@@ -72,6 +72,7 @@ internal data object BootstrapScreen : Screen {
     val demoEntryId: String? = null,
     val publicPageError: Boolean = false,
     val insights: InsightsUiState = InsightsUiState(),
+    val momotalk: MomotalkUiState = MomotalkUiState(),
     val eventSink: (Event) -> Unit,
   ) : CircuitUiState
 
@@ -113,6 +114,8 @@ internal data object BootstrapScreen : Screen {
     data object NewDebateDraft : Event
     data object ShowInsights : Event
     data class InsightsAction(val action: InsightsEvent) : Event
+    data object ShowMomotalk : Event
+    data class MomotalkAction(val action: MomotalkEvent) : Event
     data object ShowDebateRequests : Event
     data class OpenDebateRequest(val requestId: String) : Event
     data object LoadMoreDebateRequests : Event
@@ -203,6 +206,35 @@ internal class BootstrapPresenter(
     SideEffect { if (cacheAccountId != null && runtime.isActive(cacheAccountId)) insightsSelection = insights.selection() }
     LaunchedEffect(insightsModel, backStack.lastOrNull() == Insights, debateOnline) {
       if (backStack.lastOrNull() == Insights) insightsModel?.beginVisit(debateOnline)
+    }
+    var momotalkSelection by remember(cacheAccountId) { mutableStateOf(MomotalkSelection()) }
+    val momotalkModel = remember(cacheAccountId, cachePermit, modelOwner) {
+      cacheAccountId?.let { owner ->
+        val factory = viewModelFactory { initializer {
+          createMomotalkModel(context.applicationContext, runtime, owner, cachePermit, momotalkSelection)
+        } }
+        ViewModelProvider(modelOwner.viewModelStore, factory)[
+          "momotalk-${runtime.demoEntryId ?: System.identityHashCode(cachePermit)}", MomotalkModel::class.java]
+      }
+    }
+    DisposableEffect(momotalkModel) {
+      val expectedPermit = cachePermit
+      onDispose {
+        if (cacheAccountId == null || !runtime.isActive(cacheAccountId) ||
+          (demo == null && session?.cachePermit?.value !== expectedPermit)) momotalkModel?.endSession()
+      }
+    }
+    val momotalk = key(momotalkModel) { momotalkModel?.state?.collectAsState()?.value ?: MomotalkUiState() }
+    SideEffect {
+      if (cacheAccountId != null && runtime.isActive(cacheAccountId)) momotalkSelection = momotalk.selection()
+    }
+    val momotalkRoute = backStack.lastOrNull()
+    LaunchedEffect(momotalkModel, momotalkRoute, debateOnline) {
+      when (momotalkRoute) {
+        Momotalk -> momotalkModel?.open(debateOnline)
+        is MomotalkRoom -> momotalkModel?.open(debateOnline, momotalkRoute.weekId, momotalkRoute.roomId)
+        else -> Unit
+      }
     }
     val debateModel = remember(cacheAccountId, modelOwner) {
       cacheAccountId?.let { owner ->
@@ -528,7 +560,7 @@ internal class BootstrapPresenter(
       loginCompletion = loginCompletion, backStack = backStack.toList(), recordOwner = cacheAccountId,
       debate = debate, debateStatus = debateStatus, debateHistory = debateHistory,
       debateOnline = debateOnline, debateImages = debateImages, demoEntryId = runtime.demoEntryId,
-      publicPageError = publicPageError, insights = insights) { event ->
+      publicPageError = publicPageError, insights = insights, momotalk = momotalk) { event ->
       when (event) {
         is BootstrapScreen.Event.SelectTheme -> themeChoice = event.choice
         BootstrapScreen.Event.EnterDemo -> runtime.enterDemo()
@@ -620,6 +652,36 @@ internal class BootstrapPresenter(
           if (debateModel?.newDraft() == true) {
             backStack.closeRecord()
             backStack.add(DebateCompose)
+          }
+        }
+        BootstrapScreen.Event.ShowMomotalk -> if (cacheAccountId != null && runtime.isActive(cacheAccountId) &&
+          stackOwner == cacheAccountId && session?.pendingDestination?.value == null &&
+          backStack.lastOrNull() != Momotalk && backStack.lastOrNull() !is MomotalkRoom) {
+          if (backStack.lastOrNull() == DebateCompose) debateModel?.flush { backStack.add(Momotalk) }
+          else backStack.add(Momotalk)
+        }
+        is BootstrapScreen.Event.MomotalkAction -> if (cacheAccountId != null && runtime.isActive(cacheAccountId) &&
+          stackOwner == cacheAccountId && (backStack.lastOrNull() == Momotalk || backStack.lastOrNull() is MomotalkRoom)) {
+          when (val action = event.action) {
+            MomotalkEvent.Back -> backStack.removeLastOrNull()
+            is MomotalkEvent.SelectRoom -> {
+              val week = momotalk.selectedWeek
+              if (week != null && momotalk.rooms.data.orEmpty().flatMap { it.rooms }.any {
+                  it.roomId == action.value && it.state == "ready"
+                }) {
+                momotalkModel?.event(action)
+                val route = MomotalkRoom(week, action.value)
+                if (backStack.lastOrNull() is MomotalkRoom) backStack[backStack.lastIndex] = route
+                else backStack.add(route)
+              }
+            }
+            is MomotalkEvent.SelectWeek -> {
+              if (momotalk.weeks.data.orEmpty().flatMap { it.weeks }.any { it.weekId == action.value }) {
+                momotalkModel?.event(action)
+                if (backStack.lastOrNull() is MomotalkRoom) backStack.removeLastOrNull()
+              }
+            }
+            else -> momotalkModel?.event(action)
           }
         }
         BootstrapScreen.Event.ShowInsights -> if (cacheAccountId != null && runtime.isActive(cacheAccountId) &&

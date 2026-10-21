@@ -13,6 +13,18 @@ internal data object RecordsList : NavKey
 internal data object Insights : NavKey
 
 @Serializable
+internal data object Momotalk : NavKey
+
+@Serializable
+internal data class MomotalkRoom(val weekId: String, val roomId: String) : NavKey {
+  init {
+    require(validMomotalkWeekId(weekId) && validMomotalkRoomId(roomId)) {
+      "invalid_momotalk_route"
+    }
+  }
+}
+
+@Serializable
 internal data object DebateCompose : NavKey
 
 @Serializable
@@ -31,7 +43,7 @@ internal data class RecordDetail(val recordId: String) : NavKey {
 // Preserve the existing list + one detail behavior, including links received in two-pane mode.
 internal fun NavBackStack<NavKey>.openRecord(recordId: String) {
   val detail = RecordDetail(recordId)
-  if (lastOrNull() == Insights) removeLastOrNull()
+  while (lastOrNull() == Insights || lastOrNull() == Momotalk || lastOrNull() is MomotalkRoom) removeLastOrNull()
   if (lastOrNull() == detail) return
   if (size > 1) this[lastIndex] = detail else add(detail)
 }

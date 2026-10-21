@@ -8380,7 +8380,7 @@
     },
     "/api/v1/momotalk/weeks": {
       "get": {
-        "description": "認証必須。日曜20時以降のモモトークを返す。private, no-store。",
+        "description": "Web CookieまたはモバイルBearer認証必須。日曜20時以降のモモトークを返す。CookieとAuthorizationの混在を拒否。private, no-store。",
         "operationId": "listMomotalkWeeks",
         "parameters": [
           {
@@ -8484,12 +8484,20 @@
             },
             "description": "Records service unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "mobileBearer": []
+          }
+        ]
       }
     },
     "/api/v1/momotalk/weeks/{weekId}/rooms": {
       "get": {
-        "description": "認証必須。日曜20時以降のモモトークを返す。private, no-store。",
+        "description": "Web CookieまたはモバイルBearer認証必須。日曜20時以降のモモトークを返す。CookieとAuthorizationの混在を拒否。private, no-store。",
         "operationId": "listMomotalkRooms",
         "parameters": [
           {
@@ -8602,12 +8610,20 @@
             },
             "description": "Records service unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "mobileBearer": []
+          }
+        ]
       }
     },
     "/api/v1/momotalk/weeks/{weekId}/rooms/{roomId}": {
       "get": {
-        "description": "認証必須。日曜20時以降のモモトークを返す。private, no-store。contract=momotalk-selfie-v2で各画像のsubjectsに登場人格と個別の表情を返す。新しい会話は条件を満たす全人格を1枚に含める。既存の最大2画像も保持する。未指定時はsubjectsを省略し、従来の応答fieldを維持する。",
+        "description": "Web CookieまたはモバイルBearer認証必須。日曜20時以降のモモトークを返す。CookieとAuthorizationの混在を拒否。private, no-store。contract=momotalk-selfie-v2で各画像のsubjectsに登場人格と個別の表情を返す。新しい会話は条件を満たす全人格を1枚に含める。既存の最大2画像も保持する。未指定時はsubjectsを省略し、従来の応答fieldを維持する。",
         "operationId": "getMomotalkRoom",
         "parameters": [
           {
@@ -8721,7 +8737,15 @@
             },
             "description": "Records service unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "mobileBearer": []
+          }
+        ]
       }
     },
     "/api/v1/records": {
