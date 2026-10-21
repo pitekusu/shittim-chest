@@ -17,6 +17,11 @@
     <string name="momotalk_conversation_title">%1$s のルーム</string>
     <string name="momotalk_conversation_description">今週の質問を振り返る、3人のおしゃべりです。</string>
     <string name="momotalk_messages_title">おしゃべり</string>
+    <string name="momotalk_playback_playing">会話を再生中</string>
+    <string name="momotalk_playback_done">会話を表示中</string>
+    <string name="momotalk_playback_skip">すべて表示</string>
+    <string name="momotalk_playback_replay">もう一度再生</string>
+    <string name="momotalk_playback_follow">会話の続きへ</string>
     <string name="momotalk_selfies_title">集合セルフィー</string>
     <string name="momotalk_selfie_open">集合セルフィー %1$d を拡大</string>
     <string name="momotalk_selfie_description">%1$s の集合セルフィー</string>

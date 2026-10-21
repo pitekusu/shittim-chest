@@ -1,5 +1,12 @@
 package dev.pitekusu.shittim.records
 
+import android.animation.ValueAnimator
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -17,10 +24,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -36,23 +47,32 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
@@ -60,6 +80,8 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil3.compose.AsyncImage
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
@@ -73,6 +95,8 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.math.PI
+import kotlin.math.sin
 import kotlinx.coroutines.launch
 import me.saket.telephoto.zoomable.ZoomableContentLocation
 import me.saket.telephoto.zoomable.rememberZoomableState
@@ -84,7 +108,21 @@ private val momotalkZone = ZoneId.of("Asia/Tokyo")
 
 @Composable
 internal fun MomotalkScreen(state: MomotalkUiState, onEvent: (MomotalkEvent) -> Unit,
-  modifier: Modifier = Modifier, showAppBar: Boolean = true) {
+  modifier: Modifier = Modifier, showAppBar: Boolean = true,
+  animationsEnabled: Boolean = true) {
+  val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
+  val active = lifecycle.isAtLeast(Lifecycle.State.RESUMED) && LocalWindowInfo.current.isWindowFocused
+  val scale = rememberCoroutineScope().coroutineContext[MotionDurationScale]?.scaleFactor ?: 1f
+  val touchExploration = rememberMomotalkTouchExploration()
+  var replay by rememberSaveable(state.selectedWeek, state.selectedRoom) { mutableIntStateOf(0) }
+  // Playback lives above the adaptive layout, so resizing never starts this room over.
+  val playback = androidx.compose.runtime.key(state.selectedWeek, state.selectedRoom) {
+    state.detail.data.takeIf { state.selectedRoom != null }?.let {
+      rememberMomotalkPlayback(it.messages, active,
+        animationsEnabled && ValueAnimator.areAnimatorsEnabled() && scale > 0f && !touchExploration, replay)
+    }
+  }
+  val conversationList = androidx.compose.runtime.key(state.selectedWeek, state.selectedRoom) { rememberLazyListState() }
   Surface(modifier.fillMaxSize().testTag("momotalk-screen"), color = MaterialTheme.colorScheme.background,
     contentColor = MaterialTheme.colorScheme.onBackground) {
     Column(Modifier.fillMaxSize()) {
@@ -93,12 +131,13 @@ internal fun MomotalkScreen(state: MomotalkUiState, onEvent: (MomotalkEvent) -> 
         val twoPane = maxWidth >= 840.dp && LocalDensity.current.fontScale < 1.5f && state.selectedRoom != null
         if (twoPane) {
           Row(Modifier.fillMaxSize()) {
-            MomotalkList(state, onEvent, Modifier.width(300.dp), roomPane = true)
-            MomotalkList(state, onEvent, Modifier.weight(1f))
+            MomotalkList(state, onEvent, Modifier.width(300.dp), null, active, {}, roomPane = true)
+            MomotalkList(state, onEvent, Modifier.weight(1f), playback, active, { replay++ }, listState = conversationList)
           }
         } else {
           Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-            MomotalkList(state, onEvent, Modifier.widthIn(max = 840.dp).fillMaxWidth())
+            MomotalkList(state, onEvent, Modifier.widthIn(max = 840.dp).fillMaxWidth(), playback, active,
+              { replay++ }, listState = conversationList)
           }
         }
       }
@@ -133,15 +172,79 @@ private fun MomotalkUiState.activeResource(): MomotalkResource<*> = when {
 
 @Composable
 private fun MomotalkList(state: MomotalkUiState, onEvent: (MomotalkEvent) -> Unit,
-  modifier: Modifier, roomPane: Boolean = false) {
+  modifier: Modifier, playback: MomotalkPlayback?, active: Boolean, onReplay: () -> Unit,
+  roomPane: Boolean = false, listState: LazyListState? = null) {
   // Conversation text, names, image keys and API cursors never enter saved UI state.
   // A new room starts at its heading; refreshing the same room keeps the reading position.
-  androidx.compose.runtime.key(if (roomPane) "rooms" else state.selectedRoom ?: state.selectedWeek ?: "weeks") {
-    LazyColumn(modifier.fillMaxSize().testTag(if (roomPane) "momotalk-rooms-pane" else "momotalk-content"),
-      contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-      if (roomPane || state.selectedRoom == null) {
-        if (state.selectedWeek == null) weeksContent(state, onEvent) else roomsContent(state, onEvent, roomPane)
-      } else conversationContent(state, onEvent)
+  androidx.compose.runtime.key(state.selectedWeek, if (roomPane) "rooms" else state.selectedRoom) {
+    val list = listState ?: rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val following = playback?.state?.following ?: false
+    var scrollingToTail by remember { mutableStateOf(false) }
+    val detail = state.detail.data.takeIf { !roomPane && state.selectedRoom != null }
+    // User scrolling interrupts following; automatic scrolling never claims the reader's intent.
+    LaunchedEffect(list, playback?.state) {
+      snapshotFlow { list.isScrollInProgress && !scrollingToTail }.collect { scrolling ->
+        if (scrolling) playback?.state?.following = false
+      }
+    }
+    suspend fun followTail() {
+      scrollingToTail = true
+      try {
+        val last = list.layoutInfo.totalItemsCount - 1
+        if (last >= 0 && list.canScrollForward) {
+          if (list.layoutInfo.visibleItemsInfo.lastOrNull()?.index != last) list.scrollToItem(last)
+          // A large-text bubble can be taller than the viewport. Keep its latest line visible.
+          list.layoutInfo.visibleItemsInfo.lastOrNull()?.let { item ->
+            val overflow = item.offset + item.size + list.layoutInfo.afterContentPadding - list.layoutInfo.viewportEndOffset
+            if (overflow > 0) list.scrollBy(overflow.toFloat())
+          }
+        }
+      } finally { scrollingToTail = false }
+    }
+    LaunchedEffect(list, playback?.state, playback?.motionAllowed, following, active) {
+      if (playback != null && playback.motionAllowed && following && active) {
+        // Follow measured line/row changes, not a character update before its new layout exists.
+        snapshotFlow {
+          val info = list.layoutInfo
+          val last = info.visibleItemsInfo.lastOrNull()
+          Triple(info.totalItemsCount, last?.index,
+            last?.let { it.offset + it.size + info.afterContentPadding - info.viewportEndOffset })
+        }.collect { followTail() }
+      }
+    }
+    Column(modifier.fillMaxSize()) {
+      if (playback != null && detail != null && detail.messages.isNotEmpty()) {
+        MomotalkPlaybackControls(playback, following,
+          onReplay = { onReplay(); scope.launch { list.scrollToItem(0) } },
+          onFollow = { playback.state.following = true })
+      }
+      LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag(if (roomPane) "momotalk-rooms-pane" else "momotalk-content"),
+        state = list, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        if (roomPane || state.selectedRoom == null) {
+          if (state.selectedWeek == null) weeksContent(state, onEvent) else roomsContent(state, onEvent, roomPane)
+        } else conversationContent(state, onEvent, playback, active)
+      }
+    }
+  }
+}
+
+@Composable
+private fun MomotalkPlaybackControls(playback: MomotalkPlayback, following: Boolean,
+  onReplay: () -> Unit, onFollow: () -> Unit) {
+  Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
+    FlowRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+      horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.Center,
+      itemVerticalAlignment = Alignment.CenterVertically) {
+      Text(stringResource(if (playback.done) R.string.momotalk_playback_done else R.string.momotalk_playback_playing),
+        style = MaterialTheme.typography.labelLarge)
+      if (!playback.done) TextButton(onClick = playback::skip, modifier = Modifier.testTag("momotalk-playback-skip")) {
+        Text(stringResource(R.string.momotalk_playback_skip))
+      } else if (playback.motionAllowed) TextButton(onClick = onReplay,
+        modifier = Modifier.testTag("momotalk-playback-replay")) { Text(stringResource(R.string.momotalk_playback_replay)) }
+      if (!following && playback.motionAllowed) TextButton(onClick = onFollow, modifier = Modifier.testTag("momotalk-playback-follow")) {
+        Text(stringResource(R.string.momotalk_playback_follow))
+      }
     }
   }
 }
@@ -260,7 +363,8 @@ private fun MomotalkRoomSummary.stateTitle(): Int = when (state) {
   else -> R.string.momotalk_failed
 }
 
-private fun LazyListScope.conversationContent(state: MomotalkUiState, onEvent: (MomotalkEvent) -> Unit) {
+private fun LazyListScope.conversationContent(state: MomotalkUiState, onEvent: (MomotalkEvent) -> Unit,
+  playback: MomotalkPlayback?, active: Boolean) {
   val detail = state.detail.data
   item {
     if (detail != null) {
@@ -276,11 +380,15 @@ private fun LazyListScope.conversationContent(state: MomotalkUiState, onEvent: (
   if (detail == null) return
   if (detail.room.state != "ready") item { Text(stringResource(detail.room.stateTitle())) }
   if (detail.messages.isEmpty() && detail.room.state == "ready") item { Text(stringResource(R.string.momotalk_empty_messages)) }
-  items(detail.messages, key = { "message-${it.id}" }) { message ->
+  items(detail.messages.take(playback?.shown ?: detail.messages.size), key = { "message-${it.id}" }) { message ->
     val participant = detail.participants.firstOrNull { it.slot == message.participant }
-    if (participant != null) MomotalkBubble(message, participant)
+    val current = playback != null && !playback.done && detail.messages.getOrNull(playback.state.completed)?.id == message.id
+    if (participant != null) MomotalkBubble(message, participant,
+      displayText = if (current) playback!!.currentText else message.text,
+      complete = !current, typing = current && playback!!.typing,
+      motionActive = active && playback?.motionAllowed == true)
   }
-  if (detail.images.isNotEmpty()) {
+  if (detail.images.isNotEmpty() && playback?.done != false) {
     item { ShittimSectionHeading(stringResource(R.string.momotalk_selfies_title), Modifier.padding(top = 8.dp)) }
     items(detail.images, key = { "image-${it.participant}-${it.mood}" }) { image ->
       MomotalkSelfieCard(image, detail, state.online, state.detail.loading,
@@ -334,9 +442,11 @@ private fun MomotalkNotice(text: String, tag: String) {
 }
 
 @Composable
-private fun MomotalkBubble(message: MomotalkMessage, participant: MomotalkParticipant) {
+private fun MomotalkBubble(message: MomotalkMessage, participant: MomotalkParticipant,
+  displayText: String = message.text, complete: Boolean = true, typing: Boolean = false, motionActive: Boolean = false) {
   val largeText = LocalDensity.current.fontScale >= 1.5f
-  Column(Modifier.fillMaxWidth().testTag("momotalk-message-${message.id}").semantics(mergeDescendants = true) {},
+  Column(Modifier.fillMaxWidth().then(if (complete) Modifier.semantics(mergeDescendants = true) {}
+    else Modifier.clearAndSetSemantics {}).testTag("momotalk-message-${message.id}"),
     verticalArrangement = Arrangement.spacedBy(8.dp)) {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
       ShittimParticipantAvatar(participant.displayName, participant.slot, size = if (largeText) 32.dp else 36.dp)
@@ -350,8 +460,29 @@ private fun MomotalkBubble(message: MomotalkMessage, participant: MomotalkPartic
     }
     Surface(shape = RoundedCornerShape(topStart = 4.dp, topEnd = 20.dp, bottomStart = 20.dp, bottomEnd = 20.dp),
       color = color, modifier = Modifier.fillMaxWidth().padding(start = if (largeText) 0.dp else 44.dp)) {
-      Text(message.text, Modifier.padding(16.dp), style = MaterialTheme.typography.bodyLarge,
-        color = MaterialTheme.colorScheme.onSurface)
+      if (typing) MomotalkTyping(motionActive)
+      else if (complete) SelectionContainer {
+        Text(displayText, Modifier.padding(16.dp), style = MaterialTheme.typography.bodyLarge,
+          color = MaterialTheme.colorScheme.onSurface)
+      } else Text(displayText, Modifier.padding(16.dp).testTag("momotalk-partial-text"),
+        style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+    }
+  }
+}
+
+@Composable
+private fun MomotalkTyping(active: Boolean) {
+  val cycle = if (active) rememberInfiniteTransition(label = "momotalk typing").animateFloat(0f, 1f,
+    infiniteRepeatable(tween(1_200, easing = LinearEasing)), label = "momotalk typing dots")
+    else rememberUpdatedState(0f)
+  Row(Modifier.padding(16.dp).height(24.dp).testTag("momotalk-typing"),
+    horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
+    repeat(3) { dot ->
+      Surface(Modifier.size(6.dp).graphicsLayer {
+        val wave = sin((cycle.value - dot * .125f) * 2 * PI).toFloat()
+        translationY = if (active) -3.dp.toPx() * wave else 0f
+        alpha = .65f + .35f * wave
+      }, shape = CircleShape, color = MaterialTheme.colorScheme.onSurfaceVariant) {}
     }
   }
 }
