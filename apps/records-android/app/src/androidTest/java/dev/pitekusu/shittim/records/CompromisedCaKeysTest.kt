@@ -34,7 +34,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
-import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -78,6 +77,9 @@ class CompromisedCaKeysTest {
     assertTrue(probe.response === response)
     assertTrue(probe.request === response.request)
     response.close()
+    if (InstrumentationRegistry.getArguments().getString("shittimTlsLiveControl") == "true") {
+      liveNormalTlsControlUsesPlatformValidationAndTheGuard()
+    }
   }
 
   @Test fun absentOrEmptyHandshakeFailsClosed() {
@@ -121,9 +123,8 @@ class CompromisedCaKeysTest {
     })
   }
 
-  @Test fun optionalLiveNormalTlsControlUsesPlatformValidationAndTheGuard() {
-    // Explicit local smoke only; the ordinary regression suite stays offline.
-    assumeTrue(InstrumentationRegistry.getArguments().getString("shittimTlsLiveControl") == "true")
+  private fun liveNormalTlsControlUsesPlatformValidationAndTheGuard() {
+    // Explicit local smoke extends the mandatory offline positive control.
     val client = OkHttpClient.Builder().addNetworkInterceptor(CompromisedCaKeys).build()
     try {
       val request = Request.Builder().url("https://www.python.org/").head().build()

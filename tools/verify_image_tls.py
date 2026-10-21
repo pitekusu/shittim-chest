@@ -10,6 +10,7 @@ import hashlib
 import json
 import platform
 import re
+import socket
 import ssl
 import subprocess
 import sys
@@ -27,6 +28,13 @@ DENIED_ROOTS = {
     "86a1ecba089c4a8d3bbe2734c612ba341d813e043cf9e8a862cd5c57a36bbe6b",
     "d7a7a0fb5d7e2731d771e9484ebcdef71d5f0c3e0a2948782bc83ee0ea699ef4",
 }
+MAX_ATTEMPTS = 3
+ATTEMPT_TIMEOUT_SECONDS = 10
+RETRY_BACKOFF_SECONDS = 0.25
+MAX_CONCURRENT_HANDSHAKES = 4
+# 45 checks / four slots, each with three 10s attempts, 0.25s + 0.5s
+# backoff and at most 1s TLS shutdown: <=381s, plus container startup.
+DOCKER_TIMEOUT_SECONDS = 420
 
 
 def _load_capath(context: ssl.SSLContext, directory: str | None) -> None:
@@ -66,32 +74,86 @@ def _store_metadata(context: ssl.SSLContext) -> dict[str, object]:
     }
 
 
-async def _handshake(context: ssl.SSLContext, host: str, accept: bool) -> dict[str, object]:
-    row: dict[str, object] = {"host": host, "expected": "accept" if accept else "reject"}
+async def _handshake_attempt(context: ssl.SSLContext, host: str, accept: bool) -> dict[str, object]:
     try:
         _reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, 443, ssl=context, server_hostname=host), timeout=10
+            asyncio.open_connection(
+                host,
+                443,
+                ssl=context,
+                server_hostname=host,
+                happy_eyeballs_delay=0.25,
+                interleave=1,
+            ),
+            timeout=ATTEMPT_TIMEOUT_SECONDS,
         )
     except ssl.SSLCertVerificationError as error:
-        row.update(result="certificate_rejected", verify_code=error.verify_code)
-        row["passed"] = not accept and error.verify_code in {20, 23}
-    except TimeoutError, OSError:
-        # DNS, timeout, expiry and hostname failures never count as CA distrust.
-        row.update(result="unverified_connection", passed=False)
+        return {
+            "result": "certificate_rejected",
+            "reason": "certificate_verification_failed",
+            "verify_code": error.verify_code,
+            "passed": not accept and error.verify_code in {20, 23},
+            "retryable": False,
+        }
+    except ssl.SSLError:
+        # Protocol failures are not evidence of CA distrust or transport noise.
+        return {
+            "result": "tls_protocol_error",
+            "reason": "tls_protocol_error",
+            "passed": False,
+            "retryable": False,
+        }
+    except (TimeoutError, OSError) as error:
+        if isinstance(error, TimeoutError):
+            reason = "timeout"
+        elif isinstance(error, socket.gaierror):
+            reason = "dns_error"
+        elif isinstance(error, ConnectionResetError):
+            reason = "connection_reset"
+        elif isinstance(error, ConnectionRefusedError):
+            reason = "connection_refused"
+        else:
+            reason = "transport_error"
+        return {
+            "result": "unverified_connection",
+            "reason": reason,
+            "passed": False,
+            "retryable": True,
+        }
     else:
-        row.update(result="accepted", passed=accept)
         writer.close()
         # The certificate-verifying handshake is already complete. There is no
         # HTTP data to flush, including on a missing close_notify.
         with suppress(TimeoutError, OSError):
             await asyncio.wait_for(writer.wait_closed(), timeout=1)
-    return row
+        return {
+            "result": "accepted",
+            "reason": "tls_handshake_completed",
+            "passed": accept,
+            "retryable": False,
+        }
+
+
+async def _handshake(context: ssl.SSLContext, host: str, accept: bool) -> dict[str, object]:
+    attempts = []
+    for number in range(1, MAX_ATTEMPTS + 1):
+        result = await _handshake_attempt(context, host, accept)
+        attempts.append({"attempt": number, **result})
+        if not result["retryable"] or number == MAX_ATTEMPTS:
+            break
+        await asyncio.sleep(RETRY_BACKOFF_SECONDS * number)
+    return {
+        "host": host,
+        "expected": "accept" if accept else "reject",
+        **result,
+        "attempts": attempts,
+    }
 
 
 async def _probe() -> dict[str, object]:
     contexts = _contexts()
     stores = {name: _store_metadata(context) for name, context in contexts.items()}
-    semaphore = asyncio.Semaphore(4)
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT_HANDSHAKES)
 
     async def bounded(name: str, context: ssl.SSLContext, host: str, accept: bool):
         async with semaphore:
@@ -130,7 +192,7 @@ def _docker(arguments: list[str]) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         check=False,
-        timeout=180,
+        timeout=DOCKER_TIMEOUT_SECONDS,
     )
 
 

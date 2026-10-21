@@ -46,7 +46,8 @@ Firebase SDKへ任意のHTTP clientを注入する公開APIはなく、アプリ
 `CompromisedCaKeysTest`は公開証明書だけを使い、隔離した古い信頼ストアで構築可能な12チェーン、8鍵の16証明書表現、正常チェーン、キャッシュから補完した発行者を検証する。
 固定時刻でのオフラインPKIX検証と、実端末の標準TrustManagerでの拒否状態は分けて確認する。
 通常の試験は外部通信を行わず、正常なHTTPS接続のローカルsmokeだけを追加する場合は
-`-Pandroid.testInstrumentationRunnerArguments.shittimTlsLiveControl=true`を指定する。資格情報は使用しない。
+`-Pandroid.testInstrumentationRunnerArguments.shittimTlsLiveControl=true`を指定する。
+この指定は必須のオフライン正常系に検証を追加し、未指定でも試験をskipしない。資格情報は使用しない。
 
 ### ローカルの一時ビルドをため込まない
 
