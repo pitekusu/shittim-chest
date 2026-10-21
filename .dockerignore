@@ -8,6 +8,7 @@ tools/*
 !tools/canonicalize_wheel_records.py
 !tools/transfer_tree_deterministically.py
 !tools/install_runtime_expat.py
+!tools/install_runtime_ca.py
 !src/
 !src/**
 !tests/

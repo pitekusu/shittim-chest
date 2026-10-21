@@ -13,6 +13,7 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.slack.circuit.foundation.CircuitContent
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
+import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import coil3.request.CachePolicy
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -20,6 +21,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import dev.zacsweers.metro.createGraphFactory
+import okhttp3.OkHttpClient
 
 class MainActivity : ComponentActivity() {
   private val app by viewModels<RecordsAppModel>()
@@ -29,7 +31,12 @@ class MainActivity : ComponentActivity() {
     super.onCreate(savedInstanceState)
     // Presigned requester avatars must not become plaintext files on the device.
     SingletonImageLoader.setSafe { context ->
-      ImageLoader.Builder(context).diskCachePolicy(CachePolicy.DISABLED).build()
+      ImageLoader.Builder(context).diskCachePolicy(CachePolicy.DISABLED)
+        .components {
+          add(OkHttpNetworkFetcherFactory(callFactory = {
+            OkHttpClient.Builder().addNetworkInterceptor(CompromisedCaKeys).build()
+          }))
+        }.build()
     }
     // A recreated Activity must not replay an App Link the user already closed.
     if (savedInstanceState == null) openRecordLink(intent)

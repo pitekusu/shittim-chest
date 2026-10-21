@@ -89,11 +89,11 @@ updates:
           - "minor"
           - "patch"
     # uv-build follows uv's versioning policy, where minor releases can be
-    # breaking. Keep the build backend on the validated 0.12 line.
+    # breaking. Keep the build backend on the validated 0.13 line.
     ignore:
       - dependency-name: "uv-build"
         versions:
-          - ">=0.13"
+          - ">=0.14"
     open-pull-requests-limit: 5
 
   # Keep the independently locked Records service current as its own uv project.
@@ -120,7 +120,7 @@ updates:
     ignore:
       - dependency-name: "uv-build"
         versions:
-          - ">=0.13"
+          - ">=0.14"
     open-pull-requests-limit: 5
 
   - package-ecosystem: "docker"
@@ -144,11 +144,11 @@ updates:
       prefix: "deps"
       include: "scope"
     # uv minor releases can contain breaking changes. Keep the Docker stage
-    # aligned with [tool.uv].required-version on the validated 0.12 line.
+    # aligned with [tool.uv].required-version on the validated 0.13 line.
     ignore:
       - dependency-name: "astral-sh/uv"
         versions:
-          - ">=0.13"
+          - ">=0.14"
     open-pull-requests-limit: 5
 
   # Test services and BuildKit share these image pins across local/CI/release use.

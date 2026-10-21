@@ -11,6 +11,11 @@ concurrency:
   group: discord-security-digest
   cancel-in-progress: false
 
+env:
+  NODE_OPTIONS: --use-openssl-ca
+  SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
+  SSL_CERT_DIR: /etc/ssl/certs
+
 jobs:
   digest:
     name: digest
@@ -25,11 +30,40 @@ jobs:
       security-events: read
       vulnerability-alerts: read
     steps:
+      - name: Update and verify system trust before checkout
+        working-directory: ${{ runner.temp }}
+        run: |
+          sudo apt-get update --quiet
+          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          python3 - <<'PY_TLS'
+          import hashlib
+          import pathlib
+          import re
+          import ssl
+          denied = {
+              "86a1ecba089c4a8d3bbe2734c612ba341d813e043cf9e8a862cd5c57a36bbe6b",
+              "d7a7a0fb5d7e2731d771e9484ebcdef71d5f0c3e0a2948782bc83ee0ea699ef4",
+              "7dd78d5f4f13459a83dff9abbba62edbaf6f2d102bf257fd712f4d9f2746ed8d",
+              "f2edaaff3d9b701fb4d14c9f285f8c0bad90fc3bcc1fa07d47f4718edaba34a5",
+          }
+          bundle = "/etc/ssl/certs/ca-certificates.crt"
+          if not ssl.create_default_context(cafile=bundle).get_ca_certs():
+              raise SystemExit("system CA store is empty; refusing checkout")
+          paths = [pathlib.Path(bundle)]
+          paths.extend(path for path in pathlib.Path("/etc/ssl/certs").iterdir() if path.is_file())
+          for path in paths:
+              for pem in re.findall(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", path.read_text(), re.S):
+                  if hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest() in denied:
+                      raise SystemExit("system CA update still trusts an incident root; refusing checkout")
+          print("System CA distrust verified before checkout")
+          PY_TLS
       - name: Check out trusted main notification code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Configure the incident TLS trust policy
+        uses: ./.github/actions/configure-tls
       - name: Send complete daily security digests
         env:
           DISCORD_THREAD_DEPENDABOT: ${{ vars.DISCORD_THREAD_DEPENDABOT }}

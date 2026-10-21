@@ -2,8 +2,11 @@
 """Required CI checks cannot turn failed or missing work into success."""
 
 import json
+import re
 import sys
+from copy import deepcopy
 from pathlib import Path
+from typing import Any
 
 import pytest
 from tools.check_ci_scope import (
@@ -63,6 +66,62 @@ def test_success_and_not_applicable_are_distinct(required: bool) -> None:
     check_steps(required, {"verify": {"outcome": result, "conclusion": result}}, ["verify"])
     with pytest.raises(ValueError, match="verification step"):
         check_steps(not required, {"verify": {"outcome": result, "conclusion": result}}, ["verify"])
+
+
+@pytest.mark.parametrize("required", [True, False])
+def test_container_workflow_projects_all_raw_results_without_large_builder_outputs(required: bool):
+    workflow = (Path(__file__).resolve().parents[3] / ".github/workflows/ci.yml").read_text()
+    job = workflow.split("\n  container-arm64:\n", 1)[1].split("\n  grype:\n", 1)[0]
+    final = job.split("      - name: Verify the required work or report it as not applicable", 1)[1]
+    template = final.split("CI_STEP_RESULTS: >-\n", 1)[1].split("        run:", 1)[0]
+    names = re.findall(r"--require-step ([\w-]+)", final)
+    assert set(names) == {
+        "verify-container",
+        "verify-tls",
+        "verify-sbom",
+        "verify-record",
+        "retain-sbom",
+    }
+    expected = "success" if required else "skipped"
+    baseline: dict[str, Any] = {
+        name: {"outcome": expected, "conclusion": expected} for name in names
+    }
+    baseline["buildx"] = {"outputs": {"nodes": "public-ca-metadata" * 20_000}}
+
+    def project(results: dict[str, Any]) -> dict[str, Any]:
+        # Render the actual checked-in GitHub expressions; missing properties
+        # become empty strings, just as they do in an Actions string context.
+        rendered = re.sub(
+            r"\$\{\{ steps\['([^']+)'\]\.(outcome|conclusion) \}\}",
+            lambda match: results.get(match[1], {}).get(match[2]) or "",
+            template,
+        )
+        return json.loads(rendered)
+
+    def accepted(results: dict[str, Any]) -> bool:
+        try:
+            check_steps(required, results, names)
+        except ValueError:
+            return False
+        return True
+
+    assert len(json.dumps(baseline)) > 128 * 1024
+    assert len(json.dumps(project(baseline))) < 2048
+    assert accepted(baseline) and accepted(project(baseline))
+    for name in names:
+        for field in ("outcome", "conclusion"):
+            for value in ("success", "skipped", "failure", "cancelled", "timed_out", "", None):
+                if value == expected:
+                    continue
+                changed = deepcopy(baseline)
+                changed[name][field] = value
+                assert not accepted(changed) and not accepted(project(changed))
+            changed = deepcopy(baseline)
+            del changed[name][field]
+            assert not accepted(changed) and not accepted(project(changed))
+        changed = deepcopy(baseline)
+        del changed[name]
+        assert not accepted(changed) and not accepted(project(changed))
 
 
 @pytest.mark.parametrize("required", [True, False])

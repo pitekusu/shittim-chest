@@ -261,8 +261,8 @@ def test_openai_translator_uses_real_sdk_transport_and_bounded_timeout(
     with httpx2.Client(transport=httpx2.MockTransport(respond)) as http_client:
         monkeypatch.setattr(
             adapters,
-            "OpenAI",
-            lambda **kwargs: OpenAI(http_client=http_client, **kwargs),
+            "DefaultHttpxClient",
+            lambda **kwargs: http_client,
         )
         translator = OpenAIInspectorSummaryTranslator(
             cast(Any, SimpleNamespace(load_api_key=lambda: "test-key")),

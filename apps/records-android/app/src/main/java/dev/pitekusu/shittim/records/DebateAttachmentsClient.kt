@@ -56,7 +56,8 @@ import okhttp3.CookieJar
 
 /** Uploads only immutable encrypted draft bytes. S3 receives neither the app token nor cookies. */
 internal class DebateAttachmentsClient(private val engine: HttpClientEngine = OkHttp.create {
-  config { retryOnConnectionFailure(false); followRedirects(false); followSslRedirects(false)
+  config { addNetworkInterceptor(CompromisedCaKeys)
+    retryOnConnectionFailure(false); followRedirects(false); followSslRedirects(false)
     cookieJar(CookieJar.NO_COOKIES); cache(null) }
 }) : Closeable {
   private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }

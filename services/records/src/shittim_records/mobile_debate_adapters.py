@@ -6,10 +6,12 @@ import asyncio
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+import aiohttp
 import discord
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.ingress import DynamoDbIngressRepository
 from shittim_chest.adapters.dynamodb.serializer import SUPPORTED_SCHEMA_VERSIONS
+from shittim_chest.adapters.tls import create_public_tls_context
 from shittim_chest.application.ports import MobileIngressSessionInvalid
 from shittim_chest.application.scale_to_zero import EnqueuedIngress, IngressRequest
 from shittim_chest.domain import AttemptId, DebatePhase
@@ -45,7 +47,8 @@ class DiscordDebatePermissionGuard:
             # Client.start/connect would unnecessarily create a second Bot runtime.
             async with (
                 asyncio.timeout(12),
-                discord.Client(intents=discord.Intents.none()) as client,
+                aiohttp.TCPConnector(ssl=create_public_tls_context(), limit=0) as connector,
+                discord.Client(intents=discord.Intents.none(), connector=connector) as client,
             ):
                 await client.login(self._token)
                 if client.application_id != self._application or client.user is None:

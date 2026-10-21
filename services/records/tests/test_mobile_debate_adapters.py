@@ -1,11 +1,13 @@
 """Metadata-only progress, exact session CAS, and SDK permission resolution."""
 
 import asyncio
+import ssl
 from dataclasses import replace
 from datetime import timedelta
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 
+import aiohttp
 import discord
 import pytest
 from shittim_chest.adapters.dynamodb.codec import marshal_item
@@ -180,6 +182,7 @@ def test_session_condition_uses_canonical_payload_and_revocation_is_not_accepted
 def test_rest_guard_uses_sdk_roles_overwrites_and_bot_permissions(monkeypatch, mode, expected):
     real_client_class = discord.Client
     calls = []
+    connectors = []
 
     class Client:
         application_id = 10**17 + 10
@@ -287,7 +290,16 @@ def test_rest_guard_uses_sdk_roles_overwrites_and_bot_permissions(monkeypatch, m
         async def channel_get(self, _channel):
             return self.channel
 
-    monkeypatch.setattr(discord, "Client", lambda **_kwargs: Client())
+    def create_client(*, connector, **_kwargs):
+        connectors.append(connector)
+        assert isinstance(connector, aiohttp.TCPConnector)
+        assert connector.limit == 0
+        assert isinstance(connector._ssl, ssl.SSLContext)
+        assert connector._ssl.verify_mode == ssl.CERT_REQUIRED
+        assert connector._ssl.check_hostname
+        return Client()
+
+    monkeypatch.setattr(discord, "Client", create_client)
     guard = DiscordDebatePermissionGuard(
         bot_token="fixture-token",  # noqa: S106 - non-authentic offline fixture
         guild_id=GUILD,
@@ -300,6 +312,44 @@ def test_rest_guard_uses_sdk_roles_overwrites_and_bot_permissions(monkeypatch, m
         with pytest.raises(DebateRequestFailure, match=expected):
             asyncio.run(guard.check(requester_id=USER))
     assert calls == ["login"]  # Never Client.start/connect: no second Gateway connection.
+    assert len(connectors) == 1
+    assert connectors[0].closed
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_rest_guard_closes_fresh_connectors_across_invocation_loops(monkeypatch, cancelled):
+    connectors = []
+
+    class Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def login(self, _token):
+            if cancelled:
+                raise asyncio.CancelledError
+            raise discord.LoginFailure("offline fixture")
+
+    def create_client(*, connector, **_kwargs):
+        connectors.append(connector)
+        return Client()
+
+    monkeypatch.setattr(discord, "Client", create_client)
+    guard = DiscordDebatePermissionGuard(
+        bot_token="fixture-token",  # noqa: S106 - non-authentic offline fixture
+        guild_id=GUILD,
+        channel_id=CHANNEL,
+        application_id=str(10**17 + 10),
+    )
+    for _ in range(2):
+        expected = asyncio.CancelledError if cancelled else DebateRequestFailure
+        with pytest.raises(expected):
+            asyncio.run(guard.check(requester_id=USER))
+    assert len(connectors) == 2
+    assert connectors[0] is not connectors[1]
+    assert all(connector.closed for connector in connectors)
 
 
 @pytest.mark.parametrize(

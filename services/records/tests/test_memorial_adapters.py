@@ -18,7 +18,6 @@ import httpx2
 import pytest
 from botocore.config import Config
 from botocore.exceptions import ClientError
-from openai import OpenAI
 from PIL import Image
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.serializer import (
@@ -1242,8 +1241,8 @@ def test_openai_client_disables_sdk_retries_and_bounds_each_paid_call(
     with httpx2.Client(transport=httpx2.MockTransport(rate_limit)) as http_client:
         monkeypatch.setattr(
             adapters,
-            "OpenAI",
-            lambda **kwargs: OpenAI(http_client=http_client, **kwargs),
+            "DefaultHttpxClient",
+            lambda **kwargs: http_client,
         )
         client = generator._openai_client()
         assert client.max_retries == 0

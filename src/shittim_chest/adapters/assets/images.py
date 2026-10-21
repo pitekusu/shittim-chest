@@ -20,6 +20,7 @@ import httpx2
 from botocore.exceptions import ClientError
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+from shittim_chest.adapters.tls import create_public_tls_context
 from shittim_chest.domain.attachments import DebateImage, ImageInput, validate_attachment_id
 
 if TYPE_CHECKING:
@@ -297,7 +298,9 @@ class S3DebateImageStore:
         try:
             async with (
                 asyncio.timeout(30),
-                httpx2.AsyncClient(follow_redirects=False, timeout=20) as client,
+                httpx2.AsyncClient(
+                    follow_redirects=False, timeout=20, verify=create_public_tls_context()
+                ) as client,
                 client.stream("GET", pending.url) as response,
             ):
                 if response.status_code != 200:

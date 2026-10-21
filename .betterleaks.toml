@@ -29,3 +29,10 @@ condition = "AND"
 regexTarget = "line"
 regexes = ['''^\s*"UPLOAD_STORE_PASSWORD": "synthetic",\s*$''']
 paths = ['''^tests/unit/tools/test_android_release\.py$''']
+
+[[rules.allowlists]]
+description = "Public-CA-only PKCS12 integrity password, never an authentication credential"
+condition = "AND"
+regexTarget = "line"
+regexes = ['''^\s*selected \+ "Password": "public-only",\s*$''']
+paths = ['''^tools/configure_build_tls\.py$''']

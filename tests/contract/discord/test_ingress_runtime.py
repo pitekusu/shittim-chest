@@ -952,10 +952,12 @@ def test_ingress_http_rate_limit_uses_retry_after_header() -> None:
     assert _discord_retry_after(error) == 91.25
 
 
-def test_panel_delivery_timeout_preserves_claim_completion_margin() -> None:
+@pytest.mark.asyncio
+async def test_panel_delivery_timeout_preserves_claim_completion_margin() -> None:
     current = snapshot(bound=True)
     application = FakeApplication(current)
-    ingress_runtime = runtime(application, now=NOW)
+    client_set = clients()
+    ingress_runtime = runtime(application, now=NOW, client_set=client_set)
     fresh_claim = replace(
         current,
         panel_refresh_required_at=NOW,
@@ -968,14 +970,23 @@ def test_panel_delivery_timeout_preserves_claim_completion_margin() -> None:
         panel_refresh_claim_expires_at=NOW + timedelta(seconds=10),
     )
 
-    assert ingress_runtime._remaining_panel_delivery_timeout(fresh_claim) == 30
-    assert ingress_runtime._remaining_panel_delivery_timeout(expiring_claim) == 0
+    try:
+        assert ingress_runtime._remaining_panel_delivery_timeout(fresh_claim) == 30
+        assert ingress_runtime._remaining_panel_delivery_timeout(expiring_claim) == 0
+    finally:
+        await asyncio.gather(*(client.close() for client in client_set.values()))
 
 
-def test_runtime_requires_the_dedicated_moderator_client() -> None:
+@pytest.mark.asyncio
+async def test_runtime_requires_the_dedicated_moderator_client() -> None:
     current = snapshot()
     client_set = clients()
+    owned_clients = tuple(client_set.values())
     client_set[DiscordBotSlot.MODERATOR] = discord.Client(intents=discord.Intents.none())
 
-    with pytest.raises(ValueError, match="dedicated moderator"):
-        runtime(FakeApplication(current), client_set=client_set)
+    try:
+        with pytest.raises(ValueError, match="dedicated moderator"):
+            runtime(FakeApplication(current), client_set=client_set)
+    finally:
+        await asyncio.gather(*(client.close() for client in owned_clients))
+        await client_set[DiscordBotSlot.MODERATOR].close()

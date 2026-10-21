@@ -28,8 +28,8 @@ UV_REFERENCE_PATTERN: Final = re.compile(
     r"^ghcr\.io/astral-sh/uv:(?P<version>\d+\.\d+\.\d+)@"
     r"(?P<digest>sha256:[0-9a-f]{64})$"
 )
-UV_MIN_VERSION: Final = (0, 12, 7)
-UV_MAX_VERSION_EXCLUSIVE: Final = (0, 13, 0)
+UV_MIN_VERSION: Final = (0, 13, 4)
+UV_MAX_VERSION_EXCLUSIVE: Final = (0, 14, 0)
 DHI_REFERENCE_PATTERN: Final = re.compile(
     r"^dhi\.io/python:(?P<tag>3\.14\.8-debian13(?P<dev>-dev)?)"
     r"@(?P<digest>sha256:[0-9a-f]{64})$"
@@ -311,6 +311,16 @@ def validate_dockerfile(policy: ContainerPolicy, dockerfile: Path) -> None:
     )
     if any(marker not in runtime_text for marker in production_venv_transfer):
         raise ValueError("production stage must transfer the venv without volatile source metadata")
+    if any(
+        marker not in runtime_text
+        for marker in (
+            "source=/etc/ssl/certs,target=/run/updated-ca/certs,ro",
+            "source=/usr/share/ca-certificates,target=/run/updated-ca/anchors,ro",
+            "source=/etc/ca-certificates.conf,target=/run/updated-ca/ca-certificates.conf,ro",
+            '["/usr/bin/python3.14", "/tmp/install_runtime_ca.py"]',
+        )
+    ):
+        raise ValueError("production stage must replace the runtime CA trees from patched upstream")
     if "COPY --from=builder" in runtime_text:
         raise ValueError("production stage must not COPY the venv directly from builder")
     if f"USER {policy.identity.user_spec}" not in text:
@@ -328,6 +338,7 @@ def validate_dockerignore(dockerignore: Path) -> None:
         "tools/*",
         "!tools/canonicalize_wheel_records.py",
         "!tools/transfer_tree_deterministically.py",
+        "!tools/install_runtime_ca.py",
     ]
     positions: list[int] = []
     for rule in required_rules:

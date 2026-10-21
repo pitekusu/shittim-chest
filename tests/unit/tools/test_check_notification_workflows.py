@@ -1757,6 +1757,21 @@ def test_runtime_required_gates_require_the_classifier_job_to_succeed(directory:
         validate_notification_workflows(directory)
 
 
+def test_runtime_tls_verification_cannot_be_omitted_from_required_outcomes(directory: Path) -> None:
+    _replace(directory / "ci.yml", "--require-step verify-tls", "", 1)
+
+    with pytest.raises(WorkflowPolicyError, match="every required step outcome"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize("field", ["outcome", "conclusion"])
+def test_runtime_projection_cannot_replace_raw_results_with_success(directory: Path, field: str):
+    _replace(directory / "ci.yml", "${{ steps['verify-tls']." + field + " }}", "success", 1)
+
+    with pytest.raises(WorkflowPolicyError, match="every required step outcome"):
+        validate_notification_workflows(directory)
+
+
 @pytest.mark.parametrize(
     ("workflow", "old", "new"),
     [
@@ -1876,7 +1891,7 @@ def test_repeated_action_version_requires_one_commit_pin(directory: Path) -> Non
 def test_release_requires_the_locked_node_version(directory: Path) -> None:
     _replace(
         directory / RELEASE_WORKFLOW,
-        '          node-version: "24.22.0"',
+        '          node-version: "24.22.1"',
         "          node-version-file: .node-version",
         1,
     )

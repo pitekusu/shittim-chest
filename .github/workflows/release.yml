@@ -16,11 +16,14 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  NODE_OPTIONS: --use-openssl-ca
+  SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
+  SSL_CERT_DIR: /etc/ssl/certs
   AWS_REGION: ap-northeast-1
   COST_REGION: us-east-1
   PYTHON_VERSION: 3.14.8
   PYTHONDONTWRITEBYTECODE: "1"
-  UV_VERSION: 0.12.24
+  UV_VERSION: 0.13.4
   AWS_SIGNER_NOTATION_INSTALLER_VERSION: 2.2.0-1
   NOTATION_CLI_VERSION: 1.3.2
   AWS_SIGNER_NOTATION_PLUGIN_VERSION: 1.0.2292
@@ -58,11 +61,42 @@ jobs:
           test "${GITHUB_REPOSITORY}" = "${EXPECTED_REPOSITORY}"
           test "${GITHUB_REPOSITORY_ID}" = "${EXPECTED_REPOSITORY_ID}"
           test "${GITHUB_SHA}" = "${GITHUB_WORKFLOW_SHA}"
+      - name: Update and verify system trust before checkout
+        working-directory: ${{ runner.temp }}
+        run: |
+          sudo apt-get update --quiet
+          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          python3 - <<'PY_TLS'
+          import hashlib
+          import pathlib
+          import re
+          import ssl
+          denied = {
+              "86a1ecba089c4a8d3bbe2734c612ba341d813e043cf9e8a862cd5c57a36bbe6b",
+              "d7a7a0fb5d7e2731d771e9484ebcdef71d5f0c3e0a2948782bc83ee0ea699ef4",
+              "7dd78d5f4f13459a83dff9abbba62edbaf6f2d102bf257fd712f4d9f2746ed8d",
+              "f2edaaff3d9b701fb4d14c9f285f8c0bad90fc3bcc1fa07d47f4718edaba34a5",
+          }
+          bundle = "/etc/ssl/certs/ca-certificates.crt"
+          if not ssl.create_default_context(cafile=bundle).get_ca_certs():
+              raise SystemExit("system CA store is empty; refusing checkout")
+          paths = [pathlib.Path(bundle)]
+          paths.extend(path for path in pathlib.Path("/etc/ssl/certs").iterdir() if path.is_file())
+          for path in paths:
+              for pem in re.findall(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", path.read_text(), re.S):
+                  if hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest() in denied:
+                      raise SystemExit("system CA update still trusts an incident root; refusing checkout")
+          print("System CA distrust verified before checkout")
+          PY_TLS
       - name: Check out the trusted main commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Configure the incident TLS trust policy
+        uses: ./.github/actions/configure-tls
+        with:
+          docker: "true"
       - name: Require immutable OIDC identity and successful main gates
         env:
           GH_TOKEN: ${{ github.token }}
@@ -143,7 +177,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.22.0"
+          node-version: "24.22.1"
           cache: npm
       - name: Install locked test environments
         run: |
@@ -485,11 +519,21 @@ jobs:
           image=$(python3 tools/container_images.py buildkit)
           echo "image=${image}" >> "${GITHUB_OUTPUT}"
       - name: Set up Buildx
+        id: buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           version: v0.38.0
           driver-opts: |
             image=${{ steps.buildkit-image.outputs.image }}
+            env.SSL_CERT_FILE=/etc/buildkit/certs/docker.io/ca.pem
+            env.SSL_CERT_DIR=/etc/buildkit/no-extra-ca
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              ca = ["${{ runner.temp }}/shittim-tls/ca.pem"]
+      - name: Verify the actual BuildKit trust store
+        env:
+          BUILDKIT_BUILDER: ${{ steps.buildx.outputs.name }}
+        run: python3 -m tools.configure_build_tls --check-buildkit "${BUILDKIT_BUILDER}"
       - name: Build and load the production image once
         id: build-normal
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -1031,11 +1075,40 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - name: Update and verify system trust before checkout
+        working-directory: ${{ runner.temp }}
+        run: |
+          sudo apt-get update --quiet
+          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          python3 - <<'PY_TLS'
+          import hashlib
+          import pathlib
+          import re
+          import ssl
+          denied = {
+              "86a1ecba089c4a8d3bbe2734c612ba341d813e043cf9e8a862cd5c57a36bbe6b",
+              "d7a7a0fb5d7e2731d771e9484ebcdef71d5f0c3e0a2948782bc83ee0ea699ef4",
+              "7dd78d5f4f13459a83dff9abbba62edbaf6f2d102bf257fd712f4d9f2746ed8d",
+              "f2edaaff3d9b701fb4d14c9f285f8c0bad90fc3bcc1fa07d47f4718edaba34a5",
+          }
+          bundle = "/etc/ssl/certs/ca-certificates.crt"
+          if not ssl.create_default_context(cafile=bundle).get_ca_certs():
+              raise SystemExit("system CA store is empty; refusing checkout")
+          paths = [pathlib.Path(bundle)]
+          paths.extend(path for path in pathlib.Path("/etc/ssl/certs").iterdir() if path.is_file())
+          for path in paths:
+              for pem in re.findall(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", path.read_text(), re.S):
+                  if hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest() in denied:
+                      raise SystemExit("system CA update still trusts an incident root; refusing checkout")
+          print("System CA distrust verified before checkout")
+          PY_TLS
       - name: Check out the exact planned commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Configure the incident TLS trust policy
+        uses: ./.github/actions/configure-tls
       - name: Set up uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
@@ -1596,11 +1669,40 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - name: Update and verify system trust before checkout
+        working-directory: ${{ runner.temp }}
+        run: |
+          sudo apt-get update --quiet
+          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          python3 - <<'PY_TLS'
+          import hashlib
+          import pathlib
+          import re
+          import ssl
+          denied = {
+              "86a1ecba089c4a8d3bbe2734c612ba341d813e043cf9e8a862cd5c57a36bbe6b",
+              "d7a7a0fb5d7e2731d771e9484ebcdef71d5f0c3e0a2948782bc83ee0ea699ef4",
+              "7dd78d5f4f13459a83dff9abbba62edbaf6f2d102bf257fd712f4d9f2746ed8d",
+              "f2edaaff3d9b701fb4d14c9f285f8c0bad90fc3bcc1fa07d47f4718edaba34a5",
+          }
+          bundle = "/etc/ssl/certs/ca-certificates.crt"
+          if not ssl.create_default_context(cafile=bundle).get_ca_certs():
+              raise SystemExit("system CA store is empty; refusing checkout")
+          paths = [pathlib.Path(bundle)]
+          paths.extend(path for path in pathlib.Path("/etc/ssl/certs").iterdir() if path.is_file())
+          for path in paths:
+              for pem in re.findall(r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", path.read_text(), re.S):
+                  if hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest() in denied:
+                      raise SystemExit("system CA update still trusts an incident root; refusing checkout")
+          print("System CA distrust verified before checkout")
+          PY_TLS
       - name: Check out the exact release cleanup implementation
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Configure the incident TLS trust policy
+        uses: ./.github/actions/configure-tls
       - name: Download the exact planned release evidence for cleanup
         id: cleanup_evidence
         if: ${{ needs.plan.result == 'success' }}

@@ -25,6 +25,7 @@ from openai import (
     APIStatusError,
     APITimeoutError,
     AuthenticationError,
+    DefaultHttpxClient,
     NotFoundError,
     OpenAI,
     PermissionDeniedError,
@@ -41,6 +42,7 @@ if TYPE_CHECKING:
 
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.serializer import OPAQUE_AFFECTION_SCHEMA_VERSIONS, DynamoItem
+from shittim_chest.adapters.tls import create_public_tls_context
 from shittim_chest.config.models import PersonaConfigPayload
 
 from shittim_records.admin import AdminFailure, PromptRevisionIncomplete
@@ -2178,6 +2180,7 @@ class OpenAIMemorialContentGenerator:
     def _openai_client(self) -> Any:
         if self._client is None:
             self._client = OpenAI(
+                http_client=DefaultHttpxClient(verify=create_public_tls_context()),
                 api_key=self._configuration.load_api_key(),
                 max_retries=0,
                 timeout=httpx2.Timeout(

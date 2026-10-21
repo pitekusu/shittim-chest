@@ -2,9 +2,9 @@
 
 ARG SOURCE_DATE_EPOCH=0
 
-FROM ghcr.io/astral-sh/uv:0.12.24@sha256:3af4716e991d6956a41e573eab705d0ee08500cd829ed30293eb8472f372c65a AS uv
+FROM ghcr.io/astral-sh/uv:0.13.4@sha256:9f130421e930bfbdc563c00740466603f8723158e90297d07957c2294640262b AS uv
 
-FROM dhi.io/python:3.14.8-debian13-dev@sha256:5b7724d3ca177d536fe88db1de8c900f29671f2cca613358e618567acfe526b2 AS builder
+FROM dhi.io/python:3.14.8-debian13-dev@sha256:f342776dc2e3f2c3d9f37cf4cc182bbeb81b4eb4d3543357163aa5fa95bdc8bd AS builder
 
 ARG SOURCE_DATE_EPOCH
 
@@ -17,6 +17,10 @@ ENV SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
     UV_PYTHON_DOWNLOADS=0
 
 WORKDIR /app
+
+# DHI prunes hashed aliases. Regenerate them with the patched upstream policy
+# before transferring the complete CA store to the runtime.
+RUN update-ca-certificates --fresh
 
 # The DHI builder has the Debian fix; its runtime still carries libexpat1 2.8.3.
 # APT authenticates the exact package installed below.
@@ -37,6 +41,8 @@ COPY README.md LICENSE ./
 COPY src ./src
 COPY tools/canonicalize_wheel_records.py /tmp/canonicalize_wheel_records.py
 COPY tools/transfer_tree_deterministically.py /tmp/transfer_tree_deterministically.py
+COPY tools/transfer_tree_deterministically.py /tmp/tools/transfer_tree_deterministically.py
+COPY tools/install_runtime_ca.py /tmp/install_runtime_ca.py
 
 # CPython's bytecode serialization can vary with uv's parallel interpreter state.
 # Compile once in a fixed order before normalizing the runtime tree.
@@ -59,6 +65,16 @@ ENV SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
 WORKDIR /app
 
 USER 0:0
+# The pinned builder has the upstream CA fix; runtime still trusts both bad roots.
+# Replace the complete generated/anchor trees so old capath aliases cannot survive.
+# Remove this overlay once the runtime's own CA store passes the same trust checks.
+RUN --mount=type=bind,from=builder,source=/etc/ssl/certs,target=/run/updated-ca/certs,ro \
+    --mount=type=bind,from=builder,source=/usr/share/ca-certificates,target=/run/updated-ca/anchors,ro \
+    --mount=type=bind,from=builder,source=/etc/ca-certificates.conf,target=/run/updated-ca/ca-certificates.conf,ro \
+    --mount=type=bind,from=builder,source=/tmp/tools,target=/tmp/tools,ro \
+    --mount=type=bind,from=builder,source=/tmp/install_runtime_ca.py,target=/tmp/install_runtime_ca.py,ro \
+    ["/usr/bin/python3.14", "/tmp/install_runtime_ca.py"]
+
 RUN --mount=type=bind,from=builder,source=/usr/bin,target=/run/package-tools/bin,ro \
     --mount=type=bind,from=builder,source=/usr/sbin,target=/run/package-tools/sbin,ro \
     --mount=type=bind,from=builder,source=/usr/lib,target=/run/package-tools/lib,ro \

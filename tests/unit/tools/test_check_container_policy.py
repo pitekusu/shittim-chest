@@ -254,7 +254,7 @@ def test_dependabot_uv_digest_bump_does_not_require_python_constant(tmp_path: Pa
     assert match is not None
     bumped = source.replace(
         match.group(0),
-        "FROM ghcr.io/astral-sh/uv:0.12.99@"
+        "FROM ghcr.io/astral-sh/uv:0.13.99@"
         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa AS uv",
         1,
     )
@@ -292,9 +292,9 @@ def test_dependabot_dhi_digest_bump_does_not_require_policy_digest(tmp_path: Pat
     [
         "ghcr.io/astral-sh/uv:0.12.7",
         "ghcr.io/astral-sh/uv:latest@sha256:" + ("a" * 64),
-        "docker.io/astral-sh/uv:0.12.7@sha256:" + ("a" * 64),
-        "ghcr.io/astral-sh/uv:0.13.0@sha256:" + ("a" * 64),
-        "ghcr.io/astral-sh/uv:0.12.6@sha256:" + ("a" * 64),
+        "docker.io/astral-sh/uv:0.13.4@sha256:" + ("a" * 64),
+        "ghcr.io/astral-sh/uv:0.14.0@sha256:" + ("a" * 64),
+        "ghcr.io/astral-sh/uv:0.13.3@sha256:" + ("a" * 64),
     ],
 )
 def test_uv_reference_rejects_unpinned_or_out_of_range_images(reference: str) -> None:
@@ -304,7 +304,7 @@ def test_uv_reference_rejects_unpinned_or_out_of_range_images(reference: str) ->
 
 def test_uv_reference_accepts_allowed_digest_pin() -> None:
     validate_uv_reference(
-        "ghcr.io/astral-sh/uv:0.12.7@sha256:"
+        "ghcr.io/astral-sh/uv:0.13.4@sha256:"
         "df4cae8f3a96d175e2e5f992e597550000edbe78fdc2594d5cd8de1a217f504c"
     )
 

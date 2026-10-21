@@ -31,6 +31,24 @@ CodeQL接続（C04）はCodeQL 2.27.2で当時のKotlin 2.4.20のmanual抽出を
 
 [Fragmentの公式更新情報](https://developer.android.com/jetpack/androidx/releases/fragment)と[Composeのエッジツーエッジ設定](https://developer.android.com/develop/ui/compose/system/setup-e2e)を参照する。
 
+### eMudhra中間CA侵害に対する通信の保護
+
+認証・記録取得・討論依頼・添付画像のKtor/OkHttpとCoilには、侵害された8鍵のSPKIを拒否する共通のnetwork interceptorを設定する。
+OSの証明書ストア、通常の証明書・ホスト名検証、Certificate Transparencyの扱いは既存のOkHttp／Androidに委ねる。
+検証済みチェーンをHTTPヘッダー・本文の送信前に確認し、cross-signと端末のキャッシュから補完された中間CAも拒否する。
+対象鍵だけを拒否し、接続先の証明書を固定するpinningや、信頼するルートの独自スナップショットは導入しない。
+
+Firebase Installationsの`HttpsURLConnection`と、別processのGoogle Play開発者サービス・Custom Tabsの通信はこのinterceptorを通らない。
+[Googleの公式説明](https://blog.google/security/protecting-chrome-and-android-users-from-compromised-emudhra-intermediate-ca-certificates/)では、Android向けの同等のSPKIブロックをGoogle Play開発者サービス経由で配信済みで、端末再起動で更新を促せる。
+OS・Google Playシステム・開発者サービス・ブラウザの更新を適用し、到達確認ができていない端末は対策済みと扱わない。
+Firebase SDKへ任意のHTTP clientを注入する公開APIはなく、アプリ全体のTLS既定値を書き換える回避策は採用しない。
+
+`CompromisedCaKeysTest`は公開証明書だけを使い、隔離した古い信頼ストアで構築可能な12チェーン、8鍵の16証明書表現、正常チェーン、キャッシュから補完した発行者を検証する。
+固定時刻でのオフラインPKIX検証と、実端末の標準TrustManagerでの拒否状態は分けて確認する。
+通常の試験は外部通信を行わず、正常なHTTPS接続のローカルsmokeだけを追加する場合は
+`-Pandroid.testInstrumentationRunnerArguments.shittimTlsLiveControl=true`を指定する。
+この指定は必須のオフライン正常系に検証を追加し、未指定でも試験をskipしない。資格情報は使用しない。
+
 ### ローカルの一時ビルドをため込まない
 
 ローカルではリポジトリのrootから管理用の入口を使う。設定済みの`JAVA_HOME`と`ANDROID_HOME`、署名・Firebaseの環境変数は引き継ぐ。
@@ -41,6 +59,11 @@ uv run --frozen python -m tools.run_android_build -- :app:assembleDebug :app:lin
 
 Android projectを明示する場合は`--project apps/records-android`を指定する。この端末に配置した`shittim-android-build`も同じ入口である。
 Release配布のヘルパーもこの入口へ接続し、`--output-dir`の出力から検証済みAABを取り出す。実署名・versionCode確認・Playへの提出手順は変えない。
+
+この入口はGradle起動前に、選択したJDKの既存cacertsとOS bundleから対象CA／公開鍵だけを除いた一時ストアを生成する。
+標準の`javax.net.ssl.trustStore`と各ツールのCA環境変数で選択し、Wrapper・Maven・SDK取得にも適用する。
+`JAVA_HOME`未指定時は既存の固定JDKを探す。別のtrustStore指定は拒否し、CIが生成したストアを継承する場合も実体を検査する。
+CAの追加、ホストの恒久ストア変更、TLS検証の無効化は行わず、一時ストアも管理対象ビルド終了時に回収する。
 
 - 中間生成物、project cache、Kotlinのpersistent project data、JVM／nativeの一時ファイルは、`XDG_CACHE_HOME`配下の専用ディスク領域で作る。Kotlin公式の`kotlin.project.persistent.dir`を使い、checkoutの`.kotlin`にも蓄積させない。`/tmp`のtmpfsや使い捨てソースコピーには蓄積させない。
 - 標準の`TemporaryDirectory`とGradle init-scriptを使い、処理終了を確認してから一時領域を削除する。強制終了の残骸は、次回実行時にこの入口が作った非使用領域だけを回収する。同時ビルドによる衝突を防ぐ。Gradleの単発JVMも使用権ロックを持ち、起動途中の中断などで終了を保証できなければ`android_build_cleanup_needed`で止める。使用中・状態不明の領域を自動削除して新しいビルドを重ねない。
