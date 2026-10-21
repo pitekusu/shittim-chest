@@ -1048,7 +1048,29 @@ jobs:
       - name: Verify the required work or report it as not applicable
         if: always()
         env:
-          CI_STEP_RESULTS: ${{ toJSON(steps) }}
+          CI_STEP_RESULTS: >-
+            {
+              "verify-container": {
+                "outcome": "${{ steps['verify-container'].outcome }}",
+                "conclusion": "${{ steps['verify-container'].conclusion }}"
+              },
+              "verify-tls": {
+                "outcome": "${{ steps['verify-tls'].outcome }}",
+                "conclusion": "${{ steps['verify-tls'].conclusion }}"
+              },
+              "verify-sbom": {
+                "outcome": "${{ steps['verify-sbom'].outcome }}",
+                "conclusion": "${{ steps['verify-sbom'].conclusion }}"
+              },
+              "verify-record": {
+                "outcome": "${{ steps['verify-record'].outcome }}",
+                "conclusion": "${{ steps['verify-record'].conclusion }}"
+              },
+              "retain-sbom": {
+                "outcome": "${{ steps['retain-sbom'].outcome }}",
+                "conclusion": "${{ steps['retain-sbom'].conclusion }}"
+              }
+            }
         run: >-
           python3 tools/check_ci_scope.py
           --require-step verify-container

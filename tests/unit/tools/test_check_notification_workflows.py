@@ -1764,6 +1764,14 @@ def test_runtime_tls_verification_cannot_be_omitted_from_required_outcomes(direc
         validate_notification_workflows(directory)
 
 
+@pytest.mark.parametrize("field", ["outcome", "conclusion"])
+def test_runtime_projection_cannot_replace_raw_results_with_success(directory: Path, field: str):
+    _replace(directory / "ci.yml", "${{ steps['verify-tls']." + field + " }}", "success", 1)
+
+    with pytest.raises(WorkflowPolicyError, match="every required step outcome"):
+        validate_notification_workflows(directory)
+
+
 @pytest.mark.parametrize(
     ("workflow", "old", "new"),
     [

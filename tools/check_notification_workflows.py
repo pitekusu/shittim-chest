@@ -1521,11 +1521,29 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         final = _workflow_step_block(
             block, "Verify the required work or report it as not applicable"
         )
+        # Buildx publishes the full registry CA bundle in its node outputs. Only
+        # outcomes belong in this environment; the full steps object exceeds the
+        # Linux per-variable limit before the required verification can start.
+        if job == "container-arm64":
+            results_valid = (
+                "CI_STEP_RESULTS: >-" in final
+                and "toJSON(steps)" not in final
+                and all(
+                    f'"{step}": {{' in final
+                    and all(
+                        f'"{field}": "' + "${{ steps['" + step + "']." + field + ' }}"' in final
+                        for field in ("outcome", "conclusion")
+                    )
+                    for step in steps
+                )
+            )
+        else:
+            results_valid = "CI_STEP_RESULTS: ${{ toJSON(steps) }}" in final
         if (
             'python3 tools/check_ci_scope.py --github-output "${GITHUB_OUTPUT}"' not in guard
             or "if: always()" not in final
             or "python3 tools/check_ci_scope.py" not in final
-            or "CI_STEP_RESULTS: ${{ toJSON(steps) }}" not in final
+            or not results_valid
             or any(f"--require-step {step}" not in final for step in steps)
         ):
             raise WorkflowPolicyError(f"CI {job} must verify every required step outcome")
