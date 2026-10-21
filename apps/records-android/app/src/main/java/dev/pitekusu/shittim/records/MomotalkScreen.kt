@@ -109,7 +109,7 @@ private val momotalkZone = ZoneId.of("Asia/Tokyo")
 @Composable
 internal fun MomotalkScreen(state: MomotalkUiState, onEvent: (MomotalkEvent) -> Unit,
   modifier: Modifier = Modifier, showAppBar: Boolean = true,
-  animationsEnabled: Boolean = true) {
+  animationsEnabled: Boolean = ValueAnimator.areAnimatorsEnabled()) {
   val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
   val active = lifecycle.isAtLeast(Lifecycle.State.RESUMED) && LocalWindowInfo.current.isWindowFocused
   val scale = rememberCoroutineScope().coroutineContext[MotionDurationScale]?.scaleFactor ?: 1f
@@ -119,7 +119,7 @@ internal fun MomotalkScreen(state: MomotalkUiState, onEvent: (MomotalkEvent) -> 
   val playback = androidx.compose.runtime.key(state.selectedWeek, state.selectedRoom) {
     state.detail.data.takeIf { state.selectedRoom != null }?.let {
       rememberMomotalkPlayback(it.messages, active,
-        animationsEnabled && ValueAnimator.areAnimatorsEnabled() && scale > 0f && !touchExploration, replay)
+        animationsEnabled && scale > 0f && !touchExploration, replay)
     }
   }
   val conversationList = androidx.compose.runtime.key(state.selectedWeek, state.selectedRoom) { rememberLazyListState() }

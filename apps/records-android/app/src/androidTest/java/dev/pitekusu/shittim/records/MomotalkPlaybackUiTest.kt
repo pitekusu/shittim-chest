@@ -1,6 +1,5 @@
 package dev.pitekusu.shittim.records
 
-import android.animation.ValueAnimator
 import android.view.ViewGroup
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
@@ -11,6 +10,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.ComposeView
@@ -48,7 +48,11 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 @ScreenTest
 class MomotalkPlaybackUiTest {
-  @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+  // The CI device disables system animations. Compose's standard test context
+  // gives these explicit playback tests a deterministic clock without changing device settings.
+  @get:Rule val compose = createAndroidComposeRule<MainActivity>(effectContext = object : MotionDurationScale {
+    override val scaleFactor = 1f
+  })
 
   @After fun restoreClock() { compose.mainClock.autoAdvance = true }
 
@@ -190,7 +194,6 @@ class MomotalkPlaybackUiTest {
   }
 
   @Test fun restorationRetainsNumericProgressAndTheReadersFollowChoice() {
-    assertTrue("Run motion tests with system animator_duration_scale=1", ValueAnimator.areAnimatorsEnabled())
     val messages = requireNotNull(shortConversation().detail.data).messages
     val active = mutableStateOf(true)
     lateinit var playback: MomotalkPlayback
@@ -308,7 +311,6 @@ class MomotalkPlaybackUiTest {
   private fun show(state: MutableState<MomotalkUiState>, animationsEnabled: Boolean = true,
     owner: LifecycleOwner? = null, width: MutableState<Int> = mutableStateOf(420),
     fontScale: MutableState<Float> = mutableStateOf(1f), onEvent: (MomotalkEvent) -> Unit = {}) {
-    if (animationsEnabled) assertTrue("Run motion tests with system animator_duration_scale=1", ValueAnimator.areAnimatorsEnabled())
     compose.mainClock.autoAdvance = !animationsEnabled
     compose.activityRule.scenario.onActivity { activity -> activity.setContent {
       val density = LocalDensity.current
