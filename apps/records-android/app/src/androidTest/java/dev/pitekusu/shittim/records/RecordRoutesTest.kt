@@ -54,4 +54,16 @@ class RecordRoutesTest {
       catch (_: IllegalArgumentException) { }
     }
   }
+
+  @Test fun momotalkRouteRestoresOnlyIdentifiersAndIncomingRecordClosesBothMomotalkRoutes() {
+    val room = MomotalkRoom("2026-10-18", "r".repeat(43))
+    assertEquals(room, Json.decodeFromString<MomotalkRoom>(Json.encodeToString(room)))
+    val stack = NavBackStack<NavKey>(RecordsList, Momotalk, room)
+    stack.openRecord("a".repeat(43))
+    assertEquals(listOf(RecordsList, RecordDetail("a".repeat(43))), stack.toList())
+    for (invalid in listOf("2026-02-30", "2026-1-1", "2026-10-18?next=/admin")) {
+      try { MomotalkRoom(invalid, room.roomId); fail("invalid week") }
+      catch (_: IllegalArgumentException) { }
+    }
+  }
 }

@@ -558,6 +558,65 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
       it.validate(); check(it.period == period)
     }
 
+  suspend fun momotalkWeeks(accessToken: String, cursor: String? = null): MomotalkWeeksPage =
+    momotalkRead("/api/v1/momotalk/weeks?limit=20", accessToken, cursor,
+      validCursor = ::validMomotalkWeekId) {
+      it.validate(); check(cursor == null || it.nextCursor != cursor)
+      check(cursor == null || it.weeks.all { week -> week.weekId < cursor })
+    }
+
+  suspend fun momotalkRooms(accessToken: String, weekId: String, cursor: String? = null): MomotalkRoomsPage {
+    if (!validMomotalkWeekId(weekId)) throw MomotalkException(MomotalkFailure.INVALID_RESPONSE)
+    return momotalkRead("/api/v1/momotalk/weeks/$weekId/rooms?limit=20", accessToken, cursor,
+      validCursor = ::validMomotalkRoomId) {
+      it.validate(); check(it.week.weekId == weekId && (cursor == null || it.nextCursor != cursor))
+      check(cursor == null || it.rooms.all { room -> room.roomId > cursor })
+    }
+  }
+
+  suspend fun momotalkRoom(accessToken: String, weekId: String, roomId: String): MomotalkRoomDetail {
+    if (!validMomotalkWeekId(weekId) || !validMomotalkRoomId(roomId))
+      throw MomotalkException(MomotalkFailure.INVALID_RESPONSE)
+    return momotalkRead("/api/v1/momotalk/weeks/$weekId/rooms/$roomId", accessToken,
+      contract = "momotalk-selfie-v2") {
+      it.validate(requireUrls = true); check(it.week.weekId == weekId && it.room.roomId == roomId)
+    }
+  }
+
+  private suspend inline fun <reified T> momotalkRead(path: String, token: String, cursor: String? = null,
+    contract: String? = null, validCursor: (String) -> Boolean = { false }, validate: (T) -> Unit): T {
+    if (!mobileOpaqueValue.matches(token)) throw MomotalkException(MomotalkFailure.AUTH_REQUIRED)
+    if (cursor != null && !validCursor(cursor)) throw MomotalkException(MomotalkFailure.INVALID_RESPONSE)
+    try { return read<T>(path, token, cursor, contract).also(validate) }
+    catch (error: CancellationException) { throw error }
+    catch (error: RecordReadException) {
+      throw MomotalkException(when (error.failure) {
+        RecordReadFailure.AUTH_REQUIRED -> MomotalkFailure.AUTH_REQUIRED
+        RecordReadFailure.NOT_FOUND -> MomotalkFailure.NOT_FOUND
+        RecordReadFailure.UNAVAILABLE -> MomotalkFailure.UNAVAILABLE
+        RecordReadFailure.CURSOR_INVALID -> MomotalkFailure.CURSOR_INVALID
+        else -> MomotalkFailure.INVALID_RESPONSE
+      })
+    } catch (_: Exception) { throw MomotalkException(MomotalkFailure.INVALID_RESPONSE) }
+  }
+
+  suspend fun momotalkImage(url: String, weekId: String, roomId: String): ByteArray {
+    if (!validMomotalkImageUrl(url, weekId, roomId)) throw MomotalkException(MomotalkFailure.INVALID_RESPONSE)
+    try {
+      // The presigned S3 URL is a separate transport; it never receives the mobile session.
+      return client.prepareGet(url) { header(HttpHeaders.CacheControl, "no-store") }.execute { response ->
+        if (response.status.value != 200) throw MomotalkException(MomotalkFailure.UNAVAILABLE)
+        if (response.contentType()?.withoutParameters()?.toString() != "image/webp")
+          throw MomotalkException(MomotalkFailure.INVALID_RESPONSE)
+        val bytes = response.bodyAsChannel().readBuffer((MAX_ATTACHMENT_BYTES + 1).toLong()).readByteArray()
+        try { validateAttachmentBytes(bytes); bytes }
+        catch (_: Exception) { bytes.fill(0); throw MomotalkException(MomotalkFailure.INVALID_RESPONSE) }
+      }
+    } catch (error: CancellationException) { throw error }
+    catch (error: MomotalkException) { throw error }
+    catch (_: Exception) { throw MomotalkException(MomotalkFailure.UNAVAILABLE) }
+  }
+
   private suspend inline fun <reified T> insightRead(path: String, token: String, cursor: String? = null,
     validate: (T) -> Unit): T {
     if (!mobileOpaqueValue.matches(token)) throw InsightsException(InsightsFailure.AUTH_REQUIRED)

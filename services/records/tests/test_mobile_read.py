@@ -12,13 +12,21 @@ from tests.test_mobile_auth_adapters import mobile_session
 from tests.test_mobile_session import SessionStore
 
 from shittim_records.auth import SESSION_COOKIE_NAME, AuthFailure, _digest
-from shittim_records.contracts import RecordDetailResponse, RecordSyncIndexResponse
+from shittim_records.contracts import (
+    MomotalkRoomResponse,
+    MomotalkRoomsResponse,
+    MomotalkWeeksResponse,
+    RecordDetailResponse,
+    RecordSyncIndexResponse,
+)
 from shittim_records.http_api import ReadHttpController
+from shittim_records.momotalk import week_for_schedule
 
 TOKEN = "t" * 43
 BEARER = {"Authorization": f"Bearer {TOKEN}"}
 COOKIE = [f"{SESSION_COOKIE_NAME}=session-token"]
 DIGEST = _digest(SESSION_KEY, "mobile-session", TOKEN)
+MOMOTALK_WEEK = week_for_schedule(datetime(2026, 9, 13, 9, tzinfo=UTC))
 
 
 class Records(FakeRecords):
@@ -28,6 +36,42 @@ class Records(FakeRecords):
     def get_record(self, **kwargs: Any) -> Any:
         assert kwargs["record_id"] == "r" * 43
         return RecordDetailResponse.model_validate(_record_detail_payload())
+
+
+class Momotalk:
+    def __init__(self):
+        self.calls = []
+
+    def list_weeks(self, **kwargs: Any) -> MomotalkWeeksResponse:
+        self.calls.append(("weeks", kwargs))
+        return MomotalkWeeksResponse(weeks=[MOMOTALK_WEEK])
+
+    def list_rooms(self, **kwargs: Any) -> MomotalkRoomsResponse:
+        self.calls.append(("rooms", kwargs))
+        assert kwargs["week_id"] == "2026-09-13"
+        return MomotalkRoomsResponse(week=MOMOTALK_WEEK, rooms=[])
+
+    def get_room(self, **kwargs: Any) -> MomotalkRoomResponse:
+        self.calls.append(("detail", kwargs))
+        assert kwargs["week_id"] == "2026-09-13" and kwargs["room_id"] == "m" * 43
+        avatar = {"kind": "placeholder", "alt": "アバター", "fallbackVariant": "cyan"}
+        return MomotalkRoomResponse.model_validate(
+            {
+                "week": MOMOTALK_WEEK,
+                "room": {
+                    "roomId": "m" * 43,
+                    "requester": {"displayName": "テスト利用者", "avatar": avatar},
+                    "questionCount": 1,
+                    "state": "preparing",
+                },
+                "participants": [
+                    {"slot": slot, "displayName": slot, "avatar": avatar}
+                    for slot in ("participant-a", "participant-b", "participant-c")
+                ],
+                "messages": [],
+                "images": [],
+            }
+        )
 
 
 @pytest.fixture
@@ -40,6 +84,7 @@ def read():
         session_key=SESSION_KEY,
         records=cast(Any, records),
         mobile_store=store,
+        momotalk=Momotalk(),
         clock=lambda: NOW,
     )
     return controller, store, records
@@ -54,6 +99,12 @@ def read():
         ("GET /api/v1/insights/rankings", ""),
         ("GET /api/v1/insights/affection-rankings", ""),
         ("GET /api/v1/insights/affection-rankings", "view=requesters&limit=10"),
+        ("GET /api/v1/momotalk/weeks", "limit=20"),
+        ("GET /api/v1/momotalk/weeks/{weekId}/rooms", "limit=20"),
+        (
+            "GET /api/v1/momotalk/weeks/{weekId}/rooms/{roomId}",
+            "contract=momotalk-selfie-v2",
+        ),
         *(
             ("GET /api/v1/insights/costs", f"period={period}")
             for period in ("today", "week", "month", "all")
@@ -62,7 +113,7 @@ def read():
 )
 def test_cookie_and_bearer_return_the_same_public_reads_without_cookies(read, route, query):
     controller, store, _records = read
-    path = {"recordId": "r" * 43}
+    path = {"recordId": "r" * 43, "weekId": "2026-09-13", "roomId": "m" * 43}
     cookie = controller.handle(event(route, query=query, cookies=COOKIE, path=path), now=NOW)
     bearer = controller.handle(event(route, query=query, headers=BEARER, path=path), now=NOW)
     assert bearer == cookie and bearer["statusCode"] == 200
@@ -71,6 +122,10 @@ def test_cookie_and_bearer_return_the_same_public_reads_without_cookies(read, ro
     assert TOKEN not in bearer["body"] and DIGEST not in bearer["body"]
     assert store.reads == [DIGEST]
     assert len(store.sessions) == 1 and not store.deleted
+    if "/momotalk/" in route:
+        assert len(controller._momotalk.calls) == 2
+        if route.endswith("/{roomId}"):
+            assert controller._momotalk.calls[-1][1]["include_image_subjects"] is True
 
 
 @pytest.mark.parametrize(
@@ -82,6 +137,9 @@ def test_cookie_and_bearer_return_the_same_public_reads_without_cookies(read, ro
         ("GET /api/v1/insights/affection-rankings", "view=unknown"),
         ("GET /api/v1/insights/costs", "period=week&period=all"),
         ("GET /api/v1/insights/costs", "period=week&internal=true"),
+        ("GET /api/v1/momotalk/weeks", "cursor=one&cursor=two"),
+        ("GET /api/v1/momotalk/weeks/{weekId}/rooms", "contract=momotalk-selfie-v2"),
+        ("GET /api/v1/momotalk/weeks/{weekId}/rooms/{roomId}", "contract=unknown"),
     ],
 )
 def test_insights_bearer_auth_preserves_query_validation(read, route, query):
@@ -125,6 +183,9 @@ def test_sync_index_requires_auth_and_rejects_unknown_or_duplicate_parameters(re
         "GET /api/v1/insights/rankings",
         "GET /api/v1/insights/affection-rankings",
         "GET /api/v1/insights/costs",
+        "GET /api/v1/momotalk/weeks",
+        "GET /api/v1/momotalk/weeks/{weekId}/rooms",
+        "GET /api/v1/momotalk/weeks/{weekId}/rooms/{roomId}",
     ],
 )
 def test_mixed_or_malformed_credentials_never_fall_back_to_cookie(
@@ -136,6 +197,7 @@ def test_mixed_or_malformed_credentials_never_fall_back_to_cookie(
     assert response["headers"]["Cache-Control"] == "private, no-store"
     assert TOKEN not in response["body"]
     assert not store.reads and records.list_query is None
+    assert not controller._momotalk.calls
     if status == 401:
         assert response["headers"]["WWW-Authenticate"] == "Bearer"
 
@@ -162,6 +224,9 @@ def test_bearer_scheme_is_case_insensitive_and_query_validation_is_unchanged(rea
         "GET /api/v1/insights/rankings",
         "GET /api/v1/insights/affection-rankings",
         "GET /api/v1/insights/costs",
+        "GET /api/v1/momotalk/weeks",
+        "GET /api/v1/momotalk/weeks/{weekId}/rooms",
+        "GET /api/v1/momotalk/weeks/{weekId}/rooms/{roomId}",
     ],
 )
 def test_mobile_revocation_expiry_and_corruption_never_read_records(
@@ -181,6 +246,7 @@ def test_mobile_revocation_expiry_and_corruption_never_read_records(
     response = controller.handle(event(route, headers=BEARER), now=NOW)
     assert response["statusCode"] == (503 if state == "corrupt" else 401)
     assert records.list_query is None
+    assert not controller._momotalk.calls
     assert json.loads(response["body"])["error"]["code"] == (
         "RECORDS_UNAVAILABLE" if state == "corrupt" else "AUTHENTICATION_REQUIRED"
     )
@@ -192,7 +258,8 @@ def test_mobile_revocation_expiry_and_corruption_never_read_records(
         "GET /api/v1/records/requesters",
         "POST /api/v1/records/search",
         "POST /api/v1/insights/rankings",
-        "GET /api/v1/momotalk/weeks",
+        "POST /api/v1/momotalk/weeks",
+        "GET /api/v1/momotalk/private",
         "GET /api/v1/admin/status",
         "POST /api/v1/admin/prompts/apply",
         "POST /api/v1/records",

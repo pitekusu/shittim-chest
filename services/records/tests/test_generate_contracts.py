@@ -56,6 +56,9 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
         ("get", "/api/v1/insights/rankings"),
         ("get", "/api/v1/insights/affection-rankings"),
         ("get", "/api/v1/insights/costs"),
+        ("get", "/api/v1/momotalk/weeks"),
+        ("get", "/api/v1/momotalk/weeks/{weekId}/rooms"),
+        ("get", "/api/v1/momotalk/weeks/{weekId}/rooms/{roomId}"),
         ("get", "/api/v1/auth/mobile/session"),
         ("post", "/api/v1/auth/mobile/logout"),
         ("put", "/api/v1/auth/mobile/notifications/device"),
@@ -144,6 +147,15 @@ def test_archive_search_keeps_private_criteria_in_body_and_uses_browser_auth() -
 
 def test_momotalk_detail_documents_opt_in_selfie_subjects() -> None:
     openapi = json.loads(expected_documents()["openapi.json"])
+    for path in (
+        "/api/v1/momotalk/weeks",
+        "/api/v1/momotalk/weeks/{weekId}/rooms",
+        "/api/v1/momotalk/weeks/{weekId}/rooms/{roomId}",
+    ):
+        assert openapi["paths"][path]["get"]["security"] == [
+            {"sessionCookie": []},
+            {"mobileBearer": []},
+        ]
     detail = openapi["paths"]["/api/v1/momotalk/weeks/{weekId}/rooms/{roomId}"]["get"]
     contract = next(item for item in detail["parameters"] if item["name"] == "contract")
     assert contract == {

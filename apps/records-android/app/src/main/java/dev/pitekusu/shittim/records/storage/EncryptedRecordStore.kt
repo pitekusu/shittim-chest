@@ -14,7 +14,9 @@ internal enum class CachedRecordPart(val code: String) {
   LIST("list"), DETAIL("detail"), SYNC_PROGRESS("sync-progress"), AVATAR("avatar"), REVISION("revision"),
   DEBATE_WORKSPACE("debate-workspace"), DEMO_SANDBOX("demo-sandbox"),
   INSIGHTS_RANKINGS("insights-rankings"), INSIGHTS_AFFECTION("insights-affection"),
-  INSIGHTS_REQUESTERS("insights-requesters"), INSIGHTS_COSTS("insights-costs"), INSIGHTS_AVATAR("insights-avatar")
+  INSIGHTS_REQUESTERS("insights-requesters"), INSIGHTS_COSTS("insights-costs"), INSIGHTS_AVATAR("insights-avatar"),
+  MOMOTALK_WEEKS("momotalk-weeks"), MOMOTALK_ROOMS("momotalk-rooms"), MOMOTALK_DETAIL("momotalk-detail"),
+  MOMOTALK_MEDIA("momotalk-media")
 }
 
 internal class RecordCacheException : Exception("record_cache_unavailable")

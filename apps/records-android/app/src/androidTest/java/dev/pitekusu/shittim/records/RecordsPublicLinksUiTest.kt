@@ -33,6 +33,9 @@ class RecordsPublicLinksUiTest {
   @Test fun normalMenuRestoresEveryFeatureLinkAndKeepsPublicPagesReachableByScrolling() {
     val events = mutableListOf<BootstrapScreen.Event>()
     showMenu(demo = false, events)
+    compose.onNodeWithTag("momotalk-open").performScrollTo().assertIsDisplayed().performClick()
+    compose.onNodeWithTag("web-page-Momotalk").assertDoesNotExist()
+    compose.onNodeWithTag("records-menu-open").performClick()
     RecordsWebPage.entries.forEach { page ->
       compose.onNodeWithTag("web-page-${page.name}").performScrollTo().assertIsDisplayed().performClick()
     }
@@ -41,20 +44,23 @@ class RecordsPublicLinksUiTest {
     }
     compose.onNodeWithTag("records-menu-logout").performScrollTo().assertIsDisplayed()
     compose.runOnIdle { assertEquals(
-      RecordsWebPage.entries.map { BootstrapScreen.Event.OpenWebPage(it) } +
+      listOf(BootstrapScreen.Event.ShowMomotalk) + RecordsWebPage.entries.map { BootstrapScreen.Event.OpenWebPage(it) } +
         RecordsPublicPage.entries.map { BootstrapScreen.Event.OpenPublicPage(it) }, events) }
   }
 
   @Test fun demoMenuStillOffersOnlyTheTwoPublicBrowserPages() {
     val events = mutableListOf<BootstrapScreen.Event>()
     showMenu(demo = true, events)
+    compose.onNodeWithTag("momotalk-open").performScrollTo().assertIsDisplayed().performClick()
+    compose.onNodeWithTag("records-menu-open").performClick()
     RecordsWebPage.entries.forEach { page ->
       compose.onNodeWithTag("web-page-${page.name}").assertDoesNotExist()
     }
     RecordsPublicPage.entries.forEach { page ->
       compose.onNodeWithTag("public-page-${page.name}").performScrollTo().assertIsDisplayed().performClick()
     }
-    compose.runOnIdle { assertEquals(RecordsPublicPage.entries.map { BootstrapScreen.Event.OpenPublicPage(it) }, events) }
+    compose.runOnIdle { assertEquals(listOf(BootstrapScreen.Event.ShowMomotalk) +
+      RecordsPublicPage.entries.map { BootstrapScreen.Event.OpenPublicPage(it) }, events) }
   }
 
   private fun showMenu(demo: Boolean, events: MutableList<BootstrapScreen.Event>) {

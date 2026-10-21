@@ -9,6 +9,7 @@ C24では3人の投票・得票数と、記録に採点があれば展開式の�
 C25では親愛度と勝利コメントなどの任意項目を表示する。
 C26〜C28でKeystore・PQC・Roomの暗号化保存部品を追加し、C29で認証済み記録を保存するようにした。C30は期限付きオフライン認可とログアウト時の記録削除、C31は全記録同期・キャンセル・再開、C32は保存済み一覧・詳細のオフライン表示とオンライン更新、C33はローカル検索・勝者絞り込み・並べ替えを担当する。
 「いろいろな記録」はメニューから親愛度・ランキング・費用の3タブを持つネイティブ画面を開く。取得済みの集計は既存の暗号化Storeへ保存し、有効なオフライン閲覧認可の範囲で表示する。端末内デモにも隔離した架空集計を用意する。
+「モモトーク」もメニューからネイティブ画面へ移動し、公開週・依頼者別の部屋・会話と集合セルフィーをアプリ内で閲覧する。取得済みの内容は同じ暗号化Storeとオフライン認可を使い、デモでは隔離した架空の週・会話・画像を表示する。
 CodeQL接続（C04）はCodeQL 2.27.2で当時のKotlin 2.4.20のmanual抽出を確認し、専用workflowへ追加した。現行Kotlin 2.4.21も単独更新PRでmanualビルド・解析・uploadを確認済み。依存更新の統合時は同一SHAのPRとマージ後のmainで4言語の解析・uploadを改めて確認し、Kotlinはダウングレードしない。
 
 ## 開発環境
@@ -303,7 +304,7 @@ API 36の架空データで[ライト](screenshots/progress-light.png)、[ダー
 - メニューの「デモを終了」は確認後にデモの保存データと表示済み通知を消去してログイン画面へ戻る。「デモを初期化」は同じ消去後に新しいデモを開く。通常に戻った後はDiscordログインを必要とする。途中で終了・再起動した場合は、最後にcommitされたモードから消去を続ける。
 - 「デモの端末内通知」をオンにすると、結果確認時に端末内通知を表示し、タップからデモの詳細を開ける。専用設定・channel・entry ID付きIntentを使い、Firebase登録・実FCM配送は行わない。OSの通知許可だけはpackage単位で通常版と共通であり、拒否しても閲覧・作成を使える。
 - Play公式アプリ内更新は通常・デモ双方で維持する。更新SDKへ本番token・記録・下書き・画像を渡さず、更新確認失敗・未対応・オフラインでもデモ利用を妨げない。デモのデータ操作は端末内で完結するが、Playの更新確認まで通信ゼロとは主張しない。
-- 「いろいろな記録」は通常と同じネイティブの親愛度・ランキング・費用タブで架空集計を表示する。更新・人格や期間の切替も端末内データだけを使い、本番APIや本番の保存集計へ接続しない。通常の外部Web機能はモモトーク・メモリアルロビー・サービス状態確認・プロンプト管理の4導線とし、固定ページをCustom Tabsで開いてWeb側の認証・認可を使う。Demoではこの4導線を隠してruntimeでも起動を拒否する。DemoのMarkdown外部リンク禁止を維持し、公開ポリシー・削除申請の固定2 URLだけをメニューから確認できる。
+- 「いろいろな記録」は通常と同じネイティブの親愛度・ランキング・費用タブで架空集計を表示する。「モモトーク」も通常と同じネイティブ画面で架空の週・依頼者・会話・集合セルフィーを表示する。更新・週や期間の切替も端末内データだけを使い、本番APIや本番の保存内容へ接続しない。通常の外部Web機能はメモリアルロビー・サービス状態確認・プロンプト管理の3導線とし、固定ページをCustom Tabsで開いてWeb側の認証・認可を使う。Demoではこの3導線を隠してruntimeでも起動を拒否する。DemoのMarkdown外部リンク禁止を維持し、公開ポリシー・削除申請の固定2 URLだけをメニューから確認できる。
 
 詳細な境界・機能対応表は[Androidアプリ設計](../../docs/29_Androidアプリ設計.md)の「Play審査用アクセス：端末内デモ」を正とする。2026年10月12日、Debug／テストAPK・Android LintとR8最適化Release APK／Release Lint、標準CI範囲の非画面227件、関連画面18件をローカルで確認した。Releaseは本番upload keyとは別の一時検証鍵で署名し、配布していない。当該ローカル検証時点では実機、実Play更新、本番Discordログイン、実FCM配送、Console設定、Play配布、審査送信は未実施であり、英語Console文案は未記入の草案である。Play配布の成否は正式配布Workflowとreceiptで別途記録する。
 
@@ -317,7 +318,7 @@ API 36の架空データで[ライト](screenshots/progress-light.png)、[ダー
 
 提出予定と同じReleaseビルドを実機で確認する。受入操作は架空データだけを使用し、本番の有料生成やDiscord投稿を追加しない。
 
-1. Discord未ログイン・機内モードで「デモで試す / Try demo」を開き、一覧・検索・絞り込み・並べ替え・詳細・質問全文・サンプル画像を操作する。メニューの「いろいろな記録」から3タブ・人格別／依頼者別・依頼者ページ・費用期間と更新を操作し、架空集計として表示されることを確認する。
+1. Discord未ログイン・機内モードで「デモで試す / Try demo」を開き、一覧・検索・絞り込み・並べ替え・詳細・質問全文・サンプル画像を操作する。メニューの「いろいろな記録」から3タブ・人格別／依頼者別・依頼者ページ・費用期間と更新を操作し、架空集計として表示されることを確認する。「モモトーク」では架空の週・依頼者を選び、会話・集合セルフィー・更新・戻るを確認する。
 2. 架空の議題とサンプル画像で送信し、依頼履歴・進捗・結果・画像を確認する。下書き中／進行中の再起動、同IDの再確認で重複が増えないことも確認する。
 3. デモ通知のオン／オフ、OS許可／拒否、通知タップ、再起動、デモ終了後の古い通知拒否を確認する。実FCM配送の受入とは分ける。
 4. 初期化・終了・再入場と、通常ログアウト→デモ→終了→通常再ログインを確認する。期限切れ・tokenなし・保存失敗・途中cleanupと古いApp Link／認証callbackを含め、別モードの保存データを読めないことを確認する。
@@ -327,7 +328,7 @@ API 36の架空データで[ライト](screenshots/progress-light.png)、[ダー
 
 `https://shittim.pitekusu.dev/privacy-policy`と`https://shittim.pitekusu.dev/data-deletion`は、ログイン不要の公開ページである。Webの公開後にPlay ConsoleのプライバシーポリシーURLとデータ削除URLへ登録する。削除申請はページのメール窓口で本人確認後に運営者が手動対応し、メールを開くだけで自動削除を完了したとは扱わない。
 
-この導線を含む版では、ログイン画面と通常・デモのメニューから既存Custom Tabsで固定2 URLを開く。資格情報や質問・画像を付加せず、失効したruntime・旧デモentryの操作を拒否する。デモの議論本文内の外部リンク禁止と、デモでの4つの外部Web機能メニューの非表示は維持する。公開済み41版にはこれらのネイティブ導線はなく、新版のPlay配布はWeb公開と分けて確認する。
+この導線を含む版では、ログイン画面と通常・デモのメニューから既存Custom Tabsで固定2 URLを開く。資格情報や質問・画像を付加せず、失効したruntime・旧デモentryの操作を拒否する。デモの議論本文内の外部リンク禁止と、デモでの3つの外部Web機能メニューの非表示は維持する。公開済み41版にはこれらのネイティブ導線はなく、新版のPlay配布はWeb公開と分けて確認する。
 
 ### Play Console「アプリのアクセス権」の英語文案
 
@@ -355,6 +356,9 @@ Password: Not required for the review demo.
    Open "いろいろな記録" from the top-right menu to inspect fictional
    affection, win/requester rankings, and estimated costs in three native tabs.
    Persona, requester page, period, and refresh controls use only demo data.
+   Open "モモトーク" from the same menu, choose a fictional week and requester,
+   and read the sample conversation and group selfie in the native screen.
+   Week selection and refresh use only isolated demo data.
 3. Return to the list and tap "+" to create a demo discussion. Enter a
    fictional question, such as "Please plan a fictional picnic."
    Tap "架空のサンプル画像を追加" to attach an in-app sample image.
@@ -377,10 +381,10 @@ with fictional records, sample images, and predefined sample results.
 It does not analyze the entered question or images using AI, create AI charges,
 post to Discord, upload to S3, or access or change production records/accounts.
 Notifications are generated locally; remote Firebase/FCM delivery is not used.
-Normal mode also offers browser links to insights, Momotalk, the memorial lobby,
-service status, and prompt management. These use separate web sign-in;
+Normal mode also offers browser links to the memorial lobby, service status,
+and prompt management. These use separate web sign-in;
 service status and prompt management also require web administrator access.
-Those five links are absent in demo mode, and links in demo record text do not open.
+Those three links are absent in demo mode, and links in demo record text do not open.
 The privacy policy and data-deletion pages remain available from the demo menu
 without sign-in. The demo does not provide review access to the authenticated web features.
 The demo has no account expiration or region restriction and works offline.
@@ -637,10 +641,10 @@ API 36・架空データ。標準のテスト用window／font scale overrideで�
 ## C37：Web機能メニューとログアウト
 
 - 先頭の「依頼した議論」は、時計付きの履歴アイコン・「進行状況・結果を見る」・右向き矢印を備えた強調カードにする。標準Surface／ListItemと既存のシアン配色を使い、カード全体から依頼履歴を開く。新規作成の「＋」とは区別し、狭幅・文字拡大では折り返す。
-- 認証済みの一覧・詳細の上部にメニューを置く。「いろいろな記録」は通常・Demoともネイティブ画面へ移動する。通常版ではモモトーク・メモリアルロビーを「Webで開く」、サービス状態確認・プロンプト管理を「Webの管理機能」に分けて表示する。4つの固定HTTPS URLを既存Custom Tabsで開き、アプリの資格情報・質問・画像は渡さず、Web側で別途ログイン・管理者認可を確認する。Demoではこの外部Web機能を非表示にし、失効した通常runtimeやDemoからの起動も拒否する。依頼履歴・公開情報・通知・表示切替・ログアウトを残し、Demoでは初期化・終了を確認付きで行う。
+- 認証済みの一覧・詳細の上部にメニューを置く。「いろいろな記録」と「モモトーク」は通常・Demoともネイティブ画面へ移動する。通常版ではメモリアルロビーを「Webで開く」、サービス状態確認・プロンプト管理を「Webの管理機能」に分けて表示する。3つの固定HTTPS URLを既存Custom Tabsで開き、アプリの資格情報・質問・画像は渡さず、Web側で別途ログイン・管理者認可を確認する。Demoではこの外部Web機能を非表示にし、失効した通常runtimeやDemoからの起動も拒否する。依頼履歴・公開情報・通知・表示切替・ログアウトを残し、Demoでは初期化・終了を確認付きで行う。
 - ログアウト・自動／ライト／ダーク切替をメニューへ移し、記録一覧にあったログイン状態カードと表示切替を撤去。通信不調によるオフライン閲覧でも同じログアウト操作が可能。
 - ログイン前の常設説明文を削除。期限切れ・取消・失敗・ブラウザー不可の状態表示は残す。C35の短い完了通知は次の起動／ログイン演出PRで置き換える。
-- 架空データの画面試験で依頼履歴・通知・表示切替・ログアウト／Demo終了、通常・Demoのネイティブ集計導線、通常版の4つの外部Web導線と下方の公開情報へのスクロール、DemoでのWeb機能非表示、一覧・詳細のスクロール維持を確認する。ブラウザーIntentの固定URL・アプリ資格情報の非付加、旧runtime・DemoからのWeb機能起動拒否は関連非画面試験で確認する。通常認証の実機受入とDemoだけの操作確認は区別する。
+- 架空データの画面試験で依頼履歴・通知・表示切替・ログアウト／Demo終了、通常・Demoのネイティブ集計・モモトーク導線、通常版の3つの外部Web導線と下方の公開情報へのスクロール、DemoでのWeb機能非表示、一覧・詳細のスクロール維持を確認する。ブラウザーIntentの固定URL・アプリ資格情報の非付加、旧runtime・DemoからのWeb機能起動拒否は関連非画面試験で確認する。通常認証の実機受入とDemoだけの操作確認は区別する。
 - 依頼履歴カードのプレビュー：[ダーク](screenshots/debate-history-menu-dark.png)、[ライト](screenshots/debate-history-menu-light.png)、[OS設定320dp・文字2倍](screenshots/debate-history-menu-large-text.png)。Bottom Sheetの文字拡大は内容内だけのoverrideではなく、専用AVDのOS設定で確認する。
 
 ## いろいろな記録：ネイティブ集計
@@ -656,6 +660,18 @@ API 36・架空データ。標準のテスト用window／font scale overrideで�
 架空データの画面写真：[親愛度・ライト](screenshots/insights-light.png)、[依頼者別・ダーク](screenshots/insights-dark.png)、[320dp・文字2倍](screenshots/insights-large-text.png)、[費用](screenshots/insights-costs.png)、[広幅ランキング](screenshots/insights-wide.png)。API 36のエミュレーターで採取しており、実機受入や配布の証拠ではない。
 
 詳細は[Androidアプリ設計](../../docs/29_Androidアプリ設計.md)と[親愛度・ランキング設計](../../docs/26_親愛度・ランキング設計.md)を参照する。公開時はRecordsの3 GETの認証対応を先に反映してからAndroidを配布する。
+
+## モモトーク：ネイティブ閲覧
+
+- メニューから専用画面へ移動し、初回は最新の公開週の依頼者別部屋一覧を開く。週pickerで別の週を選び、「以前の週を表示」「ルームをもっと表示」で追加ページを取得する。部屋を選ぶと完成した会話を表示し、戻る操作で部屋一覧・元の記録画面へ戻る。
+- 発言者の名前・顔・吹き出しと、集合セルフィーの全被写体・表情をアプリ内で表示する。本文は最初から全文表示し、逐字再生は追加しない。部屋詳細は`contract=momotalk-selfie-v2`を使用する。写真を押すと全画面Dialogで拡大・前後移動・閉じるを行い、端末への書き出しは追加しない。
+- 内容幅840dp以上かつ文字倍率1.5未満では部屋一覧と会話を2ペイン、狭幅・文字拡大では1ペインとする。長い名前・本文を折り返し、標準の戻ると48dpの操作領域を維持する。
+- 既存のモバイルBearer認証で週一覧・部屋一覧・部屋詳細の3 GETを取得する。検証済みの内容を既存Room／暗号化Storeへ保存し、有効なオフライン閲覧認可がある場合だけ取得済みの週・部屋・会話を表示する。未保存のページや画像には再接続を案内する。ログアウト・アカウント切替・認可喪失は既存の削除・非表示処理を共用する。
+- 更新・追加取得の失敗では保存済みの内容を残し、空・準備中・失敗を区別する。常時pollingや未閲覧の全件取得は追加しない。Demoでは同じ画面へ架空の週・依頼者・会話・端末内画像だけを渡し、本番API・保存内容・署名付きURLへ接続しない。
+
+詳細は[Androidアプリ設計](../../docs/29_Androidアプリ設計.md)と[モモトーク設計](../../docs/28_モモトーク設計.md)を参照する。公開時はRecordsのモモトーク3 GETの認証対応を先に反映してからAndroidを配布する。実機受入・配布はそれぞれの証跡で判断する。
+
+架空データの画面資料は[部屋一覧](screenshots/momotalk-rooms.png)、[会話](screenshots/momotalk-light.png)、[ダーク](screenshots/momotalk-dark.png)、[320dp・文字2倍](screenshots/momotalk-large-text.png)、[広幅](screenshots/momotalk-wide.png)を参照する。
 
 ## C39：GitHubからのクローズドテスト配布
 

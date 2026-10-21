@@ -281,6 +281,23 @@ internal fun AdaptiveRecordsUi(
             }
           }
           entry<DebateCompose> { composeContent.value() }
+          entry<Momotalk> {
+            ShittimBackdrop(Modifier.fillMaxSize()) {
+              MomotalkScreen(currentState.value.momotalk.copy(selectedRoom = null), { event ->
+                currentState.value.eventSink(BootstrapScreen.Event.MomotalkAction(event))
+              }, Modifier.fillMaxSize(), showAppBar = false)
+            }
+          }
+          entry<MomotalkRoom> { route ->
+            ShittimBackdrop(Modifier.fillMaxSize()) {
+              val value = currentState.value.momotalk
+              val detail = value.detail.takeIf { it.data == null ||
+                (it.data.week.weekId == route.weekId && it.data.room.roomId == route.roomId) } ?: MomotalkResource()
+              MomotalkScreen(value.copy(selectedWeek = route.weekId, selectedRoom = route.roomId, detail = detail), { event ->
+                currentState.value.eventSink(BootstrapScreen.Event.MomotalkAction(event))
+              }, Modifier.fillMaxSize(), showAppBar = false)
+            }
+          }
           entry<DebateRequests> { requestsContent.value() }
           entry<DebateRequestStatus> { statusContent.value(it) }
         }

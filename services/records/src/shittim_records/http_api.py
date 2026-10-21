@@ -64,6 +64,9 @@ MOBILE_READ_ROUTES = frozenset(
         "GET /api/v1/insights/rankings",
         "GET /api/v1/insights/affection-rankings",
         "GET /api/v1/insights/costs",
+        "GET /api/v1/momotalk/weeks",
+        "GET /api/v1/momotalk/weeks/{weekId}/rooms",
+        "GET /api/v1/momotalk/weeks/{weekId}/rooms/{roomId}",
     }
 )
 MAX_SEARCH_BODY_BYTES = 16 * 1024
