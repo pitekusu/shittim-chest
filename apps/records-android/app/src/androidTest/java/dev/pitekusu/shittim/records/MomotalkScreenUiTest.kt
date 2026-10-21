@@ -161,7 +161,9 @@ class MomotalkScreenUiTest {
         val density = LocalDensity.current
         val viewportDensity = density.density * minOf(1f, LocalConfiguration.current.screenWidthDp.toFloat() / width)
         CompositionLocalProvider(LocalDensity provides Density(viewportDensity, fontScale)) {
-          ShittimTheme(dark) { Box(Modifier.width(width.dp).fillMaxHeight()) { MomotalkScreen(state.value, onEvent) } }
+          ShittimTheme(dark) { Box(Modifier.width(width.dp).fillMaxHeight()) {
+            MomotalkScreen(state.value, onEvent, animationsEnabled = false)
+          } }
         }
       }
     }
