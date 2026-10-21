@@ -92,7 +92,8 @@ internal class DebateRequestException(val failure: DebateFailure) : Exception("d
 
 /** Normal JSON uses Ktor; POST is one-shot so an ambiguous response cannot cause implicit replay. */
 internal class DebateRequestsClient(private val engine: HttpClientEngine = OkHttp.create {
-  config { retryOnConnectionFailure(false); followRedirects(false); followSslRedirects(false)
+  config { addNetworkInterceptor(CompromisedCaKeys)
+    retryOnConnectionFailure(false); followRedirects(false); followSslRedirects(false)
     cookieJar(CookieJar.NO_COOKIES); cache(null) }
 }) : Closeable {
   private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }

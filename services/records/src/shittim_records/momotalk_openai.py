@@ -6,8 +6,16 @@ import logging
 from typing import Any
 
 import httpx2
-from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI, OpenAIError
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    DefaultHttpxClient,
+    OpenAI,
+    OpenAIError,
+)
 from pydantic import BaseModel, Field, create_model
+from shittim_chest.adapters.tls import create_public_tls_context
 
 from shittim_records.memorial_adapters import (
     MemorialConfigurationRepository,
@@ -196,6 +204,7 @@ class OpenAIMomotalkGenerator:
     def _client(self) -> Any:
         if self.client is None:
             self.client = OpenAI(
+                http_client=DefaultHttpxClient(verify=create_public_tls_context()),
                 api_key=self.configuration.load_api_key(),
                 max_retries=0,
                 timeout=httpx2.Timeout(120, connect=5, write=30, pool=5),

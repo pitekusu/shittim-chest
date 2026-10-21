@@ -15,7 +15,11 @@ from tools import run_android_build as runner
 
 
 @pytest.fixture
-def paths(tmp_path: Path) -> tuple[Path, Path, Path]:
+def paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path, Path]:
+    # Lifecycle tests use invented wrappers; TLS integration has separate cases.
+    monkeypatch.setattr(
+        runner, "_tls_environment", lambda environment, _scratch, _project: environment
+    )
     source = tmp_path / "source"
     source.mkdir()
     (source / ".git").write_text("invented worktree marker")
@@ -236,6 +240,65 @@ def test_broken_lifetime_lock_link_is_not_owner_only_setup(tmp_path):
     assert (directory / runner.LIFETIME_LOCK).is_symlink()
 
 
+def test_default_launcher_selects_tls_before_any_jvm_starts(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    java_home = tmp_path / "existing-jdk"
+    observed = []
+    monkeypatch.setattr(runner, "discover_java_home", lambda _environment, _project: java_home)
+
+    def configure(directory, *, environment):
+        observed.append(directory)
+        assert directory == scratch / "tls"
+        assert environment["JAVA_HOME"] == str(java_home)
+        assert environment["TMPDIR"] == str(scratch / "tmp")
+        assert str(scratch / "tmp") in environment["JAVA_TOOL_OPTIONS"]
+        return {
+            "SSL_CERT_FILE": str(directory / "ca.pem"),
+            "SSL_CERT_DIR": str(directory / "empty"),
+        }
+
+    def java(directory, environment):
+        assert environment["SSL_CERT_FILE"] == str(directory / "ca.pem")
+        return {
+            "JAVA_TOOL_OPTIONS": environment["JAVA_TOOL_OPTIONS"]
+            + f" -Djavax.net.ssl.trustStore={directory / 'java-ca.p12'}",
+            "SHITTIM_BUILD_JAVA_TRUST_STORE": str(directory / "java-ca.p12"),
+        }
+
+    monkeypatch.setattr(runner, "configure_environment", configure)
+    monkeypatch.setattr(runner, "configure_java", java)
+    environment = runner.build_environment(scratch, project)
+    assert observed == [scratch / "tls"]
+    assert "javax.net.ssl.trustStore=" in environment["JAVA_TOOL_OPTIONS"]
+    assert set(scratch.iterdir()) == {scratch / "tmp", scratch / "tls"}
+    assert not java_home.exists()  # No JDK tree is copied or created.
+
+
+def test_default_launcher_fails_closed_on_tls_setup_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "discover_java_home", lambda _environment, _project: tmp_path)
+
+    def unsafe(*_args, **_kwargs):
+        raise runner.TrustPolicyError("tls_build_unsafe_override")
+
+    monkeypatch.setattr(runner, "configure_environment", unsafe)
+    with pytest.raises(runner.AndroidBuildError, match=r"^android_build_tls_failed$"):
+        runner.build_environment(tmp_path)
+
+
+def test_gradle_property_store_cannot_override_the_selected_ca(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "gradle.properties").write_text(
+        "org.gradle.jvmargs=-Djavax.net.ssl.trustStore=/unknown-store\n"
+    )
+    monkeypatch.setattr(runner, "discover_java_home", lambda _environment, _project: tmp_path)
+    with pytest.raises(runner.AndroidBuildError, match=r"^android_build_tls_failed$"):
+        runner.build_environment(tmp_path, project)
+
+
 @pytest.mark.parametrize("proof", ["valid", "partial", "symlink"])
 def test_stale_preinit_run_requires_complete_owned_exit_proof(tmp_path, proof):
     directory = tmp_path / "run-failed"
@@ -298,6 +361,8 @@ def test_prelaunch_environment_failure_is_cleaned_without_uncertain_state(paths,
         "shittimAndroidBuildRoot=/tmp/other",
         "-Djava.io.tmpdir=/tmp/other",
         "-Dorg.gradle.jvmargs=-Djava.io.tmpdir=/tmp/other",
+        "-Djavax.net.ssl.trustStore=/other",
+        "-Dorg.gradle.jvmargs=-Djavax.net.ssl.trustStore=/other",
         "-Ppassword=invented",
     ],
 )

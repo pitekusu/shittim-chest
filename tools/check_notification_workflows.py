@@ -545,7 +545,7 @@ def _validate_release(directory: Path) -> None:
         "group: production-release",
         "cancel-in-progress: false",
         "runs-on: ubuntu-26.04-arm",
-        'node-version: "24.22.0"',
+        'node-version: "24.22.1"',
         'EXPECTED_REPOSITORY_ID: "1302516701"',
         ".use_immutable_subject == true",
         "ACTIONS_ID_TOKEN_REQUEST_URL",
@@ -1500,7 +1500,7 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         ),
         "container-arm64": (
             "runtime_container",
-            ("verify-container", "verify-sbom", "verify-record", "retain-sbom"),
+            ("verify-container", "verify-tls", "verify-sbom", "verify-record", "retain-sbom"),
         ),
         "grype": (
             "runtime_container",
@@ -1531,6 +1531,7 @@ def _validate_ci_path_isolation(directory: Path) -> None:
             raise WorkflowPolicyError(f"CI {job} must verify every required step outcome")
         for name in re.findall(r"(?m)^      - name: (.+)$", block):
             if name in {
+                "Update and verify system trust before checkout",
                 "Check out the tested commit",
                 "Require an explicit CI scope",
                 "Verify the required work or report it as not applicable",
@@ -2183,8 +2184,11 @@ def _validate_grype_database_action(directory: Path) -> None:
 
 def _require_full_action_pins(text: str, label: str) -> None:
     for action in re.findall(r"(?m)^\s*(?:-\s*)?uses:\s*([^\s#]+)", text):
-        # This one local action is bound to the workflow's immutable checkout SHA.
-        if action == "./.github/actions/prepare-grype-db":
+        # These repository actions are bound to the immutable checkout SHA.
+        if action in {
+            "./.github/actions/prepare-grype-db",
+            "./.github/actions/configure-tls",
+        }:
             continue
         _, separator, revision = action.rpartition("@")
         if not separator or re.fullmatch(r"[0-9a-f]{40}", revision) is None:

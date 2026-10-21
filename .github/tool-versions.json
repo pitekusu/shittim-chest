@@ -87,7 +87,7 @@
       "files": {".github/workflows/*.yml": "(?:NODE_VERSION|node-version): \"?([0-9.]+)", ".node-version": "^([0-9.]+)"}
     },
     "uv": {
-      "repository": "astral-sh/uv", "tag_prefix": "", "release_prefix": "0.12.",
+      "repository": "astral-sh/uv", "tag_prefix": "", "release_prefix": "0.13.",
       "files": {".github/workflows/*.yml": "UV_VERSION: \"?([0-9.]+)"}
     },
     "pnpm": {

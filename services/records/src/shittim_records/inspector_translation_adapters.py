@@ -15,6 +15,7 @@ from openai import (
     APIStatusError,
     APITimeoutError,
     AuthenticationError,
+    DefaultHttpxClient,
     NotFoundError,
     OpenAI,
     PermissionDeniedError,
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
 
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.serializer import DynamoItem
+from shittim_chest.adapters.tls import create_public_tls_context
 
 from shittim_records.inspector_translations import (
     INSPECTOR_SUMMARY_MAX_CHARS,
@@ -267,6 +269,7 @@ class OpenAIInspectorSummaryTranslator:
         client = self._client
         if client is None:
             client = OpenAI(
+                http_client=DefaultHttpxClient(verify=create_public_tls_context()),
                 api_key=self._configuration.load_api_key(),
                 max_retries=1,
                 timeout=httpx2.Timeout(45.0, connect=5.0, write=15.0, pool=5.0),

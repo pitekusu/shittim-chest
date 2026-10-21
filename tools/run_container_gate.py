@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Final
 
 from tools.check_container_policy import load_container_policy
+from tools.install_runtime_ca import DENIED_ROOTS
 
 IMAGE_PATTERN: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$")
 CONTAINER_POLICY: Final = load_container_policy()
@@ -126,18 +127,36 @@ def _validate_runtime_security(image: str) -> None:
 import asyncio
 import ctypes
 import getpass
+import hashlib
 import os
 import pathlib
 import pwd
 import pyexpat
+import re
 import shutil
+import ssl
 import sys
 from xml.etree import ElementTree
 import shittim_chest
 from shittim_chest.healthcheck import HealthStatus, heartbeat_status
+from shittim_chest.adapters.tls import create_public_tls_context
 from shittim_chest.runtime.health import EventLoopHeartbeat, heartbeat_is_healthy
 
 async def verify():
+    # Inspect the effective file AND lazy OpenSSL capath aliases. A new bundle
+    # alone must not let an obsolete hashed root remain trusted.
+    system = ssl.create_default_context()
+    capath = ssl.get_default_verify_paths().capath
+    if capath:
+        for path in pathlib.Path(capath).iterdir():
+            if re.fullmatch(r"[0-9a-fA-F]{{8}}\\.[0-9]+", path.name) and path.is_file():
+                system.load_verify_locations(cafile=str(path))
+    for context in (system, create_public_tls_context()):
+        assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname
+        fingerprints = set(map(
+            lambda cert: hashlib.sha256(cert).hexdigest(), context.get_ca_certs(True)
+        ))
+        assert fingerprints and fingerprints.isdisjoint({sorted(DENIED_ROOTS)!r})
     # Check the actually loaded library, not only package inventory: botocore's
     # S3 response parsing must keep working after the Expat security update.
     # CPython bundles its own Expat; also inspect both updated system variants.

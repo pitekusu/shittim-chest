@@ -1,0 +1,21 @@
+name: Configure the incident TLS trust policy
+description: Remove the published emSign incident roots from this disposable runner and child tools.
+inputs:
+  docker:
+    description: Restart the Docker daemon after correcting its system trust.
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - name: Rebuild the hosted runner store and select safe tool stores
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        CONFIGURE_DOCKER_TLS: ${{ inputs.docker }}
+      run: |
+        options=()
+        if [ "${CONFIGURE_DOCKER_TLS}" = true ]; then
+          options+=(--docker)
+        fi
+        python3 -m tools.configure_build_tls --runner-system \
+          --output "${RUNNER_TEMP}/shittim-tls" --github-env "${GITHUB_ENV}" "${options[@]}"

@@ -163,6 +163,7 @@ internal fun validRecordCursor(value: String): Boolean =
 
 internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.create {
   config {
+    addNetworkInterceptor(CompromisedCaKeys)
     followRedirects(false)
     followSslRedirects(false)
     // GETs are safe to recover through OkHttp's standard stale-connection/route handling.

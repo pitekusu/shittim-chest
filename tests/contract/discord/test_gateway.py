@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import ssl
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
+import aiohttp
 import discord
 import discord.http
 import pytest
@@ -62,21 +64,69 @@ def mocked_clients() -> dict[DiscordBotSlot, discord.Client]:
     return clients
 
 
-def test_client_builder_uses_guilds_only_safe_mentions_and_bounded_rate_limits() -> None:
+@pytest.mark.asyncio
+async def test_client_builder_uses_guilds_only_safe_mentions_and_bounded_rate_limits() -> None:
     clients = build_discord_clients(config())
 
-    assert set(clients) == set(DISCORD_BOT_SLOTS)
-    assert len({id(client) for client in clients.values()}) == 4
-    for slot, client in clients.items():
-        assert client.application_id == int(config().application_id_for(slot))
-        assert client.intents.guilds
-        assert not client.intents.message_content
-        assert not client.intents.members
-        assert client.allowed_mentions is not None
-        assert cast(Any, client.allowed_mentions).to_dict() == {"parse": []}
-        assert client.http.http_trace is not None
-        assert len(client.http.http_trace.on_request_end) == 1
-        assert client.http.max_ratelimit_timeout == 300.0
+    try:
+        assert set(clients) == set(DISCORD_BOT_SLOTS)
+        assert len({id(client) for client in clients.values()}) == 4
+        assert len({id(client.http.connector) for client in clients.values()}) == 4
+        for slot, client in clients.items():
+            assert client.application_id == int(config().application_id_for(slot))
+            assert client.intents.guilds
+            assert not client.intents.message_content
+            assert not client.intents.members
+            assert client.allowed_mentions is not None
+            assert cast(Any, client.allowed_mentions).to_dict() == {"parse": []}
+            assert client.http.http_trace is not None
+            assert len(client.http.http_trace.on_request_end) == 1
+            assert client.http.max_ratelimit_timeout == 300.0
+            connector = client.http.connector
+            assert isinstance(connector, aiohttp.TCPConnector)
+            assert connector.limit == 0
+            context = cast(Any, connector)._ssl
+            assert isinstance(context, ssl.SSLContext)
+            assert context.verify_mode == ssl.CERT_REQUIRED
+            assert context.check_hostname
+    finally:
+        supervisor = DiscordClientSupervisor(clients)
+        await supervisor.close()
+        await supervisor.close()
+    assert all(client.http.connector.closed for client in clients.values())
+
+
+@pytest.mark.asyncio
+async def test_failed_login_closes_every_owned_connector(monkeypatch: pytest.MonkeyPatch) -> None:
+    clients = build_discord_clients(config())
+    monkeypatch.setattr(
+        discord.http.HTTPClient,
+        "static_login",
+        AsyncMock(side_effect=discord.LoginFailure("offline fixture")),
+    )
+    supervisor = DiscordClientSupervisor(clients)
+
+    with pytest.raises(discord.LoginFailure):
+        await supervisor.run({slot: f"fixture-{slot.value}" for slot in DISCORD_BOT_SLOTS})
+
+    assert all(client.http.connector.closed for client in clients.values())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [RuntimeError("offline fixture"), asyncio.CancelledError()])
+async def test_owned_connector_closes_when_sdk_cleanup_fails(
+    monkeypatch: pytest.MonkeyPatch, failure: BaseException
+) -> None:
+    clients = build_discord_clients(config())
+    client = clients[DiscordBotSlot.MODERATOR]
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(discord.Client, "close", AsyncMock(side_effect=failure))
+            with pytest.raises(type(failure)):
+                await client.close()
+        assert client.http.connector.closed
+    finally:
+        await DiscordClientSupervisor(clients).close()
 
 
 @pytest.mark.asyncio

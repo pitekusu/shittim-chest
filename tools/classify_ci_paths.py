@@ -24,6 +24,7 @@ RUNTIME_CONTEXT_FILES = frozenset(
         "tests/fixtures/container_process.py",
         "tools/canonicalize_wheel_records.py",
         "tools/install_runtime_expat.py",
+        "tools/install_runtime_ca.py",
         "tools/transfer_tree_deterministically.py",
     }
 )

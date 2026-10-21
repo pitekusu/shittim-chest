@@ -19,6 +19,16 @@ import time
 from contextlib import suppress
 from pathlib import Path
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from tools.configure_build_tls import (
+    configure_environment,
+    configure_java,
+    discover_java_home,
+)
+from tools.tls_policy import TrustPolicyError
+
 OWNER = ".shittim-android-build-owner"
 OWNER_VALUE = "shittim-android-build-v1\n"
 INIT_SCRIPT = Path(__file__).resolve().with_name("android_build.init.gradle.kts")
@@ -71,6 +81,7 @@ def validate_arguments(arguments: list[str]) -> list[str]:
         or "shittimAndroidBuildRoot" in arg
         or "kotlin.compiler.execution.strategy" in arg
         or "kotlin.project.persistent.dir" in arg
+        or "javax.net.ssl.trustStore" in arg
         or re.search(r"(?i)(?:password|secret|token)=", arg)
         for arg in arguments
     ):
@@ -143,7 +154,24 @@ def cleanup_stale_runs(root: Path) -> None:
             raise AndroidBuildError("android_build_already_running")
 
 
-def build_environment(scratch: Path) -> dict[str, str]:
+def _tls_environment(environment: dict[str, str], scratch: Path, project: Path) -> dict[str, str]:
+    environment = dict(environment)
+    environment["JAVA_HOME"] = str(discover_java_home(environment, project))
+    # Gradle command-line/property settings take precedence over inherited JVM
+    # options. Reject an independently configured store rather than silently
+    # accepting an unverified trust source in a forked Gradle JVM.
+    user_home = Path(environment.get("GRADLE_USER_HOME", str(Path.home() / ".gradle")))
+    for properties in (project / "gradle.properties", user_home / "gradle.properties"):
+        if properties.is_file() and "javax.net.ssl.trustStore" in properties.read_text():
+            raise TrustPolicyError("tls_build_unsafe_override")
+    selected = scratch / "tls"
+    selected.mkdir(mode=0o700)
+    environment.update(configure_environment(selected, environment=environment))
+    environment.update(configure_java(selected, environment))
+    return environment
+
+
+def build_environment(scratch: Path, project: Path = DEFAULT_PROJECT) -> dict[str, str]:
     environment = os.environ.copy()
     for key in (
         "JAVA_TOOL_OPTIONS",
@@ -161,7 +189,10 @@ def build_environment(scratch: Path) -> dict[str, str]:
     environment["JAVA_TOOL_OPTIONS"] = (
         environment.get("JAVA_TOOL_OPTIONS", "") + " " + option
     ).strip()
-    return environment
+    try:
+        return _tls_environment(environment, scratch, project)
+    except (TrustPolicyError, OSError, KeyError, subprocess.SubprocessError) as error:
+        raise AndroidBuildError("android_build_tls_failed") from error
 
 
 def _stop_process(process: subprocess.Popen[bytes]) -> bool:
@@ -375,7 +406,7 @@ def run_build(*, project: Path, output: Path, arguments: list[str], cache: Path)
                 *arguments,
             ]
             try:
-                environment = build_environment(scratch)
+                environment = build_environment(scratch, project)
                 (scratch / LAUNCH_STARTED).touch(mode=0o600)
                 # The inherited global lock protects launcher startup after
                 # Python SIGKILL; the init-script lease protects detached JVM use.

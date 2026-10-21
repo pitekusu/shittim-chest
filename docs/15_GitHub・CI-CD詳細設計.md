@@ -266,6 +266,28 @@ Webの`fast-uri`は修正版へ更新し、同じリスク受容へ混ぜない�
 | BuildKit/DynamoDB Local | `tools/containers/Dockerfile`の名前付きstageを共通の固定値とし、Dependabotでtag・digestを更新。CI・配信・ローカル試験は検証済みの参照を読み取る |
 | Buildx/直接取得CLI | バージョン、ダイジェスト、配布物チェックサム、署名主体を固定し、専用監視で追従 |
 
+### eMudhra／emSign中間CA侵害への対応（2026年10月21日）
+
+[一次調査](https://emudhra.we-have-a-problem.com/)と[Mozillaの障害報告](https://bugzilla.mozilla.org/show_bug.cgi?id=2083449)を根拠に、通常のemSign経路とSectigoのクロス署名経路を別々に検証する。接続先の運営会社やパッケージの版だけで安全と判定せず、実際にロードするCAと拒否動作を確認する。
+
+- [uvの公式対策版](https://github.com/astral-sh/uv/security/advisories/GHSA-hq85-5cpj-mr62)0.13.4へ、Dockerのtag・digest、全workflow、両Python projectの`required-version`・`uv_build`、Dependabotの対応系列、固定ツール監視を合わせる。Pythonは3.14を維持する。両projectでfrozen同期・依存整合性・wheel／sdistを確認する。
+- [certifiの公式対策](https://github.com/certifi/python-certifi/security/advisories/GHSA-6q48-6c7w-9gw2)2026.10.19を直接依存の下限にも指定する。CoreのDiscord／OpenAI／画像取得、RecordsのOAuth／identity／avatar／OpenAIは、共通の`create_public_tls_context()`を標準クライアントへ渡して、このbundleだけを選ぶ。HTTPX2の既定truststore経路やLambdaのOS CAへ依存しない。hostname・証明書検証、SDKの接続制限・timeout・retryは維持する。Discord connectorは各event loopで生成し、失敗・cancel時も閉じる。企業CAなどOSへ追加したCAはこの経路には加わらない。
+- HTTPXによるDiscord status／announcement、現在のbotocore、Firebaseのrequests／Google APIのhttplib2はcertifiを使う。CA環境変数・custom locator・certifi不在時のbotocore同梱bundleへのfallbackも別途確認する。配置済みECSと22 LambdaにCA／proxy上書きはなく、両Lambda ZIPのcertifi実体も照合済みである。
+- DHI builderは同じPython／Debian系列の修正版digestへ更新する。ARM64 layerの`ca-certificates 20250419+deb13u1+dhi0`は対象rootを含まない。runtimeタグの`20250419+dhi2`は依然対象rootを含むため、修正済みbuilderで`update-ca-certificates --fresh`を実行し、runtimeのanchorと生成済みCA directoryを丸ごと置き換える。古いhashed aliasをmergeで残さず、固定digestと`SOURCE_DATE_EPOCH`で再現可能にする。これはCA設定のoverlayであり、runtimeのdpkg台帳を架空の更新版にしない。提供元runtimeの実体が検証を通ったらoverlayを撤去する。
+- [Node 24.22.1](https://github.com/nodejs/node/releases/tag/v24.22.1)の対象公開鍵拒否とroot更新を使い、固定版と`engines`の下限を合わせる。PATHのNode更新だけではrunner内蔵Nodeやnative downloaderは更新されない。
+- [Ubuntu公式USN-8944-1](https://ubuntu.com/security/notices/USN-8944-1)の26.04修正版`ca-certificates 20260816ubuntu0.26.04.1`を含む、署名済みAPTからCAを更新する。各jobの最初のネットワークAction実行前に、対象4root表現がbundle／CA directoryに残る場合は停止する。この手順はcheckout前なので、作業directoryを`runner.temp`に明示する。workflowの`NODE_OPTIONS=--use-openssl-ca`で内蔵NodeもこのOS CAを使う。runner自身によるAction archiveの事前取得はjobの先行stepより早く、提供元の更新確認が必要である。
+- checkout直後のlocal composite actionから`tools.configure_build_tls`を使う。使い捨てhosted runnerのみOSの標準CA設定を更新する。子ツールには既存OS bundleから対象root／公開鍵だけを除いたPEMと空のCA directoryを指定し、curl／Git／urllib／AWS CLI／vp／pnpmにも適用する。Go／OpenSSLの追加directory経由を残さない。Docker daemonはCA更新後に再起動し、BuildKitは起動前から同じPEMを選び、実際のdaemon環境とbundleを検査する。
+- pip 26.2.2への更新に加え、pip-auditがensurepipの旧pipを起動する間も安全なbundleだけを選ばせる。[pip公式のCA選択](https://pip.pypa.io/en/stable/topics/https-certificates/)に従い、限定した子環境で`PIP_USE_DEPRECATED=legacy-certs`と`PIP_CERT`／`REQUESTS_CA_BUNDLE`を組み合わせ、古いOSとvendored bundleの混在を避ける。証明書検証を維持し、既存の`--strict --require-hashes`を変更しない。不正hashが失敗することも確認する。
+- Javaは選択したJDKの既存cacertsから対象だけを除いたPKCS12を標準`javax.net.ssl.trustStore`で指定する。別CA集合とのunionや新CA追加は行わない。CIではJDK設定直後、ローカルAndroidでは管理対象ビルドの一時領域に限定し、Gradle Wrapper／Maven／SDK取得に適用する。ホストの恒久的な信頼ストアは変更しない。
+
+配置済みCore imageのOS CAは対象12チェーンを受理し、アプリとLambda bundleのcertifiは全12本を拒否した。ローカル修正後のHTTPX2同期／非同期とaiohttpは、旧OS bundle／hashed directoryを環境に指定しても対象12本を全て拒否し、正常な公開HTTPSを受理した。CA overlayも抽出した実ARM64 layerを使い、CAfile／CApathの双方で12本の拒否と正常3本の成功を確認する。完成ARM64 imageのbuild・container gate・SBOM／VEX／risk gateは別の検証であり、layer検証の成功で代替しない。 ARM64 CIでは完成した同じproduction imageから、OS既定・CApathのみ・アプリcertifiの標準SSLContextで対象12ホストと正常3ホストへTLS handshakeだけを実行する。HTTP要求・認証情報は送らず、timeout・DNS・期限切れ・hostname不一致はCA拒否の成功として扱わない。実際のPython／OpenSSL・信頼集合のhash・image情報と結果をSBOMと同じartifactへ残す。
+
+AndroidのKtor／OkHttp全4クライアントとCoilは、標準のTLS／hostname検証が成功した後、HTTP送信前にcleaned peer chainの8対象公開鍵を追加拒否する。信頼するCAを固定するpinningや独自TrustManagerは使わない。未更新AOSP API36で標準TrustManagerが対象12本を受理する条件でも、アプリは全件を送信前に拒否する。cached intermediateを使う場合と正常HTTPSも確認する。
+
+[Googleの案内](https://blog.google/security/protecting-chrome-and-android-users-from-compromised-emudhra-intermediate-ca-certificates/)によるPlay Services／OEM／Conscryptの失効配信は別に必要である。Firebase Android SDKの独自HTTPS、GMS、Custom Tabs／ブラウザはこのOkHttp interceptorを通らず、対象端末への更新到達は未確認。FCM auto-init無効は維持するが、利用者が通知を有効にした際のSDK通信を保護済みとは扱わない。CTはAPI37標準・36 opt-in・35以下非対応であり、targetSDKだけで全端末を保護できない。
+
+検証には一次資料の公開チェーンを使い、隔離CAでhostname・server用途を確認する。認証なしの公開TLSだけを正負の対照とし、CA列挙・offline検証・実クライアントの拒否を区別する。本番invoke、課金生成、Discord投稿、MITMや侵害秘密鍵を使うPoCは追加しない。ローカル対策の完了、hosted CI実行、本番反映、Android配布、実端末更新はそれぞれ独立した状態として報告する。
+
 ### Python 3.15への移行評価（2026年10月14日）
 
 [Issue #599](https://github.com/pitekusu/shittim-chest/issues/599)の更新要求は未完了。

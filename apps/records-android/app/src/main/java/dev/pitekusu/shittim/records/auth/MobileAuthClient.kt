@@ -1,5 +1,7 @@
 package dev.pitekusu.shittim.records.auth
 
+import dev.pitekusu.shittim.records.CompromisedCaKeys
+
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.HttpClientEngine
 import io.ktor.client.engine.okhttp.OkHttp
@@ -41,6 +43,7 @@ internal class MobileAuthException(val failure: MobileAuthFailure) :
 /** Owns its engine; reuse until the caller's scope ends. No UI, storage, or automatic re-login. */
 internal class MobileAuthClient(private val engine: HttpClientEngine = OkHttp.create {
   config {
+    addNetworkInterceptor(CompromisedCaKeys)
     retryOnConnectionFailure(false) // A one-time exchange must not be replayed implicitly.
     followRedirects(false)
     followSslRedirects(false)

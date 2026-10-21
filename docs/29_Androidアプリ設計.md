@@ -686,6 +686,14 @@ Version Catalogで固定する。serialization compiler pluginは同CatalogのKo
 `authorize`はブラウザー用であり、このクライアントからGETしない。固定のRecords HTTPS origin以外へ
 要求を送る入口は設けず、`INTERNET`権限だけを追加する。OS標準のTLS／証明書検証と平文HTTP禁止を維持する。
 
+2026年10月のeMudhra／emSign侵害に対して、認証・閲覧・討論・添付のKtor／OkHttpとCoilは
+共通の`CompromisedCaKeys` network interceptorを設定する。標準のTLS／hostname検証後、HTTP送信前に
+OkHttpのcleaned chainの対象8公開鍵を拒否する。cached intermediateやcross-signも同じ鍵として扱う。
+既存CA集合への追加、信頼先のpinning、独自TrustManager、TLS検証の無効化は行わない。
+Firebase Android SDKの独自HTTPS、Google Play Services、Custom Tabs／ブラウザはこの設定の対象外で、
+Play Services／OEM／Conscrypt／ブラウザ側の修正到達を別途確認する。FCM auto-init無効を維持しても、
+通知を有効にした後のSDK通信まで保護済みとは扱わない。詳細と検証条件は15章の同侵害対応節を参照する。
+
 | 項目 | C14の扱い |
 |---|---|
 | 認証情報 | 開始・交換はJSONのみ。session・logoutだけ明示的なBearerを付け、Cookie・Originを送らない |

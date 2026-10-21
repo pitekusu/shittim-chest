@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 from shittim_chest.adapters.aws import SsmParameterReader
 from shittim_chest.adapters.discord import create_discord_status_http_client
 from shittim_chest.adapters.openai.prompts import LEGACY_RUNTIME_SYSTEM_PROMPT
+from shittim_chest.adapters.tls import create_public_tls_context
 
 from shittim_records.adapters import (
     AffectionProjectionRepository,
@@ -537,7 +538,11 @@ def _auth_controller() -> AuthHttpController:
             admin_user_id_parameter_name=_environment("ADMIN_DISCORD_USER_ID_PARAMETER_NAME"),
         ).load()
         discord = DiscordOAuthClient(
-            httpx2.Client(timeout=httpx2.Timeout(3.0, connect=2.0), follow_redirects=False)
+            httpx2.Client(
+                timeout=httpx2.Timeout(3.0, connect=2.0),
+                follow_redirects=False,
+                verify=create_public_tls_context(),
+            )
         )
         avatars = S3AvatarStore(_regional_s3_client(), _environment("MEDIA_BUCKET_NAME"))
         mobile_store = DynamoMobileAuthStore(dynamodb, _environment("SESSION_TABLE_NAME"))

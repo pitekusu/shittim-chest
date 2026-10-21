@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
+from typing import Any
 
+import aiohttp
 import discord
 
 from shittim_chest.adapters.discord.rate_limit_evidence import (
     build_discord_rate_limit_trace,
 )
+from shittim_chest.adapters.tls import create_public_tls_context
 from shittim_chest.application import (
     DISCORD_BOT_SLOTS,
     AcceptDebateRequest,
@@ -21,7 +24,25 @@ DISCORD_MAX_RATELIMIT_TIMEOUT_SECONDS = 300.0
 InteractionHandler = Callable[[discord.Interaction[discord.Client]], Awaitable[None]]
 
 
-class DiscordModeratorClient(discord.Client):
+class _DiscordTlsClient(discord.Client):
+    """Own the explicit connector even when login never creates an HTTP session."""
+
+    def __init__(
+        self, *, intents: discord.Intents, connector: aiohttp.TCPConnector, **options: Any
+    ) -> None:
+        super().__init__(intents=intents, connector=connector, **options)
+        self._tls_connector = connector
+
+    async def close(self) -> None:
+        try:
+            await super().close()
+        finally:
+            # discord.py otherwise closes only the session created by login.
+            if not self._tls_connector.closed:
+                await self._tls_connector.close()
+
+
+class DiscordModeratorClient(_DiscordTlsClient):
     """Dedicated moderator client with one explicit component interaction handler."""
 
     _interaction_handler: InteractionHandler | None = None
@@ -48,19 +69,22 @@ class DiscordModeratorClient(discord.Client):
 def build_discord_clients(
     config: DiscordRuntimeConfig,
 ) -> dict[DiscordBotSlot, discord.Client]:
-    """Create exactly four least-privilege clients without reading Bot tokens."""
+    """Create four least-privilege clients in the owning event loop, without Bot tokens."""
 
     clients: dict[DiscordBotSlot, discord.Client] = {}
     for slot in DISCORD_BOT_SLOTS:
         intents = discord.Intents.none()
         intents.guilds = True
-        client_type = DiscordModeratorClient if slot is DiscordBotSlot.MODERATOR else discord.Client
+        client_type = (
+            DiscordModeratorClient if slot is DiscordBotSlot.MODERATOR else _DiscordTlsClient
+        )
         clients[slot] = client_type(
             application_id=int(config.application_id_for(slot)),
             intents=intents,
             allowed_mentions=discord.AllowedMentions.none(),
             http_trace=build_discord_rate_limit_trace(),
             max_ratelimit_timeout=DISCORD_MAX_RATELIMIT_TIMEOUT_SECONDS,
+            connector=aiohttp.TCPConnector(ssl=create_public_tls_context(), limit=0),
         )
     return clients
 

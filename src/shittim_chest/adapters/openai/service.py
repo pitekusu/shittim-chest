@@ -16,6 +16,7 @@ from openai import (
     APITimeoutError,
     AsyncOpenAI,
     AuthenticationError,
+    DefaultAsyncHttpxClient,
     NotFoundError,
     PermissionDeniedError,
     RateLimitError,
@@ -74,6 +75,7 @@ from shittim_chest.adapters.openai.schemas import (
     PreferenceFrameOutputV1,
     VoteOutputV1,
 )
+from shittim_chest.adapters.tls import create_public_tls_context
 from shittim_chest.application.generation_policy import ReasoningMode
 from shittim_chest.domain import (
     DEFAULT_AFFECTION_SCORE,
@@ -125,7 +127,11 @@ def create_openai_client(
         api_key=api_key,
         max_retries=2,
         timeout=timeout,
-        http_client=http_client,
+        http_client=(
+            http_client
+            if http_client is not None
+            else DefaultAsyncHttpxClient(verify=create_public_tls_context())
+        ),
     )
 
 
