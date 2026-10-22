@@ -4,7 +4,7 @@ ARG SOURCE_DATE_EPOCH=0
 
 FROM ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff AS uv
 
-FROM dhi.io/python:3.14.8-debian13-dev@sha256:f342776dc2e3f2c3d9f37cf4cc182bbeb81b4eb4d3543357163aa5fa95bdc8bd AS builder
+FROM dhi.io/python:3.14.8-debian13-dev@sha256:03cf5ae71ab5a7761ec0dcbf9d522c0209581fb5196ac303537c74d2ac92de32 AS builder
 
 ARG SOURCE_DATE_EPOCH
 
@@ -22,7 +22,7 @@ WORKDIR /app
 # before transferring the complete CA store to the runtime.
 RUN update-ca-certificates --fresh
 
-# The DHI builder has the Debian fix; its runtime still carries libexpat1 2.8.3.
+# Retain the validated Expat overlay when updating the base image.
 # APT authenticates the exact package installed below.
 COPY tools/install_runtime_expat.py /tmp/install_runtime_expat.py
 RUN mkdir /tmp/runtime-package \
@@ -53,7 +53,7 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     && python /tmp/canonicalize_wheel_records.py \
         --source-date-epoch "${SOURCE_DATE_EPOCH}" /app/.venv
 
-FROM dhi.io/python:3.14.8-debian13@sha256:b2dee88be07689a608f86c392dd863f20399f8ffcbe99eff6bdb4f04485d9298 AS runtime-base
+FROM dhi.io/python:3.14.8-debian13@sha256:046a46512297187590b40b85e86ea2b128077d57601847ce916ecb7d919a7291 AS runtime-base
 
 ARG SOURCE_DATE_EPOCH
 
@@ -65,9 +65,9 @@ ENV SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH}" \
 WORKDIR /app
 
 USER 0:0
-# The pinned builder has the upstream CA fix; runtime still trusts both bad roots.
-# Replace the complete generated/anchor trees so old capath aliases cannot survive.
-# Remove this overlay once the runtime's own CA store passes the same trust checks.
+# Both pinned bases contain the upstream CA fix. Retain the validated overlay
+# and builder-generated hashed aliases until their removal is verified separately.
+# Replace the complete generated/anchor trees so stale aliases cannot survive.
 RUN --mount=type=bind,from=builder,source=/etc/ssl/certs,target=/run/updated-ca/certs,ro \
     --mount=type=bind,from=builder,source=/usr/share/ca-certificates,target=/run/updated-ca/anchors,ro \
     --mount=type=bind,from=builder,source=/etc/ca-certificates.conf,target=/run/updated-ca/ca-certificates.conf,ro \
