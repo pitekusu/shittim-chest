@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import re
 import socket
 import ssl
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -149,7 +151,7 @@ def test_transport_recovery_keeps_each_attempt_and_stops_on_certificate_result(
 
 
 def test_docker_budget_covers_the_full_bounded_retry_schedule():
-    checks = 3 * (len(verifier.INCIDENT_HOSTS) + len(verifier.NORMAL_HOSTS))
+    checks = 4 * (len(verifier.INCIDENT_HOSTS) + len(verifier.NORMAL_HOSTS))
     batches = math.ceil(checks / verifier.MAX_CONCURRENT_HANDSHAKES)
     per_check = (
         verifier.MAX_ATTEMPTS * verifier.ATTEMPT_TIMEOUT_SECONDS
@@ -159,33 +161,77 @@ def test_docker_budget_covers_the_full_bounded_retry_schedule():
     assert batches * per_check + 30 <= verifier.DOCKER_TIMEOUT_SECONDS
 
 
-def test_probe_covers_all_three_stores_and_12_bad_3_good_without_http(monkeypatch):
+def test_fallback_context_loads_the_actual_botocore_bundle_without_ambient_roots(
+    tmp_path: Path, monkeypatch
+):
+    from botocore.httpsession import DEFAULT_CA_BUNDLE
+
+    # The fallback must stay independent of environment trust overrides and the
+    # separately selected application certifi store.
+    monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "missing-ca.pem"))
+    monkeypatch.setenv("SSL_CERT_DIR", str(tmp_path / "missing-ca-directory"))
+    monkeypatch.setattr(
+        verifier.ssl, "get_default_verify_paths", lambda: SimpleNamespace(capath=str(tmp_path))
+    )
+    contexts = verifier._contexts()
+    expected = {
+        ssl.PEM_cert_to_DER_cert(certificate)
+        for certificate in re.findall(
+            r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
+            Path(DEFAULT_CA_BUNDLE).read_text(),
+            re.DOTALL,
+        )
+    }
+    fallback = contexts["botocore_fallback"]
+    assert expected and set(fallback.get_ca_certs(binary_form=True)) == expected
+    assert set(contexts["application"].get_ca_certs(binary_form=True)) != expected
+    assert fallback.verify_mode == ssl.CERT_REQUIRED
+    assert fallback.check_hostname is True
+    assert verifier._store_metadata(fallback)["incident_roots_absent"] is True
+
+
+@pytest.mark.parametrize(
+    "unsafe_metadata",
+    (
+        {},
+        {"ca_count": 0},
+        {"incident_roots_absent": False},
+        {"verify_required": False},
+        {"check_hostname": False},
+    ),
+)
+def test_probe_covers_all_four_stores_and_12_bad_3_good_without_http(monkeypatch, unsafe_metadata):
     contexts = {
         name: ssl.create_default_context()
-        for name in ("system", "system_capath_only", "application")
+        for name in ("system", "system_capath_only", "application", "botocore_fallback")
     }
     monkeypatch.setattr(verifier, "_contexts", lambda: contexts)
     monkeypatch.setattr(
         verifier,
         "_store_metadata",
-        lambda _: {
+        lambda context: {
             "ca_count": 2,
             "incident_roots_absent": True,
             "verify_required": True,
             "check_hostname": True,
+            **(unsafe_metadata if context is contexts["botocore_fallback"] else {}),
         },
     )
 
     async def handshake(context, host, accept):
         assert host in verifier.INCIDENT_HOSTS + verifier.NORMAL_HOSTS
-        return {"host": host, "passed": True}
+        return {"host": host, "expected": "accept" if accept else "reject", "passed": True}
 
     monkeypatch.setattr(verifier, "_handshake", handshake)
     result = asyncio.run(verifier._probe())
     assert len(verifier.INCIDENT_HOSTS) == 12
     checks = result["checks"]
-    assert isinstance(checks, list) and len(checks) == 45
-    assert result["status"] == "passed"
+    assert isinstance(checks, list) and len(checks) == 60
+    for name in contexts:
+        store_checks = [check for check in checks if check["store"] == name]
+        assert sum(check["expected"] == "reject" for check in store_checks) == 12
+        assert sum(check["expected"] == "accept" for check in store_checks) == 3
+    assert result["status"] == ("failed" if unsafe_metadata else "passed")
     assert result["http_sent"] is result["credentials_supplied"] is False
 
 

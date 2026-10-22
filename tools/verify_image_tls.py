@@ -32,9 +32,9 @@ MAX_ATTEMPTS = 3
 ATTEMPT_TIMEOUT_SECONDS = 10
 RETRY_BACKOFF_SECONDS = 0.25
 MAX_CONCURRENT_HANDSHAKES = 4
-# 45 checks / four slots, each with three 10s attempts, 0.25s + 0.5s
-# backoff and at most 1s TLS shutdown: <=381s, plus container startup.
-DOCKER_TIMEOUT_SECONDS = 420
+# 60 checks / four slots, each with three 10s attempts, 0.25s + 0.5s
+# backoff and at most 1s TLS shutdown: <=477s, plus container startup.
+DOCKER_TIMEOUT_SECONDS = 540
 
 
 def _load_capath(context: ssl.SSLContext, directory: str | None) -> None:
@@ -46,6 +46,8 @@ def _load_capath(context: ssl.SSLContext, directory: str | None) -> None:
 
 
 def _contexts() -> dict[str, ssl.SSLContext]:
+    from botocore.httpsession import DEFAULT_CA_BUNDLE
+
     from shittim_chest.adapters.tls import create_public_tls_context
 
     capath = ssl.get_default_verify_paths().capath
@@ -58,6 +60,9 @@ def _contexts() -> dict[str, ssl.SSLContext]:
         "system": system,
         "system_capath_only": directory_only,
         "application": create_public_tls_context(),
+        # Probe the shipped fallback itself even when certifi is installed and
+        # selected by normal botocore clients. Do not resolve through where().
+        "botocore_fallback": ssl.create_default_context(cafile=DEFAULT_CA_BUNDLE),
     }
 
 

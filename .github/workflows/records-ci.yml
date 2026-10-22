@@ -172,6 +172,10 @@ jobs:
           uv run --frozen ty check
       - name: Run Records unit tests
         run: uv run --frozen pytest
+      - name: Verify the Records botocore fallback trust store
+        run: >-
+          uv run --frozen pytest -c pyproject.toml -o pythonpath=../..
+          ../../tests/unit/adapters/test_botocore_tls.py
       - name: Run Records DynamoDB Local integration tests
         run: |
           uv run --frozen python ../../tools/run_dynamodb_local.py -- \
