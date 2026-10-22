@@ -150,6 +150,7 @@ jobs:
           uv run --frozen ruff format --check .
           uv run --frozen ruff check .
           uv run --frozen python tools/check_container_policy.py
+          uv run --frozen python -m tools.sync_cdk_helper_ca --check
           uv run --frozen python tools/check_tool_versions.py validate \
             .github/tool-versions.json
       - name: Check types with ty
