@@ -20,8 +20,8 @@ env:
   SSL_CERT_DIR: /etc/ssl/certs
   AWS_REGION: ap-northeast-1
   NODE_VERSION: "24.22.1"
-  PYTHON_VERSION: "3.14.8"
-  UV_VERSION: "0.13.4"
+  PYTHON_VERSION: "3.14.9"
+  UV_VERSION: "0.13.5"
 
 jobs:
   plan:

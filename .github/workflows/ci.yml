@@ -24,8 +24,8 @@ env:
   SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
   SSL_CERT_DIR: /etc/ssl/certs
   DOCKER_BUILD_RECORD_RETENTION_DAYS: "30"
-  PYTHON_VERSION: "3.14.8"
-  UV_VERSION: "0.13.4"
+  PYTHON_VERSION: "3.14.9"
+  UV_VERSION: "0.13.5"
 
 jobs:
   changes:

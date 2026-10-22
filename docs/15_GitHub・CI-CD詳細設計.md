@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-10-14
+updated: 2026-10-22
 ---
 
 # GitHub・CI-CD詳細設計
@@ -284,13 +284,21 @@ Webの`fast-uri`は修正版へ更新し、同じリスク受容へ混ぜない�
 
 対策前の配置済みCore imageのOS CAは対象12チェーンを受理し、アプリとLambda bundleのcertifiは全12本を拒否した。ローカル修正後のHTTPX2同期／非同期とaiohttpは、旧OS bundle／hashed directoryを環境に指定しても対象12本を全て拒否し、正常な公開HTTPSを受理した。CA overlayも抽出した実ARM64 layerを使い、CAfile／CApathの双方で12本の拒否と正常3本の成功を確認する。完成ARM64 imageのbuild・container gate・SBOM／VEX／risk gateは別の検証であり、layer検証の成功で代替しない。 ARM64 CIでは完成した同じproduction imageから、OS既定・CApathのみ・アプリcertifiの標準SSLContextで対象12ホストと正常3ホストへTLS handshakeだけを実行する。HTTP要求・認証情報は送らず、timeout・DNS・期限切れ・hostname不一致はCA拒否の成功として扱わない。標準のIPv4／IPv6接続切り替えを使い、通信障害だけを最大3回試す。全試行の固定分類を残し、証明書の受理・拒否は再試行せず判定する。実際のPython／OpenSSL・信頼集合のhash・image情報と結果をSBOMと同じartifactへ残す。
 
-CDK helperのLayerは、旧・修正版のNodeで既定CA readback、対象12チェーンの拒否と正常系、壊れたbundleや無効な設定での起動失敗をローカル検証する。検証結果はアプリ用22 Lambdaや完成ARM64 imageの結果と分ける。このLayer追補はローカル実装であり、本番helperへは未反映である。ローカル検証が成功しても、managed runtimeの実版・CA実体や本番での適用を確認済みとは扱わない。
+CDK helperのLayerは、旧・修正版のNodeで既定CA readback、対象12チェーンの拒否と正常系、壊れたbundleや無効な設定での起動失敗をローカル検証する。検証結果はアプリ用22 Lambdaや完成ARM64 imageの結果と分ける。本番設定、配置されたLayer ZIPのhash・CA集合、同一Layerを使った隔離検証、AWS内processの実際のCA選択は別々に記録する。ローカル検証や配置設定の照合だけで、managed runtimeの実版・CA実体やAWS内processの動作まで確認済みとは扱わない。
 
 AndroidのKtor／OkHttp全4クライアントとCoilは、標準のTLS／hostname検証が成功した後、HTTP送信前にcleaned peer chainの8対象公開鍵を追加拒否する。信頼するCAを固定するpinningや独自TrustManagerは使わない。未更新AOSP API36で標準TrustManagerが対象12本を受理する条件でも、アプリは全件を送信前に拒否する。cached intermediateを使う場合と正常HTTPSも確認する。
 
 [Googleの案内](https://blog.google/security/protecting-chrome-and-android-users-from-compromised-emudhra-intermediate-ca-certificates/)によるPlay Services／OEM／Conscryptの失効配信は別に必要である。Firebase Android SDKの独自HTTPS、GMS、Custom Tabs／ブラウザはこのOkHttp interceptorを通らず、対象端末への更新到達は未確認。FCM auto-init無効は維持するが、利用者が通知を有効にした際のSDK通信を保護済みとは扱わない。CTはAPI37標準・36 opt-in・35以下非対応であり、targetSDKだけで全端末を保護できない。
 
 検証には一次資料の公開チェーンを使い、隔離CAでhostname・server用途を確認する。認証なしの公開TLSだけを正負の対照とし、CA列挙・offline検証・実クライアントの拒否を区別する。本番invoke、課金生成、Discord投稿、MITMや侵害秘密鍵を使うPoCは追加しない。ローカル対策の完了、hosted CI実行、本番反映、Android配布、実端末更新はそれぞれ独立した状態として報告する。
+
+### Python 3.14.9の採用範囲（2026年10月22日）
+
+[Python 3.14.9の公式案内](https://www.python.org/downloads/release/python-3149/)では、ensurepip同梱のpip 26.2.2と、そのvendored certifi 2026.10.19が今回のCA侵害に対応する。開発環境の`.python-version`、全workflowのPython固定値、固定ツール監視を3.14.9へ揃える。uv 0.13.4にはこのPython配布情報がないため、CA除外を維持し`rustls-webpki` 0.103.16による対象鍵拒否も含む[uv 0.13.5](https://github.com/astral-sh/uv/releases/tag/0.13.5)へCLI・Docker・CIを揃え、`required-version`の下限を0.13.5へ更新する。ビルドbackendである`uv_build`の互換範囲は別の条件として維持する。CPythonの更新だけで、既存venvのpip、OS CA、アプリのcertifiが更新されたとは扱わず、それぞれ実体とCA選択を確認する。配布するwheelとARM64 Lambda bundleも、実際に使うinterpreterと依存を記録して検証する。
+
+CoreのDHIは別の採用条件を持つ。2026年10月22日、認証済みregistryで`3.14.9-debian13`／`3.14.9-debian13-dev`はいずれもmanifest未公開であり、既存固定digestの取得は成功した。可変の3.14タグの新しいARM64 builder／runtimeについて、manifest・config・10 layerのdigestとPython実版3.14.8を照合した。実OS bundleは148根、installed pipとensurepip wheelはいずれも26.2.2で、両vendored certifiは2026.10.19の120根だった。各CA集合に対象fingerprint／SPKIがないことも確認し、CA修正版DHI 3.14.8の公開は確認済みである。この候補の署名・SBOM・完成image検証と採用は未実施のため、今回は既存の検証済みtag・digestとCA overlayを維持する。3.14.9 ARM64 imageの提供元待ちは、公開済み3.14.8候補の採用検証と分けて[issue #639](https://github.com/pitekusu/shittim-chest/issues/639)で追跡する。採用前にはPython実版、ensurepip wheel、OS CAの実体、完成imageのCA拒否動作、署名・SBOM／VEX／risk gateを照合する。
+
+既存のOS CA overlay、アプリの明示certifi選択、CDK helperのCA Layer、pip向けの限定したCA環境指定は維持する。提供元の更新版が出たことやPythonの版番号だけを理由に撤去しない。Lambdaのmanaged `python3.14`も、build用Pythonの固定値ではpatch版を指定できないため、AWSの配布・実適用確認を分ける。この更新PRの完了、本番反映、Android配布はそれぞれ独立した承認・確認対象である。
 
 ### Python 3.15への移行評価（2026年10月14日）
 

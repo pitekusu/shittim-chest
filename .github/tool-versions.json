@@ -80,7 +80,7 @@
     },
     "python": {
       "repository": "python/cpython", "tag_prefix": "v", "release_prefix": "v3.14.",
-      "files": {".github/workflows/*.yml": "PYTHON_VERSION: \"?([0-9.]+)", ".python-version": "^([0-9.]+)"}
+      "files": {".github/workflows/*.yml": "(?:PYTHON_VERSION|python-version): \"?([0-9.]+)", ".python-version": "^([0-9.]+)"}
     },
     "node": {
       "repository": "nodejs/node", "tag_prefix": "v", "release_prefix": "v24.",
