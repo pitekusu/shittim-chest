@@ -133,7 +133,11 @@ def load_tool_pins(path: Path) -> tuple[ToolPin, ...]:
             raise ValueError(f"invalid semantic version for {name}: {version}")
         if not isinstance(tag_prefix, str) or tag_prefix not in {"v", ""}:
             raise ValueError(f"unsupported tag prefix for {name}: {tag_prefix}")
-        if Path(archive_name).name != archive_name or version not in archive_name:
+        # These upstream releases publish raw binaries without a version in the
+        # filename. Keep the exception limited to their exact ARM64 assets.
+        raw_binary = {"cosign-dhi": "cosign-linux-arm64", "regctl": "regctl-linux-arm64"}.get(name)
+        valid_name = archive_name == raw_binary if raw_binary else version in archive_name
+        if Path(archive_name).name != archive_name or not valid_name:
             raise ValueError(f"invalid archive name for {name}: {archive_name}")
         if SHA256_PATTERN.fullmatch(archive_sha256) is None:
             raise ValueError(f"invalid archive SHA-256 for {name}")

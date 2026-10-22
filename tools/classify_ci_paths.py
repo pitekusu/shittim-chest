@@ -40,6 +40,11 @@ RUNTIME_VALIDATION_FILES = frozenset(
         "security/container-risk-acceptance.json",
         "security/container-risk-acceptance.schema.json",
         "tools/classify_ci_paths.py",
+        "tools/derive_dhi_vex.py",
+        "tools/fetch_dhi_attestations.py",
+        "tools/install_dhi_verification_tools.sh",
+        "tests/unit/tools/test_derive_dhi_vex.py",
+        "tests/unit/tools/test_fetch_dhi_attestations.py",
     }
 )
 RUNTIME_VALIDATION_PREFIXES = (

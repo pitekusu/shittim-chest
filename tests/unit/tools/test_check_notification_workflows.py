@@ -62,6 +62,42 @@ def test_repository_target_workflow_is_accepted(directory: Path) -> None:
     assert validate_notification_workflows(directory) == 1
 
 
+@pytest.mark.parametrize("workflow", ("ci.yml", RELEASE_WORKFLOW))
+@pytest.mark.parametrize(
+    "marker",
+    (
+        "python -m tools.fetch_dhi_attestations",
+        "SYFT_FILE_METADATA_SELECTION: all",
+        '--base-package-inventory "${RUNNER_TEMP}/dhi-evidence/base.syft.json"',
+        '--vendor-sbom "${RUNNER_TEMP}/dhi-evidence/vendor-spdx.intoto.json"',
+        "${{ runner.temp }}/dhi-evidence/",
+    ),
+)
+def test_dhi_vex_requires_signed_originals_and_actual_inventory(
+    directory: Path, workflow: str, marker: str
+) -> None:
+    _replace(directory / workflow, marker, "removed-evidence")
+    with pytest.raises(WorkflowPolicyError, match="DHI VEX"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "marker",
+    (
+        '--base-package-inventory "${RUNNER_TEMP}/release/dhi-evidence/base.syft.json"',
+        'cmp "${RUNNER_TEMP}/replayed.openvex.json" "${RUNNER_TEMP}/release/normal.openvex.json"',
+        (
+            'cmp "${RUNNER_TEMP}/replayed.vex-mapping.json" '
+            '"${RUNNER_TEMP}/release/normal.vex-mapping.json"'
+        ),
+    ),
+)
+def test_dhi_vex_deploy_replays_its_bound_inputs(directory: Path, marker: str) -> None:
+    _replace(directory / RELEASE_WORKFLOW, marker, "removed-replay")
+    with pytest.raises(WorkflowPolicyError, match="DHI VEX deploy"):
+        validate_notification_workflows(directory)
+
+
 @pytest.fixture
 def android_release(directory: Path) -> Path:
     return directory / ANDROID_RELEASE_WORKFLOW
