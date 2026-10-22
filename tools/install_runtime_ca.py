@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Transfer the fixed upstream CA configuration while DHI runtime lags builder."""
+"""Transfer the validated upstream CA trees, including regenerated hashed aliases."""
 
 from __future__ import annotations
 
