@@ -24,6 +24,7 @@ env:
   PYTHON_VERSION: 3.14.9
   PYTHONDONTWRITEBYTECODE: "1"
   UV_VERSION: 0.13.5
+  UV_MANIFEST_URL: https://raw.githubusercontent.com/${{ github.event.pull_request.head.repo.full_name || github.repository }}/${{ github.event.pull_request.head.sha || github.sha }}/.github/uv-manifest.ndjson
   AWS_SIGNER_NOTATION_INSTALLER_VERSION: 2.2.0-1
   NOTATION_CLI_VERSION: 1.3.2
   AWS_SIGNER_NOTATION_PLUGIN_VERSION: 1.0.2292
@@ -171,6 +172,8 @@ jobs:
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: ${{ env.UV_VERSION }}
+          manifest-file: ${{ env.UV_MANIFEST_URL }}
+          download-from-astral-mirror: false
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -1113,6 +1116,8 @@ jobs:
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: ${{ env.UV_VERSION }}
+          manifest-file: ${{ env.UV_MANIFEST_URL }}
+          download-from-astral-mirror: false
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock

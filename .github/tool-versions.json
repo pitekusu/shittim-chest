@@ -88,7 +88,7 @@
     },
     "uv": {
       "repository": "astral-sh/uv", "tag_prefix": "", "release_prefix": "0.13.",
-      "files": {".github/workflows/*.yml": "UV_VERSION: \"?([0-9.]+)"}
+      "files": {".github/workflows/*.yml": "UV_VERSION: \"?([0-9.]+)", ".github/uv-manifest.ndjson": "\"version\":\"([0-9.]+)\""}
     },
     "pnpm": {
       "repository": "pnpm/pnpm", "tag_prefix": "v", "release_prefix": "v12.",
