@@ -43,11 +43,11 @@
       "version": "0.11.7"
     },
     "docker-scout": {
-      "archive_name": "docker-scout_1.26.0_linux_arm64.tar.gz",
-      "archive_sha256": "34282a50d6787eec46e44a377a1ed9e70342adf078135cca8617c9199852725c",
+      "archive_name": "docker-scout_1.27.0_linux_arm64.tar.gz",
+      "archive_sha256": "3da088c321f55ddf2c2d1c5c9d49c66673b7a978a8b2b65f6a1ca9a3944dc3cd",
       "repository": "docker/scout-cli",
       "tag_prefix": "v",
-      "version": "1.26.0"
+      "version": "1.27.0"
     },
     "syft": {
       "archive_name": "syft_1.54.1_linux_arm64.tar.gz",
