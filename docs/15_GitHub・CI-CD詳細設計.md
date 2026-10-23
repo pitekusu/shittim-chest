@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-10-14
+updated: 2026-10-22
 ---
 
 # GitHub・CI-CD詳細設計
@@ -272,21 +272,41 @@ Webの`fast-uri`は修正版へ更新し、同じリスク受容へ混ぜない�
 
 - [uvの公式対策版](https://github.com/astral-sh/uv/security/advisories/GHSA-hq85-5cpj-mr62)0.13.4へ、Dockerのtag・digest、全workflow、両Python projectの`required-version`・`uv_build`、Dependabotの対応系列、固定ツール監視を合わせる。Pythonは3.14を維持する。両projectでfrozen同期・依存整合性・wheel／sdistを確認する。
 - [certifiの公式対策](https://github.com/certifi/python-certifi/security/advisories/GHSA-6q48-6c7w-9gw2)2026.10.19を直接依存の下限にも指定する。CoreのDiscord／OpenAI／画像取得、RecordsのOAuth／identity／avatar／OpenAIは、共通の`create_public_tls_context()`を標準クライアントへ渡して、このbundleだけを選ぶ。HTTPX2の既定truststore経路やLambdaのOS CAへ依存しない。hostname・証明書検証、SDKの接続制限・timeout・retryは維持する。Discord connectorは各event loopで生成し、失敗・cancel時も閉じる。企業CAなどOSへ追加したCAはこの経路には加わらない。
-- HTTPXによるDiscord status／announcement、現在のbotocore、Firebaseのrequests／Google APIのhttplib2はcertifiを使う。CA環境変数・custom locator・certifi不在時のbotocore同梱bundleへのfallbackも別途確認する。配置済みECSと22 LambdaにCA／proxy上書きはなく、両Lambda ZIPのcertifi実体も照合済みである。
-- DHI builderは同じPython／Debian系列の修正版digestへ更新する。ARM64 layerの`ca-certificates 20250419+deb13u1+dhi0`は対象rootを含まない。runtimeタグの`20250419+dhi2`は依然対象rootを含むため、修正済みbuilderで`update-ca-certificates --fresh`を実行し、runtimeのanchorと生成済みCA directoryを丸ごと置き換える。古いhashed aliasをmergeで残さず、固定digestと`SOURCE_DATE_EPOCH`で再現可能にする。これはCA設定のoverlayであり、runtimeのdpkg台帳を架空の更新版にしない。提供元runtimeの実体が検証を通ったらoverlayを撤去する。
-- [Node 24.22.1](https://github.com/nodejs/node/releases/tag/v24.22.1)の対象公開鍵拒否とroot更新を使い、固定版と`engines`の下限を合わせる。PATHのNode更新だけではrunner内蔵Nodeやnative downloaderは更新されない。
+- HTTPXによるDiscord status／announcement、botocoreの通常経路、Firebaseのrequests／Google APIのhttplib2はcertifiを使う。CA環境変数・custom locator・certifi不在時のbotocore同梱bundleへのfallbackも別途確認する。配置済みECSとアプリ用shared bundleを使う22 LambdaにCA／proxy上書きはなく、両Lambda ZIPのcertifi実体も照合済みである。別のCDK infrastructure helperへこの結果を外挿しない。
+- VPCのdefault security groupを制限するCDK helper 1関数は、managed `nodejs24.x`でruntime同梱EC2 SDKとCloudFormation応答用の標準`https.request`を使う。アプリ用22関数とは別のCA経路であり、ビルド用Nodeの固定版更新やcertifi更新では対策されない。実Node patch・managed runtimeのCA実体・対象チェーン拒否は別途確認する。
+- このhelperだけへ標準Lambda Layerを適用し、公開certifi 2026.10.19から証明書PEMブロックだけ抽出した120根、MPLライセンス、取得元とSHA-256のmetadata、小さな`trust.cjs`を同梱する。元ファイルの`metadata.source_sha256`は`50f79f98dac192b20dbf73f35c56f0b0c557ab267ff5199d1117cc1180b70785`、配布する`cacert.pem`の`metadata.sha256`は`222b3f908aa5845aea1152eb88fa6524921605bac786c4719f5091cb8a9f390a`であり、証明書DERの120根集合は元のcertifiと完全に同じである。コメントを含めず、公開面検査は弱めない。CA snapshotは`uv run --frozen python -m tools.sync_cdk_helper_ca --write`で生成し、`uv run --frozen python -m tools.sync_cdk_helper_ca --check`で照合する。`NODE_OPTIONS=--require=/opt/shittim-tls/trust.cjs`でhandlerの前にNode標準`tls.setDefaultCACertificates()`を実行し、既定CA集合を完全置換してreadbackする。Nodeのcompile-time `NODE_OPENSSL_SYSTEM_CERT_PATH`が非空の場合に既存CAを追加する条件が残るため、`--use-openssl-ca`と`SSL_CERT_FILE`／`SSL_CERT_DIR`だけの案は採用しない。PEM欠落・SHA不一致・標準API欠如・TLS検証無効指定はhandler前に起動を失敗させる。独自TLS verifierや`https`のmonkeypatchは使わず、EC2 SDKとCloudFormation応答の両方へ標準既定CAを適用する。既存helperのlogical ID・handler・SDK・IAMを維持し、Layerの新assetも署名済みCDK asset閉包へ含め、過不足を厳密に検証する。
+- DHI builder／runtimeは同じPython／Debian系列のCA更新済みdigestへ固定する。旧runtimeの`ca-certificates 20250419+dhi2`が対象rootを含んでいたため、修正済みbuilderで`update-ca-certificates --fresh`を実行し、runtimeのanchorと生成済みCA directoryを丸ごと置き換えるoverlayを導入した。古いhashed aliasをmergeで残さず、固定digestと`SOURCE_DATE_EPOCH`で再現可能にする。これはCA設定のoverlayであり、runtimeのdpkg台帳を架空の更新版にしない。2026年10月22日のCA更新済みruntime採用でもoverlayを維持し、撤去は実際に採用するCA集合・拒否動作・完成imageの検証と影響評価を経た別の変更として扱う。
+- [Node 24.22.1](https://github.com/nodejs/node/releases/tag/v24.22.1)の対象公開鍵拒否とroot更新を使い、固定版と`engines`の下限を合わせる。PATHのNode更新だけではrunner内蔵Node、native downloader、Lambdaのmanaged Nodeは更新されない。
 - [Ubuntu公式USN-8944-1](https://ubuntu.com/security/notices/USN-8944-1)の26.04修正版`ca-certificates 20260816ubuntu0.26.04.1`を含む、署名済みAPTからCAを更新する。各jobの最初のネットワークAction実行前に、対象4root表現がbundle／CA directoryに残る場合は停止する。この手順はcheckout前なので、作業directoryを`runner.temp`に明示する。workflowの`NODE_OPTIONS=--use-openssl-ca`で内蔵NodeもこのOS CAを使う。runner自身によるAction archiveの事前取得はjobの先行stepより早く、提供元の更新確認が必要である。
 - checkout直後のlocal composite actionから`tools.configure_build_tls`を使う。使い捨てhosted runnerのみOSの標準CA設定を更新する。子ツールには既存OS bundleから対象root／公開鍵だけを除いたPEMと空のCA directoryを指定し、curl／Git／urllib／AWS CLI／vp／pnpmにも適用する。Go／OpenSSLの追加directory経由を残さない。Docker daemonはCA更新後に再起動し、BuildKitは起動前から同じPEMを選び、実際のdaemon環境とbundleを検査する。
 - pip 26.2.2への更新に加え、pip-auditがensurepipの旧pipを起動する間も安全なbundleだけを選ばせる。[pip公式のCA選択](https://pip.pypa.io/en/stable/topics/https-certificates/)に従い、限定した子環境で`PIP_USE_DEPRECATED=legacy-certs`と`PIP_CERT`／`REQUESTS_CA_BUNDLE`を組み合わせ、古いOSとvendored bundleの混在を避ける。証明書検証を維持し、既存の`--strict --require-hashes`を変更しない。不正hashが失敗することも確認する。
 - Javaは選択したJDKの既存cacertsから対象だけを除いたPKCS12を標準`javax.net.ssl.trustStore`で指定する。別CA集合とのunionや新CA追加は行わない。CIではJDK設定直後、ローカルAndroidでは管理対象ビルドの一時領域に限定し、Gradle Wrapper／Maven／SDK取得に適用する。ホストの恒久的な信頼ストアは変更しない。
 
-配置済みCore imageのOS CAは対象12チェーンを受理し、アプリとLambda bundleのcertifiは全12本を拒否した。ローカル修正後のHTTPX2同期／非同期とaiohttpは、旧OS bundle／hashed directoryを環境に指定しても対象12本を全て拒否し、正常な公開HTTPSを受理した。CA overlayも抽出した実ARM64 layerを使い、CAfile／CApathの双方で12本の拒否と正常3本の成功を確認する。完成ARM64 imageのbuild・container gate・SBOM／VEX／risk gateは別の検証であり、layer検証の成功で代替しない。 ARM64 CIでは完成した同じproduction imageから、OS既定・CApathのみ・アプリcertifiの標準SSLContextで対象12ホストと正常3ホストへTLS handshakeだけを実行する。HTTP要求・認証情報は送らず、timeout・DNS・期限切れ・hostname不一致はCA拒否の成功として扱わない。標準のIPv4／IPv6接続切り替えを使い、通信障害だけを最大3回試す。全試行の固定分類を残し、証明書の受理・拒否は再試行せず判定する。実際のPython／OpenSSL・信頼集合のhash・image情報と結果をSBOMと同じartifactへ残す。
+対策前の配置済みCore imageのOS CAは対象12チェーンを受理し、アプリとLambda bundleのcertifiは全12本を拒否した。ローカル修正後のHTTPX2同期／非同期とaiohttpは、旧OS bundle／hashed directoryを環境に指定しても対象12本を全て拒否し、正常な公開HTTPSを受理した。CA overlayも抽出した実ARM64 layerを使い、CAfile／CApathの双方で12本の拒否と正常3本の成功を確認する。完成ARM64 imageのbuild・container gate・SBOM／VEX／risk gateは別の検証であり、layer検証の成功で代替しない。ARM64 CIでは完成した同じproduction imageから、OS既定・CApathのみ・アプリcertifi・botocore同梱fallbackの4ストアを標準SSLContextで別々に検証し、対象12ホストの拒否と正常3ホストの受理、合計60判定を要求する。HTTP要求・認証情報は送らず、timeout・DNS・期限切れ・hostname不一致はCA拒否の成功として扱わない。標準のIPv4／IPv6接続切り替えを使い、通信障害だけを最大3回試す。全試行の固定分類を残し、証明書の受理・拒否は再試行せず判定する。実際のPython／OpenSSL・信頼集合のhash・image情報と結果をSBOMと同じartifactへ残す。
+
+CDK helperのLayerは、旧・修正版のNodeで既定CA readback、対象12チェーンの拒否と正常系、壊れたbundleや無効な設定での起動失敗をローカル検証する。検証結果はアプリ用22 Lambdaや完成ARM64 imageの結果と分ける。本番設定、配置されたLayer ZIPのhash・CA集合、同一Layerを使った隔離検証、AWS内processの実際のCA選択は別々に記録する。ローカル検証や配置設定の照合だけで、managed runtimeの実版・CA実体やAWS内processの動作まで確認済みとは扱わない。
 
 AndroidのKtor／OkHttp全4クライアントとCoilは、標準のTLS／hostname検証が成功した後、HTTP送信前にcleaned peer chainの8対象公開鍵を追加拒否する。信頼するCAを固定するpinningや独自TrustManagerは使わない。未更新AOSP API36で標準TrustManagerが対象12本を受理する条件でも、アプリは全件を送信前に拒否する。cached intermediateを使う場合と正常HTTPSも確認する。
 
 [Googleの案内](https://blog.google/security/protecting-chrome-and-android-users-from-compromised-emudhra-intermediate-ca-certificates/)によるPlay Services／OEM／Conscryptの失効配信は別に必要である。Firebase Android SDKの独自HTTPS、GMS、Custom Tabs／ブラウザはこのOkHttp interceptorを通らず、対象端末への更新到達は未確認。FCM auto-init無効は維持するが、利用者が通知を有効にした際のSDK通信を保護済みとは扱わない。CTはAPI37標準・36 opt-in・35以下非対応であり、targetSDKだけで全端末を保護できない。
 
 検証には一次資料の公開チェーンを使い、隔離CAでhostname・server用途を確認する。認証なしの公開TLSだけを正負の対照とし、CA列挙・offline検証・実クライアントの拒否を区別する。本番invoke、課金生成、Discord投稿、MITMや侵害秘密鍵を使うPoCは追加しない。ローカル対策の完了、hosted CI実行、本番反映、Android配布、実端末更新はそれぞれ独立した状態として報告する。
+
+### botocore同梱CA bundleの更新（2026年10月22日）
+
+[botocoreの公式修正PR #3838](https://github.com/boto/botocore/pull/3838)は、Sectigoのクロス署名経路に使われる`AAA Certificate Services`を同梱`cacert.pem`から削除する。[配布版1.43.117](https://pypi.org/project/botocore/1.43.117/)の実wheelをPyPIのSHA-256と照合し、公式tagと同じPEMであること、126根に既存拒否ポリシーのDER／SPKIが残らないことを確認した。直前の1.43.116も含む1.43.114～1.43.116は同じ127根の旧PEMで対象CAを含むため、修正下限は1.43.117とする。rootとRecordsのboto3下限を1.43.117へ上げ、両lockのboto3／botocoreを同版に揃える。botocoreへの独自patchや新CA追加は行わない。
+
+botocoreは通常`certifi.where()`を使い、certifiのimportが`ImportError`になった場合だけ同梱bundleを選ぶ。`AWS_CA_BUNDLE`や共有設定の`ca_bundle`、クライアントの明示`verify`パスは別のCA選択であり、通常経路の成功をそのまま外挿しない。隔離試験ではcertifiあり／import不可／明示CAパスを区別し、実際に選んだbundleと対象チェーン拒否を確認する。Coreの依存はDocker imageからCore Lambda bundleへ、Recordsの依存はRecords lockからRecords Lambda bundleへ伝播するため、各成果物の同梱fallback自体も検証する。既存のOS CA overlay、アプリの明示certifi選択、CDK helperのCA Layer、pip向け限定CA指定は全て維持する。
+
+このfallbackの提供元修正待ちは解消しているが、PRでの依存更新・検証と本番への適用は別である。この変更のmerge・追加の本番反映・Android配布は未実施であり、AWS管理ランタイムに同梱されたSDKの実版・CA実体もこのwheelの検査だけでは確認済みと扱わない。
+
+### Python 3.14.9の採用範囲（2026年10月22日）
+
+[Python 3.14.9の公式案内](https://www.python.org/downloads/release/python-3149/)では、ensurepip同梱のpip 26.2.2と、そのvendored certifi 2026.10.19が今回のCA侵害に対応する。開発環境の`.python-version`、全workflowのPython固定値、固定ツール監視を3.14.9へ揃える。uv 0.13.4にはこのPython配布情報がないため、CA除外を維持し`rustls-webpki` 0.103.16による対象鍵拒否も含む[uv 0.13.5](https://github.com/astral-sh/uv/releases/tag/0.13.5)へCLI・Docker・CIを揃え、`required-version`の下限を0.13.5へ更新する。ビルドbackendである`uv_build`の互換範囲は別の条件として維持する。公式binaryとGHCR公開後もsetup-uvの配布indexに未登録の間は、pinned Action標準の`manifest-file`へ、実行対象SHAで固定したrepository内`.github/uv-manifest.ndjson`を渡す。公開asset URL・SHA-256をAction標準で検証し、GNU x86_64／aarch64だけを許可する。manifestの版も更新監視へ含め、TLS・checksum・必須gateを維持する。これは公式indexの反映待ちを補う一時設定であり、追随後に必要性を見直す。CPythonの更新だけで、既存venvのpip、OS CA、アプリのcertifiが更新されたとは扱わず、それぞれ実体とCA選択を確認する。配布するwheelとARM64 Lambda bundleも、実際に使うinterpreterと依存を記録して検証する。
+
+CoreのDHIは別の採用条件を持つ。2026年10月22日、認証済みregistryで`3.14.9-debian13`／`3.14.9-debian13-dev`はいずれもmanifest未公開であり、既存固定digestの取得は成功した。一方、公開済みのCA更新済み3.14.8を採用するため、builderのindex digestを`03cf5ae71ab5a7761ec0dcbf9d522c0209581fb5196ac303537c74d2ac92de32`、runtimeを`046a46512297187590b40b85e86ea2b128077d57601847ce916ecb7d919a7291`へ更新する。ARM64 manifestはそれぞれ`05095418e3d664d7e768b48282b9ea36af7f4a12ee20972b795849ba05958c12`と`d988e9c5e19801c2fe5a69b7961d386646136e1fa46493e86f25d938c24a5ca4`である。Python実版は3.14.8を維持し、OSは`ca-certificates 20250419+deb13u1+dhi0`の148根、installed pipとensurepip wheelは26.2.2、両vendored certifiは2026.10.19の120根で、抽出実体に対象fingerprint／SPKIがないことを確認した。パッケージ版の一致だけで採用完了とせず、提供元の署名・SBOM／VEXと、完成した同一ARM64 imageのPython実版・OS CAfile／CApath・アプリCA・正常系と対象12チェーン拒否・risk gateを照合し、それぞれの実施結果を記録する。3.14.9 ARM64 imageの提供元待ちは、この3.14.8の採用検証と分けて[issue #639](https://github.com/pitekusu/shittim-chest/issues/639)で追跡する。
+
+既存のOS CA overlay、アプリの明示certifi選択、CDK helperのCA Layer、pip向けの限定したCA環境指定は維持する。提供元の更新版が出たことやPythonの版番号だけを理由に撤去しない。Lambdaのmanaged `python3.14`も、build用Pythonの固定値ではpatch版を指定できないため、AWSの配布・実適用確認を分ける。この更新PRの完了、本番反映、Android配布はそれぞれ独立した承認・確認対象である。今回のdigest更新はPRでの検証までを対象とし、merge・本番反映・Android配布は未実施である。
 
 ### Python 3.15への移行評価（2026年10月14日）
 
@@ -428,6 +448,12 @@ PRの必須条件として固定された旧基準値や別実行との完全な
 修正可能な高・重大の脆弱性は拒否し、残存リスクは検証済みVEXまたは期限付き承認だけを認める。
 同じベースイメージでもベンダーのVEX判定は更新される。以前の「影響なし」がなくなった場合は、
 過去のVEXや承認範囲の拡大で通さず、修正版のベースイメージと最新の検査結果を確認する。
+
+2026年10月22日公開のDHIメタデータでは、ソースパッケージのVEX判定とバイナリの関連情報が失われ、Grypeの完全なPURL照合だけでは提供元の判断を適用できない。CI／Core Releaseは、固定したDocker公式公開鍵でindex・ARM64 attestation manifestの署名とdigestを検証し、元のin-toto SPDX／OpenVEXをそのまま保存する。SPDXはScoutでも独立に署名検証する。OCI 1.1署名との互換性に必要なCosign／regctlは版・配布物SHA-256を固定し、透過性ログの検証省略は提供元の手順と同じ範囲に限定する。署名・固定鍵・TLS・subject／blob hashの検証は省略しない。
+
+Docker Scoutは[1.27.0](https://github.com/docker/scout-cli/releases/tag/v1.27.0)へ更新し、今回の中間CAを含むチェーンを拒否するGo 1.26.10の[crypto/x509対策（GO-2026-6809）](https://pkg.go.dev/vuln/GO-2026-6809)を取り込む。CIとCore Releaseが共用する`.github/tool-versions.json`で、版・ARM64配布物名・SHA-256を揃えて固定する。既存のprocess限定CAfile／空のCApathによるroot除外を維持し、上流検証器の中間鍵拒否と併用する。他のTLSクライアントの対策状況は引き続き個別に確認する。[Scoutの出力問題 #247](https://github.com/docker/scout-cli/issues/247)と提供元のsource／binary関連メタデータは別件として追跡し、原本保持・署名照合・厳密なVEX対応付けと既存risk gateも維持する。
+
+`tools/derive_dhi_vex.py`は独自の脆弱性判断を追加せず、元の`not_affected`と根拠を完全なバイナリPURLへ対応付ける。署名付きSPDXのソース・バイナリの全版番号とファイル集合の関連、実dpkgのSource／版、完成SPDX、標準Syftの実ファイルSHA-256を照合する。同名の別版・別identity、変更されたファイル、欠けたSource情報、矛盾する判定には適用しない。署名付きSPDXにないリンク先は、固定ARM64ベースと完成イメージを標準Syftの`SYFT_FILE_METADATA_SELECTION=all`で取得して比較する。base manifestとconfigのhash、完成config digestも結合する。提供元原本・両Syft inventory・完成SPDX・対応付けreportを保存し、これらの入力hashを派生VEXへ結合する。Releaseは署名付きrelease manifestで派生VEXのhashを固定し、deploy前に同じ原本・実体情報から再計算してVEXとreportのbyte一致を要求する。既存の修正可能High／Critical拒否、残存リスク検査と空の例外ポリシーは維持する。提供元の関連メタデータ修正と、こちらで証明できた対応付けは別に追跡する。
 基盤更新を含む配信では、Recordsの変更に加えてCore Releaseで本番イメージも更新する。
 CIとCore Releaseは共通のDB準備action／スクリプトを使い、Grype版・OS・UTC日付をキーに保存する。
 mainで保存したDBは同じツール版のx64／ARM64で再利用できる。キャッシュ対象はDBのみである。

@@ -21,9 +21,10 @@ env:
   SSL_CERT_DIR: /etc/ssl/certs
   AWS_REGION: ap-northeast-1
   COST_REGION: us-east-1
-  PYTHON_VERSION: 3.14.8
+  PYTHON_VERSION: 3.14.9
   PYTHONDONTWRITEBYTECODE: "1"
-  UV_VERSION: 0.13.4
+  UV_VERSION: 0.13.5
+  UV_MANIFEST_URL: https://raw.githubusercontent.com/${{ github.event.pull_request.head.repo.full_name || github.repository }}/${{ github.event.pull_request.head.sha || github.sha }}/.github/uv-manifest.ndjson
   AWS_SIGNER_NOTATION_INSTALLER_VERSION: 2.2.0-1
   NOTATION_CLI_VERSION: 1.3.2
   AWS_SIGNER_NOTATION_PLUGIN_VERSION: 1.0.2292
@@ -171,6 +172,8 @@ jobs:
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: ${{ env.UV_VERSION }}
+          manifest-file: ${{ env.UV_MANIFEST_URL }}
+          download-from-astral-mirror: false
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -466,6 +469,7 @@ jobs:
           install_tool anchore/syft syft syft
           install_tool anchore/grype grype-arm64 grype
           install_tool docker/scout-cli docker-scout docker-scout
+          bash tools/install_dhi_verification_tools.sh
       - name: Install and cryptographically verify AWS Signer Notation
         run: bash tools/install_aws_signer_notation.sh
       - name: Authenticate to immutable source and destination registries
@@ -497,9 +501,12 @@ jobs:
         run: |
           normal_base=$(uv run --frozen python tools/check_container_policy.py \
             --print-reference runtime)
-          "${RUNNER_TEMP}/docker-scout" vex get --verify --skip-tlog \
-            --platform linux/arm64 --output "${RUNNER_TEMP}/normal.openvex.json" \
-            "registry://${normal_base}"
+          uv run --frozen python -m tools.fetch_dhi_attestations \
+            --reference "${normal_base}" \
+            --output-dir "${RUNNER_TEMP}/dhi-evidence" \
+            --scout "${RUNNER_TEMP}/docker-scout" \
+            --regctl "${RUNNER_TEMP}/dhi-regctl" \
+            --cosign "${RUNNER_TEMP}/dhi-cosign"
       - name: Check out the immutable image build context
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -627,11 +634,26 @@ jobs:
             echo "NORMAL_REFERENCE=${normal_reference}"
           } >> "${GITHUB_ENV}"
       - name: Generate the pushed-digest SPDX SBOM
+        env:
+          SYFT_FILE_METADATA_SELECTION: all
         run: |
+          "${RUNNER_TEMP}/syft" "registry:dhi.io/python@$(cat "${RUNNER_TEMP}/dhi-evidence/base-digest.txt")" \
+            --output "syft-json=${RUNNER_TEMP}/dhi-evidence/base.syft.json"
           "${RUNNER_TEMP}/syft" "registry:${NORMAL_REFERENCE}" \
-            --output "spdx-json=${RUNNER_TEMP}/normal.spdx.json"
+            --output "spdx-json=${RUNNER_TEMP}/normal.spdx.json" \
+            --output "syft-json=${RUNNER_TEMP}/normal.syft.json"
           uv run --frozen python tools/check_image_sbom.py \
             "${RUNNER_TEMP}/normal.spdx.json"
+          uv run --frozen python -m tools.derive_dhi_vex \
+            --vendor-sbom "${RUNNER_TEMP}/dhi-evidence/vendor-spdx.intoto.json" \
+            --vendor-vex "${RUNNER_TEMP}/dhi-evidence/vendor-vex.intoto.json" \
+            --base-package-inventory "${RUNNER_TEMP}/dhi-evidence/base.syft.json" \
+            --package-inventory "${RUNNER_TEMP}/normal.syft.json" \
+            --image-sbom "${RUNNER_TEMP}/normal.spdx.json" \
+            --base-digest "$(cat "${RUNNER_TEMP}/dhi-evidence/base-digest.txt")" \
+            --image-config-digest-file "${RUNNER_TEMP}/normal.config-digest" \
+            --output "${RUNNER_TEMP}/normal.openvex.json" \
+            --report "${RUNNER_TEMP}/normal.vex-mapping.json"
       - name: Apply signed vendor VEX and the time-bounded risk policy
         env:
           GRYPE_CHECK_FOR_APP_UPDATE: "false"
@@ -1031,6 +1053,7 @@ jobs:
             ${{ runner.temp }}/release-manifest.json
             ${{ runner.temp }}/records-release-evidence/records-release-manifest.json
             ${{ runner.temp }}/normal.spdx.json
+            ${{ runner.temp }}/dhi-evidence/
             ${{ runner.temp }}/normal.*.json
             ${{ runner.temp }}/normal.digest
             ${{ runner.temp }}/normal.config-digest
@@ -1113,6 +1136,8 @@ jobs:
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: ${{ env.UV_VERSION }}
+          manifest-file: ${{ env.UV_MANIFEST_URL }}
+          download-from-astral-mirror: false
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -1183,6 +1208,18 @@ jobs:
             "$(jq --raw-output '.images.normal.risk_evidence.grype_vex' "${manifest}")"
           check_hash "${RUNNER_TEMP}/release/normal.openvex.json" \
             "$(jq --raw-output '.images.normal.risk_evidence.vendor_vex' "${manifest}")"
+          uv run --frozen python -m tools.derive_dhi_vex \
+            --vendor-sbom "${RUNNER_TEMP}/release/dhi-evidence/vendor-spdx.intoto.json" \
+            --vendor-vex "${RUNNER_TEMP}/release/dhi-evidence/vendor-vex.intoto.json" \
+            --base-package-inventory "${RUNNER_TEMP}/release/dhi-evidence/base.syft.json" \
+            --package-inventory "${RUNNER_TEMP}/release/normal.syft.json" \
+            --image-sbom "${RUNNER_TEMP}/release/normal.spdx.json" \
+            --base-digest "$(cat "${RUNNER_TEMP}/release/dhi-evidence/base-digest.txt")" \
+            --image-config-digest-file "${RUNNER_TEMP}/release/normal.config-digest" \
+            --output "${RUNNER_TEMP}/replayed.openvex.json" \
+            --report "${RUNNER_TEMP}/replayed.vex-mapping.json"
+          cmp "${RUNNER_TEMP}/replayed.openvex.json" "${RUNNER_TEMP}/release/normal.openvex.json"
+          cmp "${RUNNER_TEMP}/replayed.vex-mapping.json" "${RUNNER_TEMP}/release/normal.vex-mapping.json"
           uv run --frozen python tools/check_container_risk_acceptance.py \
             --policy security/container-risk-acceptance.json \
             --raw-report "${RUNNER_TEMP}/release/normal.raw-grype.json" \

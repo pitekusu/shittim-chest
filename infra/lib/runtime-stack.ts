@@ -3,6 +3,7 @@ import {
   Aws,
   CfnOutput,
   CfnParameter,
+  CfnResource,
   Duration,
   Fn,
   RemovalPolicy,
@@ -22,6 +23,7 @@ import {
   aws_scheduler as scheduler,
 } from "aws-cdk-lib";
 import { Construct } from "constructs";
+import { join } from "node:path";
 
 import containerPolicy from "../../container-policy.json";
 
@@ -220,6 +222,32 @@ export class RuntimeStack extends Stack {
       ],
       vpcName: "shittim-chest-production",
     });
+    // CDK does not expose CA/environment options for this generated provider.
+    // Keep its handler and IAM unchanged; scope the escape hatch to this helper.
+    const restrictionHandler = this.node
+      .tryFindChild("Custom::VpcRestrictDefaultSGCustomResourceProvider")
+      ?.node.tryFindChild("Handler");
+    if (
+      !restrictionHandler ||
+      !CfnResource.isCfnResource(restrictionHandler) ||
+      restrictionHandler.cfnResourceType !== "AWS::Lambda::Function"
+    ) {
+      throw new Error("The VPC restriction provider TLS target was not found");
+    }
+    const restrictionTls = new lambda.LayerVersion(this, "VpcRestrictionTls", {
+      code: lambda.Code.fromAsset(join(__dirname, "../assets/cdk-helper-tls")),
+      compatibleArchitectures: [lambda.Architecture.X86_64],
+      compatibleRuntimes: [lambda.Runtime.NODEJS_24_X],
+      description: "Public CA store for the CDK VPC restriction provider",
+      layerVersionName: "shittim-chest-production-cdk-helper-tls",
+      license: "MIT AND MPL-2.0",
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+    restrictionHandler.addPropertyOverride("Layers", [restrictionTls.layerVersionArn]);
+    restrictionHandler.addPropertyOverride(
+      "Environment.Variables.NODE_OPTIONS",
+      "--require=/opt/shittim-tls/trust.cjs",
+    );
     Validations.of(this.vpc).acknowledge({
       id: "AwsSolutions-VPC7",
       reason:

@@ -105,6 +105,7 @@ def validate_notification_workflows(directory: Path = WORKFLOW_DIRECTORY) -> int
     _validate_deploy_guard(directory)
     _validate_release(directory)
     _validate_ci_container_risk(directory)
+    _validate_dhi_vex_evidence(directory)
     _validate_ci_path_isolation(directory)
     _validate_android_test_selection(directory)
     _validate_records_workflows(directory)
@@ -1402,6 +1403,67 @@ def _validate_ci_container_risk(directory: Path) -> None:
         raise WorkflowPolicyError(
             "CI Docker context proof must compare clean src with actual .dockerignore output"
         )
+
+
+def _validate_dhi_vex_evidence(directory: Path) -> None:
+    """Keep signed inputs and actual inventory bound to CI and deploy VEX replay."""
+    for workflow, sbom_step in (
+        ("ci.yml", "Generate and validate the final image SPDX SBOM"),
+        (RELEASE_WORKFLOW, "Generate the pushed-digest SPDX SBOM"),
+    ):
+        text = (directory / workflow).read_text(encoding="utf-8")
+        fetch_step = (
+            "Fetch and verify the DHI VEX attestation"
+            if workflow == "ci.yml"
+            else "Prepare pinned vulnerability data before image push"
+        )
+        fetch = _workflow_step_block(text, fetch_step)
+        sbom = _workflow_step_block(text, sbom_step)
+        required_fetch = (
+            "python -m tools.fetch_dhi_attestations",
+            '--regctl "${RUNNER_TEMP}/dhi-regctl"',
+            '--cosign "${RUNNER_TEMP}/dhi-cosign"',
+            '--scout "${RUNNER_TEMP}/docker-scout"',
+        )
+        required_sbom = (
+            "SYFT_FILE_METADATA_SELECTION: all",
+            '"registry:dhi.io/python@$(cat "${RUNNER_TEMP}/dhi-evidence/base-digest.txt")"',
+            "python -m tools.derive_dhi_vex",
+            '--vendor-sbom "${RUNNER_TEMP}/dhi-evidence/vendor-spdx.intoto.json"',
+            '--vendor-vex "${RUNNER_TEMP}/dhi-evidence/vendor-vex.intoto.json"',
+            '--base-package-inventory "${RUNNER_TEMP}/dhi-evidence/base.syft.json"',
+            "--package-inventory",
+            "--image-config-digest-file",
+            "--report",
+        )
+        if (
+            any(marker not in fetch for marker in required_fetch)
+            or any(marker not in sbom for marker in required_sbom)
+            or "${{ runner.temp }}/dhi-evidence/" not in text
+            or "bash tools/install_dhi_verification_tools.sh" not in text
+        ):
+            raise WorkflowPolicyError("DHI VEX must retain signed and actual package evidence")
+        if workflow == RELEASE_WORKFLOW:
+            replay = _workflow_step_block(
+                text, "Revalidate the manifest and its GitHub attestation"
+            )
+            required_replay = (
+                "python -m tools.derive_dhi_vex",
+                '--vendor-sbom "${RUNNER_TEMP}/release/dhi-evidence/vendor-spdx.intoto.json"',
+                '--vendor-vex "${RUNNER_TEMP}/release/dhi-evidence/vendor-vex.intoto.json"',
+                '--base-package-inventory "${RUNNER_TEMP}/release/dhi-evidence/base.syft.json"',
+                '--package-inventory "${RUNNER_TEMP}/release/normal.syft.json"',
+                (
+                    'cmp "${RUNNER_TEMP}/replayed.openvex.json" '
+                    '"${RUNNER_TEMP}/release/normal.openvex.json"'
+                ),
+                (
+                    'cmp "${RUNNER_TEMP}/replayed.vex-mapping.json" '
+                    '"${RUNNER_TEMP}/release/normal.vex-mapping.json"'
+                ),
+            )
+            if any(marker not in replay for marker in required_replay):
+                raise WorkflowPolicyError("DHI VEX deploy must replay its evidence exactly")
 
 
 def _validate_android_test_selection(directory: Path) -> None:

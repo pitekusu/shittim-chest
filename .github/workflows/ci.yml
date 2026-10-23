@@ -24,8 +24,9 @@ env:
   SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
   SSL_CERT_DIR: /etc/ssl/certs
   DOCKER_BUILD_RECORD_RETENTION_DAYS: "30"
-  PYTHON_VERSION: "3.14.8"
-  UV_VERSION: "0.13.4"
+  PYTHON_VERSION: "3.14.9"
+  UV_VERSION: "0.13.5"
+  UV_MANIFEST_URL: https://raw.githubusercontent.com/${{ github.event.pull_request.head.repo.full_name || github.repository }}/${{ github.event.pull_request.head.sha || github.sha }}/.github/uv-manifest.ndjson
 
 jobs:
   changes:
@@ -139,6 +140,8 @@ jobs:
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: ${{ env.UV_VERSION }}
+          manifest-file: ${{ env.UV_MANIFEST_URL }}
+          download-from-astral-mirror: false
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
       - name: Verify and synchronize the lock
@@ -150,6 +153,7 @@ jobs:
           uv run --frozen ruff format --check .
           uv run --frozen ruff check .
           uv run --frozen python tools/check_container_policy.py
+          uv run --frozen python -m tools.sync_cdk_helper_ca --check
           uv run --frozen python tools/check_tool_versions.py validate \
             .github/tool-versions.json
       - name: Check types with ty
@@ -210,6 +214,8 @@ jobs:
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: ${{ env.UV_VERSION }}
+          manifest-file: ${{ env.UV_MANIFEST_URL }}
+          download-from-astral-mirror: false
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
       - name: Synchronize the locked environment
@@ -287,6 +293,8 @@ jobs:
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: ${{ env.UV_VERSION }}
+          manifest-file: ${{ env.UV_MANIFEST_URL }}
+          download-from-astral-mirror: false
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
       - name: Synchronize the locked environment
@@ -421,6 +429,8 @@ jobs:
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: ${{ env.UV_VERSION }}
+          manifest-file: ${{ env.UV_MANIFEST_URL }}
+          download-from-astral-mirror: false
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
       - name: Build source and wheel distributions
@@ -988,28 +998,55 @@ jobs:
           installed_version=$("${RUNNER_TEMP}/docker-scout" version | \
             sed -n 's/^version: v\([^ ]*\).*/\1/p')
           test "${installed_version}" = "${scout_version}"
+      - name: Install pinned Python and uv for evidence verification
+        if: ${{ steps.scope.outputs.required == 'true' }}
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          manifest-file: ${{ env.UV_MANIFEST_URL }}
+          download-from-astral-mirror: false
+          python-version: ${{ env.PYTHON_VERSION }}
+          enable-cache: true
+      - name: Install pinned DHI signature verification tools
+        if: ${{ steps.scope.outputs.required == 'true' }}
+        run: bash tools/install_dhi_verification_tools.sh
       - name: Fetch and verify the DHI VEX attestation
         if: ${{ steps.scope.outputs.required == 'true' }}
+        env:
+          DOCKER_SCOUT_HUB_USER: ${{ secrets.DHI_USERNAME }}
+          DOCKER_SCOUT_HUB_PASSWORD: ${{ secrets.DHI_TOKEN }}
         run: |
           runtime_reference=$(python3 tools/check_container_policy.py \
             --print-reference runtime)
-          "${RUNNER_TEMP}/docker-scout" vex get \
-            --verify \
-            --skip-tlog \
-            --platform linux/arm64 \
-            --output "${RUNNER_TEMP}/dhi-python-runtime.openvex.json" \
-            "registry://${runtime_reference}"
-          test -s "${RUNNER_TEMP}/dhi-python-runtime.openvex.json"
-          jq --exit-status '.statements | type == "array" and length > 0' \
-            "${RUNNER_TEMP}/dhi-python-runtime.openvex.json"
+          uv run --frozen python -m tools.fetch_dhi_attestations \
+            --reference "${runtime_reference}" \
+            --output-dir "${RUNNER_TEMP}/dhi-evidence" \
+            --scout "${RUNNER_TEMP}/docker-scout" \
+            --regctl "${RUNNER_TEMP}/dhi-regctl" \
+            --cosign "${RUNNER_TEMP}/dhi-cosign"
       - name: Generate and validate the final image SPDX SBOM
         if: ${{ steps.scope.outputs.required == 'true' }}
         id: verify-sbom
+        env:
+          SYFT_FILE_METADATA_SELECTION: all
         run: |
+          "${RUNNER_TEMP}/syft" "registry:dhi.io/python@$(cat "${RUNNER_TEMP}/dhi-evidence/base-digest.txt")" \
+            --output "syft-json=${RUNNER_TEMP}/dhi-evidence/base.syft.json"
           "${RUNNER_TEMP}/syft" docker:shittim-chest:step-08b-arm64 \
-            --output "spdx-json=${RUNNER_TEMP}/image-sbom-arm64.spdx.json"
+            --output "spdx-json=${RUNNER_TEMP}/image-sbom-arm64.spdx.json" \
+            --output "syft-json=${RUNNER_TEMP}/image-sbom-arm64.syft.json"
           python tools/check_image_sbom.py \
             "${RUNNER_TEMP}/image-sbom-arm64.spdx.json"
+          uv run --frozen python -m tools.derive_dhi_vex \
+            --vendor-sbom "${RUNNER_TEMP}/dhi-evidence/vendor-spdx.intoto.json" \
+            --vendor-vex "${RUNNER_TEMP}/dhi-evidence/vendor-vex.intoto.json" \
+            --base-package-inventory "${RUNNER_TEMP}/dhi-evidence/base.syft.json" \
+            --package-inventory "${RUNNER_TEMP}/image-sbom-arm64.syft.json" \
+            --image-sbom "${RUNNER_TEMP}/image-sbom-arm64.spdx.json" \
+            --base-digest "$(cat "${RUNNER_TEMP}/dhi-evidence/base-digest.txt")" \
+            --image-config-digest-file "${RUNNER_TEMP}/production-image-config-digest.txt" \
+            --output "${RUNNER_TEMP}/dhi-python-runtime.openvex.json" \
+            --report "${RUNNER_TEMP}/dhi-vex-mapping.json"
       - name: Validate and retain the installed application RECORD
         if: ${{ steps.scope.outputs.required == 'true' }}
         id: verify-record
@@ -1036,6 +1073,9 @@ jobs:
           name: image-sbom-arm64-${{ github.sha }}
           path: |
             ${{ runner.temp }}/image-sbom-arm64.spdx.json
+            ${{ runner.temp }}/image-sbom-arm64.syft.json
+            ${{ runner.temp }}/dhi-evidence/
+            ${{ runner.temp }}/dhi-vex-mapping.json
             ${{ runner.temp }}/image-manifest-digest.txt
             ${{ runner.temp }}/production-image-config-digest.txt
             ${{ runner.temp }}/production-image-rootfs-diffids.json
@@ -1345,6 +1385,8 @@ jobs:
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           version: ${{ env.UV_VERSION }}
+          manifest-file: ${{ env.UV_MANIFEST_URL }}
+          download-from-astral-mirror: false
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
       - name: Synchronize the locked environment
