@@ -185,6 +185,7 @@ Android system imageとAVD snapshotもmainだけで保存し、PRは復元だけ
 mainのcache missではアプリを入れる前のAVDを起動して保存する。試験中はsnapshotを保存せず、
 cache hitでも選択対象のinstrumentation testを実行する。cache missや互換性不一致では通常起動して同じ選択対象を実行する。
 
+`setup-vp`の更新時はworkflow参照・検査用の許可SHA・repositoryの選択Action許可を同じ完全SHAへ揃える。選択Action設定は既存許可を維持し、必要な完全SHAだけを追加する。
 Records WebのCIとReleaseは完全SHA固定の`voidzero-dev/setup-vp`でNode・Vite+・pnpmを設定し、
 Actionのpnpm依存キャッシュを使う。CIのキャッシュ保存はmainのみとし、依存は`vp install --frozen-lockfile`で固定する。
 pnpm 12の環境用lock documentは[GitHubの静的依存検出に未対応の報告](https://github.com/dependabot/dependabot-core/issues/15904)があるため、
