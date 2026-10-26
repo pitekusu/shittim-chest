@@ -18,7 +18,7 @@ RECORDS_RELEASE_WORKFLOW = "records-release.yml"
 RECORDS_BACKFILL_WORKFLOW = "records-backfill.yml"
 ANDROID_RELEASE_WORKFLOW = "android-release.yml"
 WORKFLOW_RUN_NOTIFICATION = "discord-workflow-run.yml"
-PINNED_BUILDX_VERSION = "v0.38.0"
+PINNED_BUILDX_VERSION = "v0.38.1"
 PERMISSIONS_KEY = re.compile(r"(?<![a-zA-Z0-9_-])(?:\"|')?permissions(?:\"|')?\s*:")
 YAML_HEXADECIMAL_ESCAPE = re.compile(r"\\(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|U([0-9a-fA-F]{8}))")
 AWS_OR_DEPLOY_CAPABILITY = re.compile(
@@ -1650,11 +1650,12 @@ def _validate_ci_path_isolation(directory: Path) -> None:
     records_web = _workflow_job_block(records_text, "records-web")
     setup = _workflow_step_block(records_web, "Set up the pinned Records Web toolchain")
     required_setup = (
-        "uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2",
+        "uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0",
         "node-version: ${{ env.NODE_VERSION }}",
         "working-directory: apps/records-web",
         "run-install: false",
         "cache: true",
+        "cache-toolchain: true",
         "cache-save: ${{ github.ref == 'refs/heads/main' }}",
     )
     if any(marker not in setup for marker in required_setup):
@@ -1698,7 +1699,7 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         raise WorkflowPolicyError("Records CI must classify dependency signature audit inputs")
     required_records_web = (
         "vp install --frozen-lockfile",
-        "pnpm exec vp check",
+        "pnpm exec vp check --deny-warnings",
         "pnpm exec vp test",
         "pnpm run build",
         "python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low",
@@ -1815,11 +1816,13 @@ def _validate_records_workflows(directory: Path) -> None:
 
     setup = _workflow_step_block(release, "Set up the pinned Records Web toolchain")
     required_setup = (
-        "uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2",
+        "uses: voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0",
         "node-version: ${{ env.NODE_VERSION }}",
         "working-directory: apps/records-web",
         "run-install: false",
         "cache: true",
+        "cache-toolchain: true",
+        "cache-save: ${{ github.ref == 'refs/heads/main' }}",
     )
     if any(marker not in setup for marker in required_setup):
         raise WorkflowPolicyError("Records Release must use the pinned Records Web setup")
@@ -1847,7 +1850,7 @@ def _validate_records_workflows(directory: Path) -> None:
     app_local_web_gates = (
         "          (\n"
         "            cd apps/records-web\n"
-        "            pnpm exec vp check\n"
+        "            pnpm exec vp check --deny-warnings\n"
         "            pnpm exec vp test\n"
         "            pnpm run build\n"
         "            python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low\n"

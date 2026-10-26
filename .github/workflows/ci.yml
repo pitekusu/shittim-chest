@@ -26,7 +26,6 @@ env:
   DOCKER_BUILD_RECORD_RETENTION_DAYS: "30"
   PYTHON_VERSION: "3.14.9"
   UV_VERSION: "0.13.5"
-  UV_MANIFEST_URL: https://raw.githubusercontent.com/${{ github.event.pull_request.head.repo.full_name || github.repository }}/${{ github.event.pull_request.head.sha || github.sha }}/.github/uv-manifest.ndjson
 
 jobs:
   changes:
@@ -137,10 +136,9 @@ jobs:
       - name: Configure the incident TLS trust policy
         uses: ./.github/actions/configure-tls
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: ${{ env.UV_VERSION }}
-          manifest-file: ${{ env.UV_MANIFEST_URL }}
           download-from-astral-mirror: false
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
@@ -211,10 +209,9 @@ jobs:
         uses: ./.github/actions/configure-tls
       - name: Install pinned Python and uv
         if: ${{ steps.scope.outputs.required == 'true' }}
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: ${{ env.UV_VERSION }}
-          manifest-file: ${{ env.UV_MANIFEST_URL }}
           download-from-astral-mirror: false
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
@@ -290,10 +287,9 @@ jobs:
       - name: Configure the incident TLS trust policy
         uses: ./.github/actions/configure-tls
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: ${{ env.UV_VERSION }}
-          manifest-file: ${{ env.UV_MANIFEST_URL }}
           download-from-astral-mirror: false
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
@@ -302,7 +298,7 @@ jobs:
       - name: Install pinned cosign verifier
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
-          cosign-release: v3.1.3
+          cosign-release: v3.1.4
       - name: Audit locked Python dependencies
         run: |
           uv export --quiet --frozen --all-groups --no-emit-project --no-annotate \
@@ -426,10 +422,9 @@ jobs:
         uses: ./.github/actions/configure-tls
       - name: Install pinned Python and uv
         if: ${{ steps.scope.outputs.required == 'true' }}
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: ${{ env.UV_VERSION }}
-          manifest-file: ${{ env.UV_MANIFEST_URL }}
           download-from-astral-mirror: false
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
@@ -842,7 +837,7 @@ jobs:
         id: buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
-          version: v0.38.0
+          version: v0.38.1
           driver-opts: |
             image=${{ steps.buildkit-image.outputs.image }}
             env.SSL_CERT_FILE=/etc/buildkit/certs/docker.io/ca.pem
@@ -1000,10 +995,9 @@ jobs:
           test "${installed_version}" = "${scout_version}"
       - name: Install pinned Python and uv for evidence verification
         if: ${{ steps.scope.outputs.required == 'true' }}
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: ${{ env.UV_VERSION }}
-          manifest-file: ${{ env.UV_MANIFEST_URL }}
           download-from-astral-mirror: false
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
@@ -1290,14 +1284,14 @@ jobs:
       - name: Upload the source SBOM SARIF to code scanning
         if: ${{ steps.scope.outputs.required == 'true' && (always()) }}
         id: source-sarif
-        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: ${{ runner.temp }}/grype-sarif/grype-source.sarif
           category: grype-source-sbom
       - name: Upload the image SBOM SARIF to code scanning
         if: ${{ steps.scope.outputs.required == 'true' && (always()) }}
         id: image-sarif
-        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: ${{ runner.temp }}/grype-sarif/grype-image-arm64.sarif
           category: grype-image-sbom
@@ -1382,10 +1376,9 @@ jobs:
       - name: Configure the incident TLS trust policy
         uses: ./.github/actions/configure-tls
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: ${{ env.UV_VERSION }}
-          manifest-file: ${{ env.UV_MANIFEST_URL }}
           download-from-astral-mirror: false
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true

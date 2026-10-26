@@ -1,5 +1,42 @@
 {
   "schema_version": 6,
   "maximum_validity_days": 90,
-  "acceptances": []
+  "acceptances": [
+    {
+      "vulnerability_id": "CVE-2026-113351",
+      "package": "libexpat1",
+      "image_config_digests": {
+        "production": [
+          "sha256:aef36c150282c9c6081152e8ffb1d7754ad83dc98fe12147a7d1b42ef2bb5de0"
+        ]
+      },
+      "status": "affected",
+      "justification": "未修正の High 2 件によりマージを保留しているとの説明後、2026-10-26 に利用者がマージ・本番リリースを指示した。この既知の残存 DoS リスクを当該実測イメージだけで期限付き受容する。Debian の正式修正版は未提供であり、DB 反映遅延や非影響を理由とする例外ではない。",
+      "impact": "libexpat1 2.9.0-1~deb13u1 で大きな XML を処理後に同じ parser を XML_ParserReset すると、保持メモリの計数不整合により後続の XML 処理が XML_ERROR_NO_MEMORY で失敗し続ける。parser 再作成までの可用性低下が残る。上流報告はメモリ安全性の欠陥ではなく DoS としている。",
+      "exploitability": "botocore に XMLParser を使う応答解析経路がある。現在の botocore は応答ごとに parser を作成するが、完成イメージ全体について悪性 XML からの到達不能を証明していない。アプリが非影響とは断定せず、未修正コードを含むイメージの残存リスクとして扱う。",
+      "evidence": "https://security-tracker.debian.org/tracker/CVE-2026-113351 ; https://github.com/libexpat/libexpat/pull/1431 ; https://github.com/pitekusu/shittim-chest/actions/runs/40307236822 。同一実行の ARM64 SBOM・raw/VEX レポートで libexpat1 2.9.0-1~deb13u1、High、修正版なしの検出と実測 production config digest を照合。上流修正は merge 済みだが正式パッケージへの取り込みは未確認。Debian の no-dsa は修正済み・非影響の根拠にしない。",
+      "approved_on": "2026-10-26",
+      "expires_on": "2026-11-02",
+      "reevaluation_conditions": "正式修正版の公開、XML 到達性の変化、新しい検出、パッケージ版・実測設定 digest の変化、期限到達で再評価する。修正版を実装・検証して検出が解消したら削除する。対象・digest・期限を自動で追加・延長せず、その他の High/Critical と修正可能な検出の拒否を維持する。",
+      "owner": "pitekusu"
+    },
+    {
+      "vulnerability_id": "CVE-2026-115506",
+      "package": "libexpat1",
+      "image_config_digests": {
+        "production": [
+          "sha256:aef36c150282c9c6081152e8ffb1d7754ad83dc98fe12147a7d1b42ef2bb5de0"
+        ]
+      },
+      "status": "affected",
+      "justification": "未修正の High 2 件によりマージを保留しているとの説明後、2026-10-26 に利用者がマージ・本番リリースを指示した。この既知の残存 DoS リスクを当該実測イメージだけで期限付き受容する。Debian の正式修正版は未提供であり、DB 反映遅延や非影響を理由とする例外ではない。",
+      "impact": "libexpat1 2.9.0-1~deb13u1 では大きな DTD と入れ子の entity 展開に対する増幅検出が遅れ、悪性 XML の解析で CPU を長時間消費する DoS が残る。上流報告では約 12 MB の DTD により拒否まで約 47 秒を要する。新規 parser の作成だけではこのリスクを解消しない。",
+      "exploitability": "botocore に XMLParser を使う応答解析経路がある。アプリへ直接 XML を受け付ける実装が見当たらなくても、完成イメージ全体で攻撃者が XML を制御できないことを証明していない。アプリが非影響とは断定せず、CPU 消費による可用性低下を残存リスクとして扱う。",
+      "evidence": "https://security-tracker.debian.org/tracker/CVE-2026-115506 ; https://github.com/libexpat/libexpat/pull/1433 ; https://github.com/pitekusu/shittim-chest/actions/runs/40307236822 。同一実行の ARM64 SBOM・raw/VEX レポートで libexpat1 2.9.0-1~deb13u1、High、修正版なしの検出と実測 production config digest を照合。上流修正は merge 済みだが正式パッケージへの取り込みは未確認。Debian の no-dsa は修正済み・非影響の根拠にしない。",
+      "approved_on": "2026-10-26",
+      "expires_on": "2026-11-02",
+      "reevaluation_conditions": "正式修正版の公開、XML 到達性の変化、新しい検出、パッケージ版・実測設定 digest の変化、期限到達で再評価する。修正版を実装・検証して検出が解消したら削除する。対象・digest・期限を自動で追加・延長せず、その他の High/Critical と修正可能な検出の拒否を維持する。",
+      "owner": "pitekusu"
+    }
+  ]
 }

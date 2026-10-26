@@ -115,7 +115,7 @@ step outcomeとconclusionを検査し、未実行・失敗・キャンセルやc
 対象外と実行成功は各ジョブのSummaryで区別する。主要3ワークフローの全対象時は20ジョブとなる。
 CodeQLは`.github/workflows/codeql.yml`のadvanced setupでPython、JavaScript/TypeScript、
 GitHub Actions、Java/Kotlinを解析し、`ubuntu-26.04`と`security-extended`を使う。
-CodeQL Action v4.39.0はCLI 2.27.2を同梱する。Java/Kotlinだけ`manual`モードでAndroidをビルドし、既存3言語の`none`モードは維持する。
+CodeQL Action v4.39.1はCLI 2.27.3を同梱する。Java/Kotlinだけ`manual`モードでAndroidをビルドし、既存3言語の`none`モードは維持する。
 PR、mainへのpush、週次定期実行、手動実行を対象にする。
 2026年10月11日にKotlin 2.4.20のローカルmanual抽出を確認した。C04完了にはPRとマージ後のmainで4言語の解析・upload成功を確認する。
 既存3言語の解析・必須チェックを維持し、Androidの失敗を成功や対象外に置き換えない。
@@ -185,8 +185,10 @@ Android system imageとAVD snapshotもmainだけで保存し、PRは復元だけ
 mainのcache missではアプリを入れる前のAVDを起動して保存する。試験中はsnapshotを保存せず、
 cache hitでも選択対象のinstrumentation testを実行する。cache missや互換性不一致では通常起動して同じ選択対象を実行する。
 
+`setup-vp`の更新時はworkflow参照・検査用の許可SHA・repositoryの選択Action許可を同じ完全SHAへ揃える。選択Action設定は既存許可を維持し、必要な完全SHAだけを追加する。
 Records WebのCIとReleaseは完全SHA固定の`voidzero-dev/setup-vp`でNode・Vite+・pnpmを設定し、
-Actionのpnpm依存キャッシュを使う。CIのキャッシュ保存はmainのみとし、依存は`vp install --frozen-lockfile`で固定する。
+Action標準のpnpm依存キャッシュと`cache-toolchain: true`を使う。Nodeはworkflowのexact version、Vite+とpnpmはWebの`package.json`のexact versionを選択する。toolchain／package managerのキャッシュはOS・CPU・libc・版・取得設定に対応する完全キーで復元し、Action標準の実行probe・payload／layout検証に失敗した場合は通常のinstallへ戻す。CIとReleaseのキャッシュ保存はmainのみとし、依存は毎回`vp install --frozen-lockfile`で固定する。キャッシュはCA制御・依存署名監査・check／test／buildを省略する根拠にしない。
+ローカルの`pnpm run check`とCI／Releaseの`vp check`には`--deny-warnings`を付け、lint警告も失敗として扱う。
 pnpm 12の環境用lock documentは[GitHubの静的依存検出に未対応の報告](https://github.com/dependabot/dependabot-core/issues/15904)があるため、
 `pmOnFail: ignore`でproject依存の単一documentを維持する。pnpm自身によるversion切替・検査は無効になるので、
 ローカルもVite+経由で実行する。CIとRecords Releaseはinstall直前に実行中のpnpmと`packageManager`の完全一致を検査し、
@@ -302,7 +304,7 @@ botocoreは通常`certifi.where()`を使い、certifiのimportが`ImportError`�
 
 ### Python 3.14.9の採用範囲（2026年10月22日）
 
-[Python 3.14.9の公式案内](https://www.python.org/downloads/release/python-3149/)では、ensurepip同梱のpip 26.2.2と、そのvendored certifi 2026.10.19が今回のCA侵害に対応する。開発環境の`.python-version`、全workflowのPython固定値、固定ツール監視を3.14.9へ揃える。uv 0.13.4にはこのPython配布情報がないため、CA除外を維持し`rustls-webpki` 0.103.16による対象鍵拒否も含む[uv 0.13.5](https://github.com/astral-sh/uv/releases/tag/0.13.5)へCLI・Docker・CIを揃え、`required-version`の下限を0.13.5へ更新する。ビルドbackendである`uv_build`の互換範囲は別の条件として維持する。公式binaryとGHCR公開後もsetup-uvの配布indexに未登録の間は、pinned Action標準の`manifest-file`へ、実行対象SHAで固定したrepository内`.github/uv-manifest.ndjson`を渡す。公開asset URL・SHA-256をAction標準で検証し、GNU x86_64／aarch64だけを許可する。manifestの版も更新監視へ含め、TLS・checksum・必須gateを維持する。これは公式indexの反映待ちを補う一時設定であり、追随後に必要性を見直す。CPythonの更新だけで、既存venvのpip、OS CA、アプリのcertifiが更新されたとは扱わず、それぞれ実体とCA選択を確認する。配布するwheelとARM64 Lambda bundleも、実際に使うinterpreterと依存を記録して検証する。
+[Python 3.14.9の公式案内](https://www.python.org/downloads/release/python-3149/)では、ensurepip同梱のpip 26.2.2と、そのvendored certifi 2026.10.19が今回のCA侵害に対応する。開発環境の`.python-version`、全workflowのPython固定値、固定ツール監視を3.14.9へ揃える。uv 0.13.4にはこのPython配布情報がないため、CA除外を維持し`rustls-webpki` 0.103.16による対象鍵拒否も含む[uv 0.13.5](https://github.com/astral-sh/uv/releases/tag/0.13.5)へCLI・Docker・CIを揃え、`required-version`の下限を0.13.5へ更新する。ビルドbackendである`uv_build`の互換範囲は別の条件として維持する。[setup-uv v10.3.2](https://github.com/astral-sh/setup-uv/releases/tag/v10.3.2)にはuv 0.13.5の既知checksumが入り、公式配布indexのGNU x86_64／aarch64のURL・SHA-256も旧補助manifestと一致したため、repository内manifestと`manifest-file`指定を撤去し、Action標準の取得・checksum検証へ戻す。TLS・checksum・必須gateは維持する。[Python 3.14.10](https://www.python.org/downloads/release/python-31410/)はsslモジュールで侵害中間CA鍵を拒否する公式修正版だが、固定uv 0.13.5の標準配布解決では未取得のため、開発・CIの固定値は3.14.9を維持する。DHIのPython版・digestとは別に採用を判断する。CPythonの更新だけで、既存venvのpip、OS CA、アプリのcertifiが更新されたとは扱わず、それぞれ実体とCA選択を確認する。配布するwheelとARM64 Lambda bundleも、実際に使うinterpreterと依存を記録して検証する。
 
 CoreのDHIは別の採用条件を持つ。2026年10月22日、認証済みregistryで`3.14.9-debian13`／`3.14.9-debian13-dev`はいずれもmanifest未公開であり、既存固定digestの取得は成功した。一方、公開済みのCA更新済み3.14.8を採用するため、builderのindex digestを`03cf5ae71ab5a7761ec0dcbf9d522c0209581fb5196ac303537c74d2ac92de32`、runtimeを`046a46512297187590b40b85e86ea2b128077d57601847ce916ecb7d919a7291`へ更新する。ARM64 manifestはそれぞれ`05095418e3d664d7e768b48282b9ea36af7f4a12ee20972b795849ba05958c12`と`d988e9c5e19801c2fe5a69b7961d386646136e1fa46493e86f25d938c24a5ca4`である。Python実版は3.14.8を維持し、OSは`ca-certificates 20250419+deb13u1+dhi0`の148根、installed pipとensurepip wheelは26.2.2、両vendored certifiは2026.10.19の120根で、抽出実体に対象fingerprint／SPKIがないことを確認した。パッケージ版の一致だけで採用完了とせず、提供元の署名・SBOM／VEXと、完成した同一ARM64 imageのPython実版・OS CAfile／CApath・アプリCA・正常系と対象12チェーン拒否・risk gateを照合し、それぞれの実施結果を記録する。3.14.9 ARM64 imageの提供元待ちは、この3.14.8の採用検証と分けて[issue #639](https://github.com/pitekusu/shittim-chest/issues/639)で追跡する。
 
@@ -453,7 +455,7 @@ PRの必須条件として固定された旧基準値や別実行との完全な
 
 Docker Scoutは[1.27.0](https://github.com/docker/scout-cli/releases/tag/v1.27.0)へ更新し、今回の中間CAを含むチェーンを拒否するGo 1.26.10の[crypto/x509対策（GO-2026-6809）](https://pkg.go.dev/vuln/GO-2026-6809)を取り込む。CIとCore Releaseが共用する`.github/tool-versions.json`で、版・ARM64配布物名・SHA-256を揃えて固定する。既存のprocess限定CAfile／空のCApathによるroot除外を維持し、上流検証器の中間鍵拒否と併用する。他のTLSクライアントの対策状況は引き続き個別に確認する。[Scoutの出力問題 #247](https://github.com/docker/scout-cli/issues/247)と提供元のsource／binary関連メタデータは別件として追跡し、原本保持・署名照合・厳密なVEX対応付けと既存risk gateも維持する。
 
-`tools/derive_dhi_vex.py`は独自の脆弱性判断を追加せず、元の`not_affected`と根拠を完全なバイナリPURLへ対応付ける。署名付きSPDXのソース・バイナリの全版番号とファイル集合の関連、実dpkgのSource／版、完成SPDX、標準Syftの実ファイルSHA-256を照合する。同名の別版・別identity、変更されたファイル、欠けたSource情報、矛盾する判定には適用しない。署名付きSPDXにないリンク先は、固定ARM64ベースと完成イメージを標準Syftの`SYFT_FILE_METADATA_SELECTION=all`で取得して比較する。base manifestとconfigのhash、完成config digestも結合する。提供元原本・両Syft inventory・完成SPDX・対応付けreportを保存し、これらの入力hashを派生VEXへ結合する。Releaseは署名付きrelease manifestで派生VEXのhashを固定し、deploy前に同じ原本・実体情報から再計算してVEXとreportのbyte一致を要求する。既存の修正可能High／Critical拒否、残存リスク検査と空の例外ポリシーは維持する。提供元の関連メタデータ修正と、こちらで証明できた対応付けは別に追跡する。
+`tools/derive_dhi_vex.py`は独自の脆弱性判断を追加せず、元の`not_affected`と根拠を完全なバイナリPURLへ対応付ける。署名付きSPDXのソース・バイナリの全版番号とファイル集合の関連、実dpkgのSource／版、完成SPDX、標準Syftの実ファイルSHA-256を照合する。同名の別版・別identity、変更されたファイル、欠けたSource情報、矛盾する判定には適用しない。署名付きSPDXにないリンク先は、固定ARM64ベースと完成イメージを標準Syftの`SYFT_FILE_METADATA_SELECTION=all`で取得して比較する。base manifestとconfigのhash、完成config digestも結合する。提供元原本・両Syft inventory・完成SPDX・対応付けreportを保存し、これらの入力hashを派生VEXへ結合する。Releaseは署名付きrelease manifestで派生VEXのhashを固定し、deploy前に同じ原本・実体情報から再計算してVEXとreportのbyte一致を要求する。既存の修正可能High／Critical拒否と残存リスク検査は維持し、期限付き受容は後段の承認記録へ限定する。提供元の関連メタデータ修正と、こちらで証明できた対応付けは別に追跡する。
 基盤更新を含む配信では、Recordsの変更に加えてCore Releaseで本番イメージも更新する。
 CIとCore Releaseは共通のDB準備action／スクリプトを使い、Grype版・OS・UTC日付をキーに保存する。
 mainで保存したDBは同じツール版のx64／ARM64で再利用できる。キャッシュ対象はDBのみである。
@@ -484,6 +486,18 @@ Coreのコンテナゲートで、実際にロードするsystem側の通常・w
 
 再ビルドでCPythonのbytecode直列化が変わることを避けるため、uvの並列bytecode生成を無効にし、builderだけで`PYTHONHASHSEED=0`を指定して標準`compileall`を単一worker・checked-hashで実行する。既存のRECORD・時刻・所有権の正規化と、runtimeのhash randomizationは維持する。Dockerの`imageid`や`inspect.Id`はストアによってmanifestを返すため、設定digestには使用しない。CIとCore Releaseは標準`docker image save`の`manifest.json`が指す単一configの実バイトをSHA-256で測定し、push後のECR manifestの`config.digest`とも一致させる。Coreは別に保存したローカルIDでpush直前のtag不変も確認し、保存用archiveはstep終了時に削除する。
 根拠は[Debianの修正版情報](https://security-tracker.debian.org/tracker/CVE-2026-76957)を参照する。
+
+
+2026年10月26日、未修正のHigh 2件によるマージ保留の説明後に利用者がマージ・本番リリースを指示したことを承認根拠として、`libexpat1 2.9.0-1~deb13u1`の次の残存リスクを2026年11月2日まで期限付きで受容する。`security/container-risk-acceptance.json`へ`status: affected`で記録し、非影響や修正済みとは扱わない。
+
+| 検出 | 残存する影響 | 一次根拠 |
+| --- | --- | --- |
+| `CVE-2026-113351` | 大きなXMLの処理後に同じparserをresetすると、メモリ計数の不整合により後続の解析がメモリ不足で失敗し続けるDoS | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-113351)／[上流修正 #1431](https://github.com/libexpat/libexpat/pull/1431) |
+| `CVE-2026-115506` | 大きなDTDと入れ子のentity展開の増幅検出が遅れ、悪性XMLの解析が長時間CPUを占有するDoS。新規parserの作成だけでは解消しない | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-115506)／[上流修正 #1433](https://github.com/libexpat/libexpat/pull/1433) |
+
+承認対象は[CI実行40307236822](https://github.com/pitekusu/shittim-chest/actions/runs/40307236822)のARM64 SBOM・raw／VEXレポートと実測で照合した、本番設定digest `sha256:aef36c150282c9c6081152e8ffb1d7754ad83dc98fe12147a7d1b42ef2bb5de0`の1個だけである。botocoreにはXMLParserを使う応答解析経路があり、アプリ全体の非影響は証明していない。上流の修正はmerge済みだが、Debianは同版を両件ともvulnerableとし、正式修正版は未提供である。この受容は検査DB反映待ちの例外ではなく、未修正リスクの期限付き承認である。Debianの`no-dsa`や、新DHIの同記述に基づくVEXだけを修正済み・非影響の根拠にしない。
+
+正式修正版の公開、XML到達性の変化、新しい検出、パッケージ版・設定digestの変化、期限到達で再評価し、修正版を実装・検証して検出が解消したら受容記録を削除する。対象・digest・期限を自動で追加・延長しない。修正可能High／Criticalの拒否、その他の未追跡残存リスクの拒否、実スキャンと署名・VEX照合を維持する。
 
 通常PR/`main`では本番イメージの基本検証を行い、訓練用イメージを本番リスク承認の対象へ含めない。
 

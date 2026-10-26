@@ -584,8 +584,8 @@ def test_records_release_resolves_pnpm_from_records_web_boundary(directory: Path
 def test_records_release_runs_web_gates_from_records_web_boundary(directory: Path) -> None:
     _replace(
         directory / RECORDS_RELEASE_WORKFLOW,
-        "            cd apps/records-web\n            pnpm exec vp check\n",
-        "            cd .\n            pnpm --dir apps/records-web exec vp check\n",
+        "            cd apps/records-web\n            pnpm exec vp check --deny-warnings\n",
+        "            cd .\n            pnpm --dir apps/records-web exec vp check --deny-warnings\n",
         1,
     )
 
@@ -745,9 +745,19 @@ def test_records_dependency_signature_audit_follows_actual_changes(
 
 
 def test_records_ci_requires_the_web_gates(directory: Path) -> None:
-    _replace(directory / RECORDS_CI_WORKFLOW, "pnpm exec vp check", "npm run check", 1)
+    _replace(
+        directory / RECORDS_CI_WORKFLOW, "pnpm exec vp check --deny-warnings", "npm run check", 1
+    )
 
     with pytest.raises(WorkflowPolicyError, match="frozen install and web gates"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize("workflow", [RECORDS_CI_WORKFLOW, RECORDS_RELEASE_WORKFLOW])
+def test_records_web_checks_reject_warnings(directory: Path, workflow: str) -> None:
+    _replace(directory / workflow, "pnpm exec vp check --deny-warnings", "pnpm exec vp check", 1)
+
+    with pytest.raises(WorkflowPolicyError, match=r"web gates"):
         validate_notification_workflows(directory)
 
 
@@ -916,8 +926,21 @@ def test_records_ci_retains_only_playwright_comparison_pngs(
 def test_records_web_setup_requires_the_reviewed_commit(directory: Path, workflow: str) -> None:
     _replace(
         directory / workflow,
-        "voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2",
+        "voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0",
         "voidzero-dev/setup-vp@313600b80b104eadebb9111787d37a2e83e014ca # v1.17.0",
+        1,
+    )
+
+    with pytest.raises(WorkflowPolicyError, match="pinned Records Web setup"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize("workflow", [RECORDS_CI_WORKFLOW, RECORDS_RELEASE_WORKFLOW])
+def test_records_web_caches_can_only_be_saved_from_main(directory: Path, workflow: str) -> None:
+    _replace(
+        directory / workflow,
+        "cache-save: ${{ github.ref == 'refs/heads/main' }}",
+        "cache-save: true",
         1,
     )
 
@@ -1811,7 +1834,7 @@ def test_runtime_projection_cannot_replace_raw_results_with_success(directory: P
 @pytest.mark.parametrize(
     ("workflow", "old", "new"),
     [
-        ("ci.yml", "version: v0.38.0", "version: latest"),
+        ("ci.yml", "version: v0.38.1", "version: latest"),
         (
             RELEASE_WORKFLOW,
             "image=${{ steps.buildkit-image.outputs.image }}",
