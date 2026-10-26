@@ -286,6 +286,7 @@ jobs:
           working-directory: apps/records-web
           run-install: false
           cache: true
+          cache-toolchain: true
           cache-save: ${{ github.ref == 'refs/heads/main' }}
       - name: Install locked Records web dependencies
         run: |
@@ -295,7 +296,7 @@ jobs:
         if: needs.records-changes.outputs.records_web_dependencies == 'true'
         run: pnpm audit signatures
       - name: Check Records web formatting, lint, and types
-        run: pnpm exec vp check
+        run: pnpm exec vp check --deny-warnings
       - name: Test Records web
         id: unit-tests
         env:

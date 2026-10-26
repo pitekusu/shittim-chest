@@ -99,6 +99,8 @@ jobs:
           working-directory: apps/records-web
           run-install: false
           cache: true
+          cache-toolchain: true
+          cache-save: ${{ github.ref == 'refs/heads/main' }}
       - name: Install frozen build environments
         run: |
           uv sync --project services/records --frozen --all-groups
@@ -125,7 +127,7 @@ jobs:
             --testTimeout=15000
           (
             cd apps/records-web
-            pnpm exec vp check
+            pnpm exec vp check --deny-warnings
             pnpm exec vp test
             pnpm run build
             python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low

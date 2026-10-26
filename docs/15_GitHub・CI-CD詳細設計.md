@@ -187,7 +187,8 @@ cache hitでも選択対象のinstrumentation testを実行する。cache miss�
 
 `setup-vp`の更新時はworkflow参照・検査用の許可SHA・repositoryの選択Action許可を同じ完全SHAへ揃える。選択Action設定は既存許可を維持し、必要な完全SHAだけを追加する。
 Records WebのCIとReleaseは完全SHA固定の`voidzero-dev/setup-vp`でNode・Vite+・pnpmを設定し、
-Actionのpnpm依存キャッシュを使う。CIのキャッシュ保存はmainのみとし、依存は`vp install --frozen-lockfile`で固定する。
+Action標準のpnpm依存キャッシュと`cache-toolchain: true`を使う。Nodeはworkflowのexact version、Vite+とpnpmはWebの`package.json`のexact versionを選択する。toolchain／package managerのキャッシュはOS・CPU・libc・版・取得設定に対応する完全キーで復元し、Action標準の実行probe・payload／layout検証に失敗した場合は通常のinstallへ戻す。CIとReleaseのキャッシュ保存はmainのみとし、依存は毎回`vp install --frozen-lockfile`で固定する。キャッシュはCA制御・依存署名監査・check／test／buildを省略する根拠にしない。
+ローカルの`pnpm run check`とCI／Releaseの`vp check`には`--deny-warnings`を付け、lint警告も失敗として扱う。
 pnpm 12の環境用lock documentは[GitHubの静的依存検出に未対応の報告](https://github.com/dependabot/dependabot-core/issues/15904)があるため、
 `pmOnFail: ignore`でproject依存の単一documentを維持する。pnpm自身によるversion切替・検査は無効になるので、
 ローカルもVite+経由で実行する。CIとRecords Releaseはinstall直前に実行中のpnpmと`packageManager`の完全一致を検査し、

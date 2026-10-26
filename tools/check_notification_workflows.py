@@ -1655,6 +1655,7 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         "working-directory: apps/records-web",
         "run-install: false",
         "cache: true",
+        "cache-toolchain: true",
         "cache-save: ${{ github.ref == 'refs/heads/main' }}",
     )
     if any(marker not in setup for marker in required_setup):
@@ -1698,7 +1699,7 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         raise WorkflowPolicyError("Records CI must classify dependency signature audit inputs")
     required_records_web = (
         "vp install --frozen-lockfile",
-        "pnpm exec vp check",
+        "pnpm exec vp check --deny-warnings",
         "pnpm exec vp test",
         "pnpm run build",
         "python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low",
@@ -1820,6 +1821,8 @@ def _validate_records_workflows(directory: Path) -> None:
         "working-directory: apps/records-web",
         "run-install: false",
         "cache: true",
+        "cache-toolchain: true",
+        "cache-save: ${{ github.ref == 'refs/heads/main' }}",
     )
     if any(marker not in setup for marker in required_setup):
         raise WorkflowPolicyError("Records Release must use the pinned Records Web setup")
@@ -1847,7 +1850,7 @@ def _validate_records_workflows(directory: Path) -> None:
     app_local_web_gates = (
         "          (\n"
         "            cd apps/records-web\n"
-        "            pnpm exec vp check\n"
+        "            pnpm exec vp check --deny-warnings\n"
         "            pnpm exec vp test\n"
         "            pnpm run build\n"
         "            python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low\n"
