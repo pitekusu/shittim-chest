@@ -24,7 +24,6 @@ env:
   SSL_CERT_DIR: /etc/ssl/certs
   PYTHON_VERSION: "3.14.9"
   UV_VERSION: "0.13.5"
-  UV_MANIFEST_URL: https://raw.githubusercontent.com/${{ github.event.pull_request.head.repo.full_name || github.repository }}/${{ github.event.pull_request.head.sha || github.sha }}/.github/uv-manifest.ndjson
 
 jobs:
   submit-android-dependencies:
@@ -126,10 +125,9 @@ jobs:
       - name: Configure the incident TLS trust policy
         uses: ./.github/actions/configure-tls
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: ${{ env.UV_VERSION }}
-          manifest-file: ${{ env.UV_MANIFEST_URL }}
           download-from-astral-mirror: false
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true

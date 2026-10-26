@@ -83,7 +83,7 @@ C04はCodeQLの対応後に独立したPRで再開し、C02・C03の機能は混
 
 現行アプリのKotlin／Compose CompilerはVersion Catalogに従い2.4.21を使う。単独の[Kotlin更新PR](https://github.com/pitekusu/shittim-chest/pull/565)ではCodeQL 2.27.2のmanualビルド・解析・uploadを確認済み。これはKotlinだけを更新した構成の結果であり、依存更新の統合時は同一SHAのPRとマージ後のmainで4言語の解析・uploadを改めて確認する。
 
-既存の`.github/workflows/codeql.yml`へ`java-kotlin`の`manual`モード解析を追加し、CodeQL Action v4.39.0（同梱CLI 2.27.2）を使う。
+既存の`.github/workflows/codeql.yml`へ`java-kotlin`の`manual`モード解析を追加し、CodeQL Action v4.39.1（同梱CLI 2.27.3）を使う。
 TemurinはAndroidの`.java-version`から読み、SDK Platform 37.2とBuild Tools 37.0.0を用意する。
 CodeQL初期化後にWrapperから`:app:assembleDebug`を実行する。Gradle Actionのキャッシュを無効にし、`--no-daemon --no-build-cache --no-configuration-cache --rerun-tasks -Pkotlin.incremental=false`で再コンパイルを保証する。
 エミュレーター、署名鍵、認証情報は使用しない。通常のAndroid CI（C03）とは役割を分ける。

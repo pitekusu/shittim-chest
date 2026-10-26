@@ -115,7 +115,7 @@ step outcomeとconclusionを検査し、未実行・失敗・キャンセルやc
 対象外と実行成功は各ジョブのSummaryで区別する。主要3ワークフローの全対象時は20ジョブとなる。
 CodeQLは`.github/workflows/codeql.yml`のadvanced setupでPython、JavaScript/TypeScript、
 GitHub Actions、Java/Kotlinを解析し、`ubuntu-26.04`と`security-extended`を使う。
-CodeQL Action v4.39.0はCLI 2.27.2を同梱する。Java/Kotlinだけ`manual`モードでAndroidをビルドし、既存3言語の`none`モードは維持する。
+CodeQL Action v4.39.1はCLI 2.27.3を同梱する。Java/Kotlinだけ`manual`モードでAndroidをビルドし、既存3言語の`none`モードは維持する。
 PR、mainへのpush、週次定期実行、手動実行を対象にする。
 2026年10月11日にKotlin 2.4.20のローカルmanual抽出を確認した。C04完了にはPRとマージ後のmainで4言語の解析・upload成功を確認する。
 既存3言語の解析・必須チェックを維持し、Androidの失敗を成功や対象外に置き換えない。
@@ -302,7 +302,7 @@ botocoreは通常`certifi.where()`を使い、certifiのimportが`ImportError`�
 
 ### Python 3.14.9の採用範囲（2026年10月22日）
 
-[Python 3.14.9の公式案内](https://www.python.org/downloads/release/python-3149/)では、ensurepip同梱のpip 26.2.2と、そのvendored certifi 2026.10.19が今回のCA侵害に対応する。開発環境の`.python-version`、全workflowのPython固定値、固定ツール監視を3.14.9へ揃える。uv 0.13.4にはこのPython配布情報がないため、CA除外を維持し`rustls-webpki` 0.103.16による対象鍵拒否も含む[uv 0.13.5](https://github.com/astral-sh/uv/releases/tag/0.13.5)へCLI・Docker・CIを揃え、`required-version`の下限を0.13.5へ更新する。ビルドbackendである`uv_build`の互換範囲は別の条件として維持する。公式binaryとGHCR公開後もsetup-uvの配布indexに未登録の間は、pinned Action標準の`manifest-file`へ、実行対象SHAで固定したrepository内`.github/uv-manifest.ndjson`を渡す。公開asset URL・SHA-256をAction標準で検証し、GNU x86_64／aarch64だけを許可する。manifestの版も更新監視へ含め、TLS・checksum・必須gateを維持する。これは公式indexの反映待ちを補う一時設定であり、追随後に必要性を見直す。CPythonの更新だけで、既存venvのpip、OS CA、アプリのcertifiが更新されたとは扱わず、それぞれ実体とCA選択を確認する。配布するwheelとARM64 Lambda bundleも、実際に使うinterpreterと依存を記録して検証する。
+[Python 3.14.9の公式案内](https://www.python.org/downloads/release/python-3149/)では、ensurepip同梱のpip 26.2.2と、そのvendored certifi 2026.10.19が今回のCA侵害に対応する。開発環境の`.python-version`、全workflowのPython固定値、固定ツール監視を3.14.9へ揃える。uv 0.13.4にはこのPython配布情報がないため、CA除外を維持し`rustls-webpki` 0.103.16による対象鍵拒否も含む[uv 0.13.5](https://github.com/astral-sh/uv/releases/tag/0.13.5)へCLI・Docker・CIを揃え、`required-version`の下限を0.13.5へ更新する。ビルドbackendである`uv_build`の互換範囲は別の条件として維持する。[setup-uv v10.3.2](https://github.com/astral-sh/setup-uv/releases/tag/v10.3.2)にはuv 0.13.5の既知checksumが入り、公式配布indexのGNU x86_64／aarch64のURL・SHA-256も旧補助manifestと一致したため、repository内manifestと`manifest-file`指定を撤去し、Action標準の取得・checksum検証へ戻す。TLS・checksum・必須gateは維持する。[Python 3.14.10](https://www.python.org/downloads/release/python-31410/)はsslモジュールで侵害中間CA鍵を拒否する公式修正版だが、固定uv 0.13.5の標準配布解決では未取得のため、開発・CIの固定値は3.14.9を維持する。DHIのPython版・digestとは別に採用を判断する。CPythonの更新だけで、既存venvのpip、OS CA、アプリのcertifiが更新されたとは扱わず、それぞれ実体とCA選択を確認する。配布するwheelとARM64 Lambda bundleも、実際に使うinterpreterと依存を記録して検証する。
 
 CoreのDHIは別の採用条件を持つ。2026年10月22日、認証済みregistryで`3.14.9-debian13`／`3.14.9-debian13-dev`はいずれもmanifest未公開であり、既存固定digestの取得は成功した。一方、公開済みのCA更新済み3.14.8を採用するため、builderのindex digestを`03cf5ae71ab5a7761ec0dcbf9d522c0209581fb5196ac303537c74d2ac92de32`、runtimeを`046a46512297187590b40b85e86ea2b128077d57601847ce916ecb7d919a7291`へ更新する。ARM64 manifestはそれぞれ`05095418e3d664d7e768b48282b9ea36af7f4a12ee20972b795849ba05958c12`と`d988e9c5e19801c2fe5a69b7961d386646136e1fa46493e86f25d938c24a5ca4`である。Python実版は3.14.8を維持し、OSは`ca-certificates 20250419+deb13u1+dhi0`の148根、installed pipとensurepip wheelは26.2.2、両vendored certifiは2026.10.19の120根で、抽出実体に対象fingerprint／SPKIがないことを確認した。パッケージ版の一致だけで採用完了とせず、提供元の署名・SBOM／VEXと、完成した同一ARM64 imageのPython実版・OS CAfile／CApath・アプリCA・正常系と対象12チェーン拒否・risk gateを照合し、それぞれの実施結果を記録する。3.14.9 ARM64 imageの提供元待ちは、この3.14.8の採用検証と分けて[issue #639](https://github.com/pitekusu/shittim-chest/issues/639)で追跡する。
 

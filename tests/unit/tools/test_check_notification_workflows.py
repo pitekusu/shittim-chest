@@ -916,7 +916,7 @@ def test_records_ci_retains_only_playwright_comparison_pngs(
 def test_records_web_setup_requires_the_reviewed_commit(directory: Path, workflow: str) -> None:
     _replace(
         directory / workflow,
-        "voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2",
+        "voidzero-dev/setup-vp@cab1ab9eaff52d4857875f4f2c016e36af8f2c76 # v1.22.0",
         "voidzero-dev/setup-vp@313600b80b104eadebb9111787d37a2e83e014ca # v1.17.0",
         1,
     )
@@ -1811,7 +1811,7 @@ def test_runtime_projection_cannot_replace_raw_results_with_success(directory: P
 @pytest.mark.parametrize(
     ("workflow", "old", "new"),
     [
-        ("ci.yml", "version: v0.38.0", "version: latest"),
+        ("ci.yml", "version: v0.38.1", "version: latest"),
         (
             RELEASE_WORKFLOW,
             "image=${{ steps.buildkit-image.outputs.image }}",
