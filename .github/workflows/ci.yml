@@ -137,7 +137,7 @@ jobs:
       - name: Configure the incident TLS trust policy
         uses: ./.github/actions/configure-tls
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: ${{ env.UV_VERSION }}
           manifest-file: ${{ env.UV_MANIFEST_URL }}
@@ -211,7 +211,7 @@ jobs:
         uses: ./.github/actions/configure-tls
       - name: Install pinned Python and uv
         if: ${{ steps.scope.outputs.required == 'true' }}
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: ${{ env.UV_VERSION }}
           manifest-file: ${{ env.UV_MANIFEST_URL }}
@@ -290,7 +290,7 @@ jobs:
       - name: Configure the incident TLS trust policy
         uses: ./.github/actions/configure-tls
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: ${{ env.UV_VERSION }}
           manifest-file: ${{ env.UV_MANIFEST_URL }}
@@ -426,7 +426,7 @@ jobs:
         uses: ./.github/actions/configure-tls
       - name: Install pinned Python and uv
         if: ${{ steps.scope.outputs.required == 'true' }}
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: ${{ env.UV_VERSION }}
           manifest-file: ${{ env.UV_MANIFEST_URL }}
@@ -1000,7 +1000,7 @@ jobs:
           test "${installed_version}" = "${scout_version}"
       - name: Install pinned Python and uv for evidence verification
         if: ${{ steps.scope.outputs.required == 'true' }}
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: ${{ env.UV_VERSION }}
           manifest-file: ${{ env.UV_MANIFEST_URL }}
@@ -1290,14 +1290,14 @@ jobs:
       - name: Upload the source SBOM SARIF to code scanning
         if: ${{ steps.scope.outputs.required == 'true' && (always()) }}
         id: source-sarif
-        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: ${{ runner.temp }}/grype-sarif/grype-source.sarif
           category: grype-source-sbom
       - name: Upload the image SBOM SARIF to code scanning
         if: ${{ steps.scope.outputs.required == 'true' && (always()) }}
         id: image-sarif
-        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: ${{ runner.temp }}/grype-sarif/grype-image-arm64.sarif
           category: grype-image-sbom
@@ -1382,7 +1382,7 @@ jobs:
       - name: Configure the incident TLS trust policy
         uses: ./.github/actions/configure-tls
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: ${{ env.UV_VERSION }}
           manifest-file: ${{ env.UV_MANIFEST_URL }}
