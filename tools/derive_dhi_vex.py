@@ -22,6 +22,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import cast
+from urllib.parse import urlsplit
 
 from packageurl import PackageURL
 
@@ -146,6 +147,26 @@ def _purl(value: object) -> PackageURL:
         return PackageURL.from_string(text)
     except (ValueError, TypeError) as error:
         raise DerivationError("invalid PURL") from error
+
+
+def _vex_product_purl(value: object) -> PackageURL | None:
+    identifier = _text(value, "VEX product identifier")
+    if identifier.startswith("pkg:"):
+        return _purl(identifier)
+    try:
+        location = urlsplit(identifier)
+        # Accessing port also rejects malformed or out-of-range port values.
+        _ = location.port
+        is_https = location.scheme == "https" and bool(location.hostname)
+    except ValueError as error:
+        raise DerivationError("invalid VEX product identifier") from error
+    if not is_https or any(
+        character.isspace() or ord(character) < 0x20 or ord(character) == 0x7F
+        for character in identifier
+    ):
+        raise DerivationError("invalid VEX product identifier")
+    # OpenVEX also permits HTTPS image identifiers; they prove no Debian identity.
+    return None
 
 
 def _debian13(purl: PackageURL, *, vendor: bool) -> bool:
@@ -511,8 +532,8 @@ def derive_vex(
         _text(statement.get("status"), "VEX status")
         for raw_product in _array(statement.get("products"), "VEX products"):
             product = _object(raw_product, "VEX product")
-            purl = _purl(product.get("@id"))
-            if _debian13(purl, vendor=True):
+            purl = _vex_product_purl(product.get("@id"))
+            if purl is not None and _debian13(purl, vendor=True):
                 key = (_text(purl.name, "source name"), _text(purl.version, "source version"), cve)
                 if statement not in statements_by_source[key]:
                     statements_by_source[key].append(statement)
