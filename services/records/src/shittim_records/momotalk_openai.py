@@ -40,7 +40,7 @@ from shittim_records.momotalk import (
     validate_image_choices,
 )
 
-TEXT_MODEL = "gpt-6-luna"
+TEXT_MODEL = "gpt-6.1-terra"
 IMAGE_MODEL = "gpt-image-2.5-sunburst"
 LOGGER = logging.getLogger(__name__)
 # Provider fields are untrusted: only known classifications may reach logs.

@@ -285,7 +285,7 @@ def test_openai_translator_uses_real_sdk_transport_and_bounded_timeout(
     assert calls[0]["text"]["format"]["strict"] is True
 
 
-def test_openai_translator_uses_luna_structured_stateless_output() -> None:
+def test_openai_translator_uses_terra_structured_stateless_output() -> None:
     source = inspector_description(
         vulnerability_id="CVE-2026-12345",
         description=DESCRIPTION,
@@ -311,7 +311,7 @@ def test_openai_translator_uses_luna_structured_stateless_output() -> None:
     ).translate((source,), translated_at=NOW)
 
     assert summaries == (summary_for(source),)
-    assert calls[0]["model"] == "gpt-6-luna"
+    assert calls[0]["model"] == "gpt-6.1-terra"
     assert calls[0]["store"] is False
     assert calls[0]["tools"] == []
     assert calls[0]["reasoning"] == {"effort": "none"}
@@ -410,7 +410,7 @@ def test_dynamo_cache_round_trip_never_stores_the_english_description() -> None:
         "vulnerability_id": source.vulnerability_id,
         "source_sha256": source.source_sha256,
         "summary_ja": SUMMARY_JA,
-        "model": "gpt-6-luna",
+        "model": "gpt-6.1-terra",
         "translated_at": NOW.isoformat(),
     }
     with Stubber(sdk) as stubber:
@@ -450,7 +450,10 @@ def test_dynamo_cache_round_trip_never_stores_the_english_description() -> None:
     assert DESCRIPTION not in json.dumps(stored, ensure_ascii=False)
 
 
-def test_legacy_cache_remains_readable_and_only_missing_descriptions_are_translated() -> None:
+@pytest.mark.parametrize("legacy_model", ("gpt-5.6-luna", "gpt-6-luna"))
+def test_legacy_cache_remains_readable_and_only_missing_descriptions_are_translated(
+    legacy_model: str,
+) -> None:
     legacy_source = inspector_description(
         vulnerability_id="CVE-2026-12345",
         description=DESCRIPTION,
@@ -459,7 +462,7 @@ def test_legacy_cache_remains_readable_and_only_missing_descriptions_are_transla
         vulnerability_id="CVE-2026-12346",
         description=f"{DESCRIPTION} Another affected package.",
     )
-    legacy_summary = replace(summary_for(legacy_source), model="gpt-5.6-luna")
+    legacy_summary = replace(summary_for(legacy_source), model=legacy_model)
     table_name = "statistics"
     sdk = boto3.client(
         "dynamodb",
@@ -532,7 +535,7 @@ def test_legacy_cache_remains_readable_and_only_missing_descriptions_are_transla
                         "vulnerability_id": new_source.vulnerability_id,
                         "source_sha256": new_source.source_sha256,
                         "summary_ja": SUMMARY_JA,
-                        "model": "gpt-6-luna",
+                        "model": "gpt-6.1-terra",
                         "translated_at": NOW.isoformat(),
                     }
                 ),

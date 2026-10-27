@@ -63,7 +63,7 @@ def searched_response(
             "completed_at": 1_752_710_401,
             "error": None,
             "incomplete_details": None,
-            "model": "gpt-6-luna",
+            "model": "gpt-6.1-terra",
             "output": [
                 {
                     "id": "ws_1",
@@ -181,6 +181,7 @@ async def test_model_selected_search_persists_shared_evidence_and_safe_request_s
     assert parse.await_count == 1
     assert parse.await_args is not None
     request = parse.await_args.kwargs
+    assert request["model"] == "gpt-6.1-terra"
     assert request["tools"] == [{"type": "web_search", "search_context_size": "medium"}]
     assert request["tool_choice"] == "auto"
     assert request["include"] == ["web_search_call.action.sources"]

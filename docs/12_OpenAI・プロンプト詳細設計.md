@@ -29,7 +29,7 @@ OpenAIのマルチエージェント機能へ進行を委ねず、Pythonが再�
 
 | 対象 | 方針 |
 |---|---|
-| 通常討論モデル | `gpt-6-luna`の標準設定（`standard`）。上位モデルへ自動切替しない |
+| 通常討論モデル | `gpt-6.1-terra`の標準設定（`standard`）。上位モデルへ自動切替しない |
 | OpenAI接続 | Core／RecordsともSDK 3系・HTTPX2 2系。正確な版は各ロックファイルで固定 |
 | 他のHTTP通信 | Discord・認証・費用取得等のHTTPXと境界を分ける |
 | Responsesの保存 | `store=false`を明示 |
@@ -337,7 +337,7 @@ Inspector翻訳は専用の指示とAPIキーで`responses.parse()`を使う別�
 
 ### 討論の画像入力
 
-通常討論は`gpt-6-luna`を維持し、親愛度、事前調査、判断基準、候補、意見、再考、投票、最終決定へ同じ順序の画像を直接渡す。既存の構造化出力・課金上限・再試行・Pythonによる勝者決定を維持する。
+通常討論は`gpt-6.1-terra`を使用し、親愛度、事前調査、判断基準、候補、意見、再考、投票、最終決定へ同じ順序の画像を直接渡す。既存の構造化出力・課金上限・再試行・Pythonによる勝者決定を維持する。
 
 画像は管理下の原画像から最大辺2,048px・品質90・透過を保持するWebPを用意し、Responsesの`input_image`へdata URL、`detail=high`で渡す。画像の説明を一度作って全人格へ共有する方式にはしない。添付なしの入力形式は従来どおりとする。
 
@@ -366,7 +366,7 @@ flowchart TD
 | 画像生成 | `gpt-image-2.5-sunburst`、品質`xhigh`で親密なデフォルメ2ショット。実写調・第三者の追加・入力画像内の命令追従を禁止 |
 | 最終寸法 | 1920×1088で生成後、中央を切り抜いて1920×1080へ固定 |
 | 文字の合成 | アプリケーションでDelogyの`THE SHITTIM CHEST`とLINE Seed JPの日本時間の達成日を描画 |
-| 思い出文 | `gpt-6-luna`、約800字。実装では平文出力を650〜950字で検証 |
+| 思い出文 | `gpt-6.1-terra`、約800字。実装では平文出力を650〜950字で検証 |
 | 文章の内容 | 達成時のDiscord表示名と直近10質問を素材に、最大親愛度の口調で語る。質問を引用・列挙しない |
 | 通信 | 各呼出120秒、SDK自動再試行0回、終了処理用15秒を確保 |
 
@@ -406,3 +406,4 @@ flowchart TD
 | 2026-08-14 | Data controls | [データ管理](https://developers.openai.com/api/docs/guides/your-data) | 保存とログの境界 |
 | 2026-08-14 | OpenAI Python | [公式SDK](https://github.com/openai/openai-python) | 非同期クライアント、例外、parse |
 | 2026-09-05 | Responsesの再確認 | [API間の相違](https://developers.openai.com/api/docs/guides/migrate-to-responses#additional-differences) | 保存設定と構造化出力形式を再確認。用途ごとの採用方式は実装と照合 |
+| 2026-10-27 | GPT-6.1 Terra | [モデル仕様](https://developers.openai.com/api/docs/models/gpt-6.1-terra) | テキスト生成を`gpt-6.1-terra`へ統一。既存の推論量`none`／`medium`／`high`、画像入力、Structured Outputs、Web検索を維持 |

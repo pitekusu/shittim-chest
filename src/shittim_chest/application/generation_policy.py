@@ -9,7 +9,7 @@ from typing import Final
 
 @unique
 class GenerationPolicyId(StrEnum):
-    LUNA_STANDARD = "luna_standard"
+    TERRA_STANDARD = "terra_standard"
 
 
 @unique
@@ -72,10 +72,10 @@ def _policy(
     )
 
 
-LUNA_STANDARD: Final = _policy(
-    GenerationPolicyId.LUNA_STANDARD,
-    "gpt-6-luna",
+TERRA_STANDARD: Final = _policy(
+    GenerationPolicyId.TERRA_STANDARD,
+    "gpt-6.1-terra",
     ReasoningMode.STANDARD,
 )
 # The production bootstrap must use this invariant.
-PRODUCTION_POLICY: Final = LUNA_STANDARD
+PRODUCTION_POLICY: Final = TERRA_STANDARD

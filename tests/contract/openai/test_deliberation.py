@@ -100,11 +100,19 @@ async def test_private_selection_is_carried_forward_without_peer_profiles() -> N
         "question": "weekend",
     }
     for request in server.requests:
+        assert request["model"] == "gpt-6.1-terra"
         assert request["store"] is False
         assert request["tools"] == []
         assert "persona for participant-b" not in request["instructions"]
         assert "persona for participant-c" not in request["instructions"]
     assert [request["max_output_tokens"] for request in server.requests[:2]] == [2_000, 4_000]
+    assert [request["reasoning"] for request in server.requests] == [
+        {"effort": "medium"},
+        {"effort": "high"},
+        {"effort": "high"},
+        {"effort": "high"},
+        {"effort": "medium"},
+    ]
     assert all(PERSONAL_CHOICE_RULES in request["instructions"] for request in server.requests[:4])
     initial_input = json.loads(server.requests[2]["input"])
     assert initial_input["private_decision_data"]["selected_candidate"]["proposal"] == "park"
