@@ -488,14 +488,18 @@ Coreのコンテナゲートで、実際にロードするsystem側の通常・w
 根拠は[Debianの修正版情報](https://security-tracker.debian.org/tracker/CVE-2026-76957)を参照する。
 
 
-2026年10月26日、未修正のHigh 2件によるマージ保留の説明後に利用者がマージ・本番リリースを指示したことを承認根拠として、`libexpat1 2.9.0-1~deb13u1`の次の残存リスクを2026年11月2日まで期限付きで受容する。`security/container-risk-acceptance.json`へ`status: affected`で記録し、非影響や修正済みとは扱わない。
+2026年10月26日、未修正のHigh 2件によるマージ保留の説明後に利用者がマージ・本番リリースを指示したことを承認根拠として、`libexpat1 2.9.0-1~deb13u1`の次の残存リスクを2026年11月2日まで期限付きで受容した。`security/container-risk-acceptance.json`へ`status: affected`で記録し、非影響や修正済みとは扱わない。
 
 | 検出 | 残存する影響 | 一次根拠 |
 | --- | --- | --- |
 | `CVE-2026-113351` | 大きなXMLの処理後に同じparserをresetすると、メモリ計数の不整合により後続の解析がメモリ不足で失敗し続けるDoS | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-113351)／[上流修正 #1431](https://github.com/libexpat/libexpat/pull/1431) |
 | `CVE-2026-115506` | 大きなDTDと入れ子のentity展開の増幅検出が遅れ、悪性XMLの解析が長時間CPUを占有するDoS。新規parserの作成だけでは解消しない | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-115506)／[上流修正 #1433](https://github.com/libexpat/libexpat/pull/1433) |
 
-承認対象は[CI実行40307236822](https://github.com/pitekusu/shittim-chest/actions/runs/40307236822)のARM64 SBOM・raw／VEXレポートと実測で照合した、本番設定digest `sha256:aef36c150282c9c6081152e8ffb1d7754ad83dc98fe12147a7d1b42ef2bb5de0`の1個だけである。botocoreにはXMLParserを使う応答解析経路があり、アプリ全体の非影響は証明していない。上流の修正はmerge済みだが、Debianは同版を両件ともvulnerableとし、正式修正版は未提供である。この受容は検査DB反映待ちの例外ではなく、未修正リスクの期限付き承認である。Debianの`no-dsa`や、新DHIの同記述に基づくVEXだけを修正済み・非影響の根拠にしない。
+10月26日の承認対象は[CI実行40307236822](https://github.com/pitekusu/shittim-chest/actions/runs/40307236822)のARM64 SBOM・raw／VEXレポートと実測で照合した、本番設定digest `sha256:aef36c150282c9c6081152e8ffb1d7754ad83dc98fe12147a7d1b42ef2bb5de0`の1個だった。
+
+2026年10月27日、モデル変更後の実測イメージについて利用者が「11月2日まで受容して続行」と明示承認したため、同じ2件・同じパッケージ版の対象へ本番設定digest `sha256:87915701608591364a82ef1c2db4510df85eece9eebf14e7068b207ed3d5d1b7`を追加した。[CI実行40485858367](https://github.com/pitekusu/shittim-chest/actions/runs/40485858367)のARM64 SBOM・raw／VEXレポートと実測を照合し、VEX適用後のHighは上表の2件だけで、修正可能なHigh／Criticalはないことを確認した。10月26日の承認対象も維持し、期限は2026年11月2日、分類は`status: affected`のままとする。
+
+botocoreにはXMLParserを使う応答解析経路があり、アプリ全体の非影響は証明していない。上流の修正はmerge済みだが、Debianは同版を両件ともvulnerableとし、正式修正版は未提供である。この受容は検査DB反映待ちの例外ではなく、未修正リスクの期限付き承認である。Debianの`no-dsa`や、新DHIの同記述に基づくVEXだけを修正済み・非影響の根拠にしない。
 
 正式修正版の公開、XML到達性の変化、新しい検出、パッケージ版・設定digestの変化、期限到達で再評価し、修正版を実装・検証して検出が解消したら受容記録を削除する。対象・digest・期限を自動で追加・延長しない。修正可能High／Criticalの拒否、その他の未追跡残存リスクの拒否、実スキャンと署名・VEX照合を維持する。
 
