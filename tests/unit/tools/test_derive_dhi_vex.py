@@ -219,6 +219,67 @@ def test_exact_full_binary_purl_preserves_vendor_judgment_and_originals(tmp_path
     assert report["mappings"][0]["source_version"] == VERSION
 
 
+def test_https_image_identifier_does_not_change_source_package_mapping(tmp_path: Path) -> None:
+    values = evidence()
+    values[1]["predicate"]["statements"][0]["products"].append(
+        {"@id": f"https://dhi.io/v2/python/manifests/{BASE}"}
+    )
+    originals = copy.deepcopy(values)
+    result, report = run(tmp_path, values)
+    assert values == originals
+    assert len(result["statements"]) == 1
+    assert result["statements"][0]["products"] == [{"@id": BINARY_PURL}]
+    assert report["derived_statement_count"] == 1
+    assert report["mappings"][0]["source_version"] == VERSION
+
+
+def test_https_image_identifier_alone_cannot_establish_binary_judgment(tmp_path: Path) -> None:
+    values = evidence()
+    values[1]["predicate"]["statements"][0]["products"] = [
+        {"@id": f"https://dhi.io/v2/python/manifests/{BASE}"}
+    ]
+    result, report = run(tmp_path, values)
+    assert result["statements"] == []
+    assert report["mappings"] == []
+    assert report["derived_statement_count"] == 0
+
+
+@pytest.mark.parametrize("identifier", ["pkg:", "pkg:deb", "pkg:deb/debian/ncurses@1?invalid"])
+def test_malformed_product_purl_is_rejected_even_with_https_identifier(
+    tmp_path: Path, identifier: str
+) -> None:
+    values = evidence()
+    values[1]["predicate"]["statements"][0]["products"] = [
+        {"@id": f"https://dhi.io/v2/python/manifests/{BASE}"},
+        {"@id": identifier},
+    ]
+    with pytest.raises(DerivationError, match="invalid PURL"):
+        run(tmp_path, values)
+
+
+@pytest.mark.parametrize(
+    "identifier",
+    [
+        "https:///missing-host",
+        "https://[invalid-host",
+        "https://dhi.io:invalid/python",
+        "https://dhi.io:65536/python",
+        "https://dhi.io/invalid path",
+        "https://dhi.io/invalid\npath",
+        "https://dhi.io/invalid\x7fpath",
+        "http://dhi.io/python",
+        "urn:example:python",
+    ],
+)
+def test_unsupported_or_malformed_product_identifier_is_rejected(
+    tmp_path: Path, identifier: str
+) -> None:
+    values = evidence()
+    values[1]["predicate"]["statements"][0]["products"].append({"@id": identifier})
+    with pytest.raises(DerivationError, match="invalid VEX product identifier"):
+        run(tmp_path, values)
+
+
 @pytest.mark.parametrize("index", [0, 1])
 def test_tampered_attestation_subject_fails(tmp_path: Path, index: int) -> None:
     values = evidence()

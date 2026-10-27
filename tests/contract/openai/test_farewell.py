@@ -114,7 +114,7 @@ def response(
             "completed_at": 1_786_448_401,
             "error": None,
             "incomplete_details": None,
-            "model": "gpt-6-luna",
+            "model": "gpt-6.1-terra",
             "output": output,
             "parallel_tool_calls": False,
             "tool_choice": "required",
@@ -209,6 +209,7 @@ async def test_request_uses_message_only_schema_and_first_citation() -> None:
     assert content == f"{MESSAGE}\n参考リンク: {NEWS_URL}"
     assert parse.await_args is not None
     request = parse.await_args.kwargs
+    assert request["model"] == "gpt-6.1-terra"
     assert request["store"] is False
     assert request["tool_choice"] == "required"
     assert request["max_tool_calls"] == 4
