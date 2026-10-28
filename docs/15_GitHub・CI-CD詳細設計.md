@@ -508,6 +508,8 @@ Coreのコンテナゲートで、実際にロードするsystem側の通常・w
 
 2026年10月27日、モデル変更後の実測イメージについて利用者が「11月2日まで受容して続行」と明示承認したため、同じ2件・同じパッケージ版の対象へ本番設定digest `sha256:87915701608591364a82ef1c2db4510df85eece9eebf14e7068b207ed3d5d1b7`を追加した。[CI実行40485858367](https://github.com/pitekusu/shittim-chest/actions/runs/40485858367)のARM64 SBOM・raw／VEXレポートと実測を照合し、VEX適用後のHighは上表の2件だけで、修正可能なHigh／Criticalはないことを確認した。10月26日の承認対象も維持し、期限は2026年11月2日、分類は`status: affected`のままとする。
 
+2026年10月29日、uv 0.13.6等の更新を含む[PR #659](https://github.com/pitekusu/shittim-chest/pull/659)の実測イメージについて、利用者が同じ2件を11月2日まで受容してマージすることを明示承認したため、本番設定digest `sha256:2ce109528b7ba8cf597f27c271cdf0084f9abe757b39c4e20e5a27ad86db941d`の1個を追加した。[CI実行40710929200](https://github.com/pitekusu/shittim-chest/actions/runs/40710929200)のARM64 SBOM・raw／VEXレポートで同じlibexpat1版と未修正High 2件だけの残存、修正可能High／Critical 0件、TLS 60/60成功を照合した。期限・分類・既存の受容対象は維持し、本番反映はこの承認に含めない。
+
 botocoreにはXMLParserを使う応答解析経路があり、アプリ全体の非影響は証明していない。上流の修正はmerge済みだが、Debianは同版を両件ともvulnerableとし、正式修正版は未提供である。この受容は検査DB反映待ちの例外ではなく、未修正リスクの期限付き承認である。Debianの`no-dsa`や、新DHIの同記述に基づくVEXだけを修正済み・非影響の根拠にしない。
 
 正式修正版の公開、XML到達性の変化、新しい検出、パッケージ版・設定digestの変化、期限到達で再評価し、修正版を実装・検証して検出が解消したら受容記録を削除する。対象・digest・期限を自動で追加・延長しない。修正可能High／Criticalの拒否、その他の未追跡残存リスクの拒否、実スキャンと署名・VEX照合を維持する。
