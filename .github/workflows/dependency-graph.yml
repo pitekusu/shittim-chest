@@ -22,8 +22,8 @@ env:
   NODE_OPTIONS: --use-openssl-ca
   SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
   SSL_CERT_DIR: /etc/ssl/certs
-  PYTHON_VERSION: "3.14.9"
-  UV_VERSION: "0.13.5"
+  PYTHON_VERSION: "3.14.10"
+  UV_VERSION: "0.13.6"
 
 jobs:
   submit-android-dependencies:

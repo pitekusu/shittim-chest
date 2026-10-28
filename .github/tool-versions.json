@@ -30,10 +30,10 @@
     },
     "cosign-dhi": {
       "archive_name": "cosign-linux-arm64",
-      "archive_sha256": "426193b4c5da4d4d643e822f48fe0cc8a476ca1782a272704831f5a0cef716d7",
+      "archive_sha256": "ade83b7aac62e131cacfe96d958948b2150cc9efec46a570a2649b8e27dedad2",
       "repository": "sigstore/cosign",
       "tag_prefix": "v",
-      "version": "2.6.5"
+      "version": "3.1.4"
     },
     "regctl": {
       "archive_name": "regctl-linux-arm64",
@@ -43,11 +43,11 @@
       "version": "0.11.7"
     },
     "docker-scout": {
-      "archive_name": "docker-scout_1.27.0_linux_arm64.tar.gz",
-      "archive_sha256": "3da088c321f55ddf2c2d1c5c9d49c66673b7a978a8b2b65f6a1ca9a3944dc3cd",
+      "archive_name": "docker-scout_1.28.0_linux_arm64.tar.gz",
+      "archive_sha256": "aeddeca10e51be71430f49edf8b313915f4d4ab092297a6e42ddbe188dfb6caa",
       "repository": "docker/scout-cli",
       "tag_prefix": "v",
-      "version": "1.27.0"
+      "version": "1.28.0"
     },
     "syft": {
       "archive_name": "syft_1.55.0_linux_arm64.tar.gz",
