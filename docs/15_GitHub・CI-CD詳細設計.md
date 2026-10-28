@@ -302,9 +302,9 @@ botocoreは通常`certifi.where()`を使い、certifiのimportが`ImportError`�
 
 このfallbackの提供元修正待ちは解消しているが、PRでの依存更新・検証と本番への適用は別である。この変更のmerge・追加の本番反映・Android配布は未実施であり、AWS管理ランタイムに同梱されたSDKの実版・CA実体もこのwheelの検査だけでは確認済みと扱わない。
 
-### Python 3.14.9の採用範囲（2026年10月22日）
+### Python 3.14.10の採用範囲（2026年10月28日）
 
-[Python 3.14.9の公式案内](https://www.python.org/downloads/release/python-3149/)では、ensurepip同梱のpip 26.2.2と、そのvendored certifi 2026.10.19が今回のCA侵害に対応する。開発環境の`.python-version`、全workflowのPython固定値、固定ツール監視を3.14.9へ揃える。uv 0.13.4にはこのPython配布情報がないため、CA除外を維持し`rustls-webpki` 0.103.16による対象鍵拒否も含む[uv 0.13.5](https://github.com/astral-sh/uv/releases/tag/0.13.5)へCLI・Docker・CIを揃え、`required-version`の下限を0.13.5へ更新する。ビルドbackendである`uv_build`の互換範囲は別の条件として維持する。[setup-uv v10.3.2](https://github.com/astral-sh/setup-uv/releases/tag/v10.3.2)にはuv 0.13.5の既知checksumが入り、公式配布indexのGNU x86_64／aarch64のURL・SHA-256も旧補助manifestと一致したため、repository内manifestと`manifest-file`指定を撤去し、Action標準の取得・checksum検証へ戻す。TLS・checksum・必須gateは維持する。[Python 3.14.10](https://www.python.org/downloads/release/python-31410/)はsslモジュールで侵害中間CA鍵を拒否する公式修正版だが、固定uv 0.13.5の標準配布解決では未取得のため、開発・CIの固定値は3.14.9を維持する。DHIのPython版・digestとは別に採用を判断する。CPythonの更新だけで、既存venvのpip、OS CA、アプリのcertifiが更新されたとは扱わず、それぞれ実体とCA選択を確認する。配布するwheelとARM64 Lambda bundleも、実際に使うinterpreterと依存を記録して検証する。
+[Python 3.14.9の公式案内](https://www.python.org/downloads/release/python-3149/)では、ensurepip同梱のpip 26.2.2と、そのvendored certifi 2026.10.19が今回のCA侵害に対応する。2026年10月22日に開発・CIへ採用した。uv 0.13.4にはこのPython配布情報がないため、CA除外を維持し`rustls-webpki` 0.103.16による対象鍵拒否も含む[uv 0.13.5](https://github.com/astral-sh/uv/releases/tag/0.13.5)へCLI・Docker・CIを更新した。`required-version`の下限0.13.5は互換条件として維持する。ビルドbackendである`uv_build`の互換範囲は別の条件として維持する。[setup-uv v10.3.2](https://github.com/astral-sh/setup-uv/releases/tag/v10.3.2)にはuv 0.13.5の既知checksumが入り、公式配布indexのGNU x86_64／aarch64のURL・SHA-256も旧補助manifestと一致したため、repository内manifestと`manifest-file`指定を撤去し、Action標準の取得・checksum検証へ戻す。TLS・checksum・必須gateは維持する。[Python 3.14.10](https://www.python.org/downloads/release/python-31410/)はsslモジュールで侵害中間CA鍵を拒否する公式修正版である。[uv 0.13.6](https://github.com/astral-sh/uv/releases/tag/0.13.6)の標準配布解決に追加されたため、開発環境の`.python-version`と全workflowのPython固定値を3.14.10、workflowのuvを0.13.6へ更新する。uvのlock／resolveのメモリ削減とmetadata解析高速化も取り込む。DHIのPython版・digestとは別に採用を判断する。CPythonの更新だけで、既存venvのpip、OS CA、アプリのcertifiが更新されたとは扱わず、それぞれ実体とCA選択を確認する。配布するwheelとARM64 Lambda bundleも、実際に使うinterpreterと依存を記録して検証する。
 
 CoreのDHIは別の採用条件を持つ。2026年10月22日、認証済みregistryで`3.14.9-debian13`／`3.14.9-debian13-dev`はいずれもmanifest未公開であり、既存固定digestの取得は成功した。一方、公開済みのCA更新済み3.14.8を採用するため、builderのindex digestを`03cf5ae71ab5a7761ec0dcbf9d522c0209581fb5196ac303537c74d2ac92de32`、runtimeを`046a46512297187590b40b85e86ea2b128077d57601847ce916ecb7d919a7291`へ更新する。ARM64 manifestはそれぞれ`05095418e3d664d7e768b48282b9ea36af7f4a12ee20972b795849ba05958c12`と`d988e9c5e19801c2fe5a69b7961d386646136e1fa46493e86f25d938c24a5ca4`である。Python実版は3.14.8を維持し、OSは`ca-certificates 20250419+deb13u1+dhi0`の148根、installed pipとensurepip wheelは26.2.2、両vendored certifiは2026.10.19の120根で、抽出実体に対象fingerprint／SPKIがないことを確認した。パッケージ版の一致だけで採用完了とせず、提供元の署名・SBOM／VEXと、完成した同一ARM64 imageのPython実版・OS CAfile／CApath・アプリCA・正常系と対象12チェーン拒否・risk gateを照合し、それぞれの実施結果を記録する。3.14.9 ARM64 imageの提供元待ちは、この3.14.8の採用検証と分けて[issue #639](https://github.com/pitekusu/shittim-chest/issues/639)で追跡する。
 
@@ -312,24 +312,31 @@ CoreのDHIは別の採用条件を持つ。2026年10月22日、認証済みregis
 
 ### Python 3.15への移行評価（2026年10月14日）
 
+2026年10月28日に配布・依存の状況を再確認した。
 [Issue #599](https://github.com/pitekusu/shittim-chest/issues/599)の更新要求は未完了。
-[Python 3.15.0正式版](https://www.python.org/downloads/release/python-3150/)は10月9日公開済みだが、
-下記の配布条件を満たすまで現行3.14系列を維持する。新機能の提案と推奨理由は
+[Python 3.15.2](https://www.python.org/downloads/release/python-3152/)は10月25日公開済みで、
+侵害中間CA鍵の拒否などのセキュリティ修正を含む。下記の配布・互換性条件を満たすまで現行3.14系列を維持する。
+新機能の提案と推奨理由は
 [アプリケーション設計](10_アプリケーション・Python詳細設計.md#9-python-315の新機能の採用候補)に集約する。
 
-| 対象 | 確認した状態 | 移行に必要なこと |
+| 対象 | 2026年10月28日に確認した状態 | 移行に必要なこと |
 |---|---|---|
-| Lambda | [AWSの対応表](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html#runtimes-supported)で3.15はpublic preview。本番利用は推奨されず、正式公開の目標は11月（変更あり） | 正式対応後にCoreの受付・監督LambdaとRecords API／workerのmanaged runtime、CDKの対応を確認する |
-| CoreのDHI | 認証済みの公開タグ一覧に3.15系列なし。3.15のDebian 13 builder／runtime候補はいずれも404で、現行3.14タグの取得は成功 | [DHIの公式配布](https://github.com/docker-hardened-images/catalog/tree/main/image/python/debian-13)からARM64 builder／runtime、digest、SBOM／VEXを確認する。別ベースへの置換で現行の検査を迂回しない |
-| 標準Python配布・uv | 既採用の0.12系列では正式版3.15のdownloadが見つからない。[uv 0.13](https://github.com/astral-sh/uv/releases/tag/0.13.0)経由の3.15正式版インストールは成功 | uvの対応系列・固定値・更新監視を合わせる。`uv_build`は公式の互換案内とlockで確認し、CLIと同じ番号だと決めつけない |
-| 実行依存wheel | 現在固定中の`aiohttp`・`jiter`・Recordsの`msgpack`にはARM64／3.15で使えるwheelがない。`aiohttp`によりCore依存のbinary限定dry-runが失敗 | 対応版へ必要な依存だけを更新し、両lockを再生成する。対応版は公開済みで、`aiohttp`が要求する`yarl`の更新も必要。`cp315`だけでなく`abi3`も評価する |
-| 開発・字体生成 | `grimp`や字体生成用`Brotli`の現行wheelにも同じ対象の不足あり | これらはsource buildを許可する工程であり、wheel不足だけで移行不能と断定せず、ビルドと字体の再生成を個別確認する。通常Web buildが成功しても字体生成の確認済みとは扱わない |
+| Lambda | [AWSの対応表](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html#runtimes-supported)で3.15は引き続きpublic preview。本番利用は推奨されず、正式公開の目標は11月（変更あり） | 正式対応後にCoreの受付・監督LambdaとRecords API／workerのmanaged runtime、CDKの対応を確認する |
+| CoreのDHI | `3.15.2-debian13-dev`／`3.15.2-debian13`の公開manifestを取得でき、[PR #661](https://github.com/pitekusu/shittim-chest/pull/661)の固定index digestと一致した。両方にLinux ARM64／AMD64がある | 10月14日時点の未公開条件は解消。ARM64実体・署名・SBOM／VEX・CA選択・Expat・完成imageのrisk gateは別途検証する |
+| 標準Python配布・uv | 10月14日のuv 0.13系列による3.15正式版インストールは成功済み。3.15.2をプロジェクトへ採用した検証は未実施 | Python配布解決とuvの対応系列・固定値・更新監視を合わせる。`uv_build`は公式の互換案内とlockで確認し、CLIと同じ番号だと決めつけない |
+| 実行依存wheel | 再調査時の固定値を使ったARM64／3.15・binary限定依存解決は、`jiter 0.16.0`の対応wheel不足で失敗。対応版を使う候補は解決成功 | Coreの`aiohttp 3.14.5`／`jiter 0.18.0`、共有Coreを含むRecordsでは追加で`msgpack 1.2.4`を候補とし、両lockの再生成と実import・関連試験を行う |
+| 開発・字体生成 | `grimp 3.17`と`fonttools 4.66.1`／`Brotli 1.2.1`は3.15・Linux x86_64のbinary限定依存解決に成功 | 以前のwheel不足はこの対象では解消。実行・字体再生成は未実施であり、通常Web buildの成功で代替しない |
 
-`audioop-lts`は既存の`cp313-abi3` ARM64 wheelで3.15向けbinary限定dry-runが成功しており、阻害要因ではない。
+`audioop-lts`は既存の`cp313-abi3` ARM64 wheelを利用でき、阻害要因ではない。
 lockに`cp315`が記録されていないことだけで上流未対応と判定しない。上流の配布metadataと実際の解決結果を使う。
-既存の他の実行依存を固定したまま、上記のCore 3依存／Records 4依存だけを対応版へ変更した
-ARM64・binary限定dry-runはそれぞれ39／68packageの解決に成功した。lockへの変更はまだ適用していない。
+上記の実行依存候補は、それ以外の再調査時の依存固定値を維持し、共有Coreの依存も含めた
+`aarch64-manylinux_2_28`向け・source build禁止の解決で確認した。lockへの3.15移行変更は適用していない。
 ここまでの3.15検証は標準機能の合成データsmokeと依存解決だけであり、アプリ全体の互換性、API性能、本番動作を確認したものではない。
+
+PR #661はDockerのFROMだけを3.15.2へ更新するため、そのままではマージしない。
+Core／Recordsの`requires-python <3.15`、3.14を承認対象とするcontainer policy、
+Docker内の`/usr/bin/python3.14`、CI／Releaseのsite-packages指定と整合しない。
+既存の安全条件を外してCIを通すのではなく、移行条件が揃ってからこれらを一組で更新する。
 
 条件が揃ったら、次の順に更新・検証する。
 
@@ -341,8 +348,8 @@ ARM64・binary限定dry-runはそれぞれ39／68packageの解決に成功した
    コンテナの起動・停止、再現性、SBOM／VEX／risk gateとAndroid配布ツールの関連試験を維持する。
 4. 同一SHAの必須CI・CodeQLを確認してからマージする。本番／Play配布は、その時点で依頼された範囲だけ進める。
 
-この評価ではバージョン固定、必須CI、binary限定条件、本番構成を変更していない。
-更新未完了のためIssueを閉じない。未公開のruntime／imageを推測で指定したり、失敗・未実施を成功として扱ったりしない。
+この評価では3.15へのバージョン固定変更、必須CIの緩和、本番構成の変更を行っていない。
+更新未完了のためIssueを閉じない。失敗・未実施を成功として扱わない。
 
 AndroidのGradle Wrapper・プラグイン・ライブラリは、`.github/dependabot.yml`で毎週月曜09:15（日本時間）に確認する。
 Kotlin関連、Compose関連、Bouncy Castle関連はそれぞれ同じ更新PRにまとめ、ビルド・Lint・Android計装テストを確認して取り込む。
@@ -451,11 +458,13 @@ PRの必須条件として固定された旧基準値や別実行との完全な
 同じベースイメージでもベンダーのVEX判定は更新される。以前の「影響なし」がなくなった場合は、
 過去のVEXや承認範囲の拡大で通さず、修正版のベースイメージと最新の検査結果を確認する。
 
-2026年10月22日公開のDHIメタデータでは、ソースパッケージのVEX判定とバイナリの関連情報が失われ、Grypeの完全なPURL照合だけでは提供元の判断を適用できない。CI／Core Releaseは、固定したDocker公式公開鍵でindex・ARM64 attestation manifestの署名とdigestを検証し、元のin-toto SPDX／OpenVEXをそのまま保存する。SPDXはScoutでも独立に署名検証する。OCI 1.1署名との互換性に必要なCosign／regctlは版・配布物SHA-256を固定し、透過性ログの検証省略は提供元の手順と同じ範囲に限定する。署名・固定鍵・TLS・subject／blob hashの検証は省略しない。
+2026年10月22日公開のDHIメタデータでは、ソースパッケージのVEX判定とバイナリの関連情報が失われ、Grypeの完全なPURL照合だけでは提供元の判断を適用できない。CI／Core Releaseは、固定したDocker公式公開鍵でindex・ARM64 attestation manifestの署名とdigestを検証し、元のin-toto SPDX／OpenVEXをそのまま保存する。SPDXはScoutでも独立に署名検証する。OCI 1.1署名との互換性に必要なCosign／regctlは版・配布物SHA-256を固定し、透過性ログの検証省略は提供元の手順と同じ範囲に限定する。署名・固定鍵・TLS・subject／blob hashの検証は省略しない。2026年10月28日、DHI用Cosignを3.1.4へ更新した。現行のOCI 1.1検証引数を変えず、固定ARM64 DHIのindex・SPDX／VEX署名、全subject／blob hash、Scout 1.28.0による独立SPDX一致を実取得で確認した。新しいbundle既定値を理由に既存署名の検証を省略しない。
 
-Docker Scoutは[1.27.0](https://github.com/docker/scout-cli/releases/tag/v1.27.0)へ更新し、今回の中間CAを含むチェーンを拒否するGo 1.26.10の[crypto/x509対策（GO-2026-6809）](https://pkg.go.dev/vuln/GO-2026-6809)を取り込む。CIとCore Releaseが共用する`.github/tool-versions.json`で、版・ARM64配布物名・SHA-256を揃えて固定する。既存のprocess限定CAfile／空のCApathによるroot除外を維持し、上流検証器の中間鍵拒否と併用する。他のTLSクライアントの対策状況は引き続き個別に確認する。[Scoutの出力問題 #247](https://github.com/docker/scout-cli/issues/247)と提供元のsource／binary関連メタデータは別件として追跡し、原本保持・署名照合・厳密なVEX対応付けと既存risk gateも維持する。
+Docker Scoutは[1.28.0](https://github.com/docker/scout-cli/releases/tag/v1.28.0)へ更新し、Brotli／HTTP2のsecurity修正とDistroless Debian検出修正を取り込む。1.27.0で取り込んだGo 1.26.10の[crypto/x509対策（GO-2026-6809）](https://pkg.go.dev/vuln/GO-2026-6809)も維持し、今回の中間CAを含むチェーンを拒否する。CIとCore Releaseが共用する`.github/tool-versions.json`で、版・ARM64配布物名・SHA-256を揃えて固定する。既存のprocess限定CAfile／空のCApathによるroot除外を維持し、上流検証器の中間鍵拒否と併用する。他のTLSクライアントの対策状況は引き続き個別に確認する。[Scoutの出力問題 #247](https://github.com/docker/scout-cli/issues/247)と提供元のsource／binary関連メタデータは別件として追跡し、原本保持・署名照合・厳密なVEX対応付けと既存risk gateも維持する。
 
 `tools/derive_dhi_vex.py`は独自の脆弱性判断を追加せず、元の`not_affected`と根拠を完全なバイナリPURLへ対応付ける。提供元OpenVEXの`products[].@id`はIRIとして扱い、HTTPSのイメージIDはソース・バイナリ対応付けの対象にせず、Debian PURLだけを従来の厳密照合対象とし、壊れた`pkg:` PURLは拒否する。署名付きSPDXのソース・バイナリの全版番号とファイル集合の関連、実dpkgのSource／版、完成SPDX、標準Syftの実ファイルSHA-256を照合する。同名の別版・別identity、変更されたファイル、欠けたSource情報、矛盾する判定には適用しない。署名付きSPDXにないリンク先は、固定ARM64ベースと完成イメージを標準Syftの`SYFT_FILE_METADATA_SELECTION=all`で取得して比較する。base manifestとconfigのhash、完成config digestも結合する。提供元原本・両Syft inventory・完成SPDX・対応付けreportを保存し、これらの入力hashを派生VEXへ結合する。Releaseは署名付きrelease manifestで派生VEXのhashを固定し、deploy前に同じ原本・実体情報から再計算してVEXとreportのbyte一致を要求する。既存の修正可能High／Critical拒否と残存リスク検査は維持し、期限付き受容は後段の承認記録へ限定する。提供元の関連メタデータ修正と、こちらで証明できた対応付けは別に追跡する。
+2026年10月28日、Webのpackage managerをpnpm 12.16.1へ更新する。既存lockfile形式を維持し、frozen install、registry署名、Webのcheck／test／production buildを確認する。環境ファイル読込などの新APIは必要な工程ができるまで追加しない。Core／Records両lockのmsgpackは1.2.4へ更新し、1.2.1に対するCVE-2026-114613の監査失敗を解消する。監査や既存risk gateを弱めず、他の依存は固定する。
+
 基盤更新を含む配信では、Recordsの変更に加えてCore Releaseで本番イメージも更新する。
 CIとCore Releaseは共通のDB準備action／スクリプトを使い、Grype版・OS・UTC日付をキーに保存する。
 mainで保存したDBは同じツール版のx64／ARM64で再利用できる。キャッシュ対象はDBのみである。
@@ -498,6 +507,8 @@ Coreのコンテナゲートで、実際にロードするsystem側の通常・w
 10月26日の承認対象は[CI実行40307236822](https://github.com/pitekusu/shittim-chest/actions/runs/40307236822)のARM64 SBOM・raw／VEXレポートと実測で照合した、本番設定digest `sha256:aef36c150282c9c6081152e8ffb1d7754ad83dc98fe12147a7d1b42ef2bb5de0`の1個だった。
 
 2026年10月27日、モデル変更後の実測イメージについて利用者が「11月2日まで受容して続行」と明示承認したため、同じ2件・同じパッケージ版の対象へ本番設定digest `sha256:87915701608591364a82ef1c2db4510df85eece9eebf14e7068b207ed3d5d1b7`を追加した。[CI実行40485858367](https://github.com/pitekusu/shittim-chest/actions/runs/40485858367)のARM64 SBOM・raw／VEXレポートと実測を照合し、VEX適用後のHighは上表の2件だけで、修正可能なHigh／Criticalはないことを確認した。10月26日の承認対象も維持し、期限は2026年11月2日、分類は`status: affected`のままとする。
+
+2026年10月29日、uv 0.13.6等の更新を含む[PR #659](https://github.com/pitekusu/shittim-chest/pull/659)の実測イメージについて、利用者が同じ2件を11月2日まで受容してマージすることを明示承認したため、本番設定digest `sha256:2ce109528b7ba8cf597f27c271cdf0084f9abe757b39c4e20e5a27ad86db941d`の1個を追加した。[CI実行40710929200](https://github.com/pitekusu/shittim-chest/actions/runs/40710929200)のARM64 SBOM・raw／VEXレポートで同じlibexpat1版と未修正High 2件だけの残存、修正可能High／Critical 0件、TLS 60/60成功を照合した。期限・分類・既存の受容対象は維持し、本番反映はこの承認に含めない。
 
 botocoreにはXMLParserを使う応答解析経路があり、アプリ全体の非影響は証明していない。上流の修正はmerge済みだが、Debianは同版を両件ともvulnerableとし、正式修正版は未提供である。この受容は検査DB反映待ちの例外ではなく、未修正リスクの期限付き承認である。Debianの`no-dsa`や、新DHIの同記述に基づくVEXだけを修正済み・非影響の根拠にしない。
 

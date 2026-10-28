@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# Cosign 2's OCI 1.1 support is needed for Docker's existing DHI signatures.
+# Keep OCI 1.1 verification compatible with Docker's existing DHI signatures.
 set -euo pipefail
 
 test "$(uname -m)" = aarch64
