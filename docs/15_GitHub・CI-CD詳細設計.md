@@ -294,6 +294,10 @@ AndroidのKtor／OkHttp全4クライアントとCoilは、標準のTLS／hostnam
 
 検証には一次資料の公開チェーンを使い、隔離CAでhostname・server用途を確認する。認証なしの公開TLSだけを正負の対照とし、CA列挙・offline検証・実クライアントの拒否を区別する。本番invoke、課金生成、Discord投稿、MITMや侵害秘密鍵を使うPoCは追加しない。ローカル対策の完了、hosted CI実行、本番反映、Android配布、実端末更新はそれぞれ独立した状態として報告する。
 
+### Recordsの公式CA bundle更新（2026年11月2日）
+
+Records用lockの`certifi`を`2026.10.23`へ更新し、emSign Root CA - C1／emSign ECC Root CA - C3を除いた公式118根をWeb・Android共通API用bundleへ取り込む。共通Coreの親制約、Core imageとCDK helper Layerの更新は分け、対象以外の依存固定値を維持する。frozen sync・hash必須の依存監査に加え、Recordsが実際に選択するSSLContextのCA集合と対象チェーン拒否・正常系を確認する。既存の明示CA選択とfallback条件を維持し、Recordsの依存更新だけでCore・managed runtime・端末への適用まで完了したとは扱わない。本番配置とその検証は別に確認する。
+
 ### botocore同梱CA bundleの更新（2026年10月22日）
 
 [botocoreの公式修正PR #3838](https://github.com/boto/botocore/pull/3838)は、Sectigoのクロス署名経路に使われる`AAA Certificate Services`を同梱`cacert.pem`から削除する。[配布版1.43.117](https://pypi.org/project/botocore/1.43.117/)の実wheelをPyPIのSHA-256と照合し、公式tagと同じPEMであること、126根に既存拒否ポリシーのDER／SPKIが残らないことを確認した。直前の1.43.116も含む1.43.114～1.43.116は同じ127根の旧PEMで対象CAを含むため、修正下限は1.43.117とする。rootとRecordsのboto3下限を1.43.117へ上げ、両lockのboto3／botocoreを同版に揃える。botocoreへの独自patchや新CA追加は行わない。
