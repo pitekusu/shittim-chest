@@ -364,6 +364,11 @@ AGP由来の脆弱な間接依存は、ルートの`buildscript.classpath`と独
 親プラグインの更新だけで修正版へ解決されるようになった場合は制約の撤去を検討し、
 依存グラフから旧版が消えることとAndroidのビルド・Lint・計装テストを確認する。
 
+2026年11月1日、Guavaの`CVE-2026-102554`（`GHSA-xxph-c9ww-hj94`）へ対応し、Version Catalogの`build-guava`を`33.7.2-jre`に固定する。AGP／Google Servicesのbuildscript classpath、独立した`androidLintTool`、RoomコンパイラーのKSP processorへ同じ標準constraintを適用する。アプリのimplementationへ不要なGuava依存は追加しない。各解決グラフとdebug／release KSPで修正版選択を確認し、Kotlin／Room生成とLintを検証する。Gradle distribution本体の同梱Guavaは別コピーであり、このconstraintで更新済みとは扱わない。
+
+同日のPython依存監査で検出されたASN.1デコードのDoS修正を取り込むため、Core／Records両lockの`pyasn1`を`0.6.5`へ更新する。Recordsの`joserfc`は`1.7.6`へ更新し、JWS分割前のサイズ検査等の堅牢化を取り込む。既存の親依存条件は変更せず、対象以外の依存固定値を維持する。両projectのfrozen sync・hash必須監査と、既存の認証／モバイル認証・Android配布helper試験で確認する。
+
+
 Dependabotの対象はActions、Core/Recordsのuv、ルート/Webのnpm/pnpm、AndroidのGradle、
 実行用Dockerfile、試験・ビルド用イメージ定義。実行用Dockerは毎日10:00、その他は毎週月曜に確認する。
 日本時間でActions 09:00、Gradle 09:15、Core uv 09:30、Records uv 09:45、
@@ -520,6 +525,10 @@ Coreのコンテナゲートで、実際にロードするsystem側の通常・w
 botocoreにはXMLParserを使う応答解析経路があり、アプリ全体の非影響は証明していない。上流の修正はmerge済みだが、Debianは同版を両件ともvulnerableとし、正式修正版は未提供である。この受容は検査DB反映待ちの例外ではなく、未修正リスクの期限付き承認である。Debianの`no-dsa`や、新DHIの同記述に基づくVEXだけを修正済み・非影響の根拠にしない。
 
 正式修正版の公開、XML到達性の変化、新しい検出、パッケージ版・設定digestの変化、期限到達で再評価し、修正版を実装・検証して検出が解消したら受容記録を削除する。対象・digest・期限を自動で追加・延長しない。修正可能High／Criticalの拒否、その他の未追跡残存リスクの拒否、実スキャンと署名・VEX照合を維持する。
+
+2026年11月1日、[PR #663](https://github.com/pitekusu/shittim-chest/pull/663)の既存と同一イメージで新たに検出された`libc6 2.41-12+deb13u4+dhi1`のHigh `CVE-2026-84243`について、利用者が「11月2日まで受容してマージ」と明示承認した。対象は本番設定digest `sha256:2ce109528b7ba8cf597f27c271cdf0084f9abe757b39c4e20e5a27ad86db941d`の1個、期限は2026年11月2日、分類は`status: affected`とし、他のdigestへ追加しない。[CI実行41316755276](https://github.com/pitekusu/shittim-chest/actions/runs/41316755276)のARM64 SBOM・raw／VEXレポートで、本件と既承認Expat 2件だけの未修正High、修正可能High／Critical 0件、TLS 60/60成功を照合した。
+
+本件はgettextの`LANGUAGE`経由で悪性`.mo`を読み込むDoS・任意コード実行の可能性がある。成立には環境変数の制御、非C系locale、悪性ファイル配置、環境変数の信頼境界越えが必要である。現imageのlocale環境変数指定やアプリ入力由来の変更経路は確認できなかったが、native依存を含む実プロセス全体の到達不能は証明していない。`noexec`を`.mo`読み込みの防御根拠にしない。[GNU公式CVE記録](https://github.com/CVEProject/cvelistV5/blob/main/cves/2026/84xxx/CVE-2026-84243.json)・[Debian tracker](https://security-tracker.debian.org/tracker/CVE-2026-84243)・[DHI recipe](https://github.com/docker-hardened-images/catalog/blob/main/package/deb/main/glibc/debian-13/2.yaml)に基づき正式修正版未提供・未修正として扱い、署名付きVEXにも本件statementはない。修正版公開、入力境界・版・digestの変化、期限到達で再評価し、他の検出と既存gateは維持する。
 
 通常PR/`main`では本番イメージの基本検証を行い、訓練用イメージを本番リスク承認の対象へ含めない。
 
