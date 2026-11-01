@@ -32,6 +32,10 @@ SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 SHA1 = re.compile(r"[0-9a-f]{40}\Z")
 CVE = re.compile(r"CVE-[0-9]{4}-[0-9]{4,}\Z")
 GHSA = re.compile(r"GHSA-[23456789cfghjmpqrvwx]{4}(?:-[23456789cfghjmpqrvwx]{4}){2}\Z")
+DEBIAN_NO_DSA_ONLY = re.compile(
+    r"marked no-dsa by debian security team; see "
+    r"https://security-tracker\.debian\.org/tracker/(?P<cve>cve-[0-9]{4}-[0-9]{4,})\Z"
+)
 CONTEXT = "https://openvex.dev/ns/v0.2.0"
 AUTHOR = "https://github.com/pitekusu/shittim-chest"
 JUSTIFICATIONS = frozenset(
@@ -600,6 +604,22 @@ def derive_vex(
                         "not_affected vendor statement lacks a valid justification"
                     )
                 notes = _text(statement.get("status_notes"), "vendor status notes")
+                # Advisory priority alone proves neither a fix nor non-exploitability.
+                if administrative_note := DEBIAN_NO_DSA_ONLY.fullmatch(
+                    " ".join(notes.split()).casefold()
+                ):
+                    if administrative_note.group("cve") != cve.casefold():
+                        raise DerivationError(
+                            "Debian no-dsa note references a different vulnerability"
+                        )
+                    skipped.append(
+                        {
+                            "package": name,
+                            "vulnerability": cve,
+                            "reason": "vendor_debian_no_dsa_only",
+                        }
+                    )
+                    continue
                 derived.append(
                     {
                         "vulnerability": copy.deepcopy(statement["vulnerability"]),

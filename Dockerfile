@@ -22,16 +22,6 @@ WORKDIR /app
 # before transferring the complete CA store to the runtime.
 RUN update-ca-certificates --fresh
 
-# Retain the validated Expat overlay when updating the base image.
-# APT authenticates the exact package installed below.
-COPY tools/install_runtime_expat.py /tmp/install_runtime_expat.py
-RUN mkdir /tmp/runtime-package \
-    && cd /tmp/runtime-package \
-    && apt-get update \
-    && apt-get download "libexpat1=$(python /tmp/install_runtime_expat.py --version)" \
-    && mv libexpat1_*.deb /tmp/libexpat1.deb \
-    && rm -rf /var/lib/apt/lists/* /tmp/runtime-package
-
 COPY pyproject.toml uv.lock ./
 
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
@@ -75,12 +65,6 @@ RUN --mount=type=bind,from=builder,source=/etc/ssl/certs,target=/run/updated-ca/
     --mount=type=bind,from=builder,source=/tmp/install_runtime_ca.py,target=/tmp/install_runtime_ca.py,ro \
     ["/usr/bin/python3.14", "/tmp/install_runtime_ca.py"]
 
-RUN --mount=type=bind,from=builder,source=/usr/bin,target=/run/package-tools/bin,ro \
-    --mount=type=bind,from=builder,source=/usr/sbin,target=/run/package-tools/sbin,ro \
-    --mount=type=bind,from=builder,source=/usr/lib,target=/run/package-tools/lib,ro \
-    --mount=type=bind,from=builder,source=/tmp/libexpat1.deb,target=/run/libexpat1.deb,ro \
-    --mount=type=bind,from=builder,source=/tmp/install_runtime_expat.py,target=/tmp/install_runtime_expat.py,ro \
-    ["/usr/bin/python3.14", "/tmp/install_runtime_expat.py"]
 USER 65532:65532
 
 RUN --mount=type=bind,from=builder,source=/app/.venv,target=/tmp/source-venv,ro \
