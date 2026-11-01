@@ -110,6 +110,9 @@ dependencies {
     add("androidLintTool", libs.build.bouncycastle.bcpkix)
     add("androidLintTool", libs.build.bouncycastle.bcprov)
     add("androidLintTool", libs.build.bouncycastle.bcutil)
+    add("androidLintTool", libs.build.guava) { because("GHSA-xxph-c9ww-hj94") }
+    // Room compiler dependencies resolve separately from the app and buildscript.
+    add("ksp", libs.build.guava) { because("GHSA-xxph-c9ww-hj94") }
   }
   implementation(platform(libs.androidx.compose.bom))
   implementation(libs.androidx.activity.compose)
