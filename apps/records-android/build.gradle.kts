@@ -14,6 +14,7 @@ buildscript {
       }
       classpath(libs.build.bouncycastle.bcutil) { because("Align Bouncy Castle modules") }
       classpath(libs.build.jdom2) { because("GHSA-2363-cqg2-863c") }
+      classpath(libs.build.guava) { because("GHSA-xxph-c9ww-hj94") }
     }
   }
 }

@@ -361,6 +361,11 @@ AGP由来の脆弱な間接依存は、ルートの`buildscript.classpath`と独
 親プラグインの更新だけで修正版へ解決されるようになった場合は制約の撤去を検討し、
 依存グラフから旧版が消えることとAndroidのビルド・Lint・計装テストを確認する。
 
+2026年11月1日、Guavaの`CVE-2026-102554`（`GHSA-xxph-c9ww-hj94`）へ対応し、Version Catalogの`build-guava`を`33.7.2-jre`に固定する。AGP／Google Servicesのbuildscript classpath、独立した`androidLintTool`、RoomコンパイラーのKSP processorへ同じ標準constraintを適用する。アプリのimplementationへ不要なGuava依存は追加しない。各解決グラフとdebug／release KSPで修正版選択を確認し、Kotlin／Room生成とLintを検証する。Gradle distribution本体の同梱Guavaは別コピーであり、このconstraintで更新済みとは扱わない。
+
+同日のPython依存監査で検出されたASN.1デコードのDoS修正を取り込むため、Core／Records両lockの`pyasn1`を`0.6.5`へ更新する。Recordsの`joserfc`は`1.7.6`へ更新し、JWS分割前のサイズ検査等の堅牢化を取り込む。既存の親依存条件は変更せず、対象以外の依存固定値を維持する。両projectのfrozen sync・hash必須監査と、既存の認証／モバイル認証・Android配布helper試験で確認する。
+
+
 Dependabotの対象はActions、Core/Recordsのuv、ルート/Webのnpm/pnpm、AndroidのGradle、
 実行用Dockerfile、試験・ビルド用イメージ定義。実行用Dockerは毎日10:00、その他は毎週月曜に確認する。
 日本時間でActions 09:00、Gradle 09:15、Core uv 09:30、Records uv 09:45、
