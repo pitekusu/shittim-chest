@@ -110,7 +110,7 @@ class Registry:
         )
         self.index_digest = digest(index)
         self.data[self.index_digest] = index
-        self.reference = "dhi.io/python:3.14.8-debian13@" + self.index_digest
+        self.reference = "dhi.io/python:3.14.10-debian13@" + self.index_digest
         self.commands: list[list[str]] = []
         self.bad_signature = False
         self.bad_scout = False
@@ -182,7 +182,7 @@ def test_retains_originals_and_binds_every_signature(tmp_path: Path, key: bytes)
     [
         "file:///private",
         "https://dhi.io/python@sha256:" + "a" * 64,
-        "dhi.io/python:3.14.8-debian13",
+        "dhi.io/python:3.14.10-debian13",
         "example.com/python@sha256:" + "a" * 64,
     ],
 )

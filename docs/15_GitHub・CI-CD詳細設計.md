@@ -306,25 +306,27 @@ botocoreは通常`certifi.where()`を使い、certifiのimportが`ImportError`�
 
 [Python 3.14.9の公式案内](https://www.python.org/downloads/release/python-3149/)では、ensurepip同梱のpip 26.2.2と、そのvendored certifi 2026.10.19が今回のCA侵害に対応する。2026年10月22日に開発・CIへ採用した。uv 0.13.4にはこのPython配布情報がないため、CA除外を維持し`rustls-webpki` 0.103.16による対象鍵拒否も含む[uv 0.13.5](https://github.com/astral-sh/uv/releases/tag/0.13.5)へCLI・Docker・CIを更新した。`required-version`の下限0.13.5は互換条件として維持する。ビルドbackendである`uv_build`の互換範囲は別の条件として維持する。[setup-uv v10.3.2](https://github.com/astral-sh/setup-uv/releases/tag/v10.3.2)にはuv 0.13.5の既知checksumが入り、公式配布indexのGNU x86_64／aarch64のURL・SHA-256も旧補助manifestと一致したため、repository内manifestと`manifest-file`指定を撤去し、Action標準の取得・checksum検証へ戻す。TLS・checksum・必須gateは維持する。[Python 3.14.10](https://www.python.org/downloads/release/python-31410/)はsslモジュールで侵害中間CA鍵を拒否する公式修正版である。[uv 0.13.6](https://github.com/astral-sh/uv/releases/tag/0.13.6)の標準配布解決に追加されたため、開発環境の`.python-version`と全workflowのPython固定値を3.14.10、workflowのuvを0.13.6へ更新する。uvのlock／resolveのメモリ削減とmetadata解析高速化も取り込む。DHIのPython版・digestとは別に採用を判断する。CPythonの更新だけで、既存venvのpip、OS CA、アプリのcertifiが更新されたとは扱わず、それぞれ実体とCA選択を確認する。配布するwheelとARM64 Lambda bundleも、実際に使うinterpreterと依存を記録して検証する。
 
-CoreのDHIは別の採用条件を持つ。2026年10月22日、認証済みregistryで`3.14.9-debian13`／`3.14.9-debian13-dev`はいずれもmanifest未公開であり、既存固定digestの取得は成功した。一方、公開済みのCA更新済み3.14.8を採用するため、builderのindex digestを`03cf5ae71ab5a7761ec0dcbf9d522c0209581fb5196ac303537c74d2ac92de32`、runtimeを`046a46512297187590b40b85e86ea2b128077d57601847ce916ecb7d919a7291`へ更新する。ARM64 manifestはそれぞれ`05095418e3d664d7e768b48282b9ea36af7f4a12ee20972b795849ba05958c12`と`d988e9c5e19801c2fe5a69b7961d386646136e1fa46493e86f25d938c24a5ca4`である。Python実版は3.14.8を維持し、OSは`ca-certificates 20250419+deb13u1+dhi0`の148根、installed pipとensurepip wheelは26.2.2、両vendored certifiは2026.10.19の120根で、抽出実体に対象fingerprint／SPKIがないことを確認した。パッケージ版の一致だけで採用完了とせず、提供元の署名・SBOM／VEXと、完成した同一ARM64 imageのPython実版・OS CAfile／CApath・アプリCA・正常系と対象12チェーン拒否・risk gateを照合し、それぞれの実施結果を記録する。3.14.9 ARM64 imageの提供元待ちは、この3.14.8の採用検証と分けて[issue #639](https://github.com/pitekusu/shittim-chest/issues/639)で追跡する。
+CoreのDHIは別の採用条件を持つ。2026年11月1日、認証済みregistryで`3.14.10-debian13-dev`／`3.14.10-debian13`の公開を確認した。開発・CIと同じ3.14.10へ合わせ、builderのindex digestを`490a2607efe2d8234b16da40c41fbca6d12799f046bf0def488ce868fc5b43da`、runtimeを`238eb9b564c3eec6de43cdaddfee6d92f946ae38a367d763c5e2fec4472a4814`へ固定する。ARM64 manifestはそれぞれ`2e2e707cf312a64410e9cbc923500f0e52d89ebfea74e349dd882cf41de289ed`と`e9338c30987c99f92ded36cddcd345b5b5b6b6edd40ce27791edb038275ab336`である。3.14系列の実行pathとLambdaのruntimeを維持する。Python 3.15への移行とは分け、公式修正を取り込む更新として[issue #639](https://github.com/pitekusu/shittim-chest/issues/639)で追跡する。
+
+Python 3.14.10は侵害中間CA鍵の拒否を含むが、Pythonの版だけでOS・pip・アプリ・managed runtimeの全経路が対策済みとは扱わない。既存のOS CA overlay・明示certifi・botocore fallback gate・CDK helper Layer・Expat overlayを維持する。提供元の署名・SBOM／VEXと、完成した同一ARM64 imageのPython実版・OS CAfile／CApath・アプリCA・正常系と対象12チェーン拒否・risk gateを照合する。未修正libexpatの既存受容は2026年11月2日までの既承認config digestに限定し、新しいdigestや期限を自動で追加しない。
 
 既存のOS CA overlay、アプリの明示certifi選択、CDK helperのCA Layer、pip向けの限定したCA環境指定は維持する。提供元の更新版が出たことやPythonの版番号だけを理由に撤去しない。Lambdaのmanaged `python3.14`も、build用Pythonの固定値ではpatch版を指定できないため、AWSの配布・実適用確認を分ける。この更新PRの完了、本番反映、Android配布はそれぞれ独立した承認・確認対象である。今回のdigest更新はPRでの検証までを対象とし、merge・本番反映・Android配布は未実施である。
 
 ### Python 3.15への移行評価（2026年10月14日）
 
-2026年10月28日に配布・依存の状況を再確認した。
+2026年11月1日に配布・依存の状況を再確認した。
 [Issue #599](https://github.com/pitekusu/shittim-chest/issues/599)の更新要求は未完了。
 [Python 3.15.2](https://www.python.org/downloads/release/python-3152/)は10月25日公開済みで、
 侵害中間CA鍵の拒否などのセキュリティ修正を含む。下記の配布・互換性条件を満たすまで現行3.14系列を維持する。
 新機能の提案と推奨理由は
 [アプリケーション設計](10_アプリケーション・Python詳細設計.md#9-python-315の新機能の採用候補)に集約する。
 
-| 対象 | 2026年10月28日に確認した状態 | 移行に必要なこと |
+| 対象 | 2026年11月1日に確認した状態 | 移行に必要なこと |
 |---|---|---|
 | Lambda | [AWSの対応表](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html#runtimes-supported)で3.15は引き続きpublic preview。本番利用は推奨されず、正式公開の目標は11月（変更あり） | 正式対応後にCoreの受付・監督LambdaとRecords API／workerのmanaged runtime、CDKの対応を確認する |
-| CoreのDHI | `3.15.2-debian13-dev`／`3.15.2-debian13`の公開manifestを取得でき、[PR #661](https://github.com/pitekusu/shittim-chest/pull/661)の固定index digestと一致した。両方にLinux ARM64／AMD64がある | 10月14日時点の未公開条件は解消。ARM64実体・署名・SBOM／VEX・CA選択・Expat・完成imageのrisk gateは別途検証する |
+| CoreのDHI | `3.15.2-debian13-dev`／`3.15.2-debian13`の公開manifestを取得でき、[PR #661](https://github.com/pitekusu/shittim-chest/pull/661)の固定index digestと一致した。両方にLinux ARM64／AMD64がある。mutable tagはPRの固定digestと別の版へ更新されており、同一視しない | 10月14日時点の未公開条件は解消。ARM64実体・署名・SBOM／VEX・CA選択・Expat・完成imageのrisk gateは別途検証する |
 | 標準Python配布・uv | 10月14日のuv 0.13系列による3.15正式版インストールは成功済み。3.15.2をプロジェクトへ採用した検証は未実施 | Python配布解決とuvの対応系列・固定値・更新監視を合わせる。`uv_build`は公式の互換案内とlockで確認し、CLIと同じ番号だと決めつけない |
-| 実行依存wheel | 再調査時の固定値を使ったARM64／3.15・binary限定依存解決は、`jiter 0.16.0`の対応wheel不足で失敗。対応版を使う候補は解決成功 | Coreの`aiohttp 3.14.5`／`jiter 0.18.0`、共有Coreを含むRecordsでは追加で`msgpack 1.2.4`を候補とし、両lockの再生成と実import・関連試験を行う |
+| 実行依存wheel | 再調査時の固定値を使ったARM64／3.15・binary限定依存解決は、`jiter 0.16.0`の対応wheel不足で失敗。対応版を使う候補は解決成功 | Coreと共有Coreを含むRecordsで`aiohttp 3.14.5`／`jiter 0.18.0`を候補とする。`msgpack 1.2.4`は現行lockへ採用済み。両lockの再生成と実import・関連試験を行う |
 | 開発・字体生成 | `grimp 3.17`と`fonttools 4.66.1`／`Brotli 1.2.1`は3.15・Linux x86_64のbinary限定依存解決に成功 | 以前のwheel不足はこの対象では解消。実行・字体再生成は未実施であり、通常Web buildの成功で代替しない |
 
 `audioop-lts`は既存の`cp313-abi3` ARM64 wheelを利用でき、阻害要因ではない。
@@ -337,6 +339,7 @@ PR #661はDockerのFROMだけを3.15.2へ更新するため、そのままでは
 Core／Recordsの`requires-python <3.15`、3.14を承認対象とするcontainer policy、
 Docker内の`/usr/bin/python3.14`、CI／Releaseのsite-packages指定と整合しない。
 既存の安全条件を外してCIを通すのではなく、移行条件が揃ってからこれらを一組で更新する。
+Core Releaseは完成Fargate imageのsite-packagesからCore Lambda用bundleを作るため、3.15のnative wheelを3.14 Lambdaへ流用できない。段階移行するなら、既存のRecords向けARM64 wheel準備とdeterministic ZIP helperを再利用し、Core Lambdaの依存を実runtimeに合わせて別生成する。候補2依存だけを変更したbinary限定解決はCore・共有Core込みRecordsとも3.14／3.15のARM64で成功したが、実import・アプリ試験・配布生成の互換性検証とは区別する。
 
 条件が揃ったら、次の順に更新・検証する。
 

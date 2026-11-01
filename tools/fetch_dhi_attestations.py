@@ -30,7 +30,7 @@ IMAGE_TYPE = "application/vnd.oci.image.manifest.v1+json"
 INTOTO_TYPE = "application/vnd.in-toto+json"
 MAX_BYTES = 32 * 1024 * 1024
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
-REFERENCE = re.compile(r"dhi\.io/python:3\.14\.8-debian13(?:-dev)?@(sha256:[0-9a-f]{64})\Z")
+REFERENCE = re.compile(r"dhi\.io/python:3\.14\.10-debian13(?:-dev)?@(sha256:[0-9a-f]{64})\Z")
 Command = Callable[[list[str]], bytes]
 
 
