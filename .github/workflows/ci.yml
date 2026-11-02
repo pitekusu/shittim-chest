@@ -101,6 +101,9 @@ jobs:
     name: quality
     runs-on: ubuntu-26.04
     timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - name: Update and verify system trust before checkout
         working-directory: ${{ runner.temp }}
@@ -155,7 +158,17 @@ jobs:
           uv run --frozen python tools/check_tool_versions.py validate \
             .github/tool-versions.json
       - name: Check types with ty
-        run: uv run --frozen ty check
+        id: ty
+        run: >-
+          uv run --frozen ty check --output-format sarif
+          > "${RUNNER_TEMP}/ty-core.sarif"
+      - name: Upload ty results to code scanning
+        if: ${{ !cancelled() && (steps.ty.outcome == 'success' || steps.ty.outcome == 'failure') }}
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: ${{ runner.temp }}/ty-core.sarif
+          checkout_path: ${{ github.workspace }}
+          category: ty-core
       - name: Check architecture boundaries
         run: uv run --frozen lint-imports
 

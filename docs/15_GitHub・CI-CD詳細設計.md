@@ -89,7 +89,42 @@ GitHub-hosted runnerはUbuntu 26.04に固定する。x64は`ubuntu-26.04`、
 | grype | 生スキャン、VEX適用、修正可能/残存リスクの判定 |
 | docs-public-safety | 文書構造、参照、公開情報、ライセンス境界 |
 
+### tyのコードスキャン連携
+
+Coreの`quality`とRecordsの`records-python`は、ty標準の`--output-format sarif`を使い、
+結果をrunnerの一時領域へ出力する。既存の完全SHA固定`github/codeql-action/upload-sarif`で
+`ty-core`／`ty-records`を別categoryとして登録し、リポジトリrootからの該当行を表示する。
+tyの終了コードは維持し、型エラー時も結果を送信する。`continue-on-error`や`--exit-zero`は使わない。
+`security-events: write`はこの2ジョブへ限定し、通常の`pull_request`イベントと標準tokenを使う。
+別workflowへの成果物引継ぎ、`pull_request_target`による昇格、raw SARIFの汎用artifact公開は追加しない。
+
 Coreの非同期試験は`pytest-asyncio`を使い、既存のfunction単位のfixtureに合わせて`asyncio_default_fixture_loop_scope = "function"`を明示する。未使用のAnyIO pytest pluginだけをpytest標準の`-p no:anyio`で自動登録対象から外し、runtimeのAnyIOを試験pluginの互換対応だけで更新しない。pytest 9.2で同pluginの旧`CallSpec2`参照が非推奨警告となっても、Coreの`warnings=error`、strict config／marker、pytest-asyncio・Hypothesis・coverageと既存試験は維持する。AnyIO固有のfixtureやbackendを試験へ導入する場合は、この除外と採用版のplugin互換性を再評価する。
+
+### 標準プロファイラによるローカル計測
+
+本番Core／RecordsのPython 3.14は維持する。標準sampling profiler（Tachyon）はprofilerと対象processの
+Python minor一致が必要なので、3.15から3.14アプリへattachしない。
+純粋な標準ライブラリで動く公開面検査は、project環境から分離した3.15で現在計測できる。
+リポジトリrootから、採用済みuvと既存の3.15 interpreterを使って次を実行する。
+
+```bash
+PROFILE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/shittim-chest/profiles"
+install -d -m 700 "$PROFILE_DIR"
+(
+  umask 077
+  PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.15 python \
+    -m profiling.sampling run --pstats \
+    -o "$PROFILE_DIR/public-surface.pstats" -m tools.check_public_surface
+)
+```
+
+`--no-project`で3.14 projectのvenv・依存・lockを取り込まず、計測のための追加依存や本番移行を行わない。
+3.14アプリの固定fixtureには同じ3.14の標準`cProfile`を使い、raw結果の読出しも取得時と同じminorの`pstats`を使う。
+2026-11-02に公開面検査とdomainの固定fixtureで両方の標準CLIを実行し、取得と読出しの成功を確認した。
+
+profileは公開ソースと機密を含まない固定fixtureに限定する。実利用の質問・生成結果・外部I/Oを対象にしない。
+rawはprivate cacheに置き、Git・CI artifactへ公開しない。共有はlocal pathを除いた関数名・回数・時間に限定する。
+短い単発計測を速度改善の証明にせず、CPU処理と外部待ちの切り分けや改善前後の比較に使う。
 
 ### Records検証
 
@@ -238,6 +273,8 @@ npm公式Statuspageで「Security Auditコンポーネントの劣化」と「�
 2026-10-03、所有者の明示承認により、`brace-expansion`の次の3件だけを一時受容する。
 ID・パッケージ・重大度・理由・期限の正は`infra/npm-audit-exceptions.json`とする。
 既存の監査checkerを使用し、未知ID、パッケージ／重大度の不一致、期限切れ、未使用の例外は拒否する。
+npm標準reportの`via`がパッケージ名を参照する場合は、参照先のadvisoryまでたどって照合する。
+参照欠落・循環・空または不正なmetadataは拒否し、例外のパッケージ名は参照元の依存元でなくadvisoryを持つ末端へ束縛する。
 期限は2026-10-10 00:00 UTC（日本時間09:00）であり、その時刻以降は再びCIを拒否する。自動延長しない。
 
 | 対象 | 重大度 | 残るリスク |

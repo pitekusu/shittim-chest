@@ -497,6 +497,54 @@ def test_ci_requires_runtime_image_path_isolation(directory: Path) -> None:
         validate_notification_workflows(directory)
 
 
+@pytest.mark.parametrize("workflow", ("ci.yml", RECORDS_CI_WORKFLOW))
+@pytest.mark.parametrize(
+    "before,after",
+    (
+        ("--output-format sarif", "--output-format sarif --exit-zero"),
+        ("        id: ty\n", "        id: ty\n        continue-on-error: true\n"),
+        ("steps.ty.outcome == 'failure'", "steps.ty.outcome == 'success'"),
+        ("checkout_path: ${{ github.workspace }}", "checkout_path: /tmp"),
+    ),
+)
+def test_ty_sarif_cannot_mask_type_errors_or_skip_failure_uploads(
+    directory: Path, workflow: str, before: str, after: str
+) -> None:
+    _replace(directory / workflow, before, after, 1)
+    with pytest.raises(WorkflowPolicyError, match="ty SARIF"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    "workflow,job_id,category",
+    (("ci.yml", "quality", "ty-core"), (RECORDS_CI_WORKFLOW, "records-python", "ty-records")),
+)
+def test_ty_sarif_requires_scoped_permissions_and_separate_categories(
+    directory: Path, workflow: str, job_id: str, category: str
+) -> None:
+    path = directory / workflow
+    text = path.read_text()
+    block = _workflow_job_block(text, job_id)
+    widened = block.replace("contents: read", "contents: write", 1)
+    path.write_text(text.replace(block, widened, 1))
+    with pytest.raises(WorkflowPolicyError, match="ty SARIF permissions"):
+        validate_notification_workflows(directory)
+
+    path.write_text(
+        text.replace(
+            "permissions:\n  contents: read",
+            "permissions:\n  contents: read\n  security-events: write",
+            1,
+        )
+    )
+    with pytest.raises(WorkflowPolicyError, match="ty SARIF permissions"):
+        validate_notification_workflows(directory)
+
+    path.write_text(text.replace(f"category: {category}", "category: ty", 1))
+    with pytest.raises(WorkflowPolicyError, match="ty SARIF"):
+        validate_notification_workflows(directory)
+
+
 @pytest.mark.parametrize("run_screens", ("false", "true"))
 def test_android_ci_selects_only_screen_execution_as_optional(
     directory: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, run_screens: str

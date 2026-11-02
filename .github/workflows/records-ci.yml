@@ -108,6 +108,9 @@ jobs:
     timeout-minutes: 10
     needs: records-changes
     if: needs.records-changes.outputs.records_python == 'true'
+    permissions:
+      contents: read
+      security-events: write
     defaults:
       run:
         working-directory: services/records
@@ -163,11 +166,22 @@ jobs:
             --output-file "${RUNNER_TEMP}/records-audit-requirements.txt"
           uv run --frozen pip-audit --strict --require-hashes \
             --requirement "${RUNNER_TEMP}/records-audit-requirements.txt"
-      - name: Check Records formatting, lint, and types
+      - name: Check Records formatting and lint
         run: |
           uv run --frozen ruff format --check .
           uv run --frozen ruff check .
-          uv run --frozen ty check
+      - name: Check types with ty
+        id: ty
+        run: >-
+          uv run --frozen ty check --output-format sarif
+          > "${RUNNER_TEMP}/ty-records.sarif"
+      - name: Upload ty results to code scanning
+        if: ${{ !cancelled() && (steps.ty.outcome == 'success' || steps.ty.outcome == 'failure') }}
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: ${{ runner.temp }}/ty-records.sarif
+          checkout_path: ${{ github.workspace }}
+          category: ty-records
       - name: Run Records unit tests
         run: uv run --frozen pytest
       - name: Verify the Records botocore fallback trust store
