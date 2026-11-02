@@ -97,35 +97,76 @@ process.stdin.on("end", () => {
   const today = new Date().toISOString().slice(0, 10);
   const failures = [];
   const referencedExceptions = new Set();
-  for (const [name, vulnerability] of Object.entries(report.vulnerabilities ?? {})) {
-    const advisories = (vulnerability.via ?? []).filter(
-      (via) => typeof via === "object" && via !== null && typeof via.url === "string",
-    );
-    if (advisories.length === 0) {
-      failures.push(`${name}: vulnerable with no advisory metadata; refusing to pass`);
-      continue;
+  const advisories = [];
+  const visited = new Set();
+  const visiting = new Set();
+  function collectAdvisories(name) {
+    if (visiting.has(name)) {
+      failures.push(`${name}: cyclic npm audit via reference; refusing to pass`);
+      return;
     }
-    for (const advisory of advisories) {
-      const id = advisory.url.split("/").pop();
-      const exception = allowed.get(id);
-      if (exception === undefined) {
-        failures.push(`${name}: ${id} (${advisory.severity}) ${advisory.title}`);
-      } else if (exception.package !== name) {
-        referencedExceptions.add(id);
-        failures.push(
-          `${name}: ${id} exception package ${exception.package} did not match ${name}`,
-        );
-      } else if (exception.severity !== advisory.severity) {
-        referencedExceptions.add(id);
-        failures.push(
-          `${name}: ${id} exception severity ${exception.severity} did not match ${advisory.severity}`,
-        );
-      } else if (exception.expires <= today) {
-        referencedExceptions.add(id);
-        failures.push(`${name}: ${id} exception expired on ${exception.expires}`);
+    if (visited.has(name)) return;
+    if (!Object.hasOwn(report.vulnerabilities, name)) {
+      failures.push(`${name}: missing npm audit via reference; refusing to pass`);
+      return;
+    }
+    const vulnerability = report.vulnerabilities[name];
+    if (
+      vulnerability === null ||
+      typeof vulnerability !== "object" ||
+      Array.isArray(vulnerability) ||
+      !Array.isArray(vulnerability.via) ||
+      vulnerability.via.length === 0
+    ) {
+      failures.push(`${name}: vulnerable with no advisory metadata; refusing to pass`);
+      return;
+    }
+    visiting.add(name);
+    for (const via of vulnerability.via) {
+      if (typeof via === "string") {
+        collectAdvisories(via);
+      } else if (
+        via !== null &&
+        typeof via === "object" &&
+        !Array.isArray(via) &&
+        typeof via.url === "string" &&
+        via.url.trim() !== "" &&
+        typeof via.title === "string" &&
+        via.title.trim() !== "" &&
+        severities.has(via.severity)
+      ) {
+        // Bind exceptions to the package carrying the advisory, not its dependants.
+        advisories.push({ name, advisory: via });
       } else {
-        referencedExceptions.add(id);
+        failures.push(`${name}: invalid npm audit advisory metadata; refusing to pass`);
       }
+    }
+    visiting.delete(name);
+    visited.add(name);
+  }
+  for (const name of Object.keys(report.vulnerabilities)) {
+    collectAdvisories(name);
+  }
+  for (const { name, advisory } of advisories) {
+    const id = advisory.url.split("/").pop();
+    const exception = allowed.get(id);
+    if (exception === undefined) {
+      failures.push(`${name}: ${id} (${advisory.severity}) ${advisory.title}`);
+    } else if (exception.package !== name) {
+      referencedExceptions.add(id);
+      failures.push(
+        `${name}: ${id} exception package ${exception.package} did not match ${name}`,
+      );
+    } else if (exception.severity !== advisory.severity) {
+      referencedExceptions.add(id);
+      failures.push(
+        `${name}: ${id} exception severity ${exception.severity} did not match ${advisory.severity}`,
+      );
+    } else if (exception.expires <= today) {
+      referencedExceptions.add(id);
+      failures.push(`${name}: ${id} exception expired on ${exception.expires}`);
+    } else {
+      referencedExceptions.add(id);
     }
   }
   for (const id of allowed.keys()) {

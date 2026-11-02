@@ -111,6 +111,92 @@ def test_matching_package_and_severity_exception_passes(tmp_path: Path) -> None:
     assert "1 dated exception(s) active" in result.stdout
 
 
+def _transitive_report(
+    *,
+    leaf_via: list[object] | None = None,
+    parent_via: list[object] | None = None,
+) -> object:
+    advisory = {
+        "title": "test advisory",
+        "url": "https://github.com/advisories/GHSA-test-audit-entry",
+        "severity": "high",
+    }
+    return {
+        "auditReportVersion": 2,
+        "vulnerabilities": {
+            "cdk-nag": {"via": ["aws-cdk-lib"]},
+            "aws-cdk-lib": {"via": ["minimatch"] if parent_via is None else parent_via},
+            "minimatch": {"via": [advisory] if leaf_via is None else leaf_via},
+        },
+        "metadata": {"vulnerabilities": {"high": 3, "total": 3}},
+    }
+
+
+def test_transitive_references_use_one_leaf_package_exception(tmp_path: Path) -> None:
+    result = _run(
+        _transitive_report(),
+        exceptions_path=_write_exceptions(tmp_path, [_exception(package="minimatch")]),
+    )
+
+    assert result.returncode == 0
+    assert "1 dated exception(s) active" in result.stdout
+
+
+@pytest.mark.parametrize("package", ["aws-cdk-lib", "cdk-nag"])
+def test_transitive_exception_cannot_bind_to_a_parent(tmp_path: Path, package: str) -> None:
+    result = _run(
+        _transitive_report(),
+        exceptions_path=_write_exceptions(tmp_path, [_exception(package=package)]),
+    )
+
+    assert result.returncode == 1
+    assert f"exception package {package} did not match minimatch" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "report,message",
+    [
+        (_transitive_report(parent_via=["missing"]), "missing npm audit via reference"),
+        (_transitive_report(parent_via=["cdk-nag"]), "cyclic npm audit via reference"),
+        (_transitive_report(leaf_via=[]), "no advisory metadata"),
+        (_transitive_report(leaf_via=[{}]), "invalid npm audit advisory metadata"),
+        (
+            _transitive_report(leaf_via=[{"url": "", "title": "test", "severity": "high"}]),
+            "invalid npm audit advisory metadata",
+        ),
+    ],
+)
+def test_invalid_transitive_metadata_fails_closed(
+    tmp_path: Path, report: object, message: str
+) -> None:
+    result = _run(
+        report,
+        exceptions_path=_write_exceptions(tmp_path, [_exception(package="minimatch")]),
+    )
+
+    assert result.returncode == 1
+    assert message in result.stderr
+
+
+def test_transitive_known_advisory_does_not_cover_an_unknown_one(tmp_path: Path) -> None:
+    result = _run(
+        _transitive_report(
+            leaf_via=[
+                {
+                    "url": f"https://github.com/advisories/{advisory}",
+                    "title": "test advisory",
+                    "severity": "high",
+                }
+                for advisory in ("GHSA-test-audit-entry", "GHSA-unknown-audit-entry")
+            ]
+        ),
+        exceptions_path=_write_exceptions(tmp_path, [_exception(package="minimatch")]),
+    )
+
+    assert result.returncode == 1
+    assert "GHSA-unknown-audit-entry" in result.stderr
+
+
 def test_exception_package_mismatch_fails_closed(tmp_path: Path) -> None:
     result = _run(
         _vulnerable_report(),

@@ -1525,6 +1525,40 @@ def _validate_android_test_selection(directory: Path) -> None:
         raise WorkflowPolicyError("Android CI must not mask build or instrumentation failures")
 
 
+def _validate_ty_sarif(text: str, job_id: str, category: str) -> None:
+    job = _workflow_job_block(text, job_id)
+    expected_permissions = ((("contents", "read"), ("security-events", "write")),)
+    workflow_header = text.split("\njobs:\n", 1)[0]
+    if _permission_blocks(workflow_header) != ((("contents", "read"),),) or (
+        _permission_blocks(job) != expected_permissions
+    ):
+        raise WorkflowPolicyError("ty SARIF permissions must remain limited to its analysis job")
+    check = _workflow_step_block(job, "Check types with ty")
+    expected_check = (
+        "      - name: Check types with ty\n"
+        "        id: ty\n"
+        "        run: >-\n"
+        "          uv run --frozen ty check --output-format sarif\n"
+        f'          > "${{RUNNER_TEMP}}/{category}.sarif"'
+    )
+    if check.strip() != expected_check.strip():
+        raise WorkflowPolicyError("ty SARIF must preserve the frozen type check exit status")
+    upload = _workflow_step_block(job, "Upload ty results to code scanning")
+    expected_upload = (
+        "      - name: Upload ty results to code scanning\n"
+        "        if: ${{ !cancelled() && (steps.ty.outcome == 'success' || "
+        "steps.ty.outcome == 'failure') }}\n"
+        "        uses: github/codeql-action/upload-sarif@"
+        "9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1\n"
+        "        with:\n"
+        f"          sarif_file: ${{{{ runner.temp }}}}/{category}.sarif\n"
+        "          checkout_path: ${{ github.workspace }}\n"
+        f"          category: {category}"
+    )
+    if upload.strip() != expected_upload.strip():
+        raise WorkflowPolicyError("ty SARIF must use the standard upload even after type errors")
+
+
 def _validate_ci_path_isolation(directory: Path) -> None:
     ci_text = (directory / "ci.yml").read_text(encoding="utf-8")
     records_path = directory / RECORDS_CI_WORKFLOW
@@ -1536,6 +1570,9 @@ def _validate_ci_path_isolation(directory: Path) -> None:
     for workflow, text in (("ci.yml", ci_text), (RECORDS_CI_WORKFLOW, records_text)):
         if text.count("python3 tools/classify_ci_paths.py") != 1:
             raise WorkflowPolicyError(f"{workflow} must use the canonical path classifier once")
+
+    _validate_ty_sarif(ci_text, "quality", "ty-core")
+    _validate_ty_sarif(records_text, "records-python", "ty-records")
 
     cdk = _workflow_job_block(ci_text, "cdk")
     if cdk.count("python3 tools/run_npm_audit.py -- npm run audit:infra") != 1:

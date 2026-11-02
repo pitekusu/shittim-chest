@@ -4,7 +4,7 @@ ARG SOURCE_DATE_EPOCH=0
 
 FROM ghcr.io/astral-sh/uv:0.13.6@sha256:af22a52f5eafef3d78e551599d405c02df61919d18028f0cea8eda93bc9986d0 AS uv
 
-FROM dhi.io/python:3.14.8-debian13-dev@sha256:03cf5ae71ab5a7761ec0dcbf9d522c0209581fb5196ac303537c74d2ac92de32 AS builder
+FROM dhi.io/python:3.14.10-debian13-dev@sha256:e1c528dee57ce33c3192099679a1690a1541030f5137df3587d3ed0454a172b6 AS builder
 
 ARG SOURCE_DATE_EPOCH
 
@@ -21,16 +21,6 @@ WORKDIR /app
 # DHI prunes hashed aliases. Regenerate them with the patched upstream policy
 # before transferring the complete CA store to the runtime.
 RUN update-ca-certificates --fresh
-
-# Retain the validated Expat overlay when updating the base image.
-# APT authenticates the exact package installed below.
-COPY tools/install_runtime_expat.py /tmp/install_runtime_expat.py
-RUN mkdir /tmp/runtime-package \
-    && cd /tmp/runtime-package \
-    && apt-get update \
-    && apt-get download "libexpat1=$(python /tmp/install_runtime_expat.py --version)" \
-    && mv libexpat1_*.deb /tmp/libexpat1.deb \
-    && rm -rf /var/lib/apt/lists/* /tmp/runtime-package
 
 COPY pyproject.toml uv.lock ./
 
@@ -53,7 +43,7 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     && python /tmp/canonicalize_wheel_records.py \
         --source-date-epoch "${SOURCE_DATE_EPOCH}" /app/.venv
 
-FROM dhi.io/python:3.14.8-debian13@sha256:046a46512297187590b40b85e86ea2b128077d57601847ce916ecb7d919a7291 AS runtime-base
+FROM dhi.io/python:3.14.10-debian13@sha256:7773fe0d15497d7dc20d59148261e81d968b0d8088b3074d8ff06b25a3e38b7b AS runtime-base
 
 ARG SOURCE_DATE_EPOCH
 
@@ -75,12 +65,6 @@ RUN --mount=type=bind,from=builder,source=/etc/ssl/certs,target=/run/updated-ca/
     --mount=type=bind,from=builder,source=/tmp/install_runtime_ca.py,target=/tmp/install_runtime_ca.py,ro \
     ["/usr/bin/python3.14", "/tmp/install_runtime_ca.py"]
 
-RUN --mount=type=bind,from=builder,source=/usr/bin,target=/run/package-tools/bin,ro \
-    --mount=type=bind,from=builder,source=/usr/sbin,target=/run/package-tools/sbin,ro \
-    --mount=type=bind,from=builder,source=/usr/lib,target=/run/package-tools/lib,ro \
-    --mount=type=bind,from=builder,source=/tmp/libexpat1.deb,target=/run/libexpat1.deb,ro \
-    --mount=type=bind,from=builder,source=/tmp/install_runtime_expat.py,target=/tmp/install_runtime_expat.py,ro \
-    ["/usr/bin/python3.14", "/tmp/install_runtime_expat.py"]
 USER 65532:65532
 
 RUN --mount=type=bind,from=builder,source=/app/.venv,target=/tmp/source-venv,ro \

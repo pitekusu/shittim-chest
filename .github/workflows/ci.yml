@@ -101,6 +101,9 @@ jobs:
     name: quality
     runs-on: ubuntu-26.04
     timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - name: Update and verify system trust before checkout
         working-directory: ${{ runner.temp }}
@@ -136,7 +139,7 @@ jobs:
       - name: Configure the incident TLS trust policy
         uses: ./.github/actions/configure-tls
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: ${{ env.UV_VERSION }}
           download-from-astral-mirror: false
@@ -155,7 +158,17 @@ jobs:
           uv run --frozen python tools/check_tool_versions.py validate \
             .github/tool-versions.json
       - name: Check types with ty
-        run: uv run --frozen ty check
+        id: ty
+        run: >-
+          uv run --frozen ty check --output-format sarif
+          > "${RUNNER_TEMP}/ty-core.sarif"
+      - name: Upload ty results to code scanning
+        if: ${{ !cancelled() && (steps.ty.outcome == 'success' || steps.ty.outcome == 'failure') }}
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: ${{ runner.temp }}/ty-core.sarif
+          checkout_path: ${{ github.workspace }}
+          category: ty-core
       - name: Check architecture boundaries
         run: uv run --frozen lint-imports
 
@@ -209,7 +222,7 @@ jobs:
         uses: ./.github/actions/configure-tls
       - name: Install pinned Python and uv
         if: ${{ steps.scope.outputs.required == 'true' }}
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: ${{ env.UV_VERSION }}
           download-from-astral-mirror: false
@@ -287,7 +300,7 @@ jobs:
       - name: Configure the incident TLS trust policy
         uses: ./.github/actions/configure-tls
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: ${{ env.UV_VERSION }}
           download-from-astral-mirror: false
@@ -422,7 +435,7 @@ jobs:
         uses: ./.github/actions/configure-tls
       - name: Install pinned Python and uv
         if: ${{ steps.scope.outputs.required == 'true' }}
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: ${{ env.UV_VERSION }}
           download-from-astral-mirror: false
@@ -600,7 +613,7 @@ jobs:
           --output "${RUNNER_TEMP}/shittim-tls" --github-env "${GITHUB_ENV}"
       - name: Validate the Wrapper and set up Gradle caching
         if: ${{ steps.scope.outputs.required == 'true' }}
-        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
       - name: Install the compile SDK and build tools
@@ -995,7 +1008,7 @@ jobs:
           test "${installed_version}" = "${scout_version}"
       - name: Install pinned Python and uv for evidence verification
         if: ${{ steps.scope.outputs.required == 'true' }}
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: ${{ env.UV_VERSION }}
           download-from-astral-mirror: false
@@ -1376,7 +1389,7 @@ jobs:
       - name: Configure the incident TLS trust policy
         uses: ./.github/actions/configure-tls
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: ${{ env.UV_VERSION }}
           download-from-astral-mirror: false
