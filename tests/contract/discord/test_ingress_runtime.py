@@ -413,7 +413,7 @@ def empty_history() -> Any:
 
 def discord_context(
     request: IngressRequest,
-) -> tuple[discord.TextChannel, discord.Message, discord.Thread, discord.Message]:
+) -> tuple[MagicMock, MagicMock, MagicMock, MagicMock]:
     panel = MagicMock(spec=discord.Message)
     panel.id = PANEL_ID
     panel.author = SimpleNamespace(id=MODERATOR_USER_ID)
@@ -439,12 +439,7 @@ def discord_context(
     starter.thread = thread
     starter.create_thread = AsyncMock(return_value=thread)
     channel.fetch_message = AsyncMock(return_value=starter)
-    return (
-        cast(discord.TextChannel, channel),
-        cast(discord.Message, starter),
-        cast(discord.Thread, thread),
-        cast(discord.Message, panel),
-    )
+    return channel, starter, thread, panel
 
 
 @pytest.mark.asyncio
