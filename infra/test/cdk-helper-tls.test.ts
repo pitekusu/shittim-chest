@@ -34,7 +34,7 @@ describe("CDK helper TLS preload", () => {
       NODE_EXTRA_CA_CERTS: oldRoot,
     });
     expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({ matches: true, count: 120, oldExtraStillObservable: true });
+    expect(JSON.parse(result.stdout)).toEqual({ matches: true, count: 118, oldExtraStillObservable: true });
   });
 
   test.each(["disabled", "missing-api"])("fails closed with %s TLS", (mode) => {

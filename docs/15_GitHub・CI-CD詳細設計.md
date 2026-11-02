@@ -270,25 +270,26 @@ npm公式Statuspageで「Security Auditコンポーネントの劣化」と「�
 
 ### CDK依存の期限付きリスク受容
 
-2026-10-03、所有者の明示承認により、`brace-expansion`の次の3件だけを一時受容する。
 ID・パッケージ・重大度・理由・期限の正は`infra/npm-audit-exceptions.json`とする。
-既存の監査checkerを使用し、未知ID、パッケージ／重大度の不一致、期限切れ、未使用の例外は拒否する。
 npm標準reportの`via`がパッケージ名を参照する場合は、参照先のadvisoryまでたどって照合する。
 参照欠落・循環・空または不正なmetadataは拒否し、例外のパッケージ名は参照元の依存元でなくadvisoryを持つ末端へ束縛する。
-期限は2026-10-10 00:00 UTC（日本時間09:00）であり、その時刻以降は再びCIを拒否する。自動延長しない。
+未知ID、パッケージ／重大度の不一致、期限切れ、未使用の例外は拒否する。
 
-| 対象 | 重大度 | 残るリスク |
-|---|---|---|
-| [GHSA-q2hr-2g5m-vwhr](https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-q2hr-2g5m-vwhr) | moderate | globの処理時間増大によるCPU停止 |
-| [GHSA-qhr7-859c-m2p7](https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-qhr7-859c-m2p7) | high | 入れ子globによるstack枯渇 |
-| [GHSA-6j4f-fj2g-mc7p](https://github.com/juliangruber/brace-expansion/security/advisories/GHSA-6j4f-fj2g-mc7p) | high | comma-group globによるstack枯渇 |
+2026-11-02、所有者が[minimatchのCVE-2026-118764／GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249)の
+Moderate 1件を、2026-11-03 00:00 UTC（日本時間09:00）まで明示受容した。
+この時刻以降は再び監査を拒否し、自動延長しない。npm上のaws-cdk-lib・cdk-nag・minimatchの3node検出は、
+この1件のadvisoryへの依存伝播であり、他のIDやパッケージをまとめて受容したことにはしない。
 
-承認時の検出箇所はCDK内包の開発・CI依存だけで、本番のPython討論runtime・Records Lambdaへは含めない。
-アプリやDiscord入力からこのglob処理へ到達する経路は確認されていないが、安全性の完全な証明とは扱わない。
-例外の照合はパッケージ単位であり、CDKのpathだけに限定する機能ではない。依存経路が変わった場合は受容根拠を再確認する。
-公式CDKの[上流修正](https://github.com/aws/aws-cdk/pull/38929)を含む配布物が公開されたら、内包依存の実体を確認して更新し、
-3件の例外を削除して通常の監査と関連検証を実施する。CIの成功は「脆弱性0件」や「修復済み」を意味しない。
-Webの`fast-uri`は修正版へ更新し、同じリスク受容へ混ぜない。他の監査・必須試験・CodeQLは維持する。
+攻撃者が制御するglobを`optimizationLevel >= 2`で処理すると、CPU・メモリの過剰消費を起こす。
+確認したCDK 2.274.0／2.275.0の同梱minimatch 10.2.6の3呼出は既定の1を使い、
+Web／Discord入力からglobへ渡す経路や既定値を書き換える設定は見つからない。
+本番のPython討論runtime・Records LambdaへCDKを同梱しないが、未修正依存は開発・CIに残り、
+将来の設定や入力経路変更時のリスクを解消済みとは扱わない。
+
+例外はこのID・minimatch・Moderateのパッケージ単位であり、CDKのpathだけへ限定する機能ではない。
+公式CDKが修正版minimatch 11.0.1以降を同梱したら実体を確認して更新し、例外を削除して通常監査を行う。
+依存経路が変わった場合は受容根拠を再確認し、他の監査・必須試験・CodeQLを維持する。
+2026-10-03に受容したbrace-expansionの旧3件は、CDK 2.273.0での上流修正採用時に削除済みである。
 
 ## 3. 依存と配信ツールの更新
 
@@ -537,7 +538,7 @@ ARM64の実SBOMでbackport済み`libexpat1 2.8.3-1~deb13u1+dhi5`を照合し、�
 `fault-test`イメージと強制停止・復旧訓練は手動のRuntime検証に限定する。
 2026年10月17日、`CVE-2026-76957`のGrype検出に対応し、Python 3.14.8／Debian 13の系列を維持してDHI builder／runtimeの固定digestを更新する。DHI builderにはDebian修正版があるが、同系列runtimeの`libexpat1`は固有の旧版番号のままで、当該CVEの署名済みVEX判定もない。そのため、runtimeへDebianの修正版`2.9.0-1~deb13u1`を導入する。
 
-builderの標準APTで署名済み索引に照合した固定版パッケージを取得し、ビルド時だけ標準dpkgをbind mountしてruntimeへインストールする。`tools/install_runtime_expat.py`はこの接続と、dpkgの実インストール結果に合わせるDHI固有の`status.d`同期だけを担当する。パッケージ情報だけを修正版へ書き換えず、旧共有ライブラリの置換・削除と通常のdpkg情報更新を標準ツールに任せる。最終イメージは非root・shell／APT／dpkgなしを維持する。
+当時はbuilderの標準APTで認証した固定版パッケージを取得し、ビルド時だけ標準dpkgをbind mountして導入していた。2026-11-02、正式修正を収録したDHI Python 3.14.10／Debian 13へ移行し、Expatの一時導入と専用スクリプトを撤去する。providerのパッケージ実体と台帳を保持し、CA directoryのoverlayは別の責務として維持する。最終イメージは非root・shell／APT／dpkgなしを維持する。
 
 Coreのコンテナゲートで、実際にロードするsystem側の通常・wide双方のExpatが2.9.0以上であることを検証する。CPython内蔵の別コピーも2.8.4以上を要求し、正常XMLの解析と不正XMLの拒否を確認する。完成ARM64イメージのSBOM・署名済みVEX・Grypeによる判定を継続する。2026年10月17日には利用者承認により、Grype DB反映待ちの`CVE-2026-76957`／`libexpat1`を、確認済み設定digest 1個・2026年10月24日期限で例外登録した。2026年10月18日、[ARM64 CIの実測結果](https://github.com/pitekusu/shittim-chest/actions/runs/39049529578)で、正式修正版`2.9.0-1~deb13u1`とGrype DB（2026年10月17日生成）による当該CVEの未検出を確認したため、削除条件に従い例外を撤去した。VEX適用後のHigh／Criticalも0件であり、例外なしの判定を維持する。DHI runtimeへ修正版が取り込まれたら、この一時的なパッケージ導入を撤去する。
 
@@ -586,9 +587,9 @@ botocoreにはXMLParserを使う応答解析経路があり、アプリ全体の
 | `CVE-2026-119374` | 壊れたFTS5索引のDBをsecure-delete有効で削除するとheap範囲外書込み | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-119374) |
 | `CVE-2026-119379` | session拡張へ細工changesetを適用するとheap範囲外書込み | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-119379) |
 
-Coreの永続化はS3／DynamoDBで、SQL・DBfile・changesetの入力／実行経路は見つからないが、imageにはlibsqlite3とCPythonの`_sqlite3`が存在し、全native経路の到達不能は証明していない。[SQLite 3.54.0](https://sqlite.org/releaselog/3_54_0.html)の上流修正と、[DHIの正式backport recipe](https://github.com/docker-hardened-images/catalog/blob/d290a7585dc8600a3f563ec4e873f4cc82de43d2/package/deb/main/sqlite3/debian-13/3.yaml)は公開済みである。最新3.14.10 runtimeのindex `sha256:7773fe0d15497d7dc20d59148261e81d968b0d8088b3074d8ff06b25a3e38b7b`は、署名・SPDX／VEX・独立取得結果で`+dhi2`の実収録と具体的な修正commitのbackportを確認した。3.14.10 builderと3.14.8両variantは`+dhi1`のままであり、builderや現完成imageまで修正済みとは扱わない。
+Coreの永続化はS3／DynamoDBで、SQL・DBfile・changesetの入力／実行経路は見つからないが、imageにはlibsqlite3とCPythonの`_sqlite3`が存在し、全native経路の到達不能は証明していない。[SQLite 3.54.0](https://sqlite.org/releaselog/3_54_0.html)の上流修正と、[DHIの正式backport recipe](https://github.com/docker-hardened-images/catalog/blob/d290a7585dc8600a3f563ec4e873f4cc82de43d2/package/deb/main/sqlite3/debian-13/3.yaml)は公開済みである。最新3.14.10 runtimeのindex `sha256:7773fe0d15497d7dc20d59148261e81d968b0d8088b3074d8ff06b25a3e38b7b`は、署名・SPDX／VEX・独立取得結果で`+dhi2`の実収録と具体的な修正commitのbackportを確認した。当初は3.14.10 builderも`+dhi1`だったが、同日の再確認でbuilderの新index `sha256:e1c528dee57ce33c3192099679a1690a1541030f5137df3587d3ed0454a172b6`にも`+dhi2`の配布と署名を確認した。runtimeとbuilderをこの修正済みdigestへ固定し、完成imageは別途検証する。
 
-3.14.10の適用は共有`container-policy.json`の変更を伴い、必須CDK監査のbundled minimatch `CVE-2026-118764`が未解決のため保留する。修正済みイメージへ移行する際は旧Expat overlayの撤去と、完成ARM64イメージのSBOM・VEX・TLS・実測digest・残存リスクを再検証する。今回の受容を別digestへ自動で移さず、正式修正を適用できたら該当受容を削除する。
+3.14.10の適用に必要な共有`container-policy.json`も更新する。CDKの未修正minimatchは上記の明示受容で扱い、監査を省略しない。旧Expat overlayを撤去し、完成ARM64イメージのSBOM・VEX・TLS・実測digest・残存リスクを再検証する。既存の受容を別digestへ自動で移さず、正式修正を適用できた対象は該当受容を削除する。
 
 通常PR/`main`では本番イメージの基本検証を行い、訓練用イメージを本番リスク承認の対象へ含めない。
 
