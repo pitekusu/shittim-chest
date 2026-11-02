@@ -59,6 +59,96 @@
       "expires_on": "2026-11-02",
       "reevaluation_conditions": "正式修正版または提供元の技術的判断の公開、locale・環境変数やファイル入力境界の変化、新しい検出、パッケージ版・実測config digestの変化、期限到達で再評価する。対象・digest・期限を自動で追加・延長せず、修正可能な検出とその他の未追跡High/Criticalの拒否を維持する。",
       "owner": "pitekusu"
+    },
+    {
+      "vulnerability_id": "CVE-2026-5435",
+      "package": "libc6",
+      "image_config_digests": {
+        "production": [
+          "sha256:2ce109528b7ba8cf597f27c271cdf0084f9abe757b39c4e20e5a27ad86db941d"
+        ]
+      },
+      "status": "affected",
+      "justification": "2026年11月2日、PR #673の既存と同一イメージでno-dsaだけによるVEX抑制を除いて可視化したHigh 5件について、影響・成立条件・修正有無と完成runtimeの構成を説明し、利用者が「追加5件を11月2日まで受容してマージ」と明示承認した。本件・当該実測config digestだけを2026年11月2日まで受容し、既存の対象・期限は変更しない。",
+      "impact": "libc6 2.41-12+deb13u4+dhi1の非推奨DNSレコード整形APIでTSIGレコードを出力すると、呼出元が指定したbuffer長を守らず範囲外書込みに至る。Debian 13と当該DHI版は未修正である。",
+      "exploitability": "アプリに該当APIやTSIG整形の直接呼出しは見つからない。通常のDNS名前解決と同一経路とは扱わないが、native依存を含む全経路の到達不能は証明していない。no-dsaを非影響・修正済みの根拠にしない。",
+      "evidence": "https://github.com/CVEProject/cvelistV5/blob/main/cves/2026/5xxx/CVE-2026-5435.json ; https://security-tracker.debian.org/tracker/CVE-2026-5435 ; https://github.com/docker-hardened-images/catalog/blob/main/package/deb/main/glibc/debian-13/2.yaml 。https://github.com/pitekusu/shittim-chest/actions/runs/41401997805 の認証済み成果物hash・署名検証receipt・base subject・実file対応付けを照合し、実測production config digestの不変とraw High/not-fixedまたはwont-fixを確認した。no-dsaだけのstatementを除いた再生成VEXとrisk checkerでも既存受容にない本件の拒否を確認した。",
+      "approved_on": "2026-11-02",
+      "expires_on": "2026-11-02",
+      "reevaluation_conditions": "正式修正版または具体的な技術根拠を伴う提供元判断の公開、入力境界・component構成・パッケージ版・実測config digestの変化、新しい検出、期限到達で再評価する。対象・digest・期限を自動で追加・延長せず、修正可能な検出と他の未追跡High/Criticalの拒否を維持する。",
+      "owner": "pitekusu"
+    },
+    {
+      "vulnerability_id": "CVE-2026-76642",
+      "package": "libuuid1",
+      "image_config_digests": {
+        "production": [
+          "sha256:2ce109528b7ba8cf597f27c271cdf0084f9abe757b39c4e20e5a27ad86db941d"
+        ]
+      },
+      "status": "under_investigation",
+      "justification": "2026年11月2日、PR #673の既存と同一イメージでno-dsaだけによるVEX抑制を除いて可視化したHigh 5件について、影響・成立条件・修正有無と完成runtimeの構成を説明し、利用者が「追加5件を11月2日まで受容してマージ」と明示承認した。本件・当該実測config digestだけを2026年11月2日まで受容し、既存の対象・期限は変更しない。",
+      "impact": "util-linuxのlibmountがmount helper失敗後にもX-mount.idmap/owner等の特権hookを実行し、既存filesystemの権限変更や特権昇格を招く問題。検査は同じsource package由来のlibuuid1 2.41.5-0+deb13u1+dhi3にもHighを報告する。",
+      "exploitability": "完成runtimeの標準Syft全file一覧にmount/umount/nsenter/libmountと/etc/fstabはなく、util-linux由来はlibuuid1だけである。上流libuuidのbuild対象にも該当機能はない。source package単位の検出波及と確認したが、no-dsaだけの提供元VEXを自動採用したり自前の非影響VEXへ置き換えたりせず、未確定の検出として期限付きで受容する。この完成runtimeの判断をbuilderや他のimageへ一般化しない。",
+      "evidence": "https://github.com/CVEProject/cvelistV5/blob/main/cves/2026/76xxx/CVE-2026-76642.json ; https://security-tracker.debian.org/tracker/CVE-2026-76642 ; https://github.com/docker-hardened-images/catalog/blob/main/package/deb/main/util-linux/debian-13/2.yaml 。https://github.com/pitekusu/shittim-chest/actions/runs/41401997805 の認証済み成果物hash・署名検証receipt・base subject・実file対応付けを照合し、実測production config digestの不変とraw High/not-fixedまたはwont-fixを確認した。no-dsaだけのstatementを除いた再生成VEXとrisk checkerでも既存受容にない本件の拒否を確認した。 https://github.com/util-linux/util-linux/blob/v2.41.5/libuuid/src/Makemodule.am によりUUID専用のbuild対象を照合した。",
+      "approved_on": "2026-11-02",
+      "expires_on": "2026-11-02",
+      "reevaluation_conditions": "正式修正版または具体的な技術根拠を伴う提供元判断の公開、入力境界・component構成・パッケージ版・実測config digestの変化、新しい検出、期限到達で再評価する。対象・digest・期限を自動で追加・延長せず、修正可能な検出と他の未追跡High/Criticalの拒否を維持する。",
+      "owner": "pitekusu"
+    },
+    {
+      "vulnerability_id": "CVE-2026-78408",
+      "package": "libuuid1",
+      "image_config_digests": {
+        "production": [
+          "sha256:2ce109528b7ba8cf597f27c271cdf0084f9abe757b39c4e20e5a27ad86db941d"
+        ]
+      },
+      "status": "under_investigation",
+      "justification": "2026年11月2日、PR #673の既存と同一イメージでno-dsaだけによるVEX抑制を除いて可視化したHigh 5件について、影響・成立条件・修正有無と完成runtimeの構成を説明し、利用者が「追加5件を11月2日まで受容してマージ」と明示承認した。本件・当該実測config digestだけを2026年11月2日まで受容し、既存の対象・期限は変更しない。",
+      "impact": "util-linuxのnsenter --join-cgroupがrootで開いたcgroup.procsのFDをnamespace/資格情報変更やexec後まで保持し、攻撃者側programが他processのcgroup移動・終了に利用できる問題。検査は同じsource package由来のlibuuid1にもHighを報告する。",
+      "exploitability": "完成runtimeの標準Syft全file一覧にmount/umount/nsenter/libmountと/etc/fstabはなく、util-linux由来はlibuuid1だけである。上流libuuidのbuild対象にも該当機能はない。source package単位の検出波及と確認したが、no-dsaだけの提供元VEXを自動採用したり自前の非影響VEXへ置き換えたりせず、未確定の検出として期限付きで受容する。この完成runtimeの判断をbuilderや他のimageへ一般化しない。",
+      "evidence": "https://github.com/CVEProject/cvelistV5/blob/main/cves/2026/78xxx/CVE-2026-78408.json ; https://security-tracker.debian.org/tracker/CVE-2026-78408 ; https://github.com/docker-hardened-images/catalog/blob/main/package/deb/main/util-linux/debian-13/2.yaml 。https://github.com/pitekusu/shittim-chest/actions/runs/41401997805 の認証済み成果物hash・署名検証receipt・base subject・実file対応付けを照合し、実測production config digestの不変とraw High/not-fixedまたはwont-fixを確認した。no-dsaだけのstatementを除いた再生成VEXとrisk checkerでも既存受容にない本件の拒否を確認した。 https://github.com/util-linux/util-linux/blob/v2.41.5/libuuid/src/Makemodule.am によりUUID専用のbuild対象を照合した。",
+      "approved_on": "2026-11-02",
+      "expires_on": "2026-11-02",
+      "reevaluation_conditions": "正式修正版または具体的な技術根拠を伴う提供元判断の公開、入力境界・component構成・パッケージ版・実測config digestの変化、新しい検出、期限到達で再評価する。対象・digest・期限を自動で追加・延長せず、修正可能な検出と他の未追跡High/Criticalの拒否を維持する。",
+      "owner": "pitekusu"
+    },
+    {
+      "vulnerability_id": "CVE-2026-78409",
+      "package": "libuuid1",
+      "image_config_digests": {
+        "production": [
+          "sha256:2ce109528b7ba8cf597f27c271cdf0084f9abe757b39c4e20e5a27ad86db941d"
+        ]
+      },
+      "status": "under_investigation",
+      "justification": "2026年11月2日、PR #673の既存と同一イメージでno-dsaだけによるVEX抑制を除いて可視化したHigh 5件について、影響・成立条件・修正有無と完成runtimeの構成を説明し、利用者が「追加5件を11月2日まで受容してマージ」と明示承認した。本件・当該実測config digestだけを2026年11月2日まで受容し、既存の対象・期限は変更しない。",
+      "impact": "util-linuxのlibmountでLinux 6.15以降のX-mount.subdirのpath解決が中間symlinkを制限せず、fstabで許可された操作からhost側pathをmountできる問題。検査は同じsource package由来のlibuuid1にもHighを報告する。",
+      "exploitability": "完成runtimeの標準Syft全file一覧にmount/umount/nsenter/libmountと/etc/fstabはなく、util-linux由来はlibuuid1だけである。上流libuuidのbuild対象にも該当機能はない。source package単位の検出波及と確認したが、no-dsaだけの提供元VEXを自動採用したり自前の非影響VEXへ置き換えたりせず、未確定の検出として期限付きで受容する。この完成runtimeの判断をbuilderや他のimageへ一般化しない。",
+      "evidence": "https://github.com/CVEProject/cvelistV5/blob/main/cves/2026/78xxx/CVE-2026-78409.json ; https://security-tracker.debian.org/tracker/CVE-2026-78409 ; https://github.com/docker-hardened-images/catalog/blob/main/package/deb/main/util-linux/debian-13/2.yaml 。https://github.com/pitekusu/shittim-chest/actions/runs/41401997805 の認証済み成果物hash・署名検証receipt・base subject・実file対応付けを照合し、実測production config digestの不変とraw High/not-fixedまたはwont-fixを確認した。no-dsaだけのstatementを除いた再生成VEXとrisk checkerでも既存受容にない本件の拒否を確認した。 https://github.com/util-linux/util-linux/blob/v2.41.5/libuuid/src/Makemodule.am によりUUID専用のbuild対象を照合した。",
+      "approved_on": "2026-11-02",
+      "expires_on": "2026-11-02",
+      "reevaluation_conditions": "正式修正版または具体的な技術根拠を伴う提供元判断の公開、入力境界・component構成・パッケージ版・実測config digestの変化、新しい検出、期限到達で再評価する。対象・digest・期限を自動で追加・延長せず、修正可能な検出と他の未追跡High/Criticalの拒否を維持する。",
+      "owner": "pitekusu"
+    },
+    {
+      "vulnerability_id": "CVE-2026-78410",
+      "package": "libuuid1",
+      "image_config_digests": {
+        "production": [
+          "sha256:2ce109528b7ba8cf597f27c271cdf0084f9abe757b39c4e20e5a27ad86db941d"
+        ]
+      },
+      "status": "under_investigation",
+      "justification": "2026年11月2日、PR #673の既存と同一イメージでno-dsaだけによるVEX抑制を除いて可視化したHigh 5件について、影響・成立条件・修正有無と完成runtimeの構成を説明し、利用者が「追加5件を11月2日まで受容してマージ」と明示承認した。本件・当該実測config digestだけを2026年11月2日まで受容し、既存の対象・期限は変更しない。",
+      "impact": "util-linuxのSUID mountがfstabのbind元を固定しない競合で、書換可能なpathを持つlocal利用者が別host directoryへ向け、owner/group/mode変更を悪用できる問題。検査は同じsource package由来のlibuuid1にもHighを報告する。",
+      "exploitability": "完成runtimeの標準Syft全file一覧にmount/umount/nsenter/libmountと/etc/fstabはなく、util-linux由来はlibuuid1だけである。上流libuuidのbuild対象にも該当機能はない。source package単位の検出波及と確認したが、no-dsaだけの提供元VEXを自動採用したり自前の非影響VEXへ置き換えたりせず、未確定の検出として期限付きで受容する。この完成runtimeの判断をbuilderや他のimageへ一般化しない。",
+      "evidence": "https://github.com/CVEProject/cvelistV5/blob/main/cves/2026/78xxx/CVE-2026-78410.json ; https://security-tracker.debian.org/tracker/CVE-2026-78410 ; https://github.com/docker-hardened-images/catalog/blob/main/package/deb/main/util-linux/debian-13/2.yaml 。https://github.com/pitekusu/shittim-chest/actions/runs/41401997805 の認証済み成果物hash・署名検証receipt・base subject・実file対応付けを照合し、実測production config digestの不変とraw High/not-fixedまたはwont-fixを確認した。no-dsaだけのstatementを除いた再生成VEXとrisk checkerでも既存受容にない本件の拒否を確認した。 https://github.com/util-linux/util-linux/blob/v2.41.5/libuuid/src/Makemodule.am によりUUID専用のbuild対象を照合した。",
+      "approved_on": "2026-11-02",
+      "expires_on": "2026-11-02",
+      "reevaluation_conditions": "正式修正版または具体的な技術根拠を伴う提供元判断の公開、入力境界・component構成・パッケージ版・実測config digestの変化、新しい検出、期限到達で再評価する。対象・digest・期限を自動で追加・延長せず、修正可能な検出と他の未追跡High/Criticalの拒否を維持する。",
+      "owner": "pitekusu"
     }
   ]
 }

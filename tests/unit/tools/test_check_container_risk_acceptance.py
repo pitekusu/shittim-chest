@@ -65,8 +65,11 @@ def _acceptance(**overrides: object) -> dict[str, object]:
     return value
 
 
-def test_current_digest_bound_acceptance_covers_residual_finding(tmp_path: Path) -> None:
-    policy = _write_policy(tmp_path / "policy.json", [_acceptance()])
+@pytest.mark.parametrize("expires_on", ("2026-08-21", "2026-07-22"))
+def test_current_digest_bound_acceptance_covers_residual_finding(
+    tmp_path: Path, expires_on: str
+) -> None:
+    policy = _write_policy(tmp_path / "policy.json", [_acceptance(expires_on=expires_on)])
 
     assert validate_acceptances(
         policy,
@@ -78,8 +81,11 @@ def test_current_digest_bound_acceptance_covers_residual_finding(tmp_path: Path)
     ) == (0, 1)
 
 
-def test_config_digest_preflight_accepts_the_exact_loaded_image(tmp_path: Path) -> None:
-    policy = _write_policy(tmp_path / "policy.json", [_acceptance()])
+@pytest.mark.parametrize("expires_on", ("2026-08-21", "2026-07-22"))
+def test_config_digest_preflight_accepts_the_exact_loaded_image(
+    tmp_path: Path, expires_on: str
+) -> None:
+    policy = _write_policy(tmp_path / "policy.json", [_acceptance(expires_on=expires_on)])
 
     assert (
         validate_config_digest_bindings(
@@ -206,7 +212,7 @@ def test_acceptance_can_bind_independent_ci_and_release_digests(
 def test_config_digest_preflight_rejects_expired_policy_before_push(tmp_path: Path) -> None:
     policy = _write_policy(
         tmp_path / "policy.json",
-        [_acceptance(expires_on="2026-07-21")],
+        [_acceptance(approved_on="2026-07-21", expires_on="2026-07-21")],
     )
 
     with pytest.raises(ValueError, match="expired"):
@@ -254,7 +260,16 @@ def test_full_validation_with_empty_acceptances_has_no_static_baseline(tmp_path:
         ),
         ({"image_config_digests": {"unknown": [DIGEST]}}, "unsupported"),
         ({"image_config_digests": {"break-glass": [DIGEST]}}, "unsupported"),
-        ({"expires_on": "2026-07-21"}, "expired"),
+        pytest.param(
+            {"approved_on": "2026-07-21", "expires_on": "2026-07-21"},
+            "expired",
+            id="same-day-acceptance-expired-the-next-day",
+        ),
+        pytest.param(
+            {"approved_on": "2026-07-22", "expires_on": "2026-07-21"},
+            "expired",
+            id="expiry-before-approval",
+        ),
         ({"expires_on": "2026-12-31"}, "within 90 days"),
         ({"status": "not_affected"}, "must not claim"),
         ({"evidence": "guess"}, "concrete evidence"),

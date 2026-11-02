@@ -529,6 +529,18 @@ botocoreにはXMLParserを使う応答解析経路があり、アプリ全体の
 
 本件はgettextの`LANGUAGE`経由で悪性`.mo`を読み込むDoS・任意コード実行の可能性がある。成立には環境変数の制御、非C系locale、悪性ファイル配置、環境変数の信頼境界越えが必要である。現imageのlocale環境変数指定やアプリ入力由来の変更経路は確認できなかったが、native依存を含む実プロセス全体の到達不能は証明していない。`noexec`を`.mo`読み込みの防御根拠にしない。[GNU公式CVE記録](https://github.com/CVEProject/cvelistV5/blob/main/cves/2026/84xxx/CVE-2026-84243.json)・[Debian tracker](https://security-tracker.debian.org/tracker/CVE-2026-84243)・[DHI recipe](https://github.com/docker-hardened-images/catalog/blob/main/package/deb/main/glibc/debian-13/2.yaml)に基づき正式修正版未提供・未修正として扱う。11月1日の照合では署名付きVEXに本件statementはなかったが、11月2日に取得した新しいVEXはDebianの`no-dsa`指定だけを理由に`not_affected`を記載していた。この記述だけでは非影響とせず、派生VEXへの採用を見送り、既存の実測digest・11月2日期限の受容を維持する。修正版公開、入力境界・版・digestの変化、期限到達で再評価し、他の検出と既存gateは維持する。
 
+2026年11月2日、[PR #673](https://github.com/pitekusu/shittim-chest/pull/673)で`no-dsa`だけのVEX抑制を除いた結果、新たに可視化された次のHigh 5件について、利用者が「追加5件を11月2日まで受容してマージ」と明示承認した。対象は既存と同一の本番設定digest `sha256:2ce109528b7ba8cf597f27c271cdf0084f9abe757b39c4e20e5a27ad86db941d`の1個、期限は2026年11月2日とし、既存3件・他のdigest・期限は変更しない。日付の検査は承認日と同日の期限を認め、既存のUTC日付判定で期限当日まで有効・翌日は拒否とする。最大90日の上限、承認日より前の期限の拒否、実測digest照合は維持する。
+
+| 検出 | 影響と今回の分類 | 一次根拠 |
+| --- | --- | --- |
+| `CVE-2026-5435`／`libc6` | 非推奨DNSレコード整形APIのTSIG出力でbuffer長を守らない範囲外書込み。現Debian 13／DHI版は未修正のため`affected` | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-5435) |
+| `CVE-2026-76642`／`libuuid1` | util-linuxのmount helper失敗後の特権hook実行。source package単位の検出波及を`under_investigation`で受容 | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-76642) |
+| `CVE-2026-78408`／`libuuid1` | nsenterのcgroup操作FDが権限変更後まで残る問題。同上 | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-78408) |
+| `CVE-2026-78409`／`libuuid1` | X-mount.subdirのpath解決が中間symlinkを制限しない問題。同上 | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-78409) |
+| `CVE-2026-78410`／`libuuid1` | SUID mountでfstabのbind元差替え競合を悪用できる問題。同上 | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-78410) |
+
+[同一イメージの検査成果物](https://github.com/pitekusu/shittim-chest/actions/runs/41401997805)でconfig・base subject・VEX原本hashと実file対応付けを照合した。glibcの該当整形APIをアプリが直接利用する実装は見つからないが、native依存を含む到達不能は証明していない。完成runtimeにmount／umount／nsenter／libmount／fstabはなく、util-linux由来はlibuuid1だけで、[上流のlibuuid build対象](https://github.com/util-linux/util-linux/blob/v2.41.5/libuuid/src/Makemodule.am)も該当機能を含まない。この技術根拠と、no-dsaだけの提供元記述は区別する。自前の非影響VEXへ置き換えず、未確定の検出として明示承認の期限付き受容に限定し、builderや別imageへ一般化しない。正式修正・提供元の具体的な技術判断・構成や入力境界の変化・期限到達で再評価し、自動追加や延長はしない。
+
 通常PR/`main`では本番イメージの基本検証を行い、訓練用イメージを本番リスク承認の対象へ含めない。
 
 ## 5. 本番配信
