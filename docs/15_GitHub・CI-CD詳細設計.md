@@ -541,6 +541,18 @@ botocoreにはXMLParserを使う応答解析経路があり、アプリ全体の
 
 [同一イメージの検査成果物](https://github.com/pitekusu/shittim-chest/actions/runs/41401997805)でconfig・base subject・VEX原本hashと実file対応付けを照合した。glibcの該当整形APIをアプリが直接利用する実装は見つからないが、native依存を含む到達不能は証明していない。完成runtimeにmount／umount／nsenter／libmount／fstabはなく、util-linux由来はlibuuid1だけで、[上流のlibuuid build対象](https://github.com/util-linux/util-linux/blob/v2.41.5/libuuid/src/Makemodule.am)も該当機能を含まない。この技術根拠と、no-dsaだけの提供元記述は区別する。自前の非影響VEXへ置き換えず、未確定の検出として明示承認の期限付き受容に限定し、builderや別imageへ一般化しない。正式修正・提供元の具体的な技術判断・構成や入力境界の変化・期限到達で再評価し、自動追加や延長はしない。
 
+同日、最新Grype DB（生成2026年11月2日06:26:52 UTC）で、同じ完成イメージの`libsqlite3-0 3.46.1-7+deb13u2+dhi1`に次のHigh 3件が追加検出された。利用者が「追加3件を11月2日まで受容してマージ」と明示承認したため、同じ本番設定digest `sha256:2ce109528b7ba8cf597f27c271cdf0084f9abe757b39c4e20e5a27ad86db941d`の1個、2026年11月2日期限、`status: affected`に限定して追加する。既存8件・他digest・期限は変更しない。
+
+| 検出 | 成立条件と影響 | 一次根拠 |
+| --- | --- | --- |
+| `CVE-2026-119373` | FTS5のdetail=none表に負rowidを入れprefix MATCHを実行するとheap範囲外書込み | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-119373) |
+| `CVE-2026-119374` | 壊れたFTS5索引のDBをsecure-delete有効で削除するとheap範囲外書込み | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-119374) |
+| `CVE-2026-119379` | session拡張へ細工changesetを適用するとheap範囲外書込み | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-119379) |
+
+Coreの永続化はS3／DynamoDBで、SQL・DBfile・changesetの入力／実行経路は見つからないが、imageにはlibsqlite3とCPythonの`_sqlite3`が存在し、全native経路の到達不能は証明していない。[SQLite 3.54.0](https://sqlite.org/releaselog/3_54_0.html)の上流修正と、[DHIの正式backport recipe](https://github.com/docker-hardened-images/catalog/blob/d290a7585dc8600a3f563ec4e873f4cc82de43d2/package/deb/main/sqlite3/debian-13/3.yaml)は公開済みである。最新3.14.10 runtimeのindex `sha256:7773fe0d15497d7dc20d59148261e81d968b0d8088b3074d8ff06b25a3e38b7b`は、署名・SPDX／VEX・独立取得結果で`+dhi2`の実収録と具体的な修正commitのbackportを確認した。3.14.10 builderと3.14.8両variantは`+dhi1`のままであり、builderや現完成imageまで修正済みとは扱わない。
+
+3.14.10の適用は共有`container-policy.json`の変更を伴い、必須CDK監査のbundled minimatch `CVE-2026-118764`が未解決のため保留する。修正済みイメージへ移行する際は旧Expat overlayの撤去と、完成ARM64イメージのSBOM・VEX・TLS・実測digest・残存リスクを再検証する。今回の受容を別digestへ自動で移さず、正式修正を適用できたら該当受容を削除する。
+
 通常PR/`main`では本番イメージの基本検証を行い、訓練用イメージを本番リスク承認の対象へ含めない。
 
 ## 5. 本番配信

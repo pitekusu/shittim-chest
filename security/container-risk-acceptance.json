@@ -149,6 +149,60 @@
       "expires_on": "2026-11-02",
       "reevaluation_conditions": "正式修正版または具体的な技術根拠を伴う提供元判断の公開、入力境界・component構成・パッケージ版・実測config digestの変化、新しい検出、期限到達で再評価する。対象・digest・期限を自動で追加・延長せず、修正可能な検出と他の未追跡High/Criticalの拒否を維持する。",
       "owner": "pitekusu"
+    },
+    {
+      "vulnerability_id": "CVE-2026-119373",
+      "package": "libsqlite3-0",
+      "image_config_digests": {
+        "production": [
+          "sha256:2ce109528b7ba8cf597f27c271cdf0084f9abe757b39c4e20e5a27ad86db941d"
+        ]
+      },
+      "status": "affected",
+      "justification": "2026年11月2日、PR #673の既存と同一イメージで最新Grype DBが追加検出したSQLite High 3件について、細工したSQL/DB/changesetによるheap範囲外書込み、入力境界と到達性の限界、修正済みDHIの配布及び適用を阻む必須CDK監査を説明した。利用者が「追加3件を11月2日まで受容してマージ」と明示承認したため、本件・当該実測config digestだけを2026年11月2日まで受容する。既存8件・他のdigest・期限は変更しない。",
+      "impact": "libsqlite3-0 3.46.1-7+deb13u2+dhi1に含まれる未修正コードの問題。FTS5のdetail=none表に負のrowidを追加してprefix MATCHを実行すると、doclistのmergeで出力bufferの確保が不足しheap範囲外書込み・process crashに至る。",
+      "exploitability": "Coreの永続化はS3/DynamoDBで、アプリ実装にSQLite接続・SQL実行・汎用DBfile/changeset入力の経路は見つからない。一方、完成imageにはlibsqlite3とCPython _sqlite3拡張が実在し、native依存を含む全経路の到達不能は証明していない。アプリ非影響・修正済みとは扱わない。",
+      "evidence": "https://github.com/CVEProject/cvelistV5/blob/main/cves/2026/119xxx/CVE-2026-119373.json ; https://security-tracker.debian.org/tracker/CVE-2026-119373 ; https://sqlite.org/releaselog/3_54_0.html ; https://github.com/docker-hardened-images/catalog/blob/d290a7585dc8600a3f563ec4e873f4cc82de43d2/package/deb/main/sqlite3/debian-13/3.yaml 。https://github.com/pitekusu/shittim-chest/actions/runs/41404834173 の同一runでZIP hash・実config digest・署名receiptと新derived VEXの再生成一致を照合し、Grype 0.121.0/DB生成2026-11-02T06:26:52Zで本件High/not-fixedを確認。最新DHI 3.14.10 runtimeの署名SPDX/VEXは+dhi2への正式backportを示すが、現3.14.8完成imageの+dhi1には未適用である。",
+      "approved_on": "2026-11-02",
+      "expires_on": "2026-11-02",
+      "reevaluation_conditions": "修正済みDHIイメージの適用可能性、Debian正式修正版または具体的な技術根拠を伴う提供元判断の公開、入力境界・compile設定・パッケージ版・実測config digestの変化、新しい検出、期限到達で再評価する。対象・digest・期限を自動で追加・延長せず、修正可能な検出と他の未追跡High/Criticalの拒否を維持する。",
+      "owner": "pitekusu"
+    },
+    {
+      "vulnerability_id": "CVE-2026-119374",
+      "package": "libsqlite3-0",
+      "image_config_digests": {
+        "production": [
+          "sha256:2ce109528b7ba8cf597f27c271cdf0084f9abe757b39c4e20e5a27ad86db941d"
+        ]
+      },
+      "status": "affected",
+      "justification": "2026年11月2日、PR #673の既存と同一イメージで最新Grype DBが追加検出したSQLite High 3件について、細工したSQL/DB/changesetによるheap範囲外書込み、入力境界と到達性の限界、修正済みDHIの配布及び適用を阻む必須CDK監査を説明した。利用者が「追加3件を11月2日まで受容してマージ」と明示承認したため、本件・当該実測config digestだけを2026年11月2日まで受容する。既存8件・他のdigest・期限は変更しない。",
+      "impact": "libsqlite3-0 3.46.1-7+deb13u2+dhi1に含まれる未修正コードの問題。壊れたFTS5索引を含むDBでsecure-deleteを有効にして削除すると、不正なfooter offsetによりleaf page buffer外へ書き込みheapを破壊・processをcrashさせる。",
+      "exploitability": "Coreの永続化はS3/DynamoDBで、アプリ実装にSQLite接続・SQL実行・汎用DBfile/changeset入力の経路は見つからない。一方、完成imageにはlibsqlite3とCPython _sqlite3拡張が実在し、native依存を含む全経路の到達不能は証明していない。アプリ非影響・修正済みとは扱わない。",
+      "evidence": "https://github.com/CVEProject/cvelistV5/blob/main/cves/2026/119xxx/CVE-2026-119374.json ; https://security-tracker.debian.org/tracker/CVE-2026-119374 ; https://sqlite.org/releaselog/3_54_0.html ; https://github.com/docker-hardened-images/catalog/blob/d290a7585dc8600a3f563ec4e873f4cc82de43d2/package/deb/main/sqlite3/debian-13/3.yaml 。https://github.com/pitekusu/shittim-chest/actions/runs/41404834173 の同一runでZIP hash・実config digest・署名receiptと新derived VEXの再生成一致を照合し、Grype 0.121.0/DB生成2026-11-02T06:26:52Zで本件High/not-fixedを確認。最新DHI 3.14.10 runtimeの署名SPDX/VEXは+dhi2への正式backportを示すが、現3.14.8完成imageの+dhi1には未適用である。",
+      "approved_on": "2026-11-02",
+      "expires_on": "2026-11-02",
+      "reevaluation_conditions": "修正済みDHIイメージの適用可能性、Debian正式修正版または具体的な技術根拠を伴う提供元判断の公開、入力境界・compile設定・パッケージ版・実測config digestの変化、新しい検出、期限到達で再評価する。対象・digest・期限を自動で追加・延長せず、修正可能な検出と他の未追跡High/Criticalの拒否を維持する。",
+      "owner": "pitekusu"
+    },
+    {
+      "vulnerability_id": "CVE-2026-119379",
+      "package": "libsqlite3-0",
+      "image_config_digests": {
+        "production": [
+          "sha256:2ce109528b7ba8cf597f27c271cdf0084f9abe757b39c4e20e5a27ad86db941d"
+        ]
+      },
+      "status": "affected",
+      "justification": "2026年11月2日、PR #673の既存と同一イメージで最新Grype DBが追加検出したSQLite High 3件について、細工したSQL/DB/changesetによるheap範囲外書込み、入力境界と到達性の限界、修正済みDHIの配布及び適用を阻む必須CDK監査を説明した。利用者が「追加3件を11月2日まで受容してマージ」と明示承認したため、本件・当該実測config digestだけを2026年11月2日まで受容する。既存8件・他のdigest・期限は変更しない。",
+      "impact": "libsqlite3-0 3.46.1-7+deb13u2+dhi1に含まれる未修正コードの問題。session拡張のsqlite3changeset_applyへ、同じtable名と増加したcolumn数を含む細工changesetを渡すと、確保済みaUpdateMaskを超えるmemsetでheapを破壊する。",
+      "exploitability": "Coreの永続化はS3/DynamoDBで、アプリ実装にSQLite接続・SQL実行・汎用DBfile/changeset入力の経路は見つからない。一方、完成imageにはlibsqlite3とCPython _sqlite3拡張が実在し、native依存を含む全経路の到達不能は証明していない。アプリ非影響・修正済みとは扱わない。",
+      "evidence": "https://github.com/CVEProject/cvelistV5/blob/main/cves/2026/119xxx/CVE-2026-119379.json ; https://security-tracker.debian.org/tracker/CVE-2026-119379 ; https://sqlite.org/releaselog/3_54_0.html ; https://github.com/docker-hardened-images/catalog/blob/d290a7585dc8600a3f563ec4e873f4cc82de43d2/package/deb/main/sqlite3/debian-13/3.yaml 。https://github.com/pitekusu/shittim-chest/actions/runs/41404834173 の同一runでZIP hash・実config digest・署名receiptと新derived VEXの再生成一致を照合し、Grype 0.121.0/DB生成2026-11-02T06:26:52Zで本件High/not-fixedを確認。最新DHI 3.14.10 runtimeの署名SPDX/VEXは+dhi2への正式backportを示すが、現3.14.8完成imageの+dhi1には未適用である。",
+      "approved_on": "2026-11-02",
+      "expires_on": "2026-11-02",
+      "reevaluation_conditions": "修正済みDHIイメージの適用可能性、Debian正式修正版または具体的な技術根拠を伴う提供元判断の公開、入力境界・compile設定・パッケージ版・実測config digestの変化、新しい検出、期限到達で再評価する。対象・digest・期限を自動で追加・延長せず、修正可能な検出と他の未追跡High/Criticalの拒否を維持する。",
+      "owner": "pitekusu"
     }
   ]
 }
