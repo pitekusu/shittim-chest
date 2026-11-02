@@ -344,6 +344,105 @@ def test_conflicting_vendor_status_does_not_select_not_affected(tmp_path: Path) 
     assert result["statements"] == []
 
 
+@pytest.mark.parametrize(
+    "cve", ["CVE-2025-69720", "CVE-2026-113351", "CVE-2026-115506", "CVE-2026-84243"]
+)
+@pytest.mark.parametrize("normalize_variant", [False, True])
+@pytest.mark.parametrize(
+    "justification",
+    ["vulnerable_code_cannot_be_controlled_by_adversary", "inline_mitigations_already_exist"],
+)
+def test_debian_no_dsa_only_remains_unsuppressed(
+    tmp_path: Path, cve: str, normalize_variant: bool, justification: str
+) -> None:
+    values = evidence()
+    statement = values[1]["predicate"]["statements"][0]
+    statement["vulnerability"]["name"] = cve
+    statement["justification"] = justification
+    notes = (
+        "Marked no-dsa by Debian Security Team; see "
+        f"https://security-tracker.debian.org/tracker/{cve}"
+    )
+    statement["status_notes"] = (
+        " \n" + notes.swapcase().replace(" ", " \t ") + "\n " if normalize_variant else notes
+    )
+    original_vex = json.dumps(values[1]).encode()
+
+    result, report = run(tmp_path, values)
+
+    assert result["statements"] == []
+    assert report["mappings"] == []
+    assert report["skipped"] == [
+        {
+            "package": "libncursesw6",
+            "vulnerability": cve,
+            "reason": "vendor_debian_no_dsa_only",
+        }
+    ]
+    assert (tmp_path / "1.json").read_bytes() == original_vex
+
+
+@pytest.mark.parametrize(
+    "notes",
+    [
+        "Mitigated by backporting upstream libexpat PR #1444 (commit 7b0d50e).",
+        "The no-dsa classification is not the mitigation; the upstream fix was backported.",
+        "Marked no-dsa by Debian Security Team; see "
+        "https://security-tracker.debian.org/tracker/CVE-2025-69720. "
+        "Mitigated by backporting the upstream fix into this binary.",
+    ],
+)
+def test_no_dsa_text_does_not_exclude_other_vendor_evidence(tmp_path: Path, notes: str) -> None:
+    values = evidence()
+    statement = values[1]["predicate"]["statements"][0]
+    statement["justification"] = "inline_mitigations_already_exist"
+    statement["status_notes"] = notes
+
+    result, report = run(tmp_path, values)
+
+    assert len(result["statements"]) == 1
+    assert result["statements"][0]["status_notes"] == notes
+    assert result["statements"][0]["justification"] == "inline_mitigations_already_exist"
+    assert report["skipped"] == []
+
+
+def test_debian_no_dsa_note_for_different_cve_is_rejected(tmp_path: Path) -> None:
+    values = evidence()
+    statement = values[1]["predicate"]["statements"][0]
+    statement["justification"] = "inline_mitigations_already_exist"
+    statement["status_notes"] = (
+        "Marked no-dsa by Debian Security Team; see "
+        "https://security-tracker.debian.org/tracker/CVE-2025-69721"
+    )
+
+    with pytest.raises(DerivationError, match="different vulnerability"):
+        run(tmp_path, values)
+
+
+def test_no_dsa_statement_does_not_hide_independent_technical_statement(tmp_path: Path) -> None:
+    values = evidence()
+    statements = values[1]["predicate"]["statements"]
+    administrative = statements[0]
+    administrative["justification"] = "vulnerable_code_cannot_be_controlled_by_adversary"
+    administrative["status_notes"] = (
+        "Marked no-dsa by Debian Security Team; see "
+        "https://security-tracker.debian.org/tracker/CVE-2025-69720"
+    )
+    technical = copy.deepcopy(administrative)
+    technical["@id"] = "independent-technical-statement"
+    technical["justification"] = "inline_mitigations_already_exist"
+    technical["status_notes"] = "Mitigated by backporting the upstream fix into this binary."
+    statements.append(technical)
+
+    result, report = run(tmp_path, values)
+
+    assert len(result["statements"]) == 1
+    assert result["statements"][0]["status_notes"] == technical["status_notes"]
+    assert len(report["mappings"]) == 1
+    assert report["mappings"][0]["vendor_statement_id"] == technical["@id"]
+    assert report["skipped"][0]["reason"] == "vendor_debian_no_dsa_only"
+
+
 def test_file_tamper_fails_even_with_same_package_version_and_verification_code(
     tmp_path: Path,
 ) -> None:

@@ -74,11 +74,14 @@ minversion = "9.1"
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = [
+    # Tests use pytest-asyncio; do not autoload the unused AnyIO test plugin.
+    "-p", "no:anyio",
     "--strict-config",
     "--strict-markers",
     "--import-mode=importlib",
 ]
 asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
 xfail_strict = true
 filterwarnings = ["error"]
 

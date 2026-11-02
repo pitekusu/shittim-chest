@@ -239,7 +239,7 @@ def _validated_acceptance(
         raise ValueError(f"{label} approval date is in the future")
     if expires < today:
         raise ValueError(f"{label} is expired")
-    if expires <= approved or (expires - approved).days > 90:
+    if expires < approved or (expires - approved).days > 90:
         raise ValueError(f"{label} must expire within 90 days after approval")
     return FindingKey(vulnerability_id, package), config_digests
 

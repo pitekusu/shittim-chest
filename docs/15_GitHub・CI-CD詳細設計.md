@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-10-22
+updated: 2026-11-02
 ---
 
 # GitHub・CI-CD詳細設計
@@ -88,6 +88,8 @@ GitHub-hosted runnerはUbuntu 26.04に固定する。x64は`ubuntu-26.04`、
 | container-arm64 | 本番イメージ、実行方針、SBOM、設定ダイジェスト |
 | grype | 生スキャン、VEX適用、修正可能/残存リスクの判定 |
 | docs-public-safety | 文書構造、参照、公開情報、ライセンス境界 |
+
+Coreの非同期試験は`pytest-asyncio`を使い、既存のfunction単位のfixtureに合わせて`asyncio_default_fixture_loop_scope = "function"`を明示する。未使用のAnyIO pytest pluginだけをpytest標準の`-p no:anyio`で自動登録対象から外し、runtimeのAnyIOを試験pluginの互換対応だけで更新しない。pytest 9.2で同pluginの旧`CallSpec2`参照が非推奨警告となっても、Coreの`warnings=error`、strict config／marker、pytest-asyncio・Hypothesis・coverageと既存試験は維持する。AnyIO固有のfixtureやbackendを試験へ導入する場合は、この除外と採用版のplugin互換性を再評価する。
 
 ### Records検証
 
@@ -471,7 +473,7 @@ PRの必須条件として固定された旧基準値や別実行との完全な
 
 Docker Scoutは[1.28.0](https://github.com/docker/scout-cli/releases/tag/v1.28.0)へ更新し、Brotli／HTTP2のsecurity修正とDistroless Debian検出修正を取り込む。1.27.0で取り込んだGo 1.26.10の[crypto/x509対策（GO-2026-6809）](https://pkg.go.dev/vuln/GO-2026-6809)も維持し、今回の中間CAを含むチェーンを拒否する。CIとCore Releaseが共用する`.github/tool-versions.json`で、版・ARM64配布物名・SHA-256を揃えて固定する。既存のprocess限定CAfile／空のCApathによるroot除外を維持し、上流検証器の中間鍵拒否と併用する。他のTLSクライアントの対策状況は引き続き個別に確認する。[Scoutの出力問題 #247](https://github.com/docker/scout-cli/issues/247)と提供元のsource／binary関連メタデータは別件として追跡し、原本保持・署名照合・厳密なVEX対応付けと既存risk gateも維持する。
 
-`tools/derive_dhi_vex.py`は独自の脆弱性判断を追加せず、元の`not_affected`と根拠を完全なバイナリPURLへ対応付ける。提供元OpenVEXの`products[].@id`はIRIとして扱い、HTTPSのイメージIDはソース・バイナリ対応付けの対象にせず、Debian PURLだけを従来の厳密照合対象とし、壊れた`pkg:` PURLは拒否する。署名付きSPDXのソース・バイナリの全版番号とファイル集合の関連、実dpkgのSource／版、完成SPDX、標準Syftの実ファイルSHA-256を照合する。同名の別版・別identity、変更されたファイル、欠けたSource情報、矛盾する判定には適用しない。署名付きSPDXにないリンク先は、固定ARM64ベースと完成イメージを標準Syftの`SYFT_FILE_METADATA_SELECTION=all`で取得して比較する。base manifestとconfigのhash、完成config digestも結合する。提供元原本・両Syft inventory・完成SPDX・対応付けreportを保存し、これらの入力hashを派生VEXへ結合する。Releaseは署名付きrelease manifestで派生VEXのhashを固定し、deploy前に同じ原本・実体情報から再計算してVEXとreportのbyte一致を要求する。既存の修正可能High／Critical拒否と残存リスク検査は維持し、期限付き受容は後段の承認記録へ限定する。提供元の関連メタデータ修正と、こちらで証明できた対応付けは別に追跡する。
+`tools/derive_dhi_vex.py`は独自の脆弱性判断を追加せず、元の`not_affected`と根拠を完全なバイナリPURLへ対応付ける。提供元OpenVEXの`products[].@id`はIRIとして扱い、HTTPSのイメージIDはソース・バイナリ対応付けの対象にせず、Debian PURLだけを従来の厳密照合対象とし、壊れた`pkg:` PURLは拒否する。署名付きSPDXのソース・バイナリの全版番号とファイル集合の関連、実dpkgのSource／版、完成SPDX、標準Syftの実ファイルSHA-256を照合する。同名の別版・別identity、変更されたファイル、欠けたSource情報、矛盾する判定には適用しない。署名付きSPDXにないリンク先は、固定ARM64ベースと完成イメージを標準Syftの`SYFT_FILE_METADATA_SELECTION=all`で取得して比較する。base manifestとconfigのhash、完成config digestも結合する。提供元原本・両Syft inventory・完成SPDX・対応付けreportを保存し、これらの入力hashを派生VEXへ結合する。Releaseは署名付きrelease manifestで派生VEXのhashを固定し、deploy前に同じ原本・実体情報から再計算してVEXとreportのbyte一致を要求する。既存の修正可能High／Critical拒否と残存リスク検査は維持し、期限付き受容は後段の承認記録へ限定する。提供元の関連メタデータ修正と、こちらで証明できた対応付けは別に追跡する。2026年11月2日、提供元の`status_notes`がDebian Security Teamの`no-dsa`指定と当該CVEのtracker URLだけを根拠にする場合は、署名とファイル対応付けが正しくても`not_affected`を派生しないよう修正した。行政上の優先度判断を修正・到達不能の証明とせず、生の検出と既存の期限付き受容を維持する。CVEの参照が矛盾する記述は拒否し、具体的な技術的説明を含む他の提供元判定は従来の厳密照合で扱う。
 2026年10月28日、Webのpackage managerをpnpm 12.16.1へ更新する。既存lockfile形式を維持し、frozen install、registry署名、Webのcheck／test／production buildを確認する。環境ファイル読込などの新APIは必要な工程ができるまで追加しない。Core／Records両lockのmsgpackは1.2.4へ更新し、1.2.1に対するCVE-2026-114613の監査失敗を解消する。監査や既存risk gateを弱めず、他の依存は固定する。
 
 基盤更新を含む配信では、Recordsの変更に加えてCore Releaseで本番イメージも更新する。
@@ -525,7 +527,31 @@ botocoreにはXMLParserを使う応答解析経路があり、アプリ全体の
 
 2026年11月1日、[PR #663](https://github.com/pitekusu/shittim-chest/pull/663)の既存と同一イメージで新たに検出された`libc6 2.41-12+deb13u4+dhi1`のHigh `CVE-2026-84243`について、利用者が「11月2日まで受容してマージ」と明示承認した。対象は本番設定digest `sha256:2ce109528b7ba8cf597f27c271cdf0084f9abe757b39c4e20e5a27ad86db941d`の1個、期限は2026年11月2日、分類は`status: affected`とし、他のdigestへ追加しない。[CI実行41316755276](https://github.com/pitekusu/shittim-chest/actions/runs/41316755276)のARM64 SBOM・raw／VEXレポートで、本件と既承認Expat 2件だけの未修正High、修正可能High／Critical 0件、TLS 60/60成功を照合した。
 
-本件はgettextの`LANGUAGE`経由で悪性`.mo`を読み込むDoS・任意コード実行の可能性がある。成立には環境変数の制御、非C系locale、悪性ファイル配置、環境変数の信頼境界越えが必要である。現imageのlocale環境変数指定やアプリ入力由来の変更経路は確認できなかったが、native依存を含む実プロセス全体の到達不能は証明していない。`noexec`を`.mo`読み込みの防御根拠にしない。[GNU公式CVE記録](https://github.com/CVEProject/cvelistV5/blob/main/cves/2026/84xxx/CVE-2026-84243.json)・[Debian tracker](https://security-tracker.debian.org/tracker/CVE-2026-84243)・[DHI recipe](https://github.com/docker-hardened-images/catalog/blob/main/package/deb/main/glibc/debian-13/2.yaml)に基づき正式修正版未提供・未修正として扱い、署名付きVEXにも本件statementはない。修正版公開、入力境界・版・digestの変化、期限到達で再評価し、他の検出と既存gateは維持する。
+本件はgettextの`LANGUAGE`経由で悪性`.mo`を読み込むDoS・任意コード実行の可能性がある。成立には環境変数の制御、非C系locale、悪性ファイル配置、環境変数の信頼境界越えが必要である。現imageのlocale環境変数指定やアプリ入力由来の変更経路は確認できなかったが、native依存を含む実プロセス全体の到達不能は証明していない。`noexec`を`.mo`読み込みの防御根拠にしない。[GNU公式CVE記録](https://github.com/CVEProject/cvelistV5/blob/main/cves/2026/84xxx/CVE-2026-84243.json)・[Debian tracker](https://security-tracker.debian.org/tracker/CVE-2026-84243)・[DHI recipe](https://github.com/docker-hardened-images/catalog/blob/main/package/deb/main/glibc/debian-13/2.yaml)に基づき正式修正版未提供・未修正として扱う。11月1日の照合では署名付きVEXに本件statementはなかったが、11月2日に取得した新しいVEXはDebianの`no-dsa`指定だけを理由に`not_affected`を記載していた。この記述だけでは非影響とせず、派生VEXへの採用を見送り、既存の実測digest・11月2日期限の受容を維持する。修正版公開、入力境界・版・digestの変化、期限到達で再評価し、他の検出と既存gateは維持する。
+
+2026年11月2日、[PR #673](https://github.com/pitekusu/shittim-chest/pull/673)で`no-dsa`だけのVEX抑制を除いた結果、新たに可視化された次のHigh 5件について、利用者が「追加5件を11月2日まで受容してマージ」と明示承認した。対象は既存と同一の本番設定digest `sha256:2ce109528b7ba8cf597f27c271cdf0084f9abe757b39c4e20e5a27ad86db941d`の1個、期限は2026年11月2日とし、既存3件・他のdigest・期限は変更しない。日付の検査は承認日と同日の期限を認め、既存のUTC日付判定で期限当日まで有効・翌日は拒否とする。最大90日の上限、承認日より前の期限の拒否、実測digest照合は維持する。
+
+| 検出 | 影響と今回の分類 | 一次根拠 |
+| --- | --- | --- |
+| `CVE-2026-5435`／`libc6` | 非推奨DNSレコード整形APIのTSIG出力でbuffer長を守らない範囲外書込み。現Debian 13／DHI版は未修正のため`affected` | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-5435) |
+| `CVE-2026-76642`／`libuuid1` | util-linuxのmount helper失敗後の特権hook実行。source package単位の検出波及を`under_investigation`で受容 | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-76642) |
+| `CVE-2026-78408`／`libuuid1` | nsenterのcgroup操作FDが権限変更後まで残る問題。同上 | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-78408) |
+| `CVE-2026-78409`／`libuuid1` | X-mount.subdirのpath解決が中間symlinkを制限しない問題。同上 | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-78409) |
+| `CVE-2026-78410`／`libuuid1` | SUID mountでfstabのbind元差替え競合を悪用できる問題。同上 | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-78410) |
+
+[同一イメージの検査成果物](https://github.com/pitekusu/shittim-chest/actions/runs/41401997805)でconfig・base subject・VEX原本hashと実file対応付けを照合した。glibcの該当整形APIをアプリが直接利用する実装は見つからないが、native依存を含む到達不能は証明していない。完成runtimeにmount／umount／nsenter／libmount／fstabはなく、util-linux由来はlibuuid1だけで、[上流のlibuuid build対象](https://github.com/util-linux/util-linux/blob/v2.41.5/libuuid/src/Makemodule.am)も該当機能を含まない。この技術根拠と、no-dsaだけの提供元記述は区別する。自前の非影響VEXへ置き換えず、未確定の検出として明示承認の期限付き受容に限定し、builderや別imageへ一般化しない。正式修正・提供元の具体的な技術判断・構成や入力境界の変化・期限到達で再評価し、自動追加や延長はしない。
+
+同日、最新Grype DB（生成2026年11月2日06:26:52 UTC）で、同じ完成イメージの`libsqlite3-0 3.46.1-7+deb13u2+dhi1`に次のHigh 3件が追加検出された。利用者が「追加3件を11月2日まで受容してマージ」と明示承認したため、同じ本番設定digest `sha256:2ce109528b7ba8cf597f27c271cdf0084f9abe757b39c4e20e5a27ad86db941d`の1個、2026年11月2日期限、`status: affected`に限定して追加する。既存8件・他digest・期限は変更しない。
+
+| 検出 | 成立条件と影響 | 一次根拠 |
+| --- | --- | --- |
+| `CVE-2026-119373` | FTS5のdetail=none表に負rowidを入れprefix MATCHを実行するとheap範囲外書込み | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-119373) |
+| `CVE-2026-119374` | 壊れたFTS5索引のDBをsecure-delete有効で削除するとheap範囲外書込み | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-119374) |
+| `CVE-2026-119379` | session拡張へ細工changesetを適用するとheap範囲外書込み | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-119379) |
+
+Coreの永続化はS3／DynamoDBで、SQL・DBfile・changesetの入力／実行経路は見つからないが、imageにはlibsqlite3とCPythonの`_sqlite3`が存在し、全native経路の到達不能は証明していない。[SQLite 3.54.0](https://sqlite.org/releaselog/3_54_0.html)の上流修正と、[DHIの正式backport recipe](https://github.com/docker-hardened-images/catalog/blob/d290a7585dc8600a3f563ec4e873f4cc82de43d2/package/deb/main/sqlite3/debian-13/3.yaml)は公開済みである。最新3.14.10 runtimeのindex `sha256:7773fe0d15497d7dc20d59148261e81d968b0d8088b3074d8ff06b25a3e38b7b`は、署名・SPDX／VEX・独立取得結果で`+dhi2`の実収録と具体的な修正commitのbackportを確認した。3.14.10 builderと3.14.8両variantは`+dhi1`のままであり、builderや現完成imageまで修正済みとは扱わない。
+
+3.14.10の適用は共有`container-policy.json`の変更を伴い、必須CDK監査のbundled minimatch `CVE-2026-118764`が未解決のため保留する。修正済みイメージへ移行する際は旧Expat overlayの撤去と、完成ARM64イメージのSBOM・VEX・TLS・実測digest・残存リスクを再検証する。今回の受容を別digestへ自動で移さず、正式修正を適用できたら該当受容を削除する。
 
 通常PR/`main`では本番イメージの基本検証を行い、訓練用イメージを本番リスク承認の対象へ含めない。
 
