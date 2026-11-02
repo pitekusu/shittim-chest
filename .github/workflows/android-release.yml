@@ -73,7 +73,7 @@ jobs:
       - name: Select the fixed private runner state directory
         run: printf 'STATE=%s/android-release\n' "${RUNNER_TEMP}" >> "${GITHUB_ENV}"
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: ${{ env.UV_VERSION }}
           download-from-astral-mirror: false
@@ -102,7 +102,7 @@ jobs:
           python3 -m tools.configure_build_tls --java
           --output "${RUNNER_TEMP}/shittim-tls" --github-env "${GITHUB_ENV}"
       - name: Validate the Wrapper without restoring build caches
-        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
           cache-disabled: true
       - name: Install the compile SDK and build tools
