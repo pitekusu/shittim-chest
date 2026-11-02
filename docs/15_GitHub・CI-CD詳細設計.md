@@ -538,7 +538,7 @@ ARM64の実SBOMでbackport済み`libexpat1 2.8.3-1~deb13u1+dhi5`を照合し、�
 `fault-test`イメージと強制停止・復旧訓練は手動のRuntime検証に限定する。
 2026年10月17日、`CVE-2026-76957`のGrype検出に対応し、Python 3.14.8／Debian 13の系列を維持してDHI builder／runtimeの固定digestを更新する。DHI builderにはDebian修正版があるが、同系列runtimeの`libexpat1`は固有の旧版番号のままで、当該CVEの署名済みVEX判定もない。そのため、runtimeへDebianの修正版`2.9.0-1~deb13u1`を導入する。
 
-当時はbuilderの標準APTで認証した固定版パッケージを取得し、ビルド時だけ標準dpkgをbind mountして導入していた。2026-11-02、正式修正を収録したDHI Python 3.14.10／Debian 13へ移行し、Expatの一時導入と専用スクリプトを撤去する。providerのパッケージ実体と台帳を保持し、CA directoryのoverlayは別の責務として維持する。最終イメージは非root・shell／APT／dpkgなしを維持する。
+当時はbuilderの標準APTで認証した固定版パッケージを取得し、ビルド時だけ標準dpkgをbind mountして導入していた。2026-11-02、旧CVE-2026-76957の正式修正も収録したDHI Python 3.14.10／Debian 13へ移行し、Expatの一時導入と専用スクリプトを撤去する。providerのパッケージ実体と台帳を保持し、CA directoryのoverlayは別の責務として維持する。最終イメージは非root・shell／APT／dpkgなしを維持する。
 
 Coreのコンテナゲートで、実際にロードするsystem側の通常・wide双方のExpatが2.9.0以上であることを検証する。CPython内蔵の別コピーも2.8.4以上を要求し、正常XMLの解析と不正XMLの拒否を確認する。完成ARM64イメージのSBOM・署名済みVEX・Grypeによる判定を継続する。2026年10月17日には利用者承認により、Grype DB反映待ちの`CVE-2026-76957`／`libexpat1`を、確認済み設定digest 1個・2026年10月24日期限で例外登録した。2026年10月18日、[ARM64 CIの実測結果](https://github.com/pitekusu/shittim-chest/actions/runs/39049529578)で、正式修正版`2.9.0-1~deb13u1`とGrype DB（2026年10月17日生成）による当該CVEの未検出を確認したため、削除条件に従い例外を撤去した。VEX適用後のHigh／Criticalも0件であり、例外なしの判定を維持する。DHI runtimeへ修正版が取り込まれたら、この一時的なパッケージ導入を撤去する。
 
@@ -590,6 +590,34 @@ botocoreにはXMLParserを使う応答解析経路があり、アプリ全体の
 Coreの永続化はS3／DynamoDBで、SQL・DBfile・changesetの入力／実行経路は見つからないが、imageにはlibsqlite3とCPythonの`_sqlite3`が存在し、全native経路の到達不能は証明していない。[SQLite 3.54.0](https://sqlite.org/releaselog/3_54_0.html)の上流修正と、[DHIの正式backport recipe](https://github.com/docker-hardened-images/catalog/blob/d290a7585dc8600a3f563ec4e873f4cc82de43d2/package/deb/main/sqlite3/debian-13/3.yaml)は公開済みである。最新3.14.10 runtimeのindex `sha256:7773fe0d15497d7dc20d59148261e81d968b0d8088b3074d8ff06b25a3e38b7b`は、署名・SPDX／VEX・独立取得結果で`+dhi2`の実収録と具体的な修正commitのbackportを確認した。当初は3.14.10 builderも`+dhi1`だったが、同日の再確認でbuilderの新index `sha256:e1c528dee57ce33c3192099679a1690a1541030f5137df3587d3ed0454a172b6`にも`+dhi2`の配布と署名を確認した。runtimeとbuilderをこの修正済みdigestへ固定し、完成imageは別途検証する。
 
 3.14.10の適用に必要な共有`container-policy.json`も更新する。CDKの未修正minimatchは上記の明示受容で扱い、監査を省略しない。旧Expat overlayを撤去し、完成ARM64イメージのSBOM・VEX・TLS・実測digest・残存リスクを再検証する。既存の受容を別digestへ自動で移さず、正式修正を適用できた対象は該当受容を削除する。
+
+### DHI 3.14.10の完成イメージと同期限の受容
+
+2026-11-02、[同一実行の成果物](https://github.com/pitekusu/shittim-chest/actions/runs/41419104147)で
+完成production config `sha256:fd3cee04ef9ea4a38e18af57150bfe07e47bd9ce38c0c2a9aabd04f24552bdd2`、
+ARM64／Python 3.14.10、TLS60件、署名検証結果と全原本hash／subject、SBOMの実ファイル、VEX再生成を独立照合した。
+SQLite `+dhi2`の3件は具体的backport根拠のVEXと実fileの一致を確認し、旧受容を削除した。
+system Expat `+dhi1`はCVE-2026-117610／118370のbackportを保持するが、
+旧受容の113351／115506やPython静的内蔵copyまで解消したとは扱わない。
+
+既承認の8組（Expat2・glibc2・libuuid4）は残存する。libuuid4の成立に必要なmount／umount／nsenter／libmount／fstabが
+新完成inventoryにも存在しないことを再確認し、旧imageの判断を自動転用しない。
+さらにncursesの[CVE-2025-69720](https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves/2025/69xxx/CVE-2025-69720.json)が
+ncurses-base／ncurses-bin／libncursesw6／libtinfo6の4組で残る。
+
+ncursesは細工したterminfoを`infocmp -i`で処理した場合のスタックメモリ破壊であり、該当実行fileは新imageに存在する。
+Coreからの直接呼出しやterminfo入力経路は見つからないが、全native依存での到達不能は証明していない。
+[現dhi5のrecipe](https://github.com/docker-hardened-images/catalog/blob/c320263cabcb842e07a3412167e3142f301b82fb/package/deb/main/ncurses/debian-13/6.yaml)は
+公式修正と一致するpatchを適用し、infocmp／tic／tputと共有library2件の実hashは旧検証imageと全て一致する。
+一方、現署名VEXはno-dsaだけで、署名SLSA／sourceと公開recipe commit／patchへの完全な結合は未確認である。
+未修正への回帰とも技術的な非影響とも断定せず、提供元VEXとの整合を調査中として扱う。
+
+利用者は上記12組について、当該新configだけを既存と同じ2026-11-03 00:00 UTC（日本時間09:00）まで受容し、
+マージ・本番・Play配布へ進むことを明示承認した。container policyの`expires_on`は当日を含むため`2026-11-02`を維持する。
+旧8組へこのdigestだけを追加し、ncurses4組は`under_investigation`で同じdigest・期限へ限定する。
+Critical・修正可能High／Critical・source検出は0件。raw High23組からvendor VEX11組を除いた残12組と受容12組の完全一致を要求し、
+他digest・翌UTC日・未知検出は拒否する。最終コミットとmainでも同じ完成imageと検査結果を再確認する。
+
 
 通常PR/`main`では本番イメージの基本検証を行い、訓練用イメージを本番リスク承認の対象へ含めない。
 
