@@ -3,7 +3,7 @@
     "id": "GHSA-g3hv-75wg-m249",
     "package": "minimatch",
     "severity": "moderate",
-    "reason": "2026-11-02に所有者が明示受容。CVE-2026-118764は攻撃者のglobをoptimizationLevel 2以上で処理した場合のDoS。確認したaws-cdk-lib 2.274.0/2.275.0の同梱minimatch 10.2.6の3呼出は既定1を使い、Web/Discord入力からの経路も見つからない。ただし未修正依存はCIに残り、将来の設定・入力経路変更時のリスクは残る。例外はこのID/package/severity単位でありCDKのpathだけに限定されない。公式CDKが修正版minimatch 11.0.1以降を同梱したら削除し、他の検出は拒否する。2026-11-03 00:00 UTC（09:00 JST）に失効し自動延長しない。",
-    "expires": "2026-11-03"
+    "reason": "2026-11-05に所有者が「11月6日09:00 JSTまで13組を受容してマージ」と明示承認したうちのModerate 1件。CVE-2026-118764／GHSA-g3hv-75wg-m249は攻撃者のglobをoptimizationLevel 2以上で処理した場合のCPU・メモリ枯渇。最新aws-cdk-lib2.275.0公式tarballのintegrityと同梱minimatch10.2.6を再確認。3呼出は既定1を使い、Web/Discord入力経路は見つからないが、未修正依存と将来の設定変更リスクは残る。標準npmのnested override11.0.4を指定してinstall/ciが成功してもbundled実体は10.2.6のままで、公式修正を確認できていない。例外はこのID/minimatch/Moderateのpackage単位で、CDKのpathだけには限定されない。2026-11-06 00:00 UTC（09:00 JST）に失効し自動延長しない。正式修正CDKを確認して更新したら削除し、他の検出は拒否する。",
+    "expires": "2026-11-06"
   }
 ]

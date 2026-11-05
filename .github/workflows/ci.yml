@@ -25,7 +25,7 @@ env:
   SSL_CERT_DIR: /etc/ssl/certs
   DOCKER_BUILD_RECORD_RETENTION_DAYS: "30"
   PYTHON_VERSION: "3.14.10"
-  UV_VERSION: "0.13.6"
+  UV_VERSION: "0.13.7"
 
 jobs:
   changes:
@@ -530,7 +530,7 @@ jobs:
         if: ${{ steps.scope.outputs.required == 'true' }}
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.22.1"
+          node-version: "24.22.2"
           cache: npm
       - name: Install locked CDK dependencies
         if: ${{ steps.scope.outputs.required == 'true' }}
@@ -850,7 +850,7 @@ jobs:
         id: buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
-          version: v0.38.1
+          version: v0.38.2
           driver-opts: |
             image=${{ steps.buildkit-image.outputs.image }}
             env.SSL_CERT_FILE=/etc/buildkit/certs/docker.io/ca.pem

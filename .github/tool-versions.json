@@ -16,17 +16,17 @@
       "version": "1.7.12"
     },
     "betterleaks": {
-      "archive_name": "betterleaks_1.9.0_linux_x64.tar.gz",
-      "archive_sha256": "f8b185a39ffcece2a1ca82bf3a4e7435cd81963ffd16b7a9128daf75f35f6de7",
-      "certificate_identity": "https://github.com/betterleaks/betterleaks/.github/workflows/release.yml@refs/tags/v1.9.0",
+      "archive_name": "betterleaks_1.10.0_linux_x64.tar.gz",
+      "archive_sha256": "9d9ad503cd5d80d18a939352266c3fcca52f10da9b83cd5cfe646989b13940fe",
+      "certificate_identity": "https://github.com/betterleaks/betterleaks/.github/workflows/release.yml@refs/tags/v1.10.0",
       "certificate_oidc_issuer": "https://token.actions.githubusercontent.com",
       "checksums_name": "checksums.txt",
-      "checksums_sha256": "c9bfd6c018c9aa6df5ac18a5c4a8273e88c3aaa4293566d33d72bdf58308206e",
+      "checksums_sha256": "d465c5752b3907183f4143f88fa725077ae23445447e799a812dcd6830828107",
       "repository": "betterleaks/betterleaks",
       "signature_bundle_name": "checksums.txt.sigstore.json",
-      "signature_bundle_sha256": "02f50580f7c5ebf155010736d3a04cceb8a12ea9ee3e2be8f5206479c964dc5e",
+      "signature_bundle_sha256": "c5f51e6e1d4f8280e4f1c541954b9c9f081c6fa04de1262b991b5ea0c7e074ea",
       "tag_prefix": "v",
-      "version": "1.9.0"
+      "version": "1.10.0"
     },
     "cosign-dhi": {
       "archive_name": "cosign-linux-arm64",
@@ -43,32 +43,32 @@
       "version": "0.11.7"
     },
     "docker-scout": {
-      "archive_name": "docker-scout_1.28.0_linux_arm64.tar.gz",
-      "archive_sha256": "aeddeca10e51be71430f49edf8b313915f4d4ab092297a6e42ddbe188dfb6caa",
+      "archive_name": "docker-scout_1.29.0_linux_arm64.tar.gz",
+      "archive_sha256": "bcb16a65b7266413fea05e9dc352159485609e62a6cbd049207118b0aa7d8611",
       "repository": "docker/scout-cli",
       "tag_prefix": "v",
-      "version": "1.28.0"
+      "version": "1.29.0"
     },
     "syft": {
-      "archive_name": "syft_1.55.0_linux_arm64.tar.gz",
-      "archive_sha256": "929bd163db2d7cd2255d3bcb8967208079813d7b46b0c952f7b794d8e2c7d304",
+      "archive_name": "syft_1.56.0_linux_arm64.tar.gz",
+      "archive_sha256": "ace61b9397ae28189c674ae332d67a8074dafd71e87724dfb8b22412d8253bb5",
       "repository": "anchore/syft",
       "tag_prefix": "v",
-      "version": "1.55.0"
+      "version": "1.56.0"
     },
     "grype": {
-      "archive_name": "grype_0.121.0_linux_amd64.tar.gz",
-      "archive_sha256": "64e07133d3486115de647a66581461dccf5c732748a0a3119077395565f15519",
+      "archive_name": "grype_0.121.1_linux_amd64.tar.gz",
+      "archive_sha256": "bc3ea3f9e6fd56ac781c08c6c5e614271b79f438200757f6932085c19b0a4657",
       "repository": "anchore/grype",
       "tag_prefix": "v",
-      "version": "0.121.0"
+      "version": "0.121.1"
     },
     "grype-arm64": {
-      "archive_name": "grype_0.121.0_linux_arm64.tar.gz",
-      "archive_sha256": "86f570f75ca947ea3dd6486309232bcff6d78e44ba081ae75ab14eab72be3dae",
+      "archive_name": "grype_0.121.1_linux_arm64.tar.gz",
+      "archive_sha256": "33670612aad351c48cf3c37f4a85d8b043d1b64b21e6034e675bb00b956d78c1",
       "repository": "anchore/grype",
       "tag_prefix": "v",
-      "version": "0.121.0"
+      "version": "0.121.1"
     }
   },
   "sources": {
@@ -126,7 +126,7 @@
     "web-vitest": {
       "repository": "vitest-dev/vitest",
       "tag_prefix": "v",
-      "release_prefix": "v5.0.",
+      "release_prefix": "v5.1.",
       "files": {
         "apps/records-web/package.json": "\"vitest\": \"([0-9.]+)",
         "apps/records-web/pnpm-workspace.yaml": "vitest: \"([0-9.]+)"

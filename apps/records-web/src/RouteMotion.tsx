@@ -46,10 +46,7 @@ function RouteScene({
     if (!scene) return;
     const preference = window.matchMedia("(prefers-reduced-motion: reduce)");
     let observer: MutationObserver | null = null;
-    let detached = false;
     const detach = () => {
-      if (detached) return;
-      detached = true;
       observer?.disconnect();
       scene.removeEventListener("animationend", handleRouteAnimation);
       scene.removeEventListener("animationcancel", handleRouteAnimation);
