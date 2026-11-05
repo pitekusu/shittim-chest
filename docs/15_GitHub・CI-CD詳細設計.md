@@ -122,6 +122,19 @@ install -d -m 700 "$PROFILE_DIR"
 3.14アプリの固定fixtureには同じ3.14の標準`cProfile`を使い、raw結果の読出しも取得時と同じminorの`pstats`を使う。
 2026-11-02に公開面検査とdomainの固定fixtureで両方の標準CLIを実行し、取得と読出しの成功を確認した。
 
+CPU処理と待機を切り分ける場合は、同じ固定入力を`--mode wall`と`--mode cpu`で別々に実行する。
+`wall`はI/O・lock・sleepの待機も含め、`cpu`はCPU上で実行しているsampleだけを残す。
+C拡張の呼出元への帰属を分けたい場合は`--native`で`<native>` frameを表示する。
+上記コマンドへ例えば`--mode cpu --native`を加え、出力名も`public-surface-cpu.pstats`へ分ける。
+同じ入力・条件で比較し、短時間処理や数%の差だけで最適化の効果を断定しない。
+
+2026-11-05、独立したPython 3.15.0と標準CLIで、既存`tools.build_records_bundle`を
+64MiBの合成入力から実行し、出力ZIPのhash一致を確認した。
+同じ生成に既知の1.25秒待機を加えた対照では、待機のsampling推定値がwallで1.250秒、cpuで0秒となり、
+CPU処理と待機の切り分けに使えることを確認した。この比較手順をローカル調査へ採用する。
+合成fixtureの結果であり、API・本番性能や速度改善率の証明には使わない。
+仕様は[標準profilerのモード比較](https://docs.python.org/3.15/library/profiling.sampling.html#comparing-wall-clock-and-cpu-profiles)を参照する。
+
 profileは公開ソースと機密を含まない固定fixtureに限定する。実利用の質問・生成結果・外部I/Oを対象にしない。
 rawはprivate cacheに置き、Git・CI artifactへ公開しない。共有はlocal pathを除いた関数名・回数・時間に限定する。
 短い単発計測を速度改善の証明にせず、CPU処理と外部待ちの切り分けや改善前後の比較に使う。
@@ -164,6 +177,33 @@ PR、mainへのpush、週次定期実行、手動実行を対象にする。
 画像比較用Chromiumは`--font-render-hinting=none`でhintingを固定する。アプリの描画設定は変えず、改行・寸法を含めた画像レビュー後に基準画像を採用し、比較許容差は広げない。
 画像基準の正はCIのUbuntu 26.04上の固定Playwright/Chromiumとする。異なるLinuxのFreeType/fontconfigでは文字輪郭に差が出るため、基準画像はCIの比較artifactを寸法・改行・図形と合わせてレビューして採用する。ローカルの機能検証と別OSでのpixel完全一致は区別する。
 画像差分の許容値と再試行回数は増やさない。
+
+### Webで失敗した試験だけを再実行する
+
+Webの同じ名前の失敗testを修正している間は、project内で次を使う。
+`test:failed`はVitestの標準`--last-failed`だけを呼ぶaliasであり、独自cacheや自動fallbackを持たない。
+
+```bash
+cd apps/records-web
+pnpm run test:failed
+```
+
+標準results cacheに直前の失敗がない場合は終了値1となる。
+`--passWithNoTests`を加えて成功へ置き換えない。
+失敗testの名前を変えると選択から外れ、実行0件でも終了値0になる場合があるため、
+testの追加・改名、失敗履歴がない場合、変更完了前にはflagなしで全件を実行する。
+
+```bash
+pnpm exec vp test run
+```
+
+CIと`verify`は既存の全件試験を維持し、このaliasへ置き換えない。
+2026-11-05、既存334件に合成3件を加えた全件と、修正後の失敗1件を同じ条件で2組比較し、
+warmup後の中央値が7.125秒と1.135秒だった。
+cacheなし・全pass後の終了値1、名前変更時の0件選択、flagなしでの失敗再検出も確認した。
+合成testを撤去した既存334件の全件試験も成功している。
+この端末の限定条件での修正反復の比較であり、CIやアプリの速度改善率ではない。
+[公式の選択・終了値仕様](https://vitest.dev/guide/cli.html#last-failed)に従う。
 
 ### CodeQLの既存3言語の移行とAndroid追加
 
@@ -501,6 +541,84 @@ CDK 2.275.0は公式配布物にもminimatch 10.2.6が同梱され、
 標準npmのnested overrideに11.0.4を指定して`install`と`ci`が成功しても、実解決先は10.2.6だった。
 [npmの公式実装](https://github.com/npm/cli/blob/v11.19.1/workspaces/arborist/lib/edge.js)もbundled依存のoverrideを対象外とする。
 無検証のpostinstall置換や監査省略を追加せず、正式な修正CDKが公開されたら実体を確認して例外を削除する。
+
+### Gradle配布ZIPの手動スポット監査
+
+Gradle Wrapper更新時に、配布ZIPへ同梱されたbuild toolの依存を固定Syftで調べる手順を採用する。
+アプリのGradle解決グラフやconstraintsとは別のcopyとして扱う。
+通常CIへ重いjobや独自wrapperを追加せず、必要時のローカル手動調査に限定する。
+
+公式checksum・署名を検証済みのSyftを`.github/tool-versions.json`の版へ合わせ、
+その絶対pathを`SYFT_BINARY`へ、Wrapperの`distributionUrl`から取得したZIPの絶対pathを`GRADLE_DIST_ZIP`へ指定する。
+`SCAN_DIR`はディスク上のprivate cacheに固定し、権限0700、生成物はumask 077で保管する。
+`SCAN_DIR/scratch`を事前に作り、既存の同名systemd unitが実行中でないことを確認する。
+取得したZIPは必ずWrapperに固定されたSHA-256と照合する。
+
+```bash
+SCAN_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/shittim-chest/toolchain-audit/gradle"
+umask 077
+install -d -m 700 "$SCAN_DIR" "$SCAN_DIR/scratch"
+GRADLE_DIST_SHA="$(sed -n 's/^distributionSha256Sum=//p' apps/records-android/gradle/wrapper/gradle-wrapper.properties)"
+printf '%s  %s\n' "$GRADLE_DIST_SHA" "$GRADLE_DIST_ZIP" | sha256sum --check --strict
+```
+
+次の標準configを`SCAN_DIR/syft.yaml`へ保存する。既定のdepth 0でもJavaのJAR解析は有効である。
+外部enrichment・更新照会・cacheを使わず、結果はローカルへ保存する。
+
+```yaml
+check-for-app-update: false
+parallelism: 1
+enrich: []
+cache:
+  dir: ""
+  ttl: 0
+package:
+  nested-archive-max-depth: 0
+  nested-archive-max-memory-bytes: 134217728
+  nested-archive-max-disk-bytes: 536870912
+```
+
+Linuxの短命user serviceでCPU・メモリ・実行時間を制限し、外部socketを使わずに解析する。
+Goのaddress予約を妨げる仮想address上限ではなく、cgroupの`MemoryMax`を使う。
+制限到達や異常終了は完了扱いにせず、実行状態とscratchを確認してから再試行を判断する。
+
+```bash
+systemd-run --user --wait --pipe --quiet --collect \
+  --unit shittim-syft-gradle-spot \
+  -p CPUQuota=100% -p MemoryMax=1610612736 \
+  -p MemorySwapMax=0 -p TasksMax=64 -p RuntimeMaxSec=90 \
+  -p NoNewPrivileges=yes -p RestrictAddressFamilies=AF_UNIX \
+  /usr/bin/time -f '%e\n%U\n%S\n%M\n%x' -o "${SCAN_DIR}/time.txt" \
+  /usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 \
+    TMPDIR="${SCAN_DIR}/scratch" GOMAXPROCS=2 GOMEMLIMIT=768MiB \
+    "${SYFT_BINARY}" scan "file:${GRADLE_DIST_ZIP}" \
+    -c "${SCAN_DIR}/syft.yaml" -v \
+    -o "syft-json=${SCAN_DIR}/sbom.syft.json"
+```
+
+終了値に加え、`files[].unknowns`・version不明・展開打切りの理由を確認し、
+未識別が残る結果を完全なinventoryや脆弱性なしの証明として扱わない。
+終了後はscratchが空、短命unitが回収済みであることを確認する。
+生のSBOM・logはprivate cacheに置き、公開文書へlocal pathをコピーしない。
+CVE判定と更新可否は別途確認し、本番containerの受容記録をbuild toolへ流用しない。
+
+2026-11-05、Wrapper固定SHAが一致したGradle 9.8.2 ZIP（348 JAR）でSyft 1.56.0を比較した。
+同じ入力・cgroup制限・排他lock下のwarm-cache単発計測は次のとおり。
+
+| 項目 | depth 0 | depth 2 |
+|---|---:|---:|
+| Java package | 351 | 351 |
+| 所要時間 | 4.40秒 | 8.29秒 |
+| peak RSS | 200.95MiB | 345.75MiB |
+| 未識別file | 1 | 72 |
+
+Javaのidentity集合は完全一致し、depth 2の追加16件はJAR内のWindows DLLだった。
+そのうち14件はversion不明、全件PURLなしであり、Linuxでの実行やCVEを判定する根拠にはしない。
+対象のJava依存調査には上積みがなく資源使用が増えたため、depth 2の常用は採用しない。
+既定scanでは同梱Guava 33.4.6-jreのPURLと実`pom.properties`・JAR hashも一致した。
+このcopyはアプリのconstraintsで更新されず、今回の計測だけでCVEの影響・修正有無を断定しない。
+[Syftの標準archive仕様](https://github.com/anchore/syft/pull/5260)に従い、
+新しいnative-resourceの調査目的ができた場合だけ、depthと予算を限定して再評価する。
 
 ## 4. イメージと成果物の信頼性
 

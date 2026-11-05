@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, python, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-10-14
+updated: 2026-11-05
 ---
 
 # アプリケーション・Python詳細設計
@@ -283,6 +283,15 @@ Web本体はTypeScript、Android本体はKotlin/Composeであり、Python更新�
 | `sentinel` | `src/shittim_chest/adapters/openai/evidence.py`の`_MISSING = object()` | **低優先候補**。欠落値の名前・型を明確にできる。現状に不具合はなく、移行必須の置換にはしない |
 | `TypedDict`の`closed`／`extra_items` | CI/CDツールの状態辞書など、必要な箇所の型境界 | **必要箇所だけ検討**。実行時の入力検証は提供しない。公開契約は既存のPydanticと生成TypeScript/Kotlinを維持する |
 | `base64`／`binascii`の高速化 | 添付画像の変換とAPI cursor | **移行による改善候補**。既存の標準APIをそのまま使う。API全体の高速化は未計測であり、改善率を約束しない |
+
+2026-11-05の試験では、標準profilerのwall／cpu比較で合成ZIP生成と既知の待機を切り分けられたため、
+独立した3.15標準ライブラリtoolのローカル調査手順へ採用した。
+運用は[CI/CD設計の標準プロファイラ](15_GitHub・CI-CD詳細設計.md#標準プロファイラによるローカル計測)を参照する。
+
+限定した`__lazy_modules__`候補はprivate copyの3.14／3.15でZIP出力とhelpの整合を確認したが、
+現行3.14では遅延効果がなく、`lazy import`構文も3.14では使えない。
+SDKの関数内importと`TYPE_CHECKING`も既に使っているため、今回lazy importsのsource追加は採用しない。
+実行版を移行した後、初回応答と例外発生時点を含めた実workloadの計測で再評価する。
 
 優先するのはUTF-8既定化と標準profilerによる必要時の調査。lazy importは初回応答まで含めた計測後に選ぶ。
 一括の`PYTHON_LAZY_IMPORTS=all`、JIT、free-threaded buildは、既存SDK・ARM64 Linuxでの互換性と効果の根拠が不足するため今回の推奨に含めない。
