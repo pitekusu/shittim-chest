@@ -121,18 +121,19 @@ function UnlockOrbit(): React.JSX.Element {
   useEffect(() => {
     const orbit = orbitRef.current;
     if (orbit === null) return;
-    let inViewport = false;
-    const update = () => setAnimating(inViewport && document.visibilityState !== "hidden");
+    const visibility = { inViewport: false };
+    const update = () =>
+      setAnimating(visibility.inViewport && document.visibilityState !== "hidden");
     const observer =
       typeof IntersectionObserver === "function"
         ? new IntersectionObserver(([entry]) => {
-            inViewport = entry?.isIntersecting ?? false;
+            visibility.inViewport = entry?.isIntersecting ?? false;
             update();
           })
         : null;
     if (observer) observer.observe(orbit);
     else {
-      inViewport = true;
+      visibility.inViewport = true;
       update();
     }
     document.addEventListener("visibilitychange", update);

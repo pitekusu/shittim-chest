@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-11-02
+updated: 2026-11-05
 ---
 
 # GitHub・CI-CD詳細設計
@@ -356,19 +356,19 @@ CoreのDHIは別の採用条件を持つ。2026年10月22日、認証済みregis
 
 ### Python 3.15への移行評価（2026年10月14日）
 
-2026年10月28日に配布・依存の状況を再確認した。
+2026年11月5日に配布・依存の状況を再確認した。
 [Issue #599](https://github.com/pitekusu/shittim-chest/issues/599)の更新要求は未完了。
 [Python 3.15.2](https://www.python.org/downloads/release/python-3152/)は10月25日公開済みで、
 侵害中間CA鍵の拒否などのセキュリティ修正を含む。下記の配布・互換性条件を満たすまで現行3.14系列を維持する。
 新機能の提案と推奨理由は
 [アプリケーション設計](10_アプリケーション・Python詳細設計.md#9-python-315の新機能の採用候補)に集約する。
 
-| 対象 | 2026年10月28日に確認した状態 | 移行に必要なこと |
+| 対象 | 2026年11月5日に確認した状態 | 移行に必要なこと |
 |---|---|---|
 | Lambda | [AWSの対応表](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html#runtimes-supported)で3.15は引き続きpublic preview。本番利用は推奨されず、正式公開の目標は11月（変更あり） | 正式対応後にCoreの受付・監督LambdaとRecords API／workerのmanaged runtime、CDKの対応を確認する |
 | CoreのDHI | `3.15.2-debian13-dev`／`3.15.2-debian13`の公開manifestを取得でき、[PR #661](https://github.com/pitekusu/shittim-chest/pull/661)の固定index digestと一致した。両方にLinux ARM64／AMD64がある | 10月14日時点の未公開条件は解消。ARM64実体・署名・SBOM／VEX・CA選択・Expat・完成imageのrisk gateは別途検証する |
 | 標準Python配布・uv | 10月14日のuv 0.13系列による3.15正式版インストールは成功済み。3.15.2をプロジェクトへ採用した検証は未実施 | Python配布解決とuvの対応系列・固定値・更新監視を合わせる。`uv_build`は公式の互換案内とlockで確認し、CLIと同じ番号だと決めつけない |
-| 実行依存wheel | 再調査時の固定値を使ったARM64／3.15・binary限定依存解決は、`jiter 0.16.0`の対応wheel不足で失敗。対応版を使う候補は解決成功 | Coreの`aiohttp 3.14.5`／`jiter 0.18.0`、共有Coreを含むRecordsでは追加で`msgpack 1.2.4`を候補とし、両lockの再生成と実import・関連試験を行う |
+| 実行依存wheel | 現固定値のCore／Records ARM64と開発用x86_64の3.15・binary限定依存解決は、`jiter 0.16.0`の対応wheel不足で失敗。`jiter 0.18.0`だけを候補変更すると3対象とも解決成功 | `aiohttp 3.14.4`／`msgpack 1.2.4`は現在の固定値で解決でき、追加更新の必要条件ではない。両lockの再生成と実import・関連試験を行う |
 | 開発・字体生成 | `grimp 3.17`と`fonttools 4.66.1`／`Brotli 1.2.1`は3.15・Linux x86_64のbinary限定依存解決に成功 | 以前のwheel不足はこの対象では解消。実行・字体再生成は未実施であり、通常Web buildの成功で代替しない |
 
 `audioop-lts`は既存の`cp313-abi3` ARM64 wheelを利用でき、阻害要因ではない。
@@ -458,6 +458,35 @@ DependabotのActions更新は`uses:`を扱い、`with.version`、`driver-opts`�
   全項目が確認済みで最新の場合だけIssueを閉じ、一部取得失敗を「最新」にしない。
 - 終了値は最新`0`、更新候補あり`1`、取得/設定不正`2`。
   `main`限定で`contents: read`と`issues: write`を使い、書換え・自動マージ・AWS操作・配信開始はしない。
+
+### 2026年11月5日の固定ツール更新
+
+[Issue #679](https://github.com/pitekusu/shittim-chest/issues/679)の候補を確認し、
+Scout 1.29.0、Grypeの両architecture 0.121.1、Syft 1.56.0、Buildx 0.38.2、
+Node 24.22.2、pnpm 12.18.0、uv 0.13.7、Vite+ 1.5.0へ固定値を合わせる。
+Issue作成後の再取得で公開済みのBetterleaks 1.10.0とpnpm 12.18.0も確認対象に含める。
+Vite+に同梱されるVitest 5.1.0へWebの直接依存・UI・override・更新監視を合わせ、
+infra用Vitestの系列は維持する。Nodeのproject下限とlock metadataも同期する。
+uvのCLI更新だけを理由に、既に互換範囲内のbuild backendやPython lockを再生成しない。
+
+各配布物の公式checksum・asset digest、Nodeの署名、Grype／Syftの署名を確認する。
+新しいScoutのDHI取得結果は、署名原本のSPDXと独立に照合する。
+GrypeのversionなしOpenVEX処理の修正は配布DBにも依存し、CLI更新だけで検出が解消したと扱わない。
+Syftの再帰archive解析は既定の無効を維持する。BuildxのBake修正については、
+このCIがBakeを使わずadvisoryも0.38.1以上を修正版とするため、今回新たにCVEを解消したとは扱わない。
+Vite+のminimatch更新は、別のCDK同梱copyの修正ではない。
+
+同じPython 3.14.10／Debian 13の新しいDHI builder・runtimeも固定digestへ更新する。
+[固定した公式recipe](https://github.com/docker-hardened-images/catalog/tree/606e3a01ca8e879cde247085db127f44cb2e7ceb)と、
+署名SPDX／VEX・実library hashにより、SQLite `+dhi3`のCVE-2026-119371 backportと
+Python `3.14.10-3`のCVE-2026-116566（`socket.getaddrinfo()`のNUL拒否）を確認する。
+これらの修正を、別CVEやPython静的内蔵Expatの修正済み判断へ一般化しない。
+
+以前のcontainer High 12組とCDK同梱minimatchの所有者受容は、
+2026年11月3日00:00 UTC（09:00 JST）に失効した。
+新しい対象・digest・期限へ自動で移さず、完成した同一ARM64 imageのSBOM／VEX・TLS・risk gateを再検証する。
+ncursesは公式recipeに修正patchがあるが、署名provenanceからそのpatchへの結合を確認できないため調査中を維持する。
+必須CIの失敗を、古い受容や`no-dsa`だけで成功に置き換えない。
 
 ## 4. イメージと成果物の信頼性
 
