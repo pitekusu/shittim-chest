@@ -10,6 +10,7 @@
     "dev": "vp dev",
     "check": "vp check --deny-warnings",
     "test": "vp test",
+    "test:failed": "vp test run --last-failed",
     "test:e2e": "playwright test",
     "build": "node scripts/check-fonts.mjs && vp build && node scripts/check-code-splitting.mjs && node scripts/check-public-page-html.mjs",
     "audit": "pnpm audit --audit-level=low",
