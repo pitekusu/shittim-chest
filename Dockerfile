@@ -4,7 +4,7 @@ ARG SOURCE_DATE_EPOCH=0
 
 FROM ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490 AS uv
 
-FROM dhi.io/python:3.14.10-debian13-dev@sha256:a19aadd1356349f6103a2b14dffcd7a4386bdcc5a2c63feaaa7ca50eef8bc2eb AS builder
+FROM dhi.io/python:3.15.2-debian13-dev@sha256:eb147c5ef10ff5a1346e168b6fec2cadeab51760186ca0efa583d46ff9464f90 AS builder
 
 ARG SOURCE_DATE_EPOCH
 
@@ -43,7 +43,7 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     && python /tmp/canonicalize_wheel_records.py \
         --source-date-epoch "${SOURCE_DATE_EPOCH}" /app/.venv
 
-FROM dhi.io/python:3.14.10-debian13@sha256:1976c17f79525bf6c03e26256b24b5ab3f41e58b1189807b1a9af27592fd0088 AS runtime-base
+FROM dhi.io/python:3.15.2-debian13@sha256:3d50888877d6ceecfdfe2b0f8ee52ccbdf0074a43ca7af0d39232ec79974e6ea AS runtime-base
 
 ARG SOURCE_DATE_EPOCH
 
