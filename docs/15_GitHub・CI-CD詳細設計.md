@@ -488,6 +488,20 @@ Python `3.14.10-3`のCVE-2026-116566（`socket.getaddrinfo()`のNUL拒否）を�
 ncursesは公式recipeに修正patchがあるが、署名provenanceからそのpatchへの結合を確認できないため調査中を維持する。
 必須CIの失敗を、古い受容や`no-dsa`だけで成功に置き換えない。
 
+2026-11-05、[PR #680の同一実行](https://github.com/pitekusu/shittim-chest/actions/runs/42004113350)の
+完成production config `sha256:b7c7c63c397cde746369384a7320c452d52700da09cdded3b0642fb7f703c8fc`を独立照合した。
+最新Grype DBで既存と同じHigh 12組、新規追加0、source・Critical・修正可能High/Critical 0、TLS60/60を確認した。
+所有者がこの12組とCDK同梱minimatchのModerate 1件を、
+2026年11月6日09:00 JST（同日00:00 UTC）まで受容してマージすることを明示承認した。
+containerの対象はこの新configだけへ置き換え、旧digestの受容は再開しない。
+`expires_on`は当日を含むため`2026-11-05`、npmの`expires`は当日00:00 UTCに失効するため`2026-11-06`とする。
+対象・期限・severityの限定と、その他の検出拒否を維持する。受容は正式修正や非影響の証明を意味しない。
+
+CDK 2.275.0は公式配布物にもminimatch 10.2.6が同梱され、
+標準npmのnested overrideに11.0.4を指定して`install`と`ci`が成功しても、実解決先は10.2.6だった。
+[npmの公式実装](https://github.com/npm/cli/blob/v11.19.1/workspaces/arborist/lib/edge.js)もbundled依存のoverrideを対象外とする。
+無検証のpostinstall置換や監査省略を追加せず、正式な修正CDKが公開されたら実体を確認して例外を削除する。
+
 ## 4. イメージと成果物の信頼性
 
 ### 配布ZIPの3世代保持
