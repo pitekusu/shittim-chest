@@ -551,6 +551,21 @@ containerの対象はこの新configだけへ置き換え、旧digestの受容�
 `expires_on`は当日を含むため`2026-11-05`、npmの`expires`は当日00:00 UTCに失効するため`2026-11-06`とする。
 対象・期限・severityの限定と、その他の検出拒否を維持する。受容は正式修正や非影響の証明を意味しない。
 
+2026-11-09、[PR #697](https://github.com/pitekusu/shittim-chest/pull/697)で
+DHI Python 3.14.10／Debian 13のbuilder・runtimeを更新し、
+[Debianのzlib修正](https://security-tracker.debian.org/tracker/DSA-6613-1)を含む
+`zlib1g 1:1.3.dfsg+really1.3.1-1+deb13u1+dhi0`を完成ARM64 imageのSBOMで照合した。
+[BuildKit 0.34.2](https://github.com/moby/buildkit/releases/tag/v0.34.2)はGitキャッシュを経由した
+[CVE-2026-121522](https://github.com/moby/buildkit/security/advisories/GHSA-2fqp-xg6f-v7gj)のdaemon停止を修正する。
+
+[候補のCI](https://github.com/pitekusu/shittim-chest/actions/runs/42603921271)で
+署名・SBOM／VEX・TLS60件を検証し、Grypeのraw High 24組、VEX適用後High 12組を確認した。
+Critical、修正可能なHigh／Critical、前回の残存Highからの追加はいずれも0組だった。
+所有者の明示承認に基づき、`security/container-risk-acceptance.json`で
+実測production config `sha256:12fe1baa66e9517a5ff49ecba8bf84e9dc1fa086b88b59742986bbfbc2aa791d`の
+同じ12組だけを2026年11月13日09:00 JST（同日00:00 UTC）まで受容する。
+UTC日付を含む`expires_on`は`2026-11-12`とし、CDKの受容期限は別に扱う。
+
 CDK 2.275.0は公式配布物にもminimatch 10.2.6が同梱され、
 標準npmのnested overrideに11.0.4を指定して`install`と`ci`が成功しても、実解決先は10.2.6だった。
 [npmの公式実装](https://github.com/npm/cli/blob/v11.19.1/workspaces/arborist/lib/edge.js)もbundled依存のoverrideを対象外とする。
