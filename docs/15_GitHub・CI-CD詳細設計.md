@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-11-05
+updated: 2026-11-09
 ---
 
 # GitHub・CI-CD詳細設計
@@ -204,6 +204,20 @@ cacheなし・全pass後の終了値1、名前変更時の0件選択、flagな�
 合成testを撤去した既存334件の全件試験も成功している。
 この端末の限定条件での修正反復の比較であり、CIやアプリの速度改善率ではない。
 [公式の選択・終了値仕様](https://vitest.dev/guide/cli.html#last-failed)に従う。
+
+### ローカルでブラウザー試験の失敗ログに絞る
+
+試験件数を変えずに、失敗と再試行の診断を確認する場合は、Playwright標準の`failures` reporterを選ぶ。
+
+```bash
+cd apps/records-web
+pnpm run test:e2e --reporter failures
+```
+
+同じ合成試験を1 worker・再試行1回で比較し、全成功時は両方5件成功・終了値0、
+混在時は両方5件成功・1件失敗・1件再試行成功・終了値1だった。全成功時の出力は10行から1行になり、
+失敗時の期待値・実値は表示される。試験の選択、速度、CIのGitHub reporterは変更しない。
+[Playwright公式のreporter仕様](https://playwright.dev/docs/test-reporters#failures-reporter)を参照する。
 
 ### CodeQLの既存3言語の移行とAndroid追加
 
