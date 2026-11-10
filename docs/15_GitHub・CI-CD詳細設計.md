@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-11-05
+updated: 2026-11-09
 ---
 
 # GitHub・CI-CD詳細設計
@@ -204,6 +204,20 @@ cacheなし・全pass後の終了値1、名前変更時の0件選択、flagな�
 合成testを撤去した既存334件の全件試験も成功している。
 この端末の限定条件での修正反復の比較であり、CIやアプリの速度改善率ではない。
 [公式の選択・終了値仕様](https://vitest.dev/guide/cli.html#last-failed)に従う。
+
+### ローカルでブラウザー試験の失敗ログに絞る
+
+試験件数を変えずに、失敗と再試行の診断を確認する場合は、Playwright標準の`failures` reporterを選ぶ。
+
+```bash
+cd apps/records-web
+pnpm run test:e2e --reporter failures
+```
+
+同じ合成試験を1 worker・再試行1回で比較し、全成功時は両方5件成功・終了値0、
+混在時は両方5件成功・1件失敗・1件再試行成功・終了値1だった。全成功時の出力は10行から1行になり、
+失敗時の期待値・実値は表示される。試験の選択、速度、CIのGitHub reporterは変更しない。
+[Playwright公式のreporter仕様](https://playwright.dev/docs/test-reporters#failures-reporter)を参照する。
 
 ### CodeQLの既存3言語の移行とAndroid追加
 
@@ -536,6 +550,21 @@ ncursesは公式recipeに修正patchがあるが、署名provenanceからそのp
 containerの対象はこの新configだけへ置き換え、旧digestの受容は再開しない。
 `expires_on`は当日を含むため`2026-11-05`、npmの`expires`は当日00:00 UTCに失効するため`2026-11-06`とする。
 対象・期限・severityの限定と、その他の検出拒否を維持する。受容は正式修正や非影響の証明を意味しない。
+
+2026-11-09、[PR #697](https://github.com/pitekusu/shittim-chest/pull/697)で
+DHI Python 3.14.10／Debian 13のbuilder・runtimeを更新し、
+[Debianのzlib修正](https://security-tracker.debian.org/tracker/DSA-6613-1)を含む
+`zlib1g 1:1.3.dfsg+really1.3.1-1+deb13u1+dhi0`を完成ARM64 imageのSBOMで照合した。
+[BuildKit 0.34.2](https://github.com/moby/buildkit/releases/tag/v0.34.2)はGitキャッシュを経由した
+[CVE-2026-121522](https://github.com/moby/buildkit/security/advisories/GHSA-2fqp-xg6f-v7gj)のdaemon停止を修正する。
+
+[候補のCI](https://github.com/pitekusu/shittim-chest/actions/runs/42603921271)で
+署名・SBOM／VEX・TLS60件を検証し、Grypeのraw High 24組、VEX適用後High 12組を確認した。
+Critical、修正可能なHigh／Critical、前回の残存Highからの追加はいずれも0組だった。
+所有者の明示承認に基づき、`security/container-risk-acceptance.json`で
+実測production config `sha256:12fe1baa66e9517a5ff49ecba8bf84e9dc1fa086b88b59742986bbfbc2aa791d`の
+同じ12組だけを2026年11月13日09:00 JST（同日00:00 UTC）まで受容する。
+UTC日付を含む`expires_on`は`2026-11-12`とし、CDKの受容期限は別に扱う。
 
 CDK 2.275.0は公式配布物にもminimatch 10.2.6が同梱され、
 標準npmのnested overrideに11.0.4を指定して`install`と`ci`が成功しても、実解決先は10.2.6だった。

@@ -2999,7 +2999,24 @@ test("service status page contains wide status tables on mobile", async ({ page 
     path: testInfo.outputPath("lambda-mobile-dark.png"),
     animations: "disabled",
   });
-  await page.evaluate(() => document.documentElement.setAttribute("data-theme", "light"));
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = "light";
+    document.documentElement.style.colorScheme = "light";
+  });
+  // Audit the settled light palette, after inherited text color and surfaces agree.
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        document
+          .getAnimations()
+          .some(
+            (animation) =>
+              animation instanceof CSSTransition &&
+              (animation.pending || animation.playState === "running"),
+          ),
+      ),
+    )
+    .toBe(false);
   // Check the changed card content; existing header badges are outside this change.
   const lightCards = new AxeBuilder({ page }).exclude("header");
   for (const service of ["s3", "dynamodb", "lambda", "apigateway", "sqs"]) {
