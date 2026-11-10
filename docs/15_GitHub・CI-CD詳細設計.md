@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-11-09
+updated: 2026-11-10
 ---
 
 # GitHub・CI-CD詳細設計
@@ -565,6 +565,14 @@ Critical、修正可能なHigh／Critical、前回の残存Highからの追加�
 実測production config `sha256:12fe1baa66e9517a5ff49ecba8bf84e9dc1fa086b88b59742986bbfbc2aa791d`の
 同じ12組だけを2026年11月13日09:00 JST（同日00:00 UTC）まで受容する。
 UTC日付を含む`expires_on`は`2026-11-12`とし、CDKの受容期限は別に扱う。
+
+2026-11-10、最新mainを取り込んだ[PR #688のCI](https://github.com/pitekusu/shittim-chest/actions/runs/42786890362)で、
+実行時のPython依存を更新した完成ARM64 imageのconfig `sha256:87ae4fc54283c1684d47f55444cdcce557372cb3fa59817dcb35a0202390343f` を確認した。
+署名付きVEX適用後は既存と同じHigh 12組で、Critical・新規High・修正可能Highは0組、TLSは60件すべて成功した。
+所有者の明示承認により、このconfigだけを既存の本番configに追加する。
+期限は両方とも2026年11月13日09:00 JST（同日00:00 UTC）のままとする。
+[PR #689のCI](https://github.com/pitekusu/shittim-chest/actions/runs/42786895599)では、開発用pytest-asyncioの更新後も
+完成イメージのconfigとmanifestが本番に一致したため、この更新単独の再デプロイは不要とした。
 
 CDK 2.275.0は公式配布物にもminimatch 10.2.6が同梱され、
 標準npmのnested overrideに11.0.4を指定して`install`と`ci`が成功しても、実解決先は10.2.6だった。
