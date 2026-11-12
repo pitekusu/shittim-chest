@@ -8,7 +8,7 @@
     "contracts:check": "node scripts/generate-contract-validator.mjs --check",
     "og:image:generate": "node scripts/generate-og-image.mjs",
     "dev": "vp dev",
-    "check": "vp check --deny-warnings",
+    "check": "vp check --deny-warnings --continue-on-error",
     "test": "vp test",
     "test:failed": "vp test run --last-failed",
     "test:e2e": "playwright test",
