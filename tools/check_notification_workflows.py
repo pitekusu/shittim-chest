@@ -37,6 +37,7 @@ PINNED_PNPM_VERSION_CHECK = (
     'test "$(pnpm --version)" = "$(node -p \''
     'require("./package.json").packageManager.slice("pnpm@".length)\')"'
 )
+RECORDS_WEB_CHECK_COMMAND = "pnpm exec vp check --deny-warnings --continue-on-error"
 
 
 class WorkflowPolicyError(RuntimeError):
@@ -1741,12 +1742,18 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         raise WorkflowPolicyError("Records CI must classify dependency signature audit inputs")
     required_records_web = (
         "vp install --frozen-lockfile",
-        "pnpm exec vp check --deny-warnings",
         "pnpm exec vp test",
         "pnpm run build",
         "python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low",
     )
-    if any(marker not in records_web for marker in required_records_web):
+    check_step_name = "Check Records web formatting, lint, and types"
+    check_step_header = f"      - name: {check_step_name}"
+    if (
+        any(marker not in records_web for marker in required_records_web)
+        or check_step_header not in records_web
+        or _workflow_step_block(records_web, check_step_name).rstrip()
+        != f"{check_step_header}\n        run: {RECORDS_WEB_CHECK_COMMAND}"
+    ):
         raise WorkflowPolicyError("Records CI must retain the frozen install and web gates")
     if "npm ci" in records_web or "package-lock.json" in records_web:
         raise WorkflowPolicyError("Records CI must not fall back to the retired npm lock")
@@ -1892,13 +1899,16 @@ def _validate_records_workflows(directory: Path) -> None:
     app_local_web_gates = (
         "          (\n"
         "            cd apps/records-web\n"
-        "            pnpm exec vp check --deny-warnings\n"
+        f"            {RECORDS_WEB_CHECK_COMMAND}\n"
         "            pnpm exec vp test\n"
         "            pnpm run build\n"
         "            python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low\n"
         "          )"
     )
-    if release_gate_step.count(app_local_web_gates) != 1:
+    if (
+        release_gate_step.count(app_local_web_gates) != 1
+        or "continue-on-error:" in release_gate_step
+    ):
         raise WorkflowPolicyError(
             "Records Release must run all web gates from the Records Web package boundary"
         )

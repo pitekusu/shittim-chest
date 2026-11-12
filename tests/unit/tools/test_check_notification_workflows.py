@@ -649,7 +649,8 @@ def test_records_release_resolves_pnpm_from_records_web_boundary(directory: Path
 def test_records_release_runs_web_gates_from_records_web_boundary(directory: Path) -> None:
     _replace(
         directory / RECORDS_RELEASE_WORKFLOW,
-        "            cd apps/records-web\n            pnpm exec vp check --deny-warnings\n",
+        "            cd apps/records-web\n"
+        "            pnpm exec vp check --deny-warnings --continue-on-error\n",
         "            cd .\n            pnpm --dir apps/records-web exec vp check --deny-warnings\n",
         1,
     )
@@ -811,7 +812,10 @@ def test_records_dependency_signature_audit_follows_actual_changes(
 
 def test_records_ci_requires_the_web_gates(directory: Path) -> None:
     _replace(
-        directory / RECORDS_CI_WORKFLOW, "pnpm exec vp check --deny-warnings", "npm run check", 1
+        directory / RECORDS_CI_WORKFLOW,
+        "pnpm exec vp check --deny-warnings --continue-on-error",
+        "npm run check",
+        1,
     )
 
     with pytest.raises(WorkflowPolicyError, match="frozen install and web gates"):
@@ -819,8 +823,27 @@ def test_records_ci_requires_the_web_gates(directory: Path) -> None:
 
 
 @pytest.mark.parametrize("workflow", [RECORDS_CI_WORKFLOW, RECORDS_RELEASE_WORKFLOW])
-def test_records_web_checks_reject_warnings(directory: Path, workflow: str) -> None:
-    _replace(directory / workflow, "pnpm exec vp check --deny-warnings", "pnpm exec vp check", 1)
+@pytest.mark.parametrize("flag", ["--deny-warnings", "--continue-on-error"])
+def test_records_web_checks_require_both_flags(directory: Path, workflow: str, flag: str) -> None:
+    command = "pnpm exec vp check --deny-warnings --continue-on-error"
+    _replace(directory / workflow, command, command.replace(f" {flag}", ""), 1)
+
+    with pytest.raises(WorkflowPolicyError, match=r"web gates"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize(
+    ("workflow", "step"),
+    [
+        (RECORDS_CI_WORKFLOW, "Check Records web formatting, lint, and types"),
+        (RECORDS_RELEASE_WORKFLOW, "Re-run Records release-critical gates"),
+    ],
+)
+def test_records_web_check_failures_cannot_be_ignored(
+    directory: Path, workflow: str, step: str
+) -> None:
+    header = f"      - name: {step}\n"
+    _replace(directory / workflow, header, f"{header}        continue-on-error: true\n", 1)
 
     with pytest.raises(WorkflowPolicyError, match=r"web gates"):
         validate_notification_workflows(directory)
