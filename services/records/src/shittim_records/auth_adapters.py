@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-import httpx2
-from authlib.integrations.httpx_client import OAuth2ClientAuth
-from authlib.oauth2 import OAuth2Error
-from authlib.oauth2.client import OAuth2Client
 from botocore.exceptions import ClientError
 
 if TYPE_CHECKING:
+    import httpx2
     from mypy_boto3_dynamodb.client import DynamoDBClient
     from mypy_boto3_s3.client import S3Client
     from mypy_boto3_ssm.client import SSMClient
@@ -278,12 +276,14 @@ class DynamoAuthStore:
 class DiscordOAuthClient:
     """Bounded Discord OAuth and avatar client."""
 
-    def __init__(self, client: httpx2.Client) -> None:
+    def __init__(self, client: Callable[[], httpx2.Client]) -> None:
         self._client = client
 
     def authorization_url(self, *, configuration: RecordsOAuthConfig, state: str) -> str:
+        from authlib.oauth2.client import OAuth2Client
+
         oauth = OAuth2Client(
-            session=self._client,
+            session=None,
             client_id=configuration.client_id,
             redirect_uri=configuration.oauth_callback_url,
             scope="identify guilds.members.read",
@@ -292,9 +292,14 @@ class DiscordOAuthClient:
         return location
 
     def exchange_code(self, *, code: str, configuration: AuthConfiguration) -> DiscordTokens:
+        import httpx2
+        from authlib.integrations.httpx_client import OAuth2ClientAuth
+        from authlib.oauth2 import OAuth2Error
+        from authlib.oauth2.client import OAuth2Client
+
         # Share only the HTTP connection pool; OAuth tokens are request-local.
         oauth = OAuth2Client(
-            session=self._client,
+            session=self._client(),
             client_id=configuration.oauth.client_id,
             redirect_uri=configuration.oauth.oauth_callback_url,
         )
@@ -326,10 +331,13 @@ class DiscordOAuthClient:
         tokens: DiscordTokens,
         guild_id: str,
     ) -> DiscordIdentity:
+        import httpx2
+
         headers = {"Authorization": f"Bearer {tokens.access_token}"}
+        client = self._client()
         try:
-            user_response = self._client.get(f"{DISCORD_API_ROOT}/users/@me", headers=headers)
-            member_response = self._client.get(
+            user_response = client.get(f"{DISCORD_API_ROOT}/users/@me", headers=headers)
+            member_response = client.get(
                 f"{DISCORD_API_ROOT}/users/@me/guilds/{guild_id}/member",
                 headers=headers,
             )
@@ -371,6 +379,8 @@ class DiscordOAuthClient:
         )
 
     def fetch_avatar(self, *, identity: DiscordIdentity, guild_id: str) -> bytes | None:
+        import httpx2
+
         if identity.guild_avatar_hash:
             url = (
                 f"{DISCORD_CDN_ROOT}/guilds/{guild_id}/users/{identity.user_id}/avatars/"
@@ -384,7 +394,7 @@ class DiscordOAuthClient:
         else:
             return None
         try:
-            response = self._client.get(url)
+            response = self._client().get(url)
         except httpx2.HTTPError:
             return None
         if response.status_code != 200:
@@ -406,14 +416,14 @@ def _require_token_success(response: httpx2.Response) -> httpx2.Response:
 class S3AvatarStore:
     """Store only opaque requester avatar keys in the private media bucket."""
 
-    def __init__(self, client: S3Client, bucket_name: str) -> None:
+    def __init__(self, client: Callable[[], S3Client], bucket_name: str) -> None:
         self._client = client
         self._bucket_name = bucket_name
 
     def put_requester_avatar(self, *, object_key: str, body: bytes) -> None:
         if not _valid_requester_key(object_key) or not body or len(body) > MAX_AVATAR_BYTES:
             raise ValueError("requester avatar is outside the permitted boundary")
-        self._client.put_object(
+        self._client().put_object(
             Bucket=self._bucket_name,
             Key=object_key,
             Body=body,
@@ -425,7 +435,7 @@ class S3AvatarStore:
     def requester_avatar_url(self, *, object_key: str) -> str:
         if not _valid_requester_key(object_key):
             raise ValueError("requester avatar is outside the permitted boundary")
-        return self._client.generate_presigned_url(
+        return self._client().generate_presigned_url(
             "get_object",
             Params={"Bucket": self._bucket_name, "Key": object_key},
             ExpiresIn=300,

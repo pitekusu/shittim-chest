@@ -374,7 +374,7 @@ export class RecordsApplicationStack extends Stack {
     this.authFunction = this.httpFunctionWithRole({
       id: "AuthFunction",
       functionName: AUTH_FUNCTION_NAME,
-      handler: "shittim_records.lambda_handlers.auth_handler",
+      handler: "shittim_records.auth_handler.auth_handler",
       code,
       timeout: Duration.seconds(15),
       reservedConcurrentExecutions: 2,
@@ -847,7 +847,7 @@ export class RecordsApplicationStack extends Stack {
     this.readFunction = this.httpFunctionWithRole({
       id: "ReadFunction",
       functionName: READ_FUNCTION_NAME,
-      handler: "shittim_records.lambda_handlers.read_handler",
+      handler: "shittim_records.read_handler.read_handler",
       code,
       timeout: Duration.seconds(10),
       reservedConcurrentExecutions: 4,

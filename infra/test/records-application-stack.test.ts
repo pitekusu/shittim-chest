@@ -547,6 +547,14 @@ describe("RecordsApplicationStack", () => {
   test("publishes seven isolated aliases behind the Records HTTP API routes", () => {
     const { template } = fixture;
 
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      FunctionName: "shittim-chest-production-records-auth",
+      Handler: "shittim_records.auth_handler.auth_handler",
+    });
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      FunctionName: "shittim-chest-production-records-read",
+      Handler: "shittim_records.read_handler.read_handler",
+    });
     template.resourceCountIs("AWS::Lambda::Version", 7);
     template.resourceCountIs("AWS::Lambda::Alias", 7);
     template.resourceCountIs("AWS::ApiGatewayV2::Api", 1);

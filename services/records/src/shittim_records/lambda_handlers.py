@@ -4,15 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import boto3
 import httpx
-import httpx2
-from botocore.config import Config
 from botocore.exceptions import ClientError
 
 if TYPE_CHECKING:
@@ -22,7 +19,6 @@ if TYPE_CHECKING:
 from shittim_chest.adapters.aws import SsmParameterReader
 from shittim_chest.adapters.discord import create_discord_status_http_client
 from shittim_chest.adapters.openai.prompts import LEGACY_RUNTIME_SYSTEM_PROMPT
-from shittim_chest.adapters.tls import create_public_tls_context
 
 from shittim_records.adapters import (
     AffectionProjectionRepository,
@@ -48,13 +44,7 @@ from shittim_records.admin_status_adapters import (
     AwsAdminStatusConfiguration,
     AwsAdminStatusSource,
 )
-from shittim_records.auth import AuthService
-from shittim_records.auth_adapters import (
-    AuthConfigurationRepository,
-    DiscordOAuthClient,
-    DynamoAuthStore,
-    S3AvatarStore,
-)
+from shittim_records.auth_adapters import DynamoAuthStore
 from shittim_records.cost_adapters import (
     AwsCostExplorerSource,
     CostConfigurationRepository,
@@ -63,7 +53,6 @@ from shittim_records.cost_adapters import (
     OpenAICostSource,
 )
 from shittim_records.costs import CostCollectionFailed, CostCollectionService
-from shittim_records.http_api import AuthHttpController, ReadHttpController, error_response
 from shittim_records.inspector_translation_adapters import (
     AwsInspectorDescriptionSource,
     DynamoInspectorTranslationStore,
@@ -74,6 +63,13 @@ from shittim_records.inspector_translations import (
     InspectorTranslationService,
     InspectorTranslationUnavailable,
 )
+from shittim_records.lambda_support import (
+    S3_SDK_CONFIG,
+    SDK_CONFIG,
+    content_free_http_failure,
+)
+from shittim_records.lambda_support import environment as _environment
+from shittim_records.lambda_support import regional_s3_client as _regional_s3_client
 from shittim_records.memorial import (
     MemorialAuthorizer,
     MemorialGenerationService,
@@ -90,17 +86,7 @@ from shittim_records.memorial_adapters import (
     SqsMemorialJobQueue,
 )
 from shittim_records.memorial_http import MemorialHttpController
-from shittim_records.mobile_auth_adapters import DynamoMobileAuthStore
-from shittim_records.mobile_callback import MobileCallbackService
-from shittim_records.mobile_exchange import MobileExchangeService
-from shittim_records.mobile_http import MobileAuthHttpController
-from shittim_records.mobile_login import MobileLoginService
-from shittim_records.mobile_notification_adapters import (
-    DynamoMobileNotificationStore,
-    SqsMobileNotificationQueue,
-)
-from shittim_records.mobile_notifications import MobileNotificationRegistrationService
-from shittim_records.mobile_session import MobileSessionService
+from shittim_records.mobile_notification_adapters import SqsMobileNotificationQueue
 from shittim_records.ogp_adapters import LambdaPreviewPreparer
 from shittim_records.projector import (
     LEGACY_AFFECTION_SCHEMA_VERSION,
@@ -111,8 +97,6 @@ from shittim_records.projector import (
 )
 from shittim_records.ranking_adapters import DynamoRankingSnapshotStore, DynamoRankingSource
 from shittim_records.rankings import RankingService
-from shittim_records.read_adapters import DynamoRecordsReader, ReadConfigurationRepository
-from shittim_records.read_api import CursorCodec, RecordsReadService
 from shittim_records.record_link_adapters import (
     DiscordRecordLinkGatewayFactory,
     DynamoRecordLinkNotificationStore,
@@ -129,21 +113,10 @@ _BACKFILL: BackfillService | None = None
 _RANKING: RankingService | None = None
 _COSTS: CostCollectionService | None = None
 _INSPECTOR_TRANSLATIONS: InspectorTranslationService | None = None
-_AUTH_CONTROLLER: AuthHttpController | None = None
-_READ_CONTROLLER: ReadHttpController | None = None
 _ADMIN_CONFIG_CONTROLLER: AdminConfigHttpController | None = None
 _ADMIN_STATUS_CONTROLLER: AdminStatusHttpController | None = None
 _MEMORIAL_API_CONTROLLER: MemorialHttpController | None = None
 _MEMORIAL_WORKER: MemorialGenerationService | None = None
-
-SDK_CONFIG = Config(
-    retries={"total_max_attempts": 2, "mode": "standard"},
-    connect_timeout=2,
-    read_timeout=5,
-)
-S3_SDK_CONFIG = SDK_CONFIG.merge(
-    Config(signature_version="s3v4", s3={"addressing_style": "virtual"})
-)
 
 
 def projector_handler(event: Mapping[str, Any], _context: object) -> dict[str, object]:
@@ -277,48 +250,18 @@ def inspector_translation_handler(_event: Mapping[str, Any], _context: object) -
     return response
 
 
-def auth_handler(event: Mapping[str, Any], _context: object) -> dict[str, Any]:
-    """Handle public OAuth and session routes."""
-
-    # Discord member/avatar paths and HTTP headers contain private identifiers.
-    logging.getLogger("httpx2").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
-    try:
-        return _auth_controller().handle(event, now=datetime.now(UTC))
-    except Exception as error:
-        return _content_free_http_failure(
-            event,
-            code="RECORDS_UNAVAILABLE",
-            log_event="records_auth_request_failed",
-            error=error,
-        )
-
-
-def read_handler(event: Mapping[str, Any], _context: object) -> dict[str, Any]:
-    """Handle authenticated Archive list and detail routes."""
-
-    try:
-        return _read_controller().handle(event, now=datetime.now(UTC))
-    except Exception as error:
-        return _content_free_http_failure(
-            event,
-            code="RECORDS_UNAVAILABLE",
-            log_event="records_read_request_failed",
-            error=error,
-        )
-
-
 def admin_config_handler(event: Mapping[str, Any], _context: object) -> dict[str, Any]:
     """Handle authenticated prompt configuration without logging request content."""
 
     try:
         return _admin_config_controller().handle(event, now=datetime.now(UTC))
     except Exception as error:
-        return _content_free_http_failure(
+        return content_free_http_failure(
             event,
             code="PROMPT_CONFIGURATION_UNAVAILABLE",
             log_event="records_admin_config_request_failed",
             error=error,
+            logger=LOGGER,
         )
 
 
@@ -328,11 +271,12 @@ def admin_status_handler(event: Mapping[str, Any], _context: object) -> dict[str
     try:
         return _admin_status_controller().handle(event, now=datetime.now(UTC))
     except Exception as error:
-        return _content_free_http_failure(
+        return content_free_http_failure(
             event,
             code="ADMIN_STATUS_UNAVAILABLE",
             log_event="records_admin_status_request_failed",
             error=error,
+            logger=LOGGER,
         )
 
 
@@ -342,11 +286,12 @@ def memorial_api_handler(event: Mapping[str, Any], _context: object) -> dict[str
     try:
         return _memorial_api_controller().handle(event, now=datetime.now(UTC))
     except Exception as error:
-        return _content_free_http_failure(
+        return content_free_http_failure(
             event,
             code="MEMORIAL_UNAVAILABLE",
             log_event="records_memorial_api_request_failed",
             error=error,
+            logger=LOGGER,
         )
 
 
@@ -523,111 +468,6 @@ def _inspector_translation_service() -> InspectorTranslationService:
             ),
         )
     return _INSPECTOR_TRANSLATIONS
-
-
-def _auth_controller() -> AuthHttpController:
-    global _AUTH_CONTROLLER
-    if _AUTH_CONTROLLER is None:
-        dynamodb = boto3.client("dynamodb", config=SDK_CONFIG)
-        configuration = AuthConfigurationRepository(
-            boto3.client("ssm", config=SDK_CONFIG),
-            identity_parameter_name=_environment("IDENTITY_HMAC_PARAMETER_NAME"),
-            oauth_parameter_name=_environment("OAUTH_CONFIG_PARAMETER_NAME"),
-            client_secret_parameter_name=_environment("OAUTH_CLIENT_SECRET_PARAMETER_NAME"),
-            session_key_parameter_name=_environment("SESSION_KEY_PARAMETER_NAME"),
-            admin_user_id_parameter_name=_environment("ADMIN_DISCORD_USER_ID_PARAMETER_NAME"),
-        ).load()
-        discord = DiscordOAuthClient(
-            httpx2.Client(
-                timeout=httpx2.Timeout(3.0, connect=2.0),
-                follow_redirects=False,
-                verify=create_public_tls_context(),
-            )
-        )
-        avatars = S3AvatarStore(_regional_s3_client(), _environment("MEDIA_BUCKET_NAME"))
-        mobile_store = DynamoMobileAuthStore(dynamodb, _environment("SESSION_TABLE_NAME"))
-        service = AuthService(
-            store=DynamoAuthStore(dynamodb, _environment("SESSION_TABLE_NAME")),
-            discord=discord,
-            avatars=avatars,
-            configuration=configuration,
-        )
-        mobile = MobileAuthHttpController(
-            login=MobileLoginService(
-                store=mobile_store,
-                discord=discord,
-                oauth=configuration.oauth,
-                hmac_key=configuration.session_hmac_key,
-            ),
-            callback=MobileCallbackService(
-                store=mobile_store,
-                discord=discord,
-                avatars=avatars,
-                configuration=configuration,
-            ),
-            exchange=MobileExchangeService(
-                store=mobile_store,
-                avatars=avatars,
-                session_key=configuration.session_hmac_key,
-                admin_requester_key=configuration.admin_requester_key,
-            ),
-            sessions=MobileSessionService(
-                store=mobile_store,
-                avatars=avatars,
-                session_key=configuration.session_hmac_key,
-                admin_requester_key=configuration.admin_requester_key,
-            ),
-            allowed_origin=configuration.oauth.allowed_origin,
-            notifications=MobileNotificationRegistrationService(
-                sessions=mobile_store,
-                store=DynamoMobileNotificationStore(
-                    boto3.resource("dynamodb", config=SDK_CONFIG),
-                    statistics=_environment("STATISTICS_TABLE_NAME"),
-                    sessions=_environment("SESSION_TABLE_NAME"),
-                ),
-                session_key=configuration.session_hmac_key,
-            ),
-        )
-        _AUTH_CONTROLLER = AuthHttpController(service, mobile)
-    return _AUTH_CONTROLLER
-
-
-def _read_controller() -> ReadHttpController:
-    from shittim_records.momotalk_adapters import DynamoMomotalkStore, MomotalkAssets
-    from shittim_records.momotalk_read import MomotalkReadService
-
-    global _READ_CONTROLLER
-    if _READ_CONTROLLER is None:
-        dynamodb = boto3.client("dynamodb", config=SDK_CONFIG)
-        session_key = ReadConfigurationRepository(
-            boto3.client("ssm", config=SDK_CONFIG),
-            _environment("SESSION_KEY_PARAMETER_NAME"),
-        ).load_session_key()
-        reader = DynamoRecordsReader(
-            dynamodb,
-            _regional_s3_client(),
-            archive_table_name=_environment("ARCHIVE_TABLE_NAME"),
-            statistics_table_name=_environment("STATISTICS_TABLE_NAME"),
-            session_table_name=_environment("SESSION_TABLE_NAME"),
-            media_bucket_name=_environment("MEDIA_BUCKET_NAME"),
-        )
-        _READ_CONTROLLER = ReadHttpController(
-            store=DynamoAuthStore(dynamodb, _environment("SESSION_TABLE_NAME")),
-            mobile_store=DynamoMobileAuthStore(dynamodb, _environment("SESSION_TABLE_NAME")),
-            session_key=session_key,
-            allowed_origin="https://" + _environment("RECORDS_PUBLIC_HOSTNAME"),
-            records=RecordsReadService(
-                reader=reader,
-                cursor_codec=CursorCodec(session_key),
-                public_origin="https://" + _environment("RECORDS_PUBLIC_HOSTNAME"),
-            ),
-            momotalk=MomotalkReadService(
-                DynamoMomotalkStore(dynamodb, _environment("STATISTICS_TABLE_NAME")),
-                MomotalkAssets(_regional_s3_client(), _environment("MEDIA_BUCKET_NAME")),
-                reader,
-            ),
-        )
-    return _READ_CONTROLLER
 
 
 def _admin_config_controller() -> AdminConfigHttpController:
@@ -1061,40 +901,6 @@ def _projection_failure_fields(error: Exception) -> dict[str, object]:
         if reason_codes:
             fields["cancellation_reason_codes"] = reason_codes
     return fields
-
-
-def _environment(name: str) -> str:
-    value = os.environ.get(name, "")
-    if not value:
-        raise RuntimeError(f"required environment variable is missing: {name}")
-    return value
-
-
-def _content_free_http_failure(
-    event: Mapping[str, Any],
-    *,
-    code: str,
-    log_event: str,
-    error: Exception,
-) -> dict[str, Any]:
-    """Return a stable boundary error without serializing exception inputs or causes."""
-
-    _log(event=log_event, error_type=type(error).__name__)
-    context = event.get("requestContext")
-    request_id = context.get("requestId") if isinstance(context, Mapping) else None
-    if not isinstance(request_id, str) or not request_id:
-        request_id = "unavailable"
-    return error_response(503, code, request_id)
-
-
-def _regional_s3_client() -> Any:
-    region = _environment("AWS_REGION")
-    return boto3.client(
-        "s3",
-        region_name=region,
-        endpoint_url=f"https://s3.{region}.amazonaws.com",
-        config=S3_SDK_CONFIG,
-    )
 
 
 def _admin_status_s3_client() -> Any:

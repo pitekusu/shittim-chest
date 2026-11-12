@@ -537,7 +537,7 @@ def test_invalid_query_rejected_for_authenticated_user(query):
         store=cast(Any, FakeSessionStore(session())),
         session_key=SESSION_KEY,
         records=cast(Any, None),
-        momotalk=cast(Any, object()),
+        momotalk=lambda: pytest.fail("invalid query initialized MomoTalk"),
     )
     result = controller.handle(
         event(
