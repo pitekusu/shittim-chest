@@ -50,25 +50,25 @@
       "version": "1.29.0"
     },
     "syft": {
-      "archive_name": "syft_1.56.0_linux_arm64.tar.gz",
-      "archive_sha256": "ace61b9397ae28189c674ae332d67a8074dafd71e87724dfb8b22412d8253bb5",
+      "archive_name": "syft_1.57.1_linux_arm64.tar.gz",
+      "archive_sha256": "aa3d3e07344f590bcce8d31043b752daa76c8a56c2aa34ceeee63c6168152582",
       "repository": "anchore/syft",
       "tag_prefix": "v",
-      "version": "1.56.0"
+      "version": "1.57.1"
     },
     "grype": {
-      "archive_name": "grype_0.121.1_linux_amd64.tar.gz",
-      "archive_sha256": "bc3ea3f9e6fd56ac781c08c6c5e614271b79f438200757f6932085c19b0a4657",
+      "archive_name": "grype_0.121.3_linux_amd64.tar.gz",
+      "archive_sha256": "e9da18cc1429e786722e32161288103600efffd8e483c90761f90485bd1bec85",
       "repository": "anchore/grype",
       "tag_prefix": "v",
-      "version": "0.121.1"
+      "version": "0.121.3"
     },
     "grype-arm64": {
-      "archive_name": "grype_0.121.1_linux_arm64.tar.gz",
-      "archive_sha256": "33670612aad351c48cf3c37f4a85d8b043d1b64b21e6034e675bb00b956d78c1",
+      "archive_name": "grype_0.121.3_linux_arm64.tar.gz",
+      "archive_sha256": "b7815598d48da78bfd16f5b98ef28e1bb09c03d34fc8c3e350f99b6ccb3c7cba",
       "repository": "anchore/grype",
       "tag_prefix": "v",
-      "version": "0.121.1"
+      "version": "0.121.3"
     }
   },
   "sources": {

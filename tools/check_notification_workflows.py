@@ -1544,18 +1544,23 @@ def _validate_ty_sarif(text: str, job_id: str, category: str) -> None:
     if check.strip() != expected_check.strip():
         raise WorkflowPolicyError("ty SARIF must preserve the frozen type check exit status")
     upload = _workflow_step_block(job, "Upload ty results to code scanning")
+    upload, pin_count = re.subn(
+        r"(?m)^(        uses: github/codeql-action/upload-sarif)"
+        r"@[0-9a-f]{40} # v[0-9]+\.[0-9]+\.[0-9]+$",
+        r"\1",
+        upload,
+    )
     expected_upload = (
         "      - name: Upload ty results to code scanning\n"
         "        if: ${{ !cancelled() && (steps.ty.outcome == 'success' || "
         "steps.ty.outcome == 'failure') }}\n"
-        "        uses: github/codeql-action/upload-sarif@"
-        "9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1\n"
+        "        uses: github/codeql-action/upload-sarif\n"
         "        with:\n"
         f"          sarif_file: ${{{{ runner.temp }}}}/{category}.sarif\n"
         "          checkout_path: ${{ github.workspace }}\n"
         f"          category: {category}"
     )
-    if upload.strip() != expected_upload.strip():
+    if pin_count != 1 or upload.strip() != expected_upload.strip():
         raise WorkflowPolicyError("ty SARIF must use the standard upload even after type errors")
 
 

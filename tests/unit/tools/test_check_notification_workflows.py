@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import textwrap
@@ -504,6 +505,7 @@ def test_ci_requires_runtime_image_path_isolation(directory: Path) -> None:
         ("--output-format sarif", "--output-format sarif --exit-zero"),
         ("        id: ty\n", "        id: ty\n        continue-on-error: true\n"),
         ("steps.ty.outcome == 'failure'", "steps.ty.outcome == 'success'"),
+        ("github/codeql-action/upload-sarif@", "example/codeql-action/upload-sarif@"),
         ("checkout_path: ${{ github.workspace }}", "checkout_path: /tmp"),
     ),
 )
@@ -513,6 +515,21 @@ def test_ty_sarif_cannot_mask_type_errors_or_skip_failure_uploads(
     _replace(directory / workflow, before, after, 1)
     with pytest.raises(WorkflowPolicyError, match="ty SARIF"):
         validate_notification_workflows(directory)
+
+
+def test_ty_sarif_accepts_a_new_full_action_pin(directory: Path) -> None:
+    new_sha = "1" * 40
+    for path in (directory / "ci.yml", directory / RECORDS_CI_WORKFLOW):
+        text = path.read_text()
+        updated = re.sub(
+            r"(uses: github/codeql-action/upload-sarif@)[0-9a-f]{40} # v[0-9.]+",
+            rf"\g<1>{new_sha} # v99.0.0",
+            text,
+        )
+        assert updated != text
+        path.write_text(updated)
+
+    assert validate_notification_workflows(directory) == 1
 
 
 @pytest.mark.parametrize(
