@@ -439,7 +439,7 @@ def student_gacha_modal_response(offer_id: str) -> ApiGatewayV2Response:
                     {
                         "type": _LABEL_COMPONENT,
                         "label": "先生の名前",
-                        "description": "入力した名前は完成画像で公開されます。",
+                        "description": "先生のサインをお願いしますっ\uff01",
                         "component": {
                             "type": _TEXT_INPUT_COMPONENT,
                             "custom_id": _STUDENT_GACHA_TEACHER_FIELD,
