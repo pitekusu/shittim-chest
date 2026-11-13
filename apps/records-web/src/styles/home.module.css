@@ -285,6 +285,13 @@
   width: var(--anchor-width);
 }
 
+.avatarSelectStatus:not(:empty) {
+  display: block;
+  padding: 7px 8px;
+  color: var(--records-ink-600);
+  font-size: 0.8rem;
+}
+
 .avatarSelectOption {
   min-height: 44px;
   grid-template-columns: 28px minmax(0, 1fr) 18px;

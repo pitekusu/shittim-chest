@@ -55,11 +55,14 @@ function searchMock(
   );
   return bodies;
 }
-function selectRequester(name: string) {
+async function selectRequester(name: string) {
   fireEvent.click(screen.getByRole("combobox", { name: "依頼者" }));
-  const option = within(screen.getByRole("listbox", { name: "依頼者" })).getByRole("option", {
-    name,
-  });
+  const option = await within(screen.getByRole("listbox", { name: "依頼者" })).findByRole(
+    "option",
+    {
+      name,
+    },
+  );
   fireEvent.pointerDown(option, { pointerType: "mouse" });
   fireEvent.click(option);
 }
@@ -244,8 +247,10 @@ describe("RecordsHome", () => {
       }),
     );
     renderRoute(home);
-    await waitFor(() => expect(candidateCursors).toHaveLength(2));
-    selectRequester(second.displayName);
+    await screen.findByRole("article");
+    expect(candidateCursors).toHaveLength(0);
+    await selectRequester(second.displayName);
+    expect(candidateCursors).toHaveLength(2);
     expect(await screen.findByText("該当する記録はありません")).toBeVisible();
     expect(screen.getByRole("combobox", { name: "依頼者" })).toHaveTextContent(second.displayName);
     fireEvent.click(screen.getByRole("radio", { name: "古い順" }));

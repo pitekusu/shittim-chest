@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { App } from "./App";
 import { DATA_DELETION_MAILTO } from "./legalContact";
-import { authenticatedSession, mockApi, response } from "./test/recordsTestUtils";
+import { LOGIN_TRANSITION_KEY } from "./lib/authTransition";
+import { authenticatedSession, listResponse, mockApi, response } from "./test/recordsTestUtils";
 import { THEME_STORAGE_KEY } from "./theme";
 
 function installThemeColorMeta(): HTMLMetaElement {
@@ -275,7 +276,7 @@ describe("App shell", () => {
   });
 
   it("shows the approved login page for an anonymous Guild visitor", async () => {
-    mockApi({
+    const requests = mockApi({
       schemaVersion: 1,
       authenticated: false,
       isAdmin: false,
@@ -299,6 +300,51 @@ describe("App shell", () => {
     );
     expect(screen.getByText("シッテムの箱 議事録閲覧システム")).toBeVisible();
     expect(screen.getByText("吹雪型JCのつどいサーバの先生であることを認証します。")).toBeVisible();
+    expect(requests).toEqual(["/api/v1/session?contract=admin-v1"]);
+  });
+
+  it("fetches the initial archive during the welcome screen and reuses that page", async () => {
+    mockFixedMedia(false);
+    sessionStorage.setItem(LOGIN_TRANSITION_KEY, "pending");
+    const requests = mockApi();
+    const listPath = "/api/v1/records?limit=12&contract=record-attachments-v1&sort=newest";
+    render(<App />);
+
+    expect(await screen.findByLabelText("ログインしました")).toBeVisible();
+    await waitFor(() => expect(requests).toEqual(["/api/v1/session?contract=admin-v1", listPath]));
+    expect(screen.getByLabelText("ログインしました")).toBeVisible();
+    expect(screen.queryByRole("article")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("article")).toBeVisible(), { timeout: 3_000 });
+    expect(requests).toEqual(["/api/v1/session?contract=admin-v1", listPath]);
+  });
+
+  it("shows an initial archive error without making an automatic second request", async () => {
+    mockFixedMedia(true);
+    sessionStorage.setItem(LOGIN_TRANSITION_KEY, "pending");
+    let listRequests = 0;
+    const requests = mockApi();
+    const fetchApi = fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        if (typeof input === "string" && input.startsWith("/api/v1/records?")) {
+          listRequests += 1;
+          return listRequests === 1
+            ? Promise.reject(new Error("offline"))
+            : Promise.resolve(response(listResponse()));
+        }
+        return fetchApi(input, init);
+      }),
+    );
+
+    render(<App />);
+
+    expect(await screen.findByText("記録を読み込めませんでした")).toBeVisible();
+    expect(listRequests).toBe(1);
+    fireEvent.click(screen.getByRole("button", { name: "もう一度試す" }));
+    expect(await screen.findByRole("article")).toBeVisible();
+    expect(listRequests).toBe(2);
+    expect(requests).toEqual(["/api/v1/session?contract=admin-v1"]);
   });
 
   it.each(["/insights", "/momotalk", "/memorial", "/admin", "/admin/prompts"])(

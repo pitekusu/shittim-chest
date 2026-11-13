@@ -9,7 +9,7 @@ import {
 
 import type { ParticipantSlot, SortOrder } from "../api/types";
 
-interface ArchiveFilters {
+export interface ArchiveFilters {
   readonly winner: ParticipantSlot | "";
   readonly sort: SortOrder;
   readonly search: string;
@@ -46,7 +46,12 @@ function criteriaKey(filters: ArchiveFilters): string {
   return JSON.stringify([filters.winner, filters.sort, filters.search.trim(), filters.requester]);
 }
 
-const INITIAL_FILTERS: ArchiveFilters = { winner: "", sort: "newest", search: "", requester: "" };
+export const INITIAL_ARCHIVE_FILTERS: ArchiveFilters = {
+  winner: "",
+  sort: "newest",
+  search: "",
+  requester: "",
+};
 const ArchiveViewContext = createContext<ArchiveViewState | null>(null);
 const ArchiveActionsContext = createContext<ArchiveActions | null>(null);
 
@@ -54,7 +59,7 @@ const ArchiveActionsContext = createContext<ArchiveActions | null>(null);
 // exclusively in React memory; history state and browser storage can persist it.
 export function RecordsArchiveProvider({ children }: PropsWithChildren): React.JSX.Element {
   const [criteria, setCriteria] = useState<ArchiveCriteriaState>(() => ({
-    filters: INITIAL_FILTERS,
+    filters: INITIAL_ARCHIVE_FILTERS,
     requestedCounts: new Map(),
   }));
   const { filters, requestedCounts } = criteria;
@@ -80,7 +85,7 @@ export function RecordsArchiveProvider({ children }: PropsWithChildren): React.J
   }, []);
   const clearReturnTarget = useCallback(() => setReturnTarget(null), []);
   const reset = useCallback(() => {
-    setCriteria({ filters: INITIAL_FILTERS, requestedCounts: new Map() });
+    setCriteria({ filters: INITIAL_ARCHIVE_FILTERS, requestedCounts: new Map() });
     setReturnTarget(null);
   }, []);
   const view = useMemo(
