@@ -56,6 +56,7 @@ def _keys() -> tuple[DynamoItem, ...]:
         {"PK": "CONTROL#OUTBOX", "SK": "ACTIVITY"},
         {"PK": "CONTROL#DEBATE", "SK": "ACTIVE_ATTEMPT_COUNT"},
         *({"PK": "CONTROL#GLOBAL", "SK": f"SLOT#{slot}"} for slot in range(GLOBAL_LEASE_SLOTS)),
+        {"PK": "CONTROL#GACHA", "SK": "ACTIVITY"},
     )
 
 
@@ -156,6 +157,7 @@ def test_durable_activity_reads_marker_counters_and_slots_in_one_transaction() -
     sdk = _client()
     responses = [
         *({"Item": marshal_item(item)} for item in _zero_items()),
+        {},
     ]
 
     with Stubber(sdk) as stubber:
@@ -175,6 +177,7 @@ def test_durable_activity_reads_marker_counters_and_slots_in_one_transaction() -
         assert durable.claimed_outbox == 0
         assert durable.active_leases == 0
         assert durable.expired_leases == 0
+        assert durable.pending_student_gacha == 0
         stubber.assert_no_pending_responses()
 
 
@@ -184,6 +187,7 @@ def test_durable_activity_fails_closed_when_marker_is_missing() -> None:
     responses = [
         {},
         *({"Item": marshal_item(item)} for item in items[1:]),
+        {},
     ]
 
     with Stubber(sdk) as stubber:
@@ -229,7 +233,7 @@ def test_stop_transaction_fences_marker_all_counters_and_three_slots(
     assert "lock_state=:open" in lock_check["ConditionExpression"]
     assert actions[1]["Put"]["Item"] == marshal_item(serialize_runtime_state(stopping))
     checks = actions[2:]
-    assert len(checks) == 9
+    assert len(checks) == 10
     assert [check["ConditionCheck"]["Key"] for check in checks] == [
         marshal_item(key) for key in _keys()
     ]
@@ -244,9 +248,24 @@ def test_stop_transaction_fences_marker_all_counters_and_three_slots(
     )
     assert all(
         "attribute_not_exists(PK)" not in check["ConditionCheck"]["ConditionExpression"]
-        for check in checks[6:]
+        for check in checks[6:9]
     )
     assert all(
         "fencing_token >= :zero" in check["ConditionCheck"]["ConditionExpression"]
-        for check in checks[6:]
+        for check in checks[6:9]
     )
+
+
+def test_activity_keeps_runtime_for_a_pending_draw() -> None:
+    sdk = _client()
+    responses = [
+        *({"Item": marshal_item(item)} for item in _zero_items()),
+        {
+            "Item": marshal_item(
+                {**_keys()[-1], "record_type": "student_gacha_activity", "count": 1}
+            )
+        },
+    ]
+    with Stubber(sdk) as stubber:
+        stubber.add_response("transact_get_items", {"Responses": responses}, _expected_request())
+        assert _inspector(sdk)._read_durable(NOW).pending_student_gacha == 1

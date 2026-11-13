@@ -190,6 +190,7 @@ class RuntimeLifecycle:
         ingress_runtime: _DiscordIngressRuntime,
         drain_gate: _IngressDrainGate,
         drainer: _IngressDrainer,
+        student_gacha: _IngressDrainer | None = None,
         runtime_instance: _RuntimeInstanceLifecycle,
         tokens: Mapping[DiscordBotSlot, str],
         previous_command_schema_hash: str | None,
@@ -211,6 +212,7 @@ class RuntimeLifecycle:
         self._ingress_runtime = ingress_runtime
         self._drain_gate = drain_gate
         self._drainer = drainer
+        self._student_gacha = student_gacha
         self._runtime_instance = runtime_instance
         self._farewell = farewell
         self._tokens = dict(tokens)
@@ -421,9 +423,17 @@ class RuntimeLifecycle:
         stop = asyncio.Event()
         self._drain_stop = stop
         self._drain_task = asyncio.create_task(
-            self._drainer.run(stop),
+            self._run_drainers(stop),
             name="runtime:ingress-drainer",
         )
+
+    async def _run_drainers(self, stop: asyncio.Event) -> None:
+        if self._student_gacha is None:
+            await self._drainer.run(stop)
+            return
+        async with asyncio.TaskGroup() as tasks:
+            tasks.create_task(self._drainer.run(stop), name="runtime:debate-admission")
+            tasks.create_task(self._student_gacha.run(stop), name="runtime:student-gacha")
 
     def _raise_drain_failure(self) -> None:
         task = self._drain_task

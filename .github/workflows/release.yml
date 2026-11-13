@@ -8,6 +8,15 @@ on:
         required: true
         default: v0004
         type: string
+      student_gacha_enabled:
+        description: "生徒ガチャの配信状態 (keep=現状維持、true=有効、false=無効)"
+        required: true
+        default: keep
+        type: choice
+        options:
+          - keep
+          - "true"
+          - "false"
 
 permissions: {}
 
@@ -838,9 +847,13 @@ jobs:
           RECORDS_PUBLIC_HOSTNAME: ${{ steps.records_evidence.outputs.hostname }}
           RUNTIME_CONFIG_VERSION: ${{ inputs.runtime_config_version }}
           RUNTIME_TEMPLATE_KEY: ${{ env.RUNTIME_TEMPLATE_KEY }}
+          STUDENT_GACHA_ROLLOUT: ${{ inputs.student_gacha_enabled }}
           TOKYO_EXECUTION_ROLE: ${{ vars.CLOUDFORMATION_EXECUTION_ROLE_ARN_TOKYO }}
         run: |
           [[ "${RUNTIME_CONFIG_VERSION}" =~ ^v[0-9]{4}$ ]]
+          STUDENT_GACHA_ENABLED=$(uv run --frozen python tools/resolve_student_gacha_rollout.py \
+            "${STUDENT_GACHA_ROLLOUT}" --region "${AWS_REGION}")
+          [[ "${STUDENT_GACHA_ENABLED}" =~ ^(true|false)$ ]]
           bundle_key=$(jq --raw-output .key "${RUNNER_TEMP}/lambda-bundle.json")
           bundle_hash=$(jq --raw-output .sha256 "${RUNNER_TEMP}/lambda-bundle.json")
           bundle_code_sha256=$(printf '%s' "${bundle_hash}" | xxd -r -p | base64 -w 0)
@@ -951,6 +964,7 @@ jobs:
             --parameters \
               "ParameterKey=RuntimeImageDigest,ParameterValue=${NORMAL_DIGEST}" \
               "ParameterKey=RuntimeConfigVersion,ParameterValue=${RUNTIME_CONFIG_VERSION}" \
+              "ParameterKey=StudentGachaEnabled,ParameterValue=${STUDENT_GACHA_ENABLED}" \
               "ParameterKey=RecordsPublicHostname,ParameterValue=${RECORDS_PUBLIC_HOSTNAME}" \
               "ParameterKey=LambdaBundleBucketName,ParameterValue=${ASSET_BUCKET}" \
               "ParameterKey=LambdaBundleObjectKey,ParameterValue=${bundle_key}" \
@@ -977,6 +991,7 @@ jobs:
           validate_change_set ShittimChest-Prod-Runtime Runtime \
             --expected-parameter "RuntimeImageDigest=${NORMAL_DIGEST}" \
             --expected-parameter "RuntimeConfigVersion=${RUNTIME_CONFIG_VERSION}" \
+            --expected-parameter "StudentGachaEnabled=${STUDENT_GACHA_ENABLED}" \
             --expected-parameter "RecordsPublicHostname=${RECORDS_PUBLIC_HOSTNAME}" \
             --expected-parameter "LambdaBundleBucketName=${ASSET_BUCKET}" \
             --expected-parameter "LambdaBundleObjectKey=${bundle_key}" \
@@ -1366,7 +1381,11 @@ jobs:
           ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
           MONITOR_ARN: ${{ vars.EXISTING_SERVICE_ANOMALY_MONITOR_ARN }}
           SIGNING_PROFILE_ARN: ${{ vars.ECR_SIGNING_PROFILE_ARN }}
+          STUDENT_GACHA_ROLLOUT: ${{ inputs.student_gacha_enabled }}
         run: |
+          STUDENT_GACHA_ENABLED=$(uv run --frozen python tools/resolve_student_gacha_rollout.py \
+            "${STUDENT_GACHA_ROLLOUT}" --region "${AWS_REGION}")
+          [[ "${STUDENT_GACHA_ENABLED}" =~ ^(true|false)$ ]]
           manifest="${RUNNER_TEMP}/release/release-manifest.json"
           records_manifest="${RUNNER_TEMP}/release/records-release-evidence/records-release-manifest.json"
           records_public_hostname=$(jq --exit-status --raw-output \
@@ -1439,6 +1458,7 @@ jobs:
           validate_change_set ShittimChest-Prod-Runtime "${AWS_REGION}" Runtime \
             --expected-parameter "RuntimeImageDigest=${normal_digest}" \
             --expected-parameter "RuntimeConfigVersion=${runtime_config}" \
+            --expected-parameter "StudentGachaEnabled=${STUDENT_GACHA_ENABLED}" \
             --expected-parameter "RecordsPublicHostname=${records_public_hostname}" \
             --expected-parameter "LambdaBundleBucketName=${ASSET_BUCKET}" \
             --expected-parameter "LambdaBundleObjectKey=${bundle_key}" \

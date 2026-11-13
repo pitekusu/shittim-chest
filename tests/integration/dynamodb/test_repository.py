@@ -33,6 +33,7 @@ from shittim_chest.adapters.dynamodb.serializer import (
     serialize_outbox,
     serialize_snapshot,
 )
+from shittim_chest.adapters.dynamodb.student_gacha import DynamoDbStudentGachaRepository
 from shittim_chest.application import (
     DebateSnapshot,
     DeliveryAbandonReason,
@@ -64,6 +65,8 @@ from shittim_chest.application.ports import (
     RepositoryTransactionConflict,
     RepositoryTransactionStage,
 )
+from shittim_chest.application.scale_to_zero import IngressSource
+from shittim_chest.application.student_gacha_state import GachaJobKind
 from shittim_chest.domain import (
     AffectionReasonStatus,
     AttemptId,
@@ -92,11 +95,18 @@ DISPLAY_NAMES = {
 class DynamoDbDebateRepository(_DynamoDbDebateRepository):
     """Bind the non-secret test identity key for integration coverage."""
 
-    def __init__(self, *, client: DynamoDBClient, table_name: str) -> None:
+    def __init__(
+        self,
+        *,
+        client: DynamoDBClient,
+        table_name: str,
+        student_gacha: DynamoDbStudentGachaRepository | None = None,
+    ) -> None:
         super().__init__(
             client=client,
             table_name=table_name,
             identity_hmac_key=IDENTITY_HMAC_KEY,
+            student_gacha=student_gacha,
         )
         self._legacy_profile_to_insert: DynamoItem | None = None
 
@@ -195,6 +205,7 @@ async def claimed_ingress(
     kind: IngressKind = IngressKind.NEW_DEBATE,
     target: DebateSnapshot | None = None,
     created_at: datetime = NOW,
+    gacha_source: IngressSource | None = None,
 ) -> tuple[IngressRequest, IngressClaimFence]:
     if kind is IngressKind.NEW_DEBATE:
         request = IngressRequest.new_debate(
@@ -232,7 +243,37 @@ async def claimed_ingress(
             custom_id=f"shittim:v1:{kind.value}:{operation_id}",
             created_at=created_at,
         )
-    await repository.enqueue(request)
+    if gacha_source is IngressSource.MOBILE:
+        assert request.question is not None
+        request = IngressRequest.mobile_debate(
+            request_id="fb1788f4-c5dd-49b1-9947-5c9ba2273a08",
+            owner_key=derive_affection_requester_key(IDENTITY_HMAC_KEY, request.requester_id),
+            application_id=request.application_id,
+            question=request.question,
+            requester_id=request.requester_id,
+            requester_username=request.requester_username,
+            requester_display_name=request.requester_display_name,
+            guild_id=request.guild_id,
+            channel_id=request.channel_id,
+            created_at=created_at,
+        )
+        await repository.enqueue_mobile(request)
+    else:
+        await repository.enqueue(request)
+    if gacha_source is not None:
+        publication = await repository.claim_status_publication(
+            interaction_id=request.interaction_id, claim_owner="publisher", at=created_at
+        )
+        assert publication is not None
+        await repository.mark_status_delivered(
+            work=publication,
+            claim_owner="publisher",
+            message_id="100",
+            at=created_at,
+        )
+        replay = await repository.get_replay(request)
+        assert replay is not None
+        request = replay.request
     claimed = await repository.claim(
         request=request,
         claim_owner="runtime-instance",
@@ -994,12 +1035,15 @@ async def test_vote_delivery_stages_and_finalizes_only_the_complete_ballot(
         "previous_terminal_shape",
         "legacy_terminal_plan",
         "finalization_succeeds",
+        "gacha_source",
     ),
     (
-        *((winner, None, False, False, True) for winner in ParticipantSlot),
-        (ParticipantSlot.PARTICIPANT_A, DiscordBotSlot.MODERATOR, True, False, True),
-        (ParticipantSlot.PARTICIPANT_A, DiscordBotSlot.MODERATOR, True, True, True),
-        (ParticipantSlot.PARTICIPANT_A, DiscordBotSlot.PARTICIPANT_B, False, False, False),
+        (ParticipantSlot.PARTICIPANT_A, None, False, False, True, IngressSource.DISCORD),
+        (ParticipantSlot.PARTICIPANT_B, None, False, False, True, IngressSource.MOBILE),
+        (ParticipantSlot.PARTICIPANT_C, None, False, False, True, None),
+        (ParticipantSlot.PARTICIPANT_A, DiscordBotSlot.MODERATOR, True, False, True, None),
+        (ParticipantSlot.PARTICIPANT_A, DiscordBotSlot.MODERATOR, True, True, True, None),
+        (ParticipantSlot.PARTICIPANT_A, DiscordBotSlot.PARTICIPANT_B, False, False, False, None),
     ),
     ids=(
         "new-winner-a",
@@ -1018,13 +1062,27 @@ async def test_terminal_finalize_atomically_completes_origin_ingress_status(
     previous_terminal_shape: bool,
     legacy_terminal_plan: bool,
     finalization_succeeds: bool,
+    gacha_source: IngressSource | None,
 ) -> None:
-    debates = DynamoDbDebateRepository(client=dynamodb_client, table_name=dynamodb_table)
-    ingress = DynamoDbIngressRepository(client=dynamodb_client, table_name=dynamodb_table)
+    gacha = (
+        DynamoDbStudentGachaRepository(client=dynamodb_client, table_name=dynamodb_table)
+        if gacha_source is not None
+        else None
+    )
+    debates = DynamoDbDebateRepository(
+        client=dynamodb_client, table_name=dynamodb_table, student_gacha=gacha
+    )
+    ingress = DynamoDbIngressRepository(
+        client=dynamodb_client,
+        table_name=dynamodb_table,
+        student_gacha=gacha,
+        identity_hmac_key=IDENTITY_HMAC_KEY if gacha is not None else None,
+    )
     outbox = DynamoDbOutboxRepository(client=dynamodb_client, table_name=dynamodb_table)
     claimed, fence = await claimed_ingress(
         repository=ingress,
         operation_id="terminal-origin",
+        gacha_source=gacha_source,
     )
     source = replace(
         new_snapshot(),
@@ -1037,7 +1095,7 @@ async def test_terminal_finalize_atomically_completes_origin_ingress_status(
     )
     accepted = await debates.create(
         source,
-        operation_id="terminal-origin",
+        operation_id=claimed.operation_id,
         lease_owner="runtime-instance",
         ingress_claim=fence,
     )
@@ -1100,6 +1158,11 @@ async def test_terminal_finalize_atomically_completes_origin_ingress_status(
     assert publication is not None
     assert publication.desired_state is StatusMessageState.COMPLETED
     assert publication.state is StatusPublicationState.PREPARED
+
+    if gacha is not None:
+        notice = await gacha.claim_next(claim_owner="worker", at=NOW + timedelta(seconds=2))
+        assert notice is not None and notice.kind is GachaJobKind.PROGRESS
+        assert notice.remaining == 4 and notice.after_message_id == "100"
 
 
 @pytest.mark.asyncio

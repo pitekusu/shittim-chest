@@ -6,7 +6,7 @@ import asyncio
 import logging
 import os
 import time
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Awaitable, Callable, Generator, Mapping
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Final, Literal, cast
@@ -23,10 +23,12 @@ from shittim_chest.adapters.aws.clients import (
 )
 from shittim_chest.adapters.aws.ssm import SsmParameterReader
 from shittim_chest.adapters.discord_http import (
+    ApiGatewayV2Response,
     DiscordHttpBoundary,
     DiscordRequestVerifier,
     ingress_response,
     ingress_unavailable_response,
+    student_gacha_response,
     verified_ingress_unavailable_response,
 )
 from shittim_chest.adapters.dynamodb.debate_lookup import DynamoDbDebateAuthorizationLookup
@@ -42,6 +44,12 @@ from shittim_chest.application.ports import (
     ParameterReadUnavailable,
     RepositoryConflict,
     RepositoryUnavailable,
+)
+from shittim_chest.application.student_gacha_discord import (
+    DiscordStudentGachaOperation,
+    GachaInteractionOutcome,
+    GachaInteractionResult,
+    StudentGachaInteractions,
 )
 from shittim_chest.config.ingress import (
     IngressBootstrapSettings,
@@ -153,7 +161,13 @@ class DiscordVerifiedIngressFailure(RuntimeError):
 class DiscordIngressLambda:
     """Verify before lazily constructing any DynamoDB or Lambda dependency."""
 
-    __slots__ = ("_application", "_boundary", "_clock", "_soft_deadline_seconds")
+    __slots__ = (
+        "_application",
+        "_boundary",
+        "_clock",
+        "_soft_deadline_seconds",
+        "_student_gacha",
+    )
 
     def __init__(
         self,
@@ -161,6 +175,7 @@ class DiscordIngressLambda:
         boundary: DiscordHttpBoundary,
         application: Callable[[], DiscordIngressApplication],
         clock: Clock,
+        student_gacha: Callable[[], StudentGachaInteractions] | None = None,
         soft_deadline_seconds: float = DISCORD_INGRESS_SOFT_DEADLINE_SECONDS,
     ) -> None:
         if (
@@ -172,6 +187,7 @@ class DiscordIngressLambda:
         self._boundary = boundary
         self._application = application
         self._clock = clock
+        self._student_gacha = student_gacha
         self._soft_deadline_seconds = float(soft_deadline_seconds)
 
     def handle(
@@ -190,7 +206,7 @@ class DiscordIngressLambda:
             with _measure_stage(timings, "response_build"):
                 return reception.response.as_event()
         operation = reception.interaction
-        if not isinstance(operation, DiscordHttpOperation):
+        if not isinstance(operation, (DiscordHttpOperation, DiscordStudentGachaOperation)):
             raise AssertionError("verified Discord reception has no result")
         try:
             remaining_seconds = self._remaining_seconds(entry_at)
@@ -200,7 +216,7 @@ class DiscordIngressLambda:
             # outside the event loop so it cannot postpone asyncio's timeout callback,
             # then remeasure the entry budget before any SDK request can start.
             with _measure_stage(timings, "application_prepare"):
-                application = self._application()
+                accept = self._prepare_accept(operation)
             remaining_seconds = self._remaining_seconds(entry_at)
             if remaining_seconds <= 0:
                 raise DiscordIngressDeadlineExceeded
@@ -211,8 +227,7 @@ class DiscordIngressLambda:
             ):
                 result = asyncio.run(
                     self._accept(
-                        application,
-                        operation,
+                        accept,
                         gate=gate,
                         timeout_seconds=remaining_seconds,
                     )
@@ -220,7 +235,32 @@ class DiscordIngressLambda:
         except Exception as error:
             raise DiscordVerifiedIngressFailure(_failure_category(error)) from None
         with _measure_stage(timings, "response_build"):
-            return ingress_response(result.outcome).as_event()
+            response = (
+                ingress_response(result.outcome)
+                if isinstance(result, IngressAcceptance)
+                else result
+            )
+            return response.as_event()
+
+    def _prepare_accept(
+        self,
+        operation: DiscordHttpOperation | DiscordStudentGachaOperation,
+    ) -> Callable[[], Awaitable[IngressAcceptance | ApiGatewayV2Response]]:
+        if isinstance(operation, DiscordHttpOperation):
+            application = self._application()
+            return lambda: application.accept(operation)
+
+        student_gacha = None if self._student_gacha is None else self._student_gacha()
+
+        async def accept() -> ApiGatewayV2Response:
+            result = (
+                GachaInteractionResult(GachaInteractionOutcome.UNAVAILABLE)
+                if student_gacha is None
+                else await student_gacha.accept(operation)
+            )
+            return student_gacha_response(operation, result)
+
+        return accept
 
     def _remaining_seconds(self, entry_at: datetime) -> float:
         elapsed_seconds = max(0.0, (self._clock.now() - entry_at).total_seconds())
@@ -228,12 +268,11 @@ class DiscordIngressLambda:
 
     async def _accept(
         self,
-        application: DiscordIngressApplication,
-        operation: DiscordHttpOperation,
+        accept: Callable[[], Awaitable[IngressAcceptance | ApiGatewayV2Response]],
         *,
         gate: IngressSdkCancellationGate,
         timeout_seconds: float,
-    ) -> IngressAcceptance:
+    ) -> IngressAcceptance | ApiGatewayV2Response:
         loop = asyncio.get_running_loop()
         gate_lead_seconds = min(
             DISCORD_INGRESS_SDK_GATE_LEAD_SECONDS,
@@ -246,7 +285,7 @@ class DiscordIngressLambda:
         try:
             async with asyncio.timeout(timeout_seconds):
                 gate.raise_if_cancelled()
-                return await application.accept(operation)
+                return await accept()
         except IngressExecutionDeadlineExceeded, TimeoutError:
             raise DiscordIngressDeadlineExceeded from None
         finally:
@@ -336,9 +375,19 @@ def _build_handler(environ: Mapping[str, str]) -> DiscordIngressLambda:
     runtime = asyncio.run(load_ingress_runtime_settings(settings, ssm))
     application = _lazy_application(settings, runtime)
     return DiscordIngressLambda(
-        boundary=DiscordHttpBoundary(DiscordRequestVerifier(runtime.public_key_hex)),
+        boundary=DiscordHttpBoundary(
+            DiscordRequestVerifier(runtime.public_key_hex),
+            student_gacha_verifier=(
+                DiscordRequestVerifier(runtime.arona_public_key_hex)
+                if runtime.arona_public_key_hex is not None
+                else None
+            ),
+        ),
         application=application,
         clock=SystemClock(),
+        student_gacha=(
+            _lazy_student_gacha(settings, runtime) if runtime.student_gacha_enabled else None
+        ),
     )
 
 
@@ -364,6 +413,29 @@ def _lazy_application(
                 table_name=settings.table_name,
             ),
         )
+        return cached
+
+    return load
+
+
+def _lazy_student_gacha(
+    settings: IngressBootstrapSettings,
+    runtime: IngressRuntimeSettings,
+) -> Callable[[], StudentGachaInteractions]:
+    cached: StudentGachaInteractions | None = None
+
+    def load() -> StudentGachaInteractions:
+        nonlocal cached
+        if cached is None:
+            from shittim_chest.adapters.dynamodb.student_gacha import DynamoDbStudentGachaRepository
+
+            cached = StudentGachaInteractions(
+                store=DynamoDbStudentGachaRepository(
+                    client=create_ingress_dynamodb_client(region_name=settings.aws_region),
+                    table_name=settings.table_name,
+                ),
+                config=runtime.discord,
+            )
         return cached
 
     return load

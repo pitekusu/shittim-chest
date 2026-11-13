@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -85,6 +86,9 @@ from shittim_chest.application.status_publication import (
 )
 from shittim_chest.domain import AttemptId, DebateId, DebatePhase
 
+if TYPE_CHECKING:
+    from shittim_chest.adapters.dynamodb.student_gacha import DynamoDbStudentGachaRepository
+
 INGRESS_RECORD_SCHEMA_VERSION = 1
 INGRESS_STATUS_PUBLICATION_RECORD_SCHEMA_VERSION = 3
 INGRESS_ACTIVE_POINTER_PARTITION = "CONTROL#INGRESS#ACTIVE"
@@ -96,11 +100,22 @@ T = TypeVar("T")
 class DynamoDbIngressRepository:
     """Store a twenty-entry FIFO with transactional replay and counter records."""
 
-    def __init__(self, *, client: DynamoDBClient, table_name: str) -> None:
+    def __init__(
+        self,
+        *,
+        client: DynamoDBClient,
+        table_name: str,
+        student_gacha: DynamoDbStudentGachaRepository | None = None,
+        identity_hmac_key: bytes | None = None,
+    ) -> None:
         if not table_name.strip():
             raise ValueError("table name must not be empty")
         self._client = client
         self._table_name = table_name
+        self._student_gacha = student_gacha
+        self._identity_hmac_key = identity_hmac_key
+        if student_gacha is not None and identity_hmac_key is None:
+            raise ValueError("student gacha admissions require an identity key")
 
     async def enqueue(self, request: IngressRequest) -> EnqueuedIngress:
         if request.source is not IngressSource.DISCORD:
@@ -1639,33 +1654,63 @@ class DynamoDbIngressRepository:
         )
         if current.processing_started_at is None:
             condition += " AND terminal_deadline_at > :at"
-        try:
-            status_actions = self._rearm_status_actions(
-                request=updated,
-                state=updated.status_message_state,
-                at=at,
-            )
-            self._replace_request_and_operation(
-                previous=current,
-                updated=updated,
-                condition=condition,
-                values=values,
-                operation_condition=operation_condition,
-                operation_values=operation_values,
-                extra_actions=(*self._leave_active_queue_actions(current, at), *status_actions),
-                token_suffix=f"accepted:{debate_id}:{attempt_id}",
-            )
-        except RepositoryConflict:
-            current = self._load_current(request)
-            if (
-                current is not None
-                and current.status is IngressStatus.ACCEPTED
-                and current.accepted_debate_id == debate_id
-                and current.accepted_attempt_id == attempt_id
-            ):
-                return current
-            raise
+        for retry in range(4):
+            gacha_actions = self._gacha_admission_actions(current, debate_id, at)
+            try:
+                status_actions = self._rearm_status_actions(
+                    request=updated,
+                    state=updated.status_message_state,
+                    at=at,
+                )
+                self._replace_request_and_operation(
+                    previous=current,
+                    updated=updated,
+                    condition=condition,
+                    values=values,
+                    operation_condition=operation_condition,
+                    operation_values=operation_values,
+                    extra_actions=(
+                        *self._leave_active_queue_actions(current, at),
+                        *status_actions,
+                        *gacha_actions,
+                    ),
+                    token_suffix=f"accepted:{debate_id}:{attempt_id}",
+                )
+            except RepositoryConflict:
+                actual = self._load_current(request)
+                if (
+                    actual is not None
+                    and actual.status is IngressStatus.ACCEPTED
+                    and actual.accepted_debate_id == debate_id
+                    and actual.accepted_attempt_id == attempt_id
+                ):
+                    return actual
+                if not gacha_actions or retry == 3 or actual != current:
+                    raise
+            else:
+                break
         return updated
+
+    def _gacha_admission_actions(
+        self, request: IngressRequest, debate_id: DebateId, at: datetime
+    ) -> tuple[TransactWriteItemTypeDef, ...]:
+        if (
+            self._student_gacha is None
+            or self._identity_hmac_key is None
+            or request.kind is not IngressKind.NEW_DEBATE
+            or request.status_message_id is None
+        ):
+            return ()
+        from shittim_chest.adapters.dynamodb.repository import derive_affection_requester_key
+
+        return self._student_gacha.admission_actions(
+            debate_id=str(debate_id),
+            owner_key=derive_affection_requester_key(self._identity_hmac_key, request.requester_id),
+            guild_id=request.guild_id,
+            channel_id=request.channel_id,
+            status_message_id=request.status_message_id,
+            at=at,
+        )
 
     def _mark_startup_timeout(
         self,
@@ -2396,10 +2441,11 @@ class DynamoDbIngressRepository:
             operation_values=operation_values,
         )
         token_source = f"{self._table_name}:{previous.operation_id}:{token_suffix}"
-        self._transact(
-            (*request_actions, *extra_actions),
-            token=_client_token(token_source),
-        )
+        actions = (*request_actions, *extra_actions)
+        if self._student_gacha is not None and token_suffix.startswith("accepted:"):
+            # A version race can change the recruitment side of the same acceptance.
+            token_source += ":" + json.dumps(actions, sort_keys=True)
+        self._transact(actions, token=_client_token(token_source))
 
     def _replace_request_and_operation_actions(
         self,

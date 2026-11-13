@@ -1492,6 +1492,27 @@ async def test_stopped_transition_conflict_converges_on_the_next_pass() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_gacha_submission_wakes_stopped_runtime_without_a_debate_request() -> None:
+    at = CREATED_AT + timedelta(seconds=1)
+    stopped = RuntimeState.stopped(at=CREATED_AT)
+    ingress = FakeIngress(())
+    runtime = FakeRuntimeRepository(stopped)
+    value, _, ecs, _, _ = reconciler(
+        at=at,
+        ingress=ingress,
+        runtime=runtime,
+        activity=FakeActivity(ingress, (RuntimeActivity(pending_student_gacha=1),)),
+    )
+
+    report = await value.reconcile()
+
+    assert report.ecs_scaled_up
+    assert ecs.update_calls == [1]
+    assert runtime.state is not None
+    assert runtime.state.status is RuntimeStatus.STARTING
+
+
+@pytest.mark.asyncio
 async def test_concurrent_resumer_wins_without_losing_scale_up() -> None:
     """Two reconcilers may race to resume one STOPPED generation safely."""
 
