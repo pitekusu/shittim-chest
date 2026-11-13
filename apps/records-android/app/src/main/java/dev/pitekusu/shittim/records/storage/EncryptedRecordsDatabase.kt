@@ -35,6 +35,13 @@ internal interface EncryptedRecordDao {
   @Query("SELECT record_id FROM encrypted_records WHERE account_key = :accountKey AND part = :part")
   suspend fun recordIds(accountKey: String, part: String): List<String>
 
+  @Query("""SELECT summary.record_id FROM encrypted_records AS summary
+    WHERE summary.account_key = :accountKey AND summary.part = :listPart AND NOT EXISTS (
+      SELECT 1 FROM encrypted_records AS detail WHERE detail.account_key = summary.account_key
+      AND detail.record_id = summary.record_id AND detail.part = :detailPart
+    )""")
+  suspend fun listOnlyRecordIds(accountKey: String, listPart: String, detailPart: String): List<String>
+
   @Query("DELETE FROM encrypted_records WHERE account_key = :accountKey AND record_id IN (:recordIds)")
   suspend fun deleteRecords(accountKey: String, recordIds: List<String>)
 

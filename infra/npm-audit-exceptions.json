@@ -3,7 +3,7 @@
     "id": "GHSA-g3hv-75wg-m249",
     "package": "minimatch",
     "severity": "moderate",
-    "reason": "2026-11-05に所有者が「11月6日09:00 JSTまで13組を受容してマージ」と明示承認したうちのModerate 1件。CVE-2026-118764／GHSA-g3hv-75wg-m249は攻撃者のglobをoptimizationLevel 2以上で処理した場合のCPU・メモリ枯渇。最新aws-cdk-lib2.275.0公式tarballのintegrityと同梱minimatch10.2.6を再確認。3呼出は既定1を使い、Web/Discord入力経路は見つからないが、未修正依存と将来の設定変更リスクは残る。標準npmのnested override11.0.4を指定してinstall/ciが成功してもbundled実体は10.2.6のままで、公式修正を確認できていない。例外はこのID/minimatch/Moderateのpackage単位で、CDKのpathだけには限定されない。2026-11-06 00:00 UTC（09:00 JST）に失効し自動延長しない。正式修正CDKを確認して更新したら削除し、他の検出は拒否する。",
-    "expires": "2026-11-06"
+    "reason": "2026-11-13に所有者がRecordsの起動改善をPR #704で統合するため、既知のminimatchの検出を受容した。CVE-2026-118764は外部から指定されたglobをoptimizationLevel 2以上で処理した場合にCPUとメモリを過剰に消費する。現行CDKに同梱されたminimatch 10.2.6への3呼出は既定の1を使い、WebやDiscordからglobを渡す経路は確認されていない。未修正依存は開発とCIに残る。2026-11-15 00:00 UTC（09:00 JST）に失効する。修正版を同梱したCDKへ更新した時点で削除する。",
+    "expires": "2026-11-15"
   }
 ]

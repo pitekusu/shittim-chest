@@ -15,8 +15,6 @@ from shittim_chest.adapters.dynamodb.serializer import DynamoItem
 from shittim_chest.domain.attachments import DebateImage
 
 from shittim_records.auth import AuthFailure
-from shittim_records.cost_adapters import parse_stored_costs, parse_stored_rates
-from shittim_records.costs import StoredDailyCost, StoredDailyRate
 from shittim_records.read_api import (
     ArchivePage,
     ParticipantSlot,
@@ -24,6 +22,9 @@ from shittim_records.read_api import (
     RequesterProfile,
     SortOrder,
 )
+
+if TYPE_CHECKING:
+    from shittim_records.costs import StoredDailyCost, StoredDailyRate
 
 MAX_BATCH_GET_ATTEMPTS = 5
 
@@ -208,6 +209,8 @@ class DynamoRecordsReader:
     def load_cost_ledger(
         self,
     ) -> tuple[tuple[StoredDailyCost, ...], tuple[StoredDailyRate, ...]]:
+        from shittim_records.cost_adapters import parse_stored_costs, parse_stored_rates
+
         items: list[DynamoItem] = []
         for partition_key in ("COST#DAILY", "FX#DAILY"):
             start_key: dict[str, AttributeValueTypeDef] | None = None

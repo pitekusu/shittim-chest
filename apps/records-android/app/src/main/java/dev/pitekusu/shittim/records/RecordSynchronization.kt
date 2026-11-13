@@ -113,8 +113,9 @@ internal suspend fun RecordsRepository.synchronize(token: String, accountId: Str
     if (reference != null) {
       consume(reference)
     } else if (progress.cursor == null) {
-      // GSI omissions are not proof of deletion: only an authenticated detail 404
-      // may remove data. Keep each candidate until its confirmation succeeds.
+      // Include summaries published by foreground startup while this index was loading.
+      // An authenticated detail 404 is still required before deleting any candidate.
+      progress = progress.copy(removalCandidates = progress.removalCandidates.orEmpty() + finishIndexDiscovery(accountId))
       for (candidate in progress.removalCandidates.orEmpty()) {
         currentCoroutineContext().ensureActive()
         removeIfDeleted(token, accountId, candidate)

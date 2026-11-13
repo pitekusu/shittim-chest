@@ -275,6 +275,102 @@ class RecordsRepositoryTest {
     }
   }
 
+  @Test fun foregroundSeedSavesOnlyListSummariesAndKeepsUnknownAttachmentCount() = runBlocking {
+    val second = "s".repeat(43)
+    val cursor = "next.cursor"
+    val payload = list(listOf(recordId, second), cursor).replace(
+      "\"recordId\":\"$recordId\"", "\"recordId\":\"$recordId\",\"attachmentCount\":2")
+    var listRequests = 0
+    repository(MockEngine { request ->
+      assertEquals("/api/v1/records", request.url.encodedPath)
+      listRequests++
+      respond(payload, headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { records ->
+      records.syncCheckpoint(accountId) // The verified session has already activated this cache owner.
+      assertEquals(cursor, records.seedRecentRecords(token, accountId) { true }?.nextCursor)
+      assertNull(records.seedRecentRecords(token, accountId) { true })
+    }
+    assertEquals(1, listRequests)
+    repository(MockEngine { error("offline_must_not_request_network") }).use { records ->
+      assertEquals(2, records.cachedListEntry(accountId, recordId)?.attachmentCount)
+      val unknown = requireNotNull(records.cachedListEntry(accountId, second))
+      assertFalse(unknown.attachmentCountKnown)
+      assertEquals(0, unknown.attachmentCount)
+      assertNull(records.cachedRecord(accountId, recordId))
+      assertNull(records.syncCheckpoint(accountId))
+    }
+  }
+
+  @Test fun foregroundSeedCannotRestoreARecordDeletedWhileTheResponseWasInFlight() = runBlocking {
+    val started = CompletableDeferred<Unit>()
+    val release = CompletableDeferred<Unit>()
+    repository(MockEngine {
+      started.complete(Unit)
+      release.await()
+      respond(list(), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { seed ->
+      seed.syncCheckpoint(accountId)
+      val pending = async { seed.seedRecentRecords(token, accountId) { true } }
+      started.await()
+      try {
+        repository(MockEngine { respond("", HttpStatusCode.NotFound) }).use { sync ->
+          sync.removeIfDeleted(token, accountId, recordId)
+        }
+      } finally { release.complete(Unit) }
+      assertNull(pending.await())
+      assertNull(seed.cachedListEntry(accountId, recordId))
+    }
+  }
+
+  @Test fun workerChecksSeededSummariesEvenWhenTheyWereMissingFromItsInitialCacheSnapshot() = runBlocking {
+    val requestedIndex = CompletableDeferred<Unit>()
+    val releaseIndex = CompletableDeferred<Unit>()
+    val requestedDetails = mutableListOf<String>()
+    repository(MockEngine { request ->
+      if (request.url.encodedPath.endsWith("/sync-index")) {
+        requestedIndex.complete(Unit)
+        releaseIndex.await()
+        respond(index(emptyList()), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+      } else {
+        requestedDetails += request.url.encodedPath.substringAfterLast('/')
+        respond("", HttpStatusCode.NotFound)
+      }
+    }).use { worker ->
+      worker.syncCheckpoint(accountId)
+      val sync = async { worker.synchronize(token, accountId) }
+      requestedIndex.await()
+      try {
+        repository(MockEngine { respond(list(), headers = headersOf(HttpHeaders.ContentType, "application/json")) })
+          .use { seed -> assertEquals(1, seed.seedRecentRecords(token, accountId) { true }?.items?.size) }
+      } finally { releaseIndex.complete(Unit) }
+      sync.await()
+      assertEquals(listOf(recordId), requestedDetails)
+      assertNull(worker.cachedListEntry(accountId, recordId))
+    }
+  }
+
+  @Test fun foregroundSeedCannotWriteAStalePageAfterIndexDiscoveryCompletes() = runBlocking {
+    val requestedList = CompletableDeferred<Unit>()
+    val releaseList = CompletableDeferred<Unit>()
+    repository(MockEngine {
+      requestedList.complete(Unit)
+      releaseList.await()
+      respond(list(), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { seed ->
+      seed.syncCheckpoint(accountId)
+      val pending = async { seed.seedRecentRecords(token, accountId) { true } }
+      requestedList.await()
+      try {
+        repository(MockEngine { request ->
+          assertTrue(request.url.encodedPath.endsWith("/sync-index"))
+          respond(index(emptyList()), headers = headersOf(HttpHeaders.ContentType, "application/json"))
+        }).use { it.synchronize(token, accountId) }
+      } finally { releaseList.complete(Unit) }
+      assertNull(pending.await())
+      assertNull(seed.cachedListEntry(accountId, recordId))
+    }
+  }
+
   @Test fun syncWalksEveryPageSeriallyAndFetchesOnlyMissingDetails() = runBlocking {
     val a = "a".repeat(43)
     val b = "b".repeat(43)

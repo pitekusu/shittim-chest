@@ -111,6 +111,40 @@ class RecordsRepositoryCacheTest {
     }
   }
 
+  @Test fun recentStageSortsSavedSummariesAndPublishesBeforeAvatarDecryption() = runBlocking {
+    val source = avatarSource("https://media.example.invalid/avatar")
+    val newest = Instant.parse("2026-09-24T00:00:00Z")
+    val entries = (1..14).map { index ->
+      entry(index.toString().padStart(43, 'a'),
+        avatar = RecordAvatar("https://media.example.invalid/avatar", "cyan"),
+        completedAt = newest.plusSeconds(index.toLong()))
+    }
+    entries.forEach { saveList(it) }
+    RecordCacheAccount.lock.withLock {
+      // An undecodable saved icon proves the initial summaries do not wait for icon decryption.
+      store.save(accountId, "avatar-$source-legacy", CachedRecordPart.AVATAR, byteArrayOf(1))
+    }
+    repository().use { records ->
+      val snapshots = mutableListOf<List<RecordListEntry>>()
+      assertReadFailure(RecordReadFailure.STORAGE_UNAVAILABLE) {
+        records.cachedRecords(accountId) { recent, total ->
+          assertEquals(14, total)
+          snapshots += recent
+        }
+      }
+      val initial = snapshots.single()
+      assertEquals(entries.takeLast(12).asReversed().map { it.recordId }, initial.map { it.recordId })
+      initial.forEach {
+        assertNull(it.requesterAvatar.url)
+        assertNull(it.requesterAvatar.bytes)
+      }
+      activeAccountId = ""
+      assertReadFailure(RecordReadFailure.AUTH_REQUIRED) {
+        records.cachedRecords(accountId) { _, _ -> fail("unauthorized recent summaries") }
+      }
+    }
+  }
+
   @Test fun legacyOfflineListsDeriveImageCountsOncePerMemoWithoutAnyNetworkRequest() = runBlocking {
     saveList(entry(firstId), schemaVersion = 1)
     saveList(entry(secondId), schemaVersion = 1)
@@ -261,8 +295,9 @@ class RecordsRepositoryCacheTest {
 
   private fun entry(id: String, question: String = "架空の議題",
     avatar: RecordAvatar = RecordAvatar(null, "cyan"), requesterName: String = "架空の依頼者",
-    winnerName: String = "アロナ", winnerSlot: String? = "participant-a", attachmentCount: Int = 0): RecordListEntry =
-    RecordListEntry(id, question, requesterName, avatar, Instant.parse("2026-09-24T00:00:00Z"),
+    winnerName: String = "アロナ", winnerSlot: String? = "participant-a", attachmentCount: Int = 0,
+    completedAt: Instant = Instant.parse("2026-09-24T00:00:00Z")): RecordListEntry =
+    RecordListEntry(id, question, requesterName, avatar, completedAt,
       winnerName, winnerSlot, attachmentCount)
 
   private suspend fun saveList(entry: RecordListEntry, schemaVersion: Int = 2) = RecordCacheAccount.lock.withLock {

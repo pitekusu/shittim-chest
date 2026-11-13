@@ -316,7 +316,7 @@ def _momotalk_image_controller(
             store=cast(Any, FakeSessionStore(session())),
             session_key=SESSION_KEY,
             records=cast(Any, None),
-            momotalk=momotalk,
+            momotalk=lambda: momotalk,
         ),
         signed,
     )
@@ -385,7 +385,7 @@ def test_momotalk_detail_rejects_invalid_image_contract_before_reading(query: st
         store=cast(Any, FakeSessionStore(session())),
         session_key=SESSION_KEY,
         records=cast(Any, None),
-        momotalk=object(),
+        momotalk=lambda: pytest.fail("invalid query initialized MomoTalk"),
     )
     response = controller.handle(
         event(
@@ -400,7 +400,7 @@ def test_momotalk_detail_rejects_invalid_image_contract_before_reading(query: st
 
 
 def test_anonymous_session_is_always_200_no_store_without_cookie() -> None:
-    controller = AuthHttpController(cast(Any, FakeAuthService()))
+    controller = AuthHttpController(lambda: cast(Any, FakeAuthService()))
 
     response = controller.handle(event("GET /api/v1/session"), now=NOW)
 
@@ -416,7 +416,7 @@ def test_anonymous_session_is_always_200_no_store_without_cookie() -> None:
 
 
 def test_authenticated_session_returns_csrf_and_short_lived_avatar_url() -> None:
-    controller = AuthHttpController(cast(Any, FakeAuthService(session(avatar=True))))
+    controller = AuthHttpController(lambda: cast(Any, FakeAuthService(session(avatar=True))))
 
     response = controller.handle(
         event(
@@ -439,7 +439,7 @@ def test_authenticated_session_returns_csrf_and_short_lived_avatar_url() -> None
 
 
 def test_authenticated_legacy_session_response_omits_admin_capability() -> None:
-    controller = AuthHttpController(cast(Any, FakeAuthService(session())))
+    controller = AuthHttpController(lambda: cast(Any, FakeAuthService(session())))
 
     response = controller.handle(
         event(
@@ -464,7 +464,7 @@ def test_authenticated_legacy_session_response_omits_admin_capability() -> None:
     ),
 )
 def test_session_rejects_unknown_or_ambiguous_contract_negotiation(query: str) -> None:
-    controller = AuthHttpController(cast(Any, FakeAuthService()))
+    controller = AuthHttpController(lambda: cast(Any, FakeAuthService()))
 
     response = controller.handle(event("GET /api/v1/session", query=query), now=NOW)
 
@@ -473,7 +473,7 @@ def test_session_rejects_unknown_or_ambiguous_contract_negotiation(query: str) -
 
 
 def test_callback_requires_exactly_one_code_and_state() -> None:
-    controller = AuthHttpController(cast(Any, FakeAuthService()))
+    controller = AuthHttpController(lambda: cast(Any, FakeAuthService()))
 
     response = controller.handle(
         event(
@@ -489,7 +489,7 @@ def test_callback_requires_exactly_one_code_and_state() -> None:
 
 
 def test_logout_returns_two_clearing_cookies() -> None:
-    controller = AuthHttpController(cast(Any, FakeAuthService(session())))
+    controller = AuthHttpController(lambda: cast(Any, FakeAuthService(session())))
 
     response = controller.handle(
         event(
@@ -793,7 +793,7 @@ def test_unknown_auth_failure_is_content_free() -> None:
             del return_to, now
             raise AuthFailure("provider_private_detail")
 
-    response = AuthHttpController(cast(Any, FailingService())).handle(
+    response = AuthHttpController(lambda: cast(Any, FailingService())).handle(
         event("GET /api/v1/auth/discord/start", query="returnTo=%2F"),
         now=NOW,
     )

@@ -1,6 +1,7 @@
 package dev.pitekusu.shittim.records
 
 import android.content.ActivityNotFoundException
+import android.content.Context
 import android.net.Uri
 import kotlin.coroutines.cancellation.CancellationException
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -124,11 +125,22 @@ internal data object BootstrapScreen : Screen {
   }
 }
 
-@Inject
-internal class BootstrapPresenter(
+private class StartupSeedDenial {
+  var accountId: String? = null
+}
+
+internal class BootstrapPresenter private constructor(
   private val runtime: RecordsRuntime,
+  private val openRecords: (Context, (String) -> Boolean) -> RecordsRepository,
 ) : Presenter<BootstrapScreen.State> {
+  @Inject constructor(runtime: RecordsRuntime) : this(runtime, { context, isActive ->
+    RecordsRepository.open(context, isActive)
+  })
+
   constructor(session: MobileSessionModel) : this(RecordsRuntime(session = session))
+
+  constructor(session: MobileSessionModel, openRecords: (Context, (String) -> Boolean) -> RecordsRepository) :
+    this(RecordsRuntime(session = session), openRecords)
   @Composable
   override fun present(): BootstrapScreen.State {
     // Restore the presentation state, without persisting a device/account preference.
@@ -346,7 +358,7 @@ internal class BootstrapPresenter(
     }
     val normalRecords = remember(context.applicationContext, runtime) {
       if (demo != null) null else try {
-        RecordsRepository.open(context.applicationContext, runtime::isActive)
+        openRecords(context.applicationContext, runtime::isActive)
       }
       catch (_: Exception) { null }
     }
@@ -361,10 +373,37 @@ internal class BootstrapPresenter(
     // Search text and decrypted snapshots are account-bound memory, never SavedState.
     var listQuery by remember(cacheAccountId) { mutableStateOf(RecordListQuery()) }
     var savedEntries by remember(cacheAccountId) { mutableStateOf<List<RecordListEntry>?>(null) }
+    var showingRecent by remember(cacheAccountId) { mutableStateOf(false) }
     val requesters = remember(savedEntries) { recordRequesterChoices(savedEntries.orEmpty()) }
     var searching by remember(cacheAccountId) { mutableStateOf(false) }
     var listOwner by remember { mutableStateOf<String?>(null) }
     var syncState by remember { mutableStateOf<RecordSyncState>(RecordSyncState.Idle) }
+    val cacheIsEmpty = savedEntries?.isEmpty() == true
+    val seedDenial = remember(session) { StartupSeedDenial() }
+    var emptyFirstPage by remember(cacheAccountId, sessionState) { mutableStateOf(false) }
+    LaunchedEffect(cacheAccountId, sessionState, cacheIsEmpty) {
+      if (sessionState == SessionState.SigningOut || sessionState is SessionState.SignedOut) seedDenial.accountId = null
+      val owner = cacheAccountId ?: return@LaunchedEffect
+      val activeSession = session ?: return@LaunchedEffect
+      val repository = normalRecords ?: return@LaunchedEffect
+      if (!cacheIsEmpty || sessionState !is SessionState.SignedIn || seedDenial.accountId == owner)
+        return@LaunchedEffect
+      try {
+        val page = activeSession.withAuthorizedToken { token ->
+          repository.seedRecentRecords(token, owner, onSaved = RecordSyncScheduler::cacheChanged) {
+            activeSession.state.value === sessionState
+          }
+        } ?: return@LaunchedEffect
+        if (page.items.isEmpty()) emptyFirstPage = page.nextCursor == null
+      } catch (error: RecordReadException) {
+        // A list 401 starts another session check. Avoid looping if that check accepts the token.
+        // withAuthorizedToken already suppresses failures from a replaced credential.
+        if (error.serverRejectedSession) {
+          seedDenial.accountId = owner
+          activeSession.onAuthenticationRequired()
+        }
+      }
+    }
     LaunchedEffect(cacheAccountId, signedIn) {
       if (cacheAccountId != null && signedIn) {
         if (demo == null) RecordSyncScheduler.schedule(context)
@@ -412,13 +451,27 @@ internal class BootstrapPresenter(
       // Finish the current local read; progress only queues the latest reload.
       // collectLatest / effect keys based on progress would starve a slow decrypted read.
       snapshotFlow { listRetry }.conflate().collect {
-        val saved = try { records?.cachedRecords(cacheAccountId)
-          ?: throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE) }
-        catch (error: RecordReadException) {
-          if (runtime.isActive(cacheAccountId)) recordList = RecordListState.Error(error.failure)
+        val saved = try {
+          when {
+            normalRecords != null && savedEntries.isNullOrEmpty() && listQuery.isDefault ->
+              normalRecords.cachedRecords(cacheAccountId) { recent, total ->
+                if (runtime.isActive(cacheAccountId) && listQuery.isDefault) {
+                  showingRecent = true
+                  recordList = RecordListState.Ready.fromSaved(recent, recordList as? RecordListState.Ready, total)
+                }
+              }
+            records != null -> records.cachedRecords(cacheAccountId)
+            else -> throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE)
+          }
+        } catch (error: RecordReadException) {
+          if (runtime.isActive(cacheAccountId)) {
+            showingRecent = false
+            recordList = RecordListState.Error(error.failure)
+          }
           return@collect
         }
         if (!runtime.isActive(cacheAccountId)) return@collect
+        if (saved.isEmpty()) showingRecent = false
         savedEntries = saved
       }
     }
@@ -436,11 +489,15 @@ internal class BootstrapPresenter(
             records?.queryCachedRecords(cacheAccountId, saved, query)
               ?: throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE)
           } catch (error: RecordReadException) {
-            if (runtime.isActive(cacheAccountId)) recordList = RecordListState.Error(error.failure)
+            if (runtime.isActive(cacheAccountId)) {
+              showingRecent = false
+              recordList = RecordListState.Error(error.failure)
+            }
             searching = false
             return@collect
           }
-          if (!runtime.isActive(cacheAccountId)) return@collect
+          if (!runtime.isActive(cacheAccountId) || (showingRecent && saved.isEmpty())) return@collect
+          showingRecent = false
           val status = syncState
           recordList = if (saved.isEmpty() && query.isDefault &&
             currentSessionState != SessionState.Unavailable && status is RecordSyncState.Failed) {
@@ -455,13 +512,14 @@ internal class BootstrapPresenter(
     // Empty-list completion/errors must still change the presentation, without decrypting or
     // searching the same saved entries again just because worker/session state changed.
     LaunchedEffect(cacheAccountId, syncState, currentSessionState == SessionState.Unavailable,
-      savedEntries?.isEmpty(), listQuery) {
+      savedEntries?.isEmpty(), listQuery, showingRecent, emptyFirstPage) {
       if (cacheAccountId == null || !runtime.isActive(cacheAccountId) ||
-        savedEntries?.isEmpty() != true || !listQuery.isDefault) return@LaunchedEffect
+        showingRecent || savedEntries?.isEmpty() != true || !listQuery.isDefault) return@LaunchedEffect
       recordList = when {
         currentSessionState == SessionState.Unavailable || syncState == RecordSyncState.Completed ->
           RecordListState.Ready.fromSaved(emptyList(), recordList as? RecordListState.Ready)
         syncState is RecordSyncState.Failed -> RecordListState.Error((syncState as RecordSyncState.Failed).reason)
+        emptyFirstPage -> RecordListState.Ready.fromSaved(emptyList(), recordList as? RecordListState.Ready)
         else -> RecordListState.Idle
       }
     }
@@ -553,7 +611,8 @@ internal class BootstrapPresenter(
     val visibleRecord = (record as? RecordPreviewState.Ready)?.let {
       RecordPreviewState.Ready(it.preview, it.saved, it.updating, it.refreshFailure, recordImages)
     } ?: record
-    val visibleList = if (cacheAccountId != null && listOwner == cacheAccountId) recordList else RecordListState.Idle
+    val visibleList = if (cacheAccountId != null && listOwner == cacheAccountId &&
+      (!showingRecent || listQuery.isDefault)) recordList else RecordListState.Idle
     return BootstrapScreen.State(themeChoice, sessionState, visibleList, visibleRecord, selectedRecordId, syncState,
       canReadRecords = cacheAccountId != null, listQuery = listQuery, searching = searching,
       requesters = if (cacheAccountId != null) requesters else emptyList(),

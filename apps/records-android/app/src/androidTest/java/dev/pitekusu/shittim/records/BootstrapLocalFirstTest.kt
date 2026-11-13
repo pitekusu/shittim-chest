@@ -186,6 +186,97 @@ class BootstrapLocalFirstTest {
   }
 
   @SuppressLint("RestrictedApi") // Restore the test delegate without closing the Activity's real manager.
+  @Test fun verifiedSessionShowsTheFirstSavedPageWhileTheSyncWorkerIsStillQueued() {
+    val app = compose.activity.applicationContext
+    val directory = Files.createTempDirectory(app.noBackupFilesDir.toPath(), "initial-list-").toFile()
+    val context = object : ContextWrapper(compose.activity) {
+      override fun getApplicationContext(): Context = this
+      override fun getNoBackupFilesDir(): File = directory
+      override fun getPackageName(): String = "${app.packageName}.${directory.name}"
+      override fun getDatabasePath(name: String): File = File(directory, name)
+      override fun getSharedPreferences(name: String, mode: Int): android.content.SharedPreferences =
+        app.getSharedPreferences("${directory.name}.$name", mode)
+    }
+    val originalManager = WorkManager.getInstance(app) as WorkManagerImpl
+    val models = ViewModelStore()
+    val accountId = "u".repeat(43)
+    val recordId = "r".repeat(43)
+    val token = "t".repeat(43)
+    val question = "同期前に読める架空の記録"
+    val deadline = Instant.ofEpochSecond(Instant.now().epochSecond).plusSeconds(600)
+    val sessionVerified = CompletableDeferred<Unit>()
+    val listRequests = AtomicInteger()
+    var stored: StoredToken? = StoredToken(token, deadline)
+    val jsonHeader = headersOf(HttpHeaders.ContentType, "application/json")
+    val client = MobileAuthClient(MockEngine {
+      sessionVerified.await()
+      respond("""{"schemaVersion":1,"isAdmin":false,"cacheAccountId":"$accountId","expiresAt":"$deadline",
+        "user":{"displayName":"架空の利用者","avatar":{"kind":"placeholder","alt":"架空","fallbackVariant":"cyan"}}}""",
+        HttpStatusCode.OK, jsonHeader)
+    })
+    var testManager: WorkManager? = null
+    try {
+      WorkManagerTestInitHelper.initializeTestWorkManager(context,
+        Configuration.Builder().setExecutor(SynchronousExecutor()).build())
+      testManager = WorkManager.getInstance(context)
+      RecordNotificationSettings(context).disable()
+      var rendered: BootstrapScreen.State? = null
+      compose.activityRule.scenario.onActivity { activity ->
+        val session = MobileSessionModel(client, { stored }, { stored = it }, { stored = null }, {},
+          {}, { false }, {}, { RecordCacheAccount.activate(context, it) }, { RecordCacheAccount.clear(context) })
+        models.put("session", session)
+        val presenter = BootstrapPresenter(session) { repoContext, isActive ->
+          val database = EncryptedRecordsDatabase.open(repoContext)
+          val keys = KeystorePrivateKeyStore(repoContext)
+          val records = RecordsReadClient(MockEngine { request ->
+            assertEquals("/api/v1/records", request.url.encodedPath)
+            assertEquals("12", request.url.parameters["limit"])
+            assertEquals("Bearer $token", request.headers[HttpHeaders.Authorization])
+            listRequests.incrementAndGet()
+            respond("""{"schemaVersion":1,"nextCursor":"next.cursor","items":[{"schemaVersion":1,"recordId":"$recordId",
+              "questionPreview":"$question","completedAt":"2026-09-24T00:00:00Z","attachmentCount":2,
+              "requester":{"displayName":"架空の依頼者","avatar":{"kind":"placeholder","alt":"架空","fallbackVariant":"cyan"}},
+              "participants":[{"slot":"participant-a","displayName":"アロナ"},{"slot":"participant-b","displayName":"プラナ"},
+                {"slot":"participant-c","displayName":"安倍晋三AI"}],"result":{"winner":"participant-a"}}]}""",
+              headers = jsonHeader)
+          })
+          RecordsRepository(records, EncryptedRecordStore(database, RecordDataKeyProtector(keys)), database,
+            RecordCacheAccount(repoContext, keys, database), isActive)
+        }
+        activity.setContent {
+          CompositionLocalProvider(LocalContext provides context, LocalActivityResultRegistryOwner provides activity) {
+            val state = presenter.present()
+            rendered = state
+            BootstrapUi(state)
+          }
+        }
+      }
+      compose.waitUntil(10_000) { rendered?.session == SessionState.Checking }
+      assertEquals(0, listRequests.get())
+      sessionVerified.complete(Unit)
+      compose.waitUntil(10_000) { rendered?.requesters?.singleOrNull()?.displayName == "架空の依頼者" }
+      compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText(question))
+      compose.onNodeWithText(question).assertIsDisplayed()
+      assertEquals(1, listRequests.get())
+      val work = testManager.getWorkInfosForUniqueWork("records-immediate-sync-v1").get(10, TimeUnit.SECONDS).single()
+      assertEquals(androidx.work.WorkInfo.State.ENQUEUED, work.state)
+    } finally {
+      compose.activityRule.scenario.onActivity { it.setContent {}; models.clear() }
+      sessionVerified.complete(Unit)
+      client.close()
+      try {
+        testManager?.cancelAllWork()?.result?.get(10, TimeUnit.SECONDS)
+        if (testManager != null) WorkManagerTestInitHelper.closeWorkDatabase()
+      } finally {
+        WorkManagerImpl.setDelegate(originalManager)
+        runBlocking { RecordCacheAccount.clear(context) }
+        app.deleteSharedPreferences("${directory.name}.record-notification-v1")
+        directory.deleteRecursively()
+      }
+    }
+  }
+
+  @SuppressLint("RestrictedApi") // Restore the test delegate without closing the Activity's real manager.
   @Test fun accountChangeClearsRestoredRouteAndOfflineNavigationRejectsOldAccountCallbacks() {
     val app = compose.activity.applicationContext
     val directory = Files.createTempDirectory(app.noBackupFilesDir.toPath(), "nav-owner-").toFile()

@@ -1,11 +1,13 @@
 """Strict HTTP boundary for device login; Web cookies never authorize mobile API calls."""
 
+from __future__ import annotations
+
 import json
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from shittim_records.auth import AuthFailure, _clear_cookie
 from shittim_records.http_api import (
@@ -27,11 +29,14 @@ from shittim_records.mobile_auth import (
     MobileStartRequest,
     parse_mobile_request,
 )
-from shittim_records.mobile_callback import MobileCallbackService
-from shittim_records.mobile_exchange import MobileExchangeService
-from shittim_records.mobile_login import MOBILE_OAUTH_COOKIE_NAME, MobileLoginService
-from shittim_records.mobile_notifications import MobileNotificationRegistrationService
-from shittim_records.mobile_session import MobileSessionService
+from shittim_records.mobile_login import MOBILE_OAUTH_COOKIE_NAME
+
+if TYPE_CHECKING:
+    from shittim_records.mobile_callback import MobileCallbackService
+    from shittim_records.mobile_exchange import MobileExchangeService
+    from shittim_records.mobile_login import MobileLoginService
+    from shittim_records.mobile_notifications import MobileNotificationRegistrationService
+    from shittim_records.mobile_session import MobileSessionService
 
 MOBILE_API_PREFIX = "/api/v1/auth/mobile/"
 DISCORD_CALLBACK_ROUTE = "GET /api/v1/auth/discord/callback"
@@ -48,7 +53,7 @@ class MobileAuthHttpController:
         exchange: MobileExchangeService,
         sessions: MobileSessionService,
         allowed_origin: str,
-        notifications: MobileNotificationRegistrationService | None = None,
+        notifications: Callable[[], MobileNotificationRegistrationService] | None = None,
     ) -> None:
         self._login = login
         self._callback = callback
@@ -120,7 +125,7 @@ class MobileAuthHttpController:
                 payload = _body(event, request, MobileNotificationDeviceRequest)
                 if self._notifications is None:
                     raise AuthFailure("mobile_registration_unavailable")
-                response = self._notifications.update(
+                response = self._notifications().update(
                     raw_token=token,
                     request=payload,
                     delete=request.route_key.startswith("DELETE "),

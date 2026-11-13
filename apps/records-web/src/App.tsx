@@ -5,7 +5,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
 import { RecordsApiError } from "./api/http";
@@ -17,7 +17,12 @@ import { ErrorPanel } from "./components/ErrorPanel";
 import { Layout } from "./components/Layout";
 import { RouteChunkBoundary, RouteLoadingFallback } from "./components/RouteChunkBoundary";
 import { SESSION_QUERY_KEY } from "./hooks/useAuthenticationRecovery";
-import { RecordsArchiveProvider, useRecordsArchiveActions } from "./hooks/useRecordsArchive";
+import {
+  INITIAL_ARCHIVE_FILTERS,
+  RecordsArchiveProvider,
+  useRecordsArchiveActions,
+} from "./hooks/useRecordsArchive";
+import { archiveListQuery } from "./lib/archiveListQuery";
 import { LOGIN_TRANSITION_KEY } from "./lib/authTransition";
 import { clearProtectedQueries } from "./lib/protectedQueries";
 import { setPageMetadata } from "./lib/pageMetadata";
@@ -72,7 +77,19 @@ function AuthenticatedRoutes({
   readonly theme: Theme;
   readonly onThemeToggle: () => void;
 }): React.JSX.Element {
+  const client = useQueryClient();
   const location = useLocation();
+  const [startupArchiveKey] = useState(() => (location.pathname === "/" ? location.key : null));
+  const startupArchive = location.key === startupArchiveKey && location.pathname === "/";
+  const { csrfToken } = session;
+  const prefetchedArchive = useRef(false);
+  useEffect(() => {
+    if (!startupArchive || prefetchedArchive.current) return;
+    prefetchedArchive.current = true;
+    // The data request can run while the welcome screen or the route chunk is pending.
+    void client.prefetchInfiniteQuery(archiveListQuery(INITIAL_ARCHIVE_FILTERS, csrfToken));
+  }, [client, csrfToken, startupArchive]);
+
   const [showTransition, setShowTransition] = useState(
     () => sessionStorage.getItem(LOGIN_TRANSITION_KEY) === "pending",
   );
@@ -105,7 +122,10 @@ function AuthenticatedRoutes({
         <RouteChunkBoundary key={location.pathname}>
           <Suspense fallback={<RouteLoadingFallback />}>
             <Routes>
-              <Route path="/" element={<RecordsHome csrfToken={session.csrfToken} />} />
+              <Route
+                path="/"
+                element={<RecordsHome csrfToken={csrfToken} startupArchive={startupArchive} />}
+              />
               <Route path="/records/:recordId" element={<RecordDetail />} />
               <Route path="/insights" element={<RankingsPage />} />
               <Route path="/momotalk" element={<MomotalkPage />} />

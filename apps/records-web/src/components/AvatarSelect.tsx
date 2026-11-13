@@ -27,11 +27,15 @@ export function AvatarSelect<Value extends string>({
   label,
   value,
   options,
+  status,
+  onOpen,
   onChange,
 }: {
   readonly label: string;
   readonly value: Value;
   readonly options: readonly AvatarSelectOption<Value>[];
+  readonly status?: string;
+  readonly onOpen?: () => void;
   readonly onChange: (value: Value) => void;
 }) {
   const id = useId();
@@ -41,12 +45,13 @@ export function AvatarSelect<Value extends string>({
     <div className={styles.filterField}>
       <span id={`${id}-label`}>{label}</span>
       <Select.Root
-        onOpenChange={(_open, details) =>
+        onOpenChange={(open, details) => {
           setInstant(
             details.event.type.startsWith("key") ||
               ("detail" in details.event && details.event.detail === 0),
-          )
-        }
+          );
+          if (open) onOpen?.();
+        }}
         value={value}
         items={options}
         onValueChange={(next) => {
@@ -70,6 +75,7 @@ export function AvatarSelect<Value extends string>({
               alignItemWithTrigger={false}
             >
               <Select.Popup className={styles.avatarSelectMenu} data-instant={instant}>
+                {onOpen && <output className={styles.avatarSelectStatus}>{status}</output>}
                 <Select.List aria-labelledby={`${id}-label`}>
                   {options.map((option) => (
                     <Select.Item

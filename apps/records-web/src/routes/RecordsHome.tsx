@@ -2,13 +2,14 @@ import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { RecordsApiError } from "../api/http";
-import { getRecordRequesters, getRecords, searchRecords } from "../api/recordList";
+import { getRecordRequesters } from "../api/recordList";
 import type { ParticipantSlot, RequesterSummary } from "../api/types";
 import { AvatarSelect, type AvatarSelectOption } from "../components/AvatarSelect";
 import { DebateCard } from "../components/DebateCard";
 import { ErrorPanel } from "../components/ErrorPanel";
 import { useAuthenticationRecovery } from "../hooks/useAuthenticationRecovery";
 import { useRecordsArchive } from "../hooks/useRecordsArchive";
+import { archiveListQuery } from "../lib/archiveListQuery";
 import { routeMotionDelay } from "../lib/routePresentation";
 import commonStyles from "../styles/common.module.css";
 import styles from "../styles/home.module.css";
@@ -16,8 +17,10 @@ import routeStyles from "../styles/routeMotion.module.css";
 
 export default function RecordsHome({
   csrfToken,
+  startupArchive = false,
 }: {
   readonly csrfToken: string;
+  readonly startupArchive?: boolean;
 }): React.JSX.Element {
   const client = useQueryClient();
   const { filters, requestedCount, showMore, updateFilters, rememberRecord } = useRecordsArchive();
@@ -39,28 +42,22 @@ export default function RecordsHome({
   }, [composing, normalizedSearch]);
   const criteriaReady = !composing && normalizedSearch === debouncedSearch;
   const searchActive = debouncedSearch !== "" || requester !== "";
-  const queryKey = useMemo(
-    () => ["records", searchActive ? "search" : "list", winner, sort, debouncedSearch, requester],
-    [searchActive, winner, sort, debouncedSearch, requester],
+  const listQuery = useMemo(
+    () => archiveListQuery({ winner, sort, search: debouncedSearch, requester }, csrfToken),
+    [csrfToken, debouncedSearch, requester, sort, winner],
   );
+  const { queryKey } = listQuery;
   const records = useInfiniteQuery({
-    queryKey,
+    ...listQuery,
     enabled: criteriaReady,
-    initialPageParam: undefined as string | undefined,
-    queryFn: ({ pageParam, signal }) => {
-      const filters = { cursor: pageParam, sort, winner: winner || undefined };
-      return searchActive
-        ? searchRecords(
-            { ...filters, search: debouncedSearch, requester: requester || undefined },
-            csrfToken,
-            signal,
-          )
-        : getRecords(filters, signal);
-    },
-    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    // A failed startup prefetch is shown immediately with the existing retry action.
+    retryOnMount: !(startupArchive && !searchActive && !winner && sort === "newest"),
   });
+  const [requesterFilterOpened, setRequesterFilterOpened] = useState(false);
+  const requestersEnabled = requesterFilterOpened || requester !== "";
   const candidates = useInfiniteQuery({
     queryKey: ["records", "requesters"],
+    enabled: requestersEnabled,
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam, signal }) => getRecordRequesters(pageParam, signal),
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
@@ -74,10 +71,15 @@ export default function RecordsHome({
   }, [client, criteriaReady, queryKey]);
 
   useEffect(() => {
-    if (candidates.hasNextPage && !candidates.isFetching && !candidates.isError) {
+    if (
+      requestersEnabled &&
+      candidates.hasNextPage &&
+      !candidates.isFetching &&
+      !candidates.isError
+    ) {
       void candidates.fetchNextPage();
     }
-  }, [candidates]);
+  }, [candidates, requestersEnabled]);
 
   useEffect(() => {
     if (
@@ -294,6 +296,14 @@ export default function RecordsHome({
           label="依頼者"
           value={requester}
           options={requesterOptions}
+          status={
+            candidates.isFetching
+              ? "依頼者の候補を読み込んでいます。"
+              : candidates.isError
+                ? "依頼者の候補を読み込めませんでした。メニューを閉じて再試行できます。"
+                : undefined
+          }
+          onOpen={() => setRequesterFilterOpened(true)}
           onChange={(value) => updateFilters({ requester: value })}
         />
         <AvatarSelect
@@ -330,11 +340,6 @@ export default function RecordsHome({
           </div>
         </fieldset>
       </section>
-      {candidates.isFetching && (
-        <p className={styles.loadingLine} aria-live="polite">
-          依頼者の候補を読み込んでいます。
-        </p>
-      )}
       {candidates.isError && (
         <ErrorPanel
           title="依頼者の候補を読み込めませんでした"

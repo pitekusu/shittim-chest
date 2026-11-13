@@ -396,7 +396,7 @@ def test_http_device_api_strict_bearer_json_and_no_store(setup):
             admin_requester_key="r" * 43,
             clock=lambda: NOW,
         ),
-        notifications=registration,
+        notifications=lambda: registration,
         allowed_origin=config.oauth.allowed_origin,
     )
     request = {

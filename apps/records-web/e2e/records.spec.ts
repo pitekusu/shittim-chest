@@ -3600,9 +3600,14 @@ test("archive requester options cover unloaded records and preserve selection th
     avatar: placeholder("まだカードを読み込んでいない依頼者", "pink"),
   };
   const candidateReads: string[] = [];
-  await page.route("**/api/v1/records/requesters*", (route) => {
+  let releaseCandidates!: () => void;
+  const candidatesReady = new Promise<void>((resolve) => {
+    releaseCandidates = resolve;
+  });
+  await page.route("**/api/v1/records/requesters*", async (route) => {
     const cursor = new URL(route.request().url()).searchParams.get("cursor");
     candidateReads.push(cursor ?? "first");
+    await candidatesReady;
     return route.fulfill({
       json: {
         schemaVersion: 1,
@@ -3617,9 +3622,25 @@ test("archive requester options cover unloaded records and preserve selection th
     return route.fulfill({ json: { schemaVersion: 1, items: [], nextCursor: null } });
   });
   await page.goto("/");
-  await expect.poll(() => candidateReads.length).toBe(2);
-  await page.getByRole("combobox", { name: "依頼者" }).click();
-  await page.getByRole("option", { name: otherRequester.displayName }).click();
+  await expect(page.getByRole("article").first()).toBeVisible();
+  expect(candidateReads).toHaveLength(0);
+  const requesterFilter = page.getByRole("combobox", { name: "依頼者" });
+  await requesterFilter.press("ArrowDown");
+  const requesterOptions = page.getByRole("region", { name: "依頼者の選択肢" });
+  try {
+    await expect(requesterOptions.getByRole("status")).toHaveText(
+      "依頼者の候補を読み込んでいます。",
+    );
+    await expect(requesterOptions.getByRole("option")).toHaveCount(1);
+  } finally {
+    releaseCandidates();
+  }
+  await expect(
+    requesterOptions.getByRole("option", { name: otherRequester.displayName }),
+  ).toBeVisible();
+  expect(candidateReads).toHaveLength(2);
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
   await expect(page.getByText("該当する記録はありません")).toBeVisible();
   await expect(page.getByRole("combobox", { name: "依頼者" })).toContainText(
     otherRequester.displayName,

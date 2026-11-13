@@ -44,6 +44,7 @@ from shittim_records.read_api import (
 
 if TYPE_CHECKING:
     from shittim_records.mobile_http import MobileAuthHttpController
+    from shittim_records.momotalk_read import MomotalkReadService
 
 JSON_HEADERS = {
     "Cache-Control": "private, no-store",
@@ -86,7 +87,9 @@ class AuthHttpController:
     """Dispatch Web and mobile login without falling back between their credentials."""
 
     def __init__(
-        self, service: AuthService, mobile: MobileAuthHttpController | None = None
+        self,
+        service: Callable[[], AuthService],
+        mobile: Callable[[], MobileAuthHttpController] | None = None,
     ) -> None:
         self._service = service
         self._mobile = mobile
@@ -97,10 +100,12 @@ class AuthHttpController:
             if self._mobile is not None and request.route_key.partition(" ")[2].startswith(
                 "/api/v1/auth/mobile/"
             ):
-                return self._mobile.handle(event, now=now)
+                return self._mobile().handle(event, now=now)
             if request.route_key == "GET /api/v1/auth/discord/start":
                 query = _query(request.raw_query)
-                result = self._service.begin(return_to=_optional_single(query, "returnTo"), now=now)
+                result = self._service().begin(
+                    return_to=_optional_single(query, "returnTo"), now=now
+                )
                 return redirect(result.location, cookies=[result.oauth_cookie])
             if request.route_key == "GET /api/v1/auth/discord/callback":
                 query = _query(request.raw_query)
@@ -108,8 +113,8 @@ class AuthHttpController:
                 if any(state.startswith("m.") for state in query.get("state", [])):
                     if self._mobile is None:
                         raise AuthFailure("configuration_invalid")
-                    return self._mobile.handle(event, now=now)
-                result = self._service.complete(
+                    return self._mobile().handle(event, now=now)
+                result = self._service().complete(
                     code=_required_single(query, "code"),
                     state=_required_single(query, "state"),
                     browser_nonce=request.cookies.get(OAUTH_COOKIE_NAME, ""),
@@ -122,7 +127,7 @@ class AuthHttpController:
             if request.route_key == "GET /api/v1/session":
                 return self._session(request=request, now=now)
             if request.route_key == "POST /api/v1/logout":
-                clear = self._service.logout(
+                clear = self._service().logout(
                     raw_session=request.cookies.get(SESSION_COOKIE_NAME),
                     raw_csrf=request.cookies.get(CSRF_COOKIE_NAME),
                     csrf_header=_header(request.headers, "x-csrf-token"),
@@ -133,7 +138,7 @@ class AuthHttpController:
             return error_response(404, "ROUTE_NOT_FOUND", request.request_id)
         except AuthFailure as error:
             if request.route_key == "GET /api/v1/auth/discord/callback":
-                origin = self._service.allowed_origin
+                origin = self._service().allowed_origin
                 location = f"{origin}/login?{urlencode({'error': error.code})}"
                 return redirect(location, cookies=[_clear_oauth_cookie()])
             status = {
@@ -155,14 +160,15 @@ class AuthHttpController:
         include_admin = contract == "admin-v1"
         raw_session = request.cookies.get(SESSION_COOKIE_NAME)
         raw_csrf = request.cookies.get(CSRF_COOKIE_NAME)
-        session = self._service.authenticate(raw_session=raw_session, now=now)
-        if session is None or raw_csrf is None:
+        service = self._service() if raw_session else None
+        session = service.authenticate(raw_session=raw_session, now=now) if service else None
+        if service is None or session is None or raw_csrf is None:
             payload = SessionResponse(
                 root=AnonymousSession(schema_version=1, authenticated=False, is_admin=False)
             )
         else:
             if not csrf_token_matches(
-                session=session, session_key=self._service.session_hmac_key, token=raw_csrf
+                session=session, session_key=service.session_hmac_key, token=raw_csrf
             ):
                 payload = SessionResponse(
                     root=AnonymousSession(schema_version=1, authenticated=False)
@@ -177,7 +183,7 @@ class AuthHttpController:
                 else:
                     avatar = ImageAvatarRef(
                         kind="image",
-                        url=self._service.avatar_url(asset_key=session.avatar_asset_key),
+                        url=service.avatar_url(asset_key=session.avatar_asset_key),
                         alt=f"{session.display_name}のアバター",
                         fallback_variant="cyan",
                     )
@@ -187,7 +193,7 @@ class AuthHttpController:
                         authenticated=True,
                         user=SessionUser(display_name=session.display_name, avatar=avatar),
                         csrf_token=raw_csrf,
-                        is_admin=self._service.is_admin(session) if include_admin else False,
+                        is_admin=service.is_admin(session) if include_admin else False,
                     )
                 )
         response_payload = payload.model_dump(by_alias=True, mode="json")
@@ -205,7 +211,7 @@ class ReadHttpController:
         store: AuthStore,
         session_key: bytes,
         records: RecordsReadService,
-        momotalk: Any | None = None,
+        momotalk: Callable[[], MomotalkReadService] | None = None,
         mobile_store: MobileSessionReader | None = None,
         clock: Callable[[], datetime] | None = None,
         allowed_origin: str | None = None,
@@ -400,7 +406,7 @@ class ReadHttpController:
                 contract = _optional_single(query, "contract")
                 if contract not in {None, "momotalk-selfie-v2"}:
                     raise ReadFailure("REQUEST_INVALID", 400)
-                return self._momotalk.get_room(
+                return self._momotalk().get_room(
                     week_id=request.path_parameters.get("weekId", ""),
                     room_id=request.path_parameters.get("roomId", ""),
                     now=now,
@@ -411,10 +417,10 @@ class ReadHttpController:
             limit = _affection_limit(_optional_single(query, "limit"))
             cursor = _optional_single(query, "cursor")
             if request.route_key == "GET /api/v1/momotalk/weeks":
-                return self._momotalk.list_weeks(limit=limit, cursor=cursor, now=now)
+                return self._momotalk().list_weeks(limit=limit, cursor=cursor, now=now)
             week_id = request.path_parameters.get("weekId", "")
             if request.route_key == "GET /api/v1/momotalk/weeks/{weekId}/rooms":
-                return self._momotalk.list_rooms(
+                return self._momotalk().list_rooms(
                     week_id=week_id, limit=limit, cursor=cursor, now=now
                 )
             raise ReadFailure("ROUTE_NOT_FOUND", 404)

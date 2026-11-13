@@ -19,7 +19,9 @@ from botocore.exceptions import ClientError
 from botocore.httpsession import URLLib3Session
 from pydantic import BaseModel, Field, ValidationError
 
+from shittim_records import auth_handler as auth_lambda
 from shittim_records import lambda_handlers
+from shittim_records import read_handler as read_lambda
 from shittim_records.contracts import MemorialUploadResponse
 from shittim_records.costs import (
     CollectionSummary,
@@ -54,7 +56,9 @@ def reject_type_stubs(name, globals=None, locals=None, fromlist=(), level=0):
 
 
 builtins.__import__ = reject_type_stubs
+import shittim_records.auth_handler
 import shittim_records.lambda_handlers
+import shittim_records.read_handler
 """
 
     result = subprocess.run(  # noqa: S603 - fixed interpreter and local script.
@@ -64,6 +68,31 @@ import shittim_records.lambda_handlers
         text=True,
     )
 
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("handler", ("auth_handler", "read_handler"))
+def test_http_lambda_entry_points_avoid_unrelated_imports(handler: str) -> None:
+    script = """
+import importlib
+import sys
+
+importlib.import_module("shittim_records." + sys.argv[1])
+unrelated = {
+    "firebase_admin",
+    "openai",
+    "PIL",
+    "shittim_records.lambda_handlers",
+    "shittim_records.momotalk_adapters",
+}
+assert not unrelated.intersection(sys.modules), unrelated.intersection(sys.modules)
+"""
+    result = subprocess.run(  # noqa: S603 - fixed interpreter and local script.
+        [sys.executable, "-c", script, handler],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
     assert result.returncode == 0, result.stderr
 
 
@@ -473,9 +502,9 @@ def test_read_handler_storage_failure_does_not_expose_bearer_or_exception_detail
     def fail(*args: Any, **kwargs: Any) -> None:
         raise RuntimeError(f"{private_token}: {private_payload}")
 
-    monkeypatch.setattr(lambda_handlers, "_READ_CONTROLLER", SimpleNamespace(handle=fail))
-    with caplog.at_level(logging.INFO, logger=lambda_handlers.LOGGER.name):
-        response = lambda_handlers.read_handler(
+    monkeypatch.setattr(read_lambda, "_READ_CONTROLLER", SimpleNamespace(handle=fail))
+    with caplog.at_level(logging.INFO, logger=read_lambda.LOGGER.name):
+        response = read_lambda.read_handler(
             {
                 "routeKey": "GET /api/v1/records",
                 "requestContext": {"requestId": "opaque-request"},
@@ -504,7 +533,7 @@ def test_auth_factory_connects_mobile_routes_with_existing_configuration(monkeyp
 
     def client(service, **kwargs):
         assert service in {"dynamodb", "ssm"}
-        assert kwargs == {"config": lambda_handlers.SDK_CONFIG}
+        assert kwargs == {"config": auth_lambda.SDK_CONFIG}
         clients.append(service)
         return database if service == "dynamodb" else object()
 
@@ -514,44 +543,44 @@ def test_auth_factory_connects_mobile_routes_with_existing_configuration(monkeyp
 
     def resource(service, **kwargs):
         assert service == "dynamodb"
-        assert kwargs == {"config": lambda_handlers.SDK_CONFIG}
+        assert kwargs == {"config": auth_lambda.SDK_CONFIG}
         resources.append(service)
         return SimpleNamespace(Table=table, meta=SimpleNamespace(client=database))
 
-    monkeypatch.setattr(lambda_handlers, "_AUTH_CONTROLLER", None)
-    monkeypatch.setattr(lambda_handlers, "_environment", lambda name: name.lower())
-    monkeypatch.setattr(lambda_handlers.boto3, "client", client)
-    monkeypatch.setattr(lambda_handlers.boto3, "resource", resource)
-    monkeypatch.setattr(lambda_handlers, "_regional_s3_client", lambda: object())
+    monkeypatch.setattr(auth_lambda, "_AUTH_CONTROLLER", None)
+    monkeypatch.setattr(auth_lambda, "environment", lambda name: name.lower())
+    monkeypatch.setattr(auth_lambda.boto3, "client", client)
+    monkeypatch.setattr(auth_lambda.boto3, "resource", resource)
+    monkeypatch.setattr(auth_lambda, "regional_s3_client", lambda: object())
     monkeypatch.setattr(
-        lambda_handlers,
+        auth_lambda,
         "AuthConfigurationRepository",
         lambda *args, **kwargs: SimpleNamespace(load=configuration),
     )
-    response = lambda_handlers.auth_handler(start_event(), object())
+    response = auth_lambda.auth_handler(start_event(), object())
     assert response["statusCode"] == 200
     assert len(writes) == 1 and writes[0]["Item"]["PK"]["S"].startswith("MOBILE#")
     assert writes[0]["TableName"] == "session_table_name"
-    denied = lambda_handlers.auth_handler(event("GET /api/v1/auth/mobile/session"), object())
+    denied = auth_lambda.auth_handler(event("GET /api/v1/auth/mobile/session"), object())
     assert denied["statusCode"] == 401
-    assert clients == ["dynamodb", "ssm"]  # Cached factory, no new credential source.
-    assert resources == ["dynamodb"]
-    assert tables == ["statistics_table_name"]  # All SDK construction stays inside fakes.
+    assert clients == ["ssm", "dynamodb"]  # Cached factory, no new credential source.
+    assert resources == []
+    assert tables == []
 
 
 def test_auth_and_read_handlers_delegate_without_logging_request_content(monkeypatch: Any) -> None:
     controller = cast(Any, FakeHttpController())
-    monkeypatch.setattr(lambda_handlers, "_AUTH_CONTROLLER", controller)
-    monkeypatch.setattr(lambda_handlers, "_READ_CONTROLLER", controller)
+    monkeypatch.setattr(auth_lambda, "_AUTH_CONTROLLER", controller)
+    monkeypatch.setattr(read_lambda, "_READ_CONTROLLER", controller)
     monkeypatch.setattr(lambda_handlers, "_ADMIN_CONFIG_CONTROLLER", controller)
     monkeypatch.setattr(lambda_handlers, "_MEMORIAL_API_CONTROLLER", controller)
     event = {"routeKey": "GET /api/v1/session"}
 
-    assert lambda_handlers.auth_handler(event, object()) == {
+    assert auth_lambda.auth_handler(event, object()) == {
         "statusCode": 200,
         "event": event,
     }
-    assert lambda_handlers.read_handler(event, object()) == {
+    assert read_lambda.read_handler(event, object()) == {
         "statusCode": 200,
         "event": event,
     }
@@ -572,32 +601,35 @@ def test_auth_handler_suppresses_transport_metadata(monkeypatch: Any, caplog: An
             logging.getLogger("httpcore").debug("private authorization header")
             return {"statusCode": 200}
 
-    monkeypatch.setattr(lambda_handlers, "_AUTH_CONTROLLER", Controller())
+    monkeypatch.setattr(auth_lambda, "_AUTH_CONTROLLER", Controller())
     with (
         caplog.at_level(logging.DEBUG, logger="httpx2"),
         caplog.at_level(logging.DEBUG, logger="httpcore"),
     ):
-        assert lambda_handlers.auth_handler({}, object())["statusCode"] == 200
+        assert auth_lambda.auth_handler({}, object())["statusCode"] == 200
     assert "private member" not in caplog.text
     assert "private authorization" not in caplog.text
 
 
 @pytest.mark.parametrize(
-    ("factory_name", "handler_name", "expected_code"),
+    ("module", "factory_name", "handler_name", "expected_code"),
     (
-        ("_auth_controller", "auth_handler", "RECORDS_UNAVAILABLE"),
-        ("_read_controller", "read_handler", "RECORDS_UNAVAILABLE"),
+        (auth_lambda, "_auth_controller", "auth_handler", "RECORDS_UNAVAILABLE"),
+        (read_lambda, "_read_controller", "read_handler", "RECORDS_UNAVAILABLE"),
         (
+            lambda_handlers,
             "_admin_config_controller",
             "admin_config_handler",
             "PROMPT_CONFIGURATION_UNAVAILABLE",
         ),
         (
+            lambda_handlers,
             "_admin_status_controller",
             "admin_status_handler",
             "ADMIN_STATUS_UNAVAILABLE",
         ),
         (
+            lambda_handlers,
             "_memorial_api_controller",
             "memorial_api_handler",
             "MEMORIAL_UNAVAILABLE",
@@ -607,6 +639,7 @@ def test_auth_handler_suppresses_transport_metadata(monkeypatch: Any, caplog: An
 def test_http_handler_controller_validation_failure_is_content_free(
     monkeypatch: Any,
     caplog: pytest.LogCaptureFixture,
+    module: Any,
     factory_name: str,
     handler_name: str,
     expected_code: str,
@@ -622,8 +655,8 @@ def test_http_handler_controller_validation_failure_is_content_free(
     def fail() -> None:
         raise validation.value
 
-    monkeypatch.setattr(lambda_handlers, factory_name, fail)
-    handler = getattr(lambda_handlers, handler_name)
+    monkeypatch.setattr(module, factory_name, fail)
+    handler = getattr(module, handler_name)
 
     response = handler(
         {
