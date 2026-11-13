@@ -1048,6 +1048,7 @@ class RuntimeActivity:
     claimed_outbox: int = 0
     pending_status_updates: int = 0
     pending_panel_refreshes: int = 0
+    pending_student_gacha: int = 0
     checkpoint_tasks: int = 0
 
     def __post_init__(self) -> None:
@@ -1063,6 +1064,7 @@ class RuntimeActivity:
             self.claimed_outbox,
             self.pending_status_updates,
             self.pending_panel_refreshes,
+            self.pending_student_gacha,
             self.checkpoint_tasks,
         ):
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -1085,6 +1087,7 @@ class RuntimeActivity:
                 self.claimed_outbox,
                 self.pending_status_updates,
                 self.pending_panel_refreshes,
+                self.pending_student_gacha,
                 self.checkpoint_tasks,
             )
         )
@@ -1109,6 +1112,7 @@ class RuntimeActivity:
                 self.pending_outbox,
                 self.claimed_outbox,
                 self.pending_panel_refreshes,
+                self.pending_student_gacha,
                 self.checkpoint_tasks,
             )
         )

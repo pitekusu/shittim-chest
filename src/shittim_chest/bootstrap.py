@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from mypy_boto3_s3.client import S3Client
 
 from shittim_chest.adapters.assets.images import S3DebateImageStore
+from shittim_chest.adapters.assets.student_gacha import StudentGachaMedia
 from shittim_chest.adapters.aws import (
     LambdaStatusPublicationTrigger,
     SsmParameterReader,
@@ -36,6 +37,7 @@ from shittim_chest.adapters.discord import (
     build_discord_clients,
 )
 from shittim_chest.adapters.discord.ingress_runtime import DiscordIngressRuntime
+from shittim_chest.adapters.discord.student_gacha import DiscordStudentGacha
 from shittim_chest.adapters.dynamodb import (
     DynamoDbDebateRepository,
     DynamoDbIngressRepository,
@@ -43,6 +45,7 @@ from shittim_chest.adapters.dynamodb import (
     DynamoDbRuntimeStateRepository,
     create_dynamodb_client,
 )
+from shittim_chest.adapters.dynamodb.student_gacha import DynamoDbStudentGachaRepository
 from shittim_chest.adapters.openai import (
     OpenAIAdapterConfig,
     OpenAIFarewellGenerator,
@@ -53,6 +56,7 @@ from shittim_chest.adapters.openai import (
     ParticipantProfiles,
     create_openai_client,
 )
+from shittim_chest.adapters.openai.student_gacha import OpenAIStudentGacha
 from shittim_chest.application import (
     DebateApplication,
     IngressCommandAdapter,
@@ -60,6 +64,7 @@ from shittim_chest.application import (
 from shittim_chest.application.ingress_drain import IngressDrainer, RuntimeIngressDrainGate
 from shittim_chest.application.ports import ParameterReadUnavailable
 from shittim_chest.application.runtime_instance import RuntimeInstanceState
+from shittim_chest.application.student_gacha import StudentGachaWorker
 from shittim_chest.config import (
     BootstrapConfig,
     StartupConfigurationError,
@@ -210,14 +215,23 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
     )
 
     dynamodb_client = create_dynamodb_client(region_name=config.aws_region)
+    identity_key = config.require_identity_hmac_key()
+    gacha_repository = (
+        DynamoDbStudentGachaRepository(client=dynamodb_client, table_name=config.table_name)
+        if config.student_gacha_enabled
+        else None
+    )
     ingress_repository = DynamoDbIngressRepository(
         client=dynamodb_client,
         table_name=config.table_name,
+        student_gacha=gacha_repository,
+        identity_hmac_key=identity_key if gacha_repository is not None else None,
     )
     repository = DynamoDbDebateRepository(
         client=dynamodb_client,
         table_name=config.table_name,
-        identity_hmac_key=config.require_identity_hmac_key(),
+        identity_hmac_key=identity_key,
+        student_gacha=gacha_repository,
     )
     runtime_state_repository = DynamoDbRuntimeStateRepository(
         client=dynamodb_client,
@@ -252,6 +266,23 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
             for participant in PARTICIPANTS
         }
     )
+    student_gacha = None
+    if gacha_repository is not None:
+        if image_client is None or config.debate_media_bucket is None:
+            raise StartupConfigurationError
+        gacha_media = StudentGachaMedia(image_client, bucket_name=config.debate_media_bucket)
+        student_gacha = StudentGachaWorker(
+            store=gacha_repository,
+            media=gacha_media,
+            generator=OpenAIStudentGacha(
+                client=openai_client,
+                limiter=limiter,
+                profiles=profiles,
+            ),
+            discord=DiscordStudentGacha(clients=clients, config=config.runtime),
+            clock=clock,
+            claim_owner=owner_id,
+        )
     openai_service = OpenAIResponsesService(
         client=openai_client,
         profiles=profiles,
@@ -353,6 +384,7 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
         ingress_runtime=ingress_runtime,
         drain_gate=drain_gate,
         drainer=drainer,
+        student_gacha=student_gacha,
         runtime_instance=runtime_instance,
         tokens=config.discord_tokens,
         previous_command_schema_hash=config.previous_command_schema_hash,

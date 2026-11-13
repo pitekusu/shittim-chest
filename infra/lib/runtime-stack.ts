@@ -37,6 +37,9 @@ const LAMBDA_BUNDLE_KEY_PATTERN =
 const LAMBDA_BUNDLE_CODE_SHA256_PATTERN = "^[A-Za-z0-9+/]{43}=$";
 const PARAMETER_ROOT = "/shittim-chest/production";
 const DISCORD_PUBLIC_KEY_PARAMETER = `${PARAMETER_ROOT}/discord/moderator/public-key`;
+const ARONA_PUBLIC_KEY_PARAMETER = `${PARAMETER_ROOT}/discord/participant-a/public-key`;
+const STUDENT_GACHA_ROUTE = "/interactions/student-gacha";
+const STUDENT_GACHA_CONTROL = "CONTROL#GACHA";
 const MODERATOR_TOKEN_PARAMETER = `${PARAMETER_ROOT}/discord/moderator/token`;
 const RECORDS_IDENTITY_HMAC_PARAMETER =
   `${PARAMETER_ROOT}/records/identity-hmac-key`;
@@ -63,12 +66,18 @@ const RUNTIME_USER = `${RUNTIME_UID}:${RUNTIME_GID}`;
 const HEARTBEAT_TMPFS = containerPolicy.heartbeat_tmpfs;
 const DEPLOYMENT_LOCK_PARTITION = "CONTROL#DEPLOYMENT";
 const INGRESS_READABLE_PARTITION_PATTERNS = [
+  "GACHA#OFFER#*",
+  "GACHA#JOB#*",
+  STUDENT_GACHA_CONTROL,
   "CONTROL#INGRESS",
   "DEBATE#*",
   "INGRESS_OPERATION#*",
   "INGRESS_SEMANTIC_OPERATION#*",
 ];
 const INGRESS_WRITABLE_PARTITION_PATTERNS = [
+  "GACHA#OFFER#*",
+  "GACHA#JOB#*",
+  STUDENT_GACHA_CONTROL,
   "CONTROL#INGRESS",
   "CONTROL#INGRESS#ACTIVE",
   "INGRESS_OPERATION#*",
@@ -83,6 +92,7 @@ const STATUS_PUBLISHER_WRITABLE_PARTITION_PATTERNS = [
   "INGRESS_OPERATION#*",
 ];
 const RECONCILER_READABLE_PARTITION_PATTERNS = [
+  STUDENT_GACHA_CONTROL,
   "CONTROL#DEBATE",
   "CONTROL#GLOBAL",
   "CONTROL#INGRESS",
@@ -99,6 +109,8 @@ const RECONCILER_WRITABLE_PARTITION_PATTERNS = [
   "INGRESS_OPERATION#*",
 ];
 const APPLICATION_WRITABLE_PARTITION_PATTERNS = [
+  "GACHA#*",
+  STUDENT_GACHA_CONTROL,
   "AFFECTION#REQUESTER#*",
   "CONTROL#DEBATE",
   "CONTROL#GLOBAL",
@@ -126,6 +138,7 @@ const STATUS_PUBLISHER_CONDITION_CHECK_PARTITION_PATTERNS = [
 ];
 const RECONCILER_CONDITION_CHECK_PARTITION_PATTERNS = [
   DEPLOYMENT_LOCK_PARTITION,
+  STUDENT_GACHA_CONTROL,
   "CONTROL#DEBATE",
   "CONTROL#GLOBAL",
   "CONTROL#INGRESS",
@@ -182,6 +195,12 @@ export class RuntimeStack extends Stack {
       allowedPattern: CONFIG_VERSION_PATTERN,
       default: "v0004",
       description: "Versioned private runtime and persona configuration path",
+      type: "String",
+    });
+    const studentGachaEnabled = new CfnParameter(this, "StudentGachaEnabled", {
+      allowedValues: ["true", "false"],
+      default: "false",
+      description: "Enable the student gacha after provisioning its private assets and Arona key",
       type: "String",
     });
     const recordsPublicHostname = new CfnParameter(this, "RecordsPublicHostname", {
@@ -280,6 +299,7 @@ export class RuntimeStack extends Stack {
     const executionRole = this.executionRole();
     const normalTaskRole = this.taskRole("NormalTaskRole", "ShittimChest-Prod-Task");
     this.grantApplicationData(normalTaskRole, props.debateTable);
+    this.grantStudentGachaMedia(normalTaskRole);
     normalTaskRole.addToPrincipalPolicy(
       new iam.PolicyStatement({
         actions: ["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject"],
@@ -333,6 +353,7 @@ export class RuntimeStack extends Stack {
       logging,
       parameters,
       recordsPublicHostname: recordsPublicHostname.valueAsString,
+      studentGachaEnabled: studentGachaEnabled.valueAsString,
       taskId: "NormalTaskDefinition",
       taskRole: normalTaskRole,
     });
@@ -417,6 +438,8 @@ export class RuntimeStack extends Stack {
       code: sharedLambdaBundle.code,
       environment: {
         SHITTIM_DISCORD_PUBLIC_KEY_PARAMETER: DISCORD_PUBLIC_KEY_PARAMETER,
+        SHITTIM_ARONA_PUBLIC_KEY_PARAMETER: ARONA_PUBLIC_KEY_PARAMETER,
+        SHITTIM_STUDENT_GACHA_ENABLED: studentGachaEnabled.valueAsString,
         SHITTIM_DYNAMODB_TABLE: props.debateTable.tableName,
         SHITTIM_RUNTIME_CONFIG_PARAMETER: runtimeConfigParameter,
       },
@@ -439,6 +462,7 @@ export class RuntimeStack extends Stack {
           sharedLambdaBundle.objectKey,
           runtimeConfigParameter,
           DISCORD_PUBLIC_KEY_PARAMETER,
+          studentGachaEnabled.valueAsString,
         ]),
         lambda: this.discordIngressFunction,
         removalPolicy: RemovalPolicy.DESTROY,
@@ -583,6 +607,7 @@ export class RuntimeStack extends Stack {
     );
 
     this.grantParameterRead(this.discordIngressFunction, runtimeConfigParameter);
+    this.grantParameterRead(this.discordIngressFunction, ARONA_PUBLIC_KEY_PARAMETER);
     this.grantParameterRead(
       this.discordIngressFunction,
       DISCORD_PUBLIC_KEY_PARAMETER,
@@ -701,6 +726,19 @@ export class RuntimeStack extends Stack {
       methods: [apigatewayv2.HttpMethod.POST],
       path: "/interactions",
     });
+    api.addRoutes({
+      integration: new apigatewayv2Integrations.HttpLambdaIntegration(
+        "StudentGachaIngressIntegration",
+        ingress,
+        { payloadFormatVersion: apigatewayv2.PayloadFormatVersion.VERSION_2_0 },
+      ),
+      methods: [apigatewayv2.HttpMethod.POST],
+      path: STUDENT_GACHA_ROUTE,
+    });
+    new CfnOutput(this, "AronaStudentGachaEndpointUrl", {
+      description: "Register this URL on the Arona Discord application after enabling student gacha",
+      value: `${api.apiEndpoint}${STUDENT_GACHA_ROUTE}`,
+    });
     const stage = new apigatewayv2.HttpStage(this, "DiscordInteractionsStage", {
       autoDeploy: true,
       httpApi: api,
@@ -731,7 +769,7 @@ export class RuntimeStack extends Stack {
     Validations.of(api).acknowledge({
       id: "AwsSolutions-APIG4",
       reason:
-        "Discord cannot use an API Gateway authorizer; the only POST route validates Ed25519 over the untouched raw body before parsing.",
+        "Discord authenticates both POST routes with Ed25519 over the untouched raw body before parsing.",
     });
     return api;
   }
@@ -978,6 +1016,38 @@ export class RuntimeStack extends Stack {
     );
   }
 
+  private grantStudentGachaMedia(role: iam.Role): void {
+    const media = `arn:${this.partition}:s3:::shittim-chest-production-records-media-${this.account}`;
+    const assets = [
+      "student-gacha/assets/blue_archive_characters.json",
+      "student-gacha/assets/show.gif",
+      "student-gacha/assets/format.jpg",
+      "participants/participant-a/memorial-reference.png",
+      "participants/participant-b/memorial-reference.webp",
+      "participants/participant-c/memorial-reference.webp",
+    ];
+    role.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ["s3:GetObject"],
+      resources: assets.map((key) => `${media}/${key}`),
+    }));
+    role.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject"],
+      resources: [`${media}/student-gacha/results/*`],
+    }));
+    role.addToPrincipalPolicy(new iam.PolicyStatement({
+      actions: ["s3:ListBucket"],
+      conditions: { StringLike: { "s3:prefix": "student-gacha/results/*" } },
+      resources: [media],
+    }));
+    const account = Token.isUnresolved(this.account) ? "<AWS::AccountId>" : this.account;
+    for (const partition of ["arn:aws", "arn:<AWS::Partition>"]) {
+      Validations.of(role).acknowledge({
+        id: `AwsSolutions-IAM5[Resource::${partition}:s3:::shittim-chest-production-records-media-${account}/student-gacha/results/*]`,
+        reason: "Each immutable cosplay result uses a runtime-generated draw ID in this fixed prefix.",
+      });
+    }
+  }
+
   private addTableQueryActions(
     grantee: iam.IGrantable,
     table: dynamodb.ITable,
@@ -1107,6 +1177,7 @@ export class RuntimeStack extends Stack {
     readonly logging: ecs.LogDriver;
     readonly parameters: RuntimeParameters;
     readonly recordsPublicHostname: string;
+    readonly studentGachaEnabled: string;
     readonly taskId: string;
     readonly taskRole: iam.IRole;
   }): ecs.FargateTaskDefinition {
@@ -1143,6 +1214,7 @@ export class RuntimeStack extends Stack {
         ]),
         SHITTIM_RUNTIME_PROMPTS_ACTIVE_PARAMETER: RUNTIME_PROMPTS_ACTIVE_PARAMETER,
         SHITTIM_STATUS_PUBLISHER_FUNCTION: DISCORD_STATUS_PUBLISHER_FUNCTION_NAME,
+        SHITTIM_STUDENT_GACHA_ENABLED: options.studentGachaEnabled,
       },
       healthCheck: {
         command: ["CMD", "python", "-m", "shittim_chest.healthcheck"],

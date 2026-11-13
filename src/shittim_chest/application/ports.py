@@ -96,6 +96,7 @@ class RepositoryTransactionAction(StrEnum):
     INGRESS_REQUEST = "ingress_request"
     INGRESS_OPERATION = "ingress_operation"
     STATUS_PUBLICATION = "status_publication"
+    STUDENT_GACHA = "student_gacha"
     UNKNOWN = "unknown"
 
 
@@ -134,7 +135,7 @@ class RepositoryTransactionConflict(RepositoryConflict):
 
     @property
     def retryable(self) -> bool:
-        """Retry only complete transient conflicts or the attempt CAS race."""
+        """Retry complete transient conflicts and expected terminal CAS races."""
 
         if not self.reasons_complete:
             return False
@@ -144,7 +145,11 @@ class RepositoryTransactionConflict(RepositoryConflict):
             return True
         return self.stage is RepositoryTransactionStage.TERMINAL_FINALIZE and all(
             (
-                action is RepositoryTransactionAction.ATTEMPT_CAS
+                action
+                in {
+                    RepositoryTransactionAction.ATTEMPT_CAS,
+                    RepositoryTransactionAction.STUDENT_GACHA,
+                }
                 and code is RepositoryCancellationCode.CONDITIONAL_CHECK_FAILED
             )
             for action, code in self.failures

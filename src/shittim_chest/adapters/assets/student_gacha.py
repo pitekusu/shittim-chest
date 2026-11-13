@@ -1,0 +1,231 @@
+"""Private student recruitment assets and immutable, versioned result images."""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import binascii
+import hashlib
+import io
+import json
+import warnings
+from typing import TYPE_CHECKING, Final
+
+from botocore.exceptions import BotoCoreError, ClientError
+from PIL import Image, UnidentifiedImageError
+
+from shittim_chest.application.student_gacha_models import (
+    GachaGenerationFailure,
+    StoredGachaImage,
+    Student,
+    student_gacha_image_key,
+)
+from shittim_chest.domain import ParticipantSlot
+
+if TYPE_CHECKING:
+    from mypy_boto3_s3.client import S3Client
+    from mypy_boto3_s3.type_defs import HeadObjectOutputTypeDef
+
+STUDENT_GACHA_ASSET_PREFIX: Final = "student-gacha/assets/"
+ROSTER_KEY: Final = STUDENT_GACHA_ASSET_PREFIX + "blue_archive_characters.json"
+LOADING_GIF_KEY: Final = STUDENT_GACHA_ASSET_PREFIX + "show.gif"
+FORMAT_KEY: Final = STUDENT_GACHA_ASSET_PREFIX + "format.jpg"
+# Same private objects already used by Records memorial and Momotalk generation.
+PARTICIPANT_REFERENCE_KEYS: dict[ParticipantSlot, str] = {
+    ParticipantSlot.PARTICIPANT_A: "participants/participant-a/memorial-reference.png",
+    ParticipantSlot.PARTICIPANT_B: "participants/participant-b/memorial-reference.webp",
+    ParticipantSlot.PARTICIPANT_C: "participants/participant-c/memorial-reference.webp",
+}
+_ASSET_DIGESTS: Final = {
+    ROSTER_KEY: "561318df841fd812e90166c30506d61d83e9c07f4d5954a6ed7f3850b43cbbc6",
+    LOADING_GIF_KEY: "a902598c659185353850dbe9e26c18fa0dd57d9f5d6288d2673b3c1e7e47ad63",
+    FORMAT_KEY: "4d921dc67519a8b826a7ef6cf4853acaffca6db69c81e737816378f2ea9e80e0",
+}
+_MAX_REFERENCE_BYTES = 10 * 1024 * 1024
+RESULT_MAX_BYTES: Final = 8 * 1024 * 1024
+RESULT_SIZE: Final = (1792, 828)
+_MAX_PIXELS = 12_000_000
+
+
+class StudentGachaMedia:
+    """Read only the approved inputs and conditionally create one object per draw."""
+
+    def __init__(self, client: S3Client, *, bucket_name: str) -> None:
+        if not bucket_name:
+            raise ValueError("student_gacha_media_configuration_invalid")
+        self._client = client
+        self._bucket = bucket_name
+
+    async def roster(self) -> tuple[Student, ...]:
+        return await asyncio.to_thread(
+            lambda: _parse_roster(self._read_asset(ROSTER_KEY, maximum=64 * 1024))
+        )
+
+    async def loading_gif(self) -> bytes:
+        # The pinned hash validates the animated, indefinitely looping source byte for byte.
+        return await asyncio.to_thread(self._read_asset, LOADING_GIF_KEY, maximum=512 * 1024)
+
+    async def references(self, performer: ParticipantSlot) -> tuple[bytes, bytes]:
+        return await asyncio.to_thread(self._references, performer)
+
+    async def save(self, draw_id: str, png: bytes) -> StoredGachaImage:
+        return await asyncio.to_thread(self._save, student_gacha_image_key(draw_id), png)
+
+    async def load(self, stored: StoredGachaImage) -> bytes:
+        return await asyncio.to_thread(self._load, stored)
+
+    async def find(self, draw_id: str) -> StoredGachaImage | None:
+        return await asyncio.to_thread(self._find, student_gacha_image_key(draw_id))
+
+    def _references(self, performer: ParticipantSlot) -> tuple[bytes, bytes]:
+        layout = self._read_asset(FORMAT_KEY, maximum=512 * 1024)
+        key = PARTICIPANT_REFERENCE_KEYS[performer]
+        portrait = self._read(key, maximum=_MAX_REFERENCE_BYTES)
+        expected_format = "PNG" if key.endswith(".png") else "WEBP"
+        _require_image(portrait, expected_format=expected_format)
+        return layout, portrait
+
+    def _read_asset(self, key: str, *, maximum: int) -> bytes:
+        content = self._read(key, maximum=maximum)
+        if hashlib.sha256(content).hexdigest() != _ASSET_DIGESTS[key]:
+            raise GachaGenerationFailure("gacha_asset_checksum_mismatch")
+        return content
+
+    def _read(self, key: str, *, maximum: int, version: str | None = None) -> bytes:
+        try:
+            response = (
+                self._client.get_object(Bucket=self._bucket, Key=key, VersionId=version)
+                if version is not None
+                else self._client.get_object(Bucket=self._bucket, Key=key)
+            )
+            body = response["Body"]
+            try:
+                size = response.get("ContentLength", 0)
+                if not 1 <= size <= maximum:
+                    raise GachaGenerationFailure("gacha_media_invalid")
+                content = body.read(maximum + 1)
+            finally:
+                body.close()
+        except BotoCoreError, ClientError:
+            raise GachaGenerationFailure("gacha_media_unavailable") from None
+        if len(content) != size:
+            raise GachaGenerationFailure("gacha_media_invalid")
+        return content
+
+    def _save(self, key: str, png: bytes) -> StoredGachaImage:
+        if not 1 <= len(png) <= RESULT_MAX_BYTES:
+            raise GachaGenerationFailure("gacha_result_invalid")
+        _require_image(png, expected_format="PNG", expected_size=RESULT_SIZE)
+        digest = hashlib.sha256(png).digest()
+        checksum = base64.b64encode(digest).decode("ascii")
+        try:
+            response = self._client.put_object(
+                Bucket=self._bucket,
+                Key=key,
+                Body=png,
+                IfNoneMatch="*",
+                ContentType="image/png",
+                CacheControl="private, no-store",
+                ChecksumSHA256=checksum,
+            )
+        except BotoCoreError, ClientError:
+            # The request may have committed before the SDK lost its response.
+            current = self._find(key)
+            if current is None:
+                raise GachaGenerationFailure(
+                    "gacha_result_save_unconfirmed", ambiguous=True
+                ) from None
+            if current.sha256 != digest.hex():
+                raise GachaGenerationFailure("gacha_result_conflict", ambiguous=True) from None
+            return current
+        try:
+            return StoredGachaImage(key, response.get("VersionId", ""), digest.hex())
+        except ValueError:
+            raise GachaGenerationFailure("gacha_result_save_unconfirmed", ambiguous=True) from None
+
+    def _load(self, stored: StoredGachaImage) -> bytes:
+        content = self._read(stored.key, maximum=RESULT_MAX_BYTES, version=stored.version_id)
+        if hashlib.sha256(content).hexdigest() != stored.sha256:
+            raise GachaGenerationFailure("gacha_result_conflict")
+        _require_image(content, expected_format="PNG", expected_size=RESULT_SIZE)
+        return content
+
+    def _find(self, key: str) -> StoredGachaImage | None:
+        try:
+            head = self._client.head_object(Bucket=self._bucket, Key=key, ChecksumMode="ENABLED")
+        except ClientError as error:
+            status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            if status == 404:
+                return None
+            if status == 403 and self._missing_result(key):
+                return None
+            raise GachaGenerationFailure("gacha_result_lookup_failed", ambiguous=True) from None
+        except BotoCoreError:
+            raise GachaGenerationFailure("gacha_result_lookup_failed", ambiguous=True) from None
+        return _receipt(key, head)
+
+    def _missing_result(self, key: str) -> bool:
+        # With restricted ListBucket permissions S3 HEAD can return 403 for an absent key.
+        try:
+            listing = self._client.list_objects_v2(Bucket=self._bucket, Prefix=key, MaxKeys=1)
+        except BotoCoreError, ClientError:
+            raise GachaGenerationFailure("gacha_result_lookup_failed", ambiguous=True) from None
+        return not any(item.get("Key") == key for item in listing.get("Contents", []))
+
+
+def _receipt(key: str, head: HeadObjectOutputTypeDef) -> StoredGachaImage:
+    if (
+        head.get("ContentType") != "image/png"
+        or not 1 <= head.get("ContentLength", 0) <= RESULT_MAX_BYTES
+    ):
+        raise GachaGenerationFailure("gacha_result_invalid", ambiguous=True)
+    try:
+        digest = base64.b64decode(head.get("ChecksumSHA256", ""), validate=True).hex()
+        return StoredGachaImage(key, head.get("VersionId", ""), digest)
+    except binascii.Error, ValueError:
+        raise GachaGenerationFailure("gacha_result_invalid", ambiguous=True) from None
+
+
+def _parse_roster(content: bytes) -> tuple[Student, ...]:
+    try:
+        rows: object = json.loads(content)
+        if not isinstance(rows, list) or not 1 <= len(rows) <= 500:
+            raise ValueError
+        students: list[Student] = []
+        names: set[str] = set()
+        for row in rows:
+            if not isinstance(row, dict) or set(row) != {"name", "school"}:
+                raise ValueError
+            name, school = row["name"], row["school"]
+            if not isinstance(name, str) or not isinstance(school, str) or name in names:
+                raise ValueError
+            students.append(Student(name, school))
+            names.add(name)
+        return tuple(students)
+    except UnicodeError, ValueError, RecursionError:
+        raise GachaGenerationFailure("gacha_roster_invalid") from None
+
+
+def _require_image(
+    content: bytes, *, expected_format: str, expected_size: tuple[int, int] | None = None
+) -> None:
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(content), formats=[expected_format]) as image:
+                if (
+                    image.format != expected_format
+                    or image.width * image.height > _MAX_PIXELS
+                    or getattr(image, "n_frames", 1) != 1
+                    or (expected_size is not None and image.size != expected_size)
+                ):
+                    raise GachaGenerationFailure("gacha_media_invalid")
+                image.load()
+    except (
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+        UnidentifiedImageError,
+        OSError,
+        ValueError,
+    ):
+        raise GachaGenerationFailure("gacha_media_invalid") from None

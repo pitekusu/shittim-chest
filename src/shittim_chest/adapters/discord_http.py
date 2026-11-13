@@ -26,6 +26,12 @@ from shittim_chest.application.discord_http import (
 from shittim_chest.application.ingress import IngressOutcome
 from shittim_chest.application.models import PendingDiscordImage
 from shittim_chest.application.scale_to_zero import IngressKind
+from shittim_chest.application.student_gacha_discord import (
+    DiscordStudentGachaOperation,
+    GachaInteractionOutcome,
+    GachaInteractionResult,
+)
+from shittim_chest.application.student_gacha_models import normalize_teacher_name
 
 DISCORD_SIGNATURE_REPLAY_TOLERANCE = timedelta(minutes=5)
 # Discord interactions are small JSON documents. Bound attacker-controlled input
@@ -35,6 +41,16 @@ DISCORD_HTTP_MAX_BASE64_BODY_CHARACTERS = ((DISCORD_HTTP_MAX_RAW_BODY_BYTES + 2)
 
 _APPLICATION_COMMAND = 2
 _MESSAGE_COMPONENT = 3
+_MODAL_SUBMIT = 5
+_LABEL_COMPONENT = 18
+_TEXT_INPUT_COMPONENT = 4
+STUDENT_GACHA_ROUTE = "POST /interactions/student-gacha"
+STUDENT_GACHA_OFFER_ID = re.compile(r"[0-9a-f]{32}\Z")
+STUDENT_GACHA_OFFER_BUTTON = re.compile(r"([0-9a-f]{32}):[A-Za-z0-9_-]{22}\Z")
+STUDENT_GACHA_BUTTON_PREFIX = "shittim:gacha:v1:offer:"
+STUDENT_GACHA_MODAL_PREFIX = "shittim:gacha:v1:teacher:"
+_STUDENT_GACHA_TEACHER_FIELD = "teacher_name"
+STUDENT_GACHA_APPROVAL = "🎉 生徒募集の準備ができました! 承認をお願いします!"
 _PING = 1
 _CHAT_INPUT_COMMAND = 1
 _STRING_OPTION = 3
@@ -113,7 +129,7 @@ class DiscordHttpReception:
     """Exactly one early HTTP response or one authenticated typed input."""
 
     response: ApiGatewayV2Response | None = None
-    interaction: DiscordHttpInput | None = None
+    interaction: DiscordHttpInput | DiscordStudentGachaOperation | None = None
 
     def __post_init__(self) -> None:
         if (self.response is None) is (self.interaction is None):
@@ -168,18 +184,33 @@ class DiscordRequestVerifier:
 class DiscordHttpBoundary:
     """Authenticate and parse one event without invoking application or AWS services."""
 
-    __slots__ = ("_verifier",)
+    __slots__ = ("_student_gacha_verifier", "_verifier")
 
-    def __init__(self, verifier: DiscordRequestVerifier) -> None:
+    def __init__(
+        self,
+        verifier: DiscordRequestVerifier,
+        *,
+        student_gacha_verifier: DiscordRequestVerifier | None = None,
+    ) -> None:
         self._verifier = verifier
+        self._student_gacha_verifier = student_gacha_verifier
 
     def receive(self, event: Mapping[str, object], *, now: datetime) -> DiscordHttpReception:
         """Return PONG/error immediately, otherwise one token-free typed operation."""
 
         try:
+            request_context = _mapping(event.get("requestContext"))
+            is_student_gacha = request_context.get("routeKey") == STUDENT_GACHA_ROUTE
+            verifier = self._student_gacha_verifier if is_student_gacha else self._verifier
+            if verifier is None:
+                return DiscordHttpReception(response=_json_response(404, {"error": "not_found"}))
             request = extract_api_gateway_v2_request(event)
-            self._verifier.verify(request, now=now)
-            interaction = parse_verified_interaction(request.raw_body, received_at=now)
+            verifier.verify(request, now=now)
+            interaction = (
+                _parse_student_gacha(request.raw_body, received_at=now)
+                if is_student_gacha
+                else parse_verified_interaction(request.raw_body, received_at=now)
+            )
         except DiscordHttpBoundaryError as error:
             return DiscordHttpReception(response=error_response(error))
         if isinstance(interaction, DiscordHttpPing):
@@ -246,13 +277,7 @@ def extract_api_gateway_v2_request(
     )
 
 
-def parse_verified_interaction(
-    raw_body: bytes,
-    *,
-    received_at: datetime,
-) -> DiscordHttpInput:
-    """Parse only a body that the caller has already authenticated."""
-
+def _decode_verified_payload(raw_body: bytes) -> Mapping[str, object]:
     try:
         decoded = raw_body.decode("utf-8")
         parsed = cast(
@@ -268,6 +293,17 @@ def parse_verified_interaction(
     payload = _mapping(parsed)
     if _integer(payload.get("version")) != 1:
         raise DiscordHttpPayloadError
+    return payload
+
+
+def parse_verified_interaction(
+    raw_body: bytes,
+    *,
+    received_at: datetime,
+) -> DiscordHttpInput:
+    """Parse only a body that the caller has already authenticated."""
+
+    payload = _decode_verified_payload(raw_body)
     interaction_type = _integer(payload.get("type"))
     if interaction_type == _PING:
         return DiscordHttpPing(received_at=received_at)
@@ -311,6 +347,149 @@ def parse_verified_interaction(
         display_name=display_name,
         permissions=permissions,
         received_at=received_at,
+    )
+
+
+def _parse_student_gacha(
+    raw_body: bytes,
+    *,
+    received_at: datetime,
+) -> DiscordHttpPing | DiscordStudentGachaOperation:
+    payload = _decode_verified_payload(raw_body)
+    interaction_type = _integer(payload.get("type"))
+    if interaction_type == _PING:
+        return DiscordHttpPing(received_at=received_at)
+    if interaction_type not in {_MESSAGE_COMPONENT, _MODAL_SUBMIT}:
+        raise DiscordHttpPayloadError
+    is_modal = interaction_type == _MODAL_SUBMIT
+    data = _mapping(payload.get("data"))
+    prefix = STUDENT_GACHA_MODAL_PREFIX if is_modal else STUDENT_GACHA_BUTTON_PREFIX
+    custom_id = _text(data.get("custom_id"))
+    binding = custom_id.removeprefix(prefix)
+    if binding == custom_id:
+        raise DiscordHttpPayloadError
+    teacher_name = None
+    if is_modal:
+        if STUDENT_GACHA_OFFER_ID.fullmatch(binding) is None:
+            raise DiscordHttpPayloadError
+        offer_id = binding
+        teacher_name = _parse_teacher_name(data)
+    else:
+        button = STUDENT_GACHA_OFFER_BUTTON.fullmatch(binding)
+        if _integer(data.get("component_type")) != _BUTTON_COMPONENT or button is None:
+            raise DiscordHttpPayloadError
+        offer_id = button.group(1)
+    message = _mapping(payload.get("message"))
+    channel_id = _snowflake(payload.get("channel_id"))
+    if _snowflake(message.get("channel_id")) != channel_id:
+        raise DiscordHttpPayloadError
+    channel_type, _ = _channel_context(payload, channel_id=channel_id)
+    member = _mapping(payload.get("member"))
+    user = _mapping(member.get("user"))
+    return DiscordStudentGachaOperation(
+        interaction_id=_snowflake(payload.get("id")),
+        application_id=_snowflake(payload.get("application_id")),
+        guild_id=_snowflake(payload.get("guild_id")),
+        channel_id=channel_id,
+        channel_type=channel_type,
+        requester_id=_snowflake(user.get("id")),
+        offer_id=offer_id,
+        message_id=_snowflake(message.get("id")),
+        message_author_id=_snowflake(_mapping(message.get("author")).get("id")),
+        received_at=received_at,
+        teacher_name=teacher_name,
+        is_modal=is_modal,
+    )
+
+
+def _parse_teacher_name(data: Mapping[str, object]) -> str | None:
+    components = _sequence(data.get("components"))
+    if len(components) != 1:
+        raise DiscordHttpPayloadError
+    label = _mapping(components[0])
+    if _integer(label.get("type")) != _LABEL_COMPONENT:
+        raise DiscordHttpPayloadError
+    text_input = _mapping(label.get("component"))
+    if (
+        _integer(text_input.get("type")) != _TEXT_INPUT_COMPONENT
+        or text_input.get("custom_id") != _STUDENT_GACHA_TEACHER_FIELD
+    ):
+        raise DiscordHttpPayloadError
+    value = text_input.get("value")
+    if not isinstance(value, str):
+        raise DiscordHttpPayloadError
+    try:
+        return normalize_teacher_name(value)
+    except ValueError:
+        # A legitimate user's input error should receive an ephemeral callback.
+        return None
+
+
+def student_gacha_modal_response(offer_id: str) -> ApiGatewayV2Response:
+    """Open the modal directly in the button interaction's initial response."""
+
+    return _json_response(
+        200,
+        {
+            "type": 9,
+            "data": {
+                "custom_id": STUDENT_GACHA_MODAL_PREFIX + offer_id,
+                "title": "承認をお願いします!",
+                "components": [
+                    {
+                        "type": _LABEL_COMPONENT,
+                        "label": "先生の名前",
+                        "description": "入力した名前は完成画像で公開されます。",
+                        "component": {
+                            "type": _TEXT_INPUT_COMPONENT,
+                            "custom_id": _STUDENT_GACHA_TEACHER_FIELD,
+                            "style": 1,
+                            "required": True,
+                            "min_length": 1,
+                            "max_length": 24,
+                        },
+                    },
+                ],
+            },
+        },
+    )
+
+
+def student_gacha_response(
+    operation: DiscordStudentGachaOperation,
+    result: GachaInteractionResult,
+) -> ApiGatewayV2Response:
+    outcome = result.outcome
+    if outcome is GachaInteractionOutcome.OPEN_MODAL:
+        return student_gacha_modal_response(operation.offer_id)
+    if result.warned_users is not None:
+        owner, clicker = result.warned_users
+        return _json_response(
+            200,
+            {
+                "type": 4,
+                "data": {
+                    "content": (
+                        f"今回の生徒募集は<@{owner}>先生だけができるんです\uff01"
+                        f"<@{clicker}>先生は押しちゃダメですよっ\uff01"
+                    ),
+                    "allowed_mentions": {"parse": [], "users": [owner, clicker]},
+                },
+            },
+        )
+    content = {
+        GachaInteractionOutcome.ACCEPTED: "✅ 生徒募集を受け付けました!",
+        GachaInteractionOutcome.UNAVAILABLE: (
+            "この募集ボタンは利用できません。最新の案内をご確認ください。"
+        ),
+        GachaInteractionOutcome.WRONG_OWNER: "この募集ボタンは対象の先生だけが使えます。",
+        GachaInteractionOutcome.INVALID_TEACHER_NAME: (
+            "先生の名前を１〜２４文字で入力してください。"
+        ),
+    }[outcome]
+    return _json_response(
+        200,
+        {"type": 4, "data": {"content": content, "allowed_mentions": {"parse": []}, "flags": 64}},
     )
 
 

@@ -26,6 +26,9 @@ if TYPE_CHECKING:
 else:
     TransactWriteItemTypeDef = object
 
+if TYPE_CHECKING:
+    from shittim_chest.adapters.dynamodb.student_gacha import DynamoDbStudentGachaRepository
+
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.outbox import outbox_activity_action
 from shittim_chest.adapters.dynamodb.serializer import (
@@ -166,6 +169,7 @@ class DynamoDbDebateRepository:
         client: DynamoDBClient,
         table_name: str,
         identity_hmac_key: bytes,
+        student_gacha: DynamoDbStudentGachaRepository | None = None,
     ) -> None:
         if not table_name.strip():
             raise ValueError("table name must not be empty")
@@ -176,6 +180,7 @@ class DynamoDbDebateRepository:
         self._client = client
         self._table_name = table_name
         self._identity_hmac_key = bytes(identity_hmac_key)
+        self._student_gacha = student_gacha
         self._ingress_terminal_projection = DynamoDbIngressRepository(
             client=client,
             table_name=table_name,
@@ -1217,6 +1222,15 @@ class DynamoDbDebateRepository:
         )
         actions.extend(ingress_actions)
         action_kinds.extend(ingress_action_kinds)
+        if self._student_gacha is not None and persisted.state.phase is DebatePhase.COMPLETED:
+            gacha_actions = self._student_gacha.completion_actions(
+                debate_id=str(persisted.state.debate_id),
+                guild_id=persisted.guild_id,
+                channel_id=persisted.channel_id,
+                at=persisted.state.updated_at,
+            )
+            actions.extend(gacha_actions)
+            action_kinds.extend(RepositoryTransactionAction.STUDENT_GACHA for _ in gacha_actions)
         _require_transaction_size(actions)
         token_source = ":".join(
             (

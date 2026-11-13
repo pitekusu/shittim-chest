@@ -101,3 +101,29 @@ async def test_runtime_payload_version_must_match_parameter_version() -> None:
             load_ingress_bootstrap_settings(environment()),
             Reader(),
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_loads_arona_public_key_only_when_student_gacha_is_enabled(enabled: bool) -> None:
+    arona_parameter = "/shittim-chest/production/discord/participant-a/public-key"
+    values = environment()
+    values["SHITTIM_ARONA_PUBLIC_KEY_PARAMETER"] = arona_parameter
+    values["SHITTIM_STUDENT_GACHA_ENABLED"] = "true" if enabled else "false"
+    reads: list[str] = []
+
+    class Reader:
+        async def get_parameter(self, name: str, *, with_decryption: bool = True) -> str:
+            assert with_decryption
+            reads.append(name)
+            if name.endswith("/runtime/v0001"):
+                return runtime_json()
+            if name.endswith("/moderator/public-key"):
+                return "ab" * 32
+            assert name == arona_parameter
+            return "ef" * 32
+
+    runtime = await load_ingress_runtime_settings(load_ingress_bootstrap_settings(values), Reader())
+    assert runtime.student_gacha_enabled is enabled
+    assert (arona_parameter in reads) is enabled
+    assert runtime.arona_public_key_hex == ("ef" * 32 if enabled else None)

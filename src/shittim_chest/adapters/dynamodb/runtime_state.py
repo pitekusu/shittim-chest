@@ -42,6 +42,7 @@ from shittim_chest.adapters.dynamodb.serializer import (
     serialize_runtime_state,
     serialize_runtime_wake_result,
 )
+from shittim_chest.adapters.dynamodb.student_gacha_activity import student_gacha_idle_check
 from shittim_chest.adapters.dynamodb.transaction_errors import (
     is_condition_only_cancellation,
 )
@@ -378,6 +379,7 @@ class DynamoDbRuntimeStateRepository:
                 _free_slot_check(table_name=self._table_name, slot=slot)
                 for slot in range(GLOBAL_LEASE_SLOTS)
             ),
+            student_gacha_idle_check(self._table_name),
         ]
         try:
             self._client.transact_write_items(

@@ -247,6 +247,7 @@ describe("RuntimeStack", () => {
               ],
             },
             "/shittim-chest/production/discord/moderator/public-key",
+            { Ref: "StudentGachaEnabled" },
           ],
         ],
       },
@@ -263,18 +264,19 @@ describe("RuntimeStack", () => {
       Name: "live",
     });
 
-    const integration = Object.values(
-      template.findResources("AWS::ApiGatewayV2::Integration"),
-    )[0];
-    expect(JSON.stringify(integration?.Properties.IntegrationUri)).toContain(aliasLogicalId);
-    expect(JSON.stringify(integration?.Properties.IntegrationUri)).not.toContain("$LATEST");
+    const integrations = Object.values(template.findResources("AWS::ApiGatewayV2::Integration"));
+    expect(integrations).toHaveLength(2);
+    for (const integration of integrations) {
+      expect(JSON.stringify(integration.Properties.IntegrationUri)).toContain(aliasLogicalId);
+      expect(JSON.stringify(integration.Properties.IntegrationUri)).not.toContain("$LATEST");
+    }
     const apiPermissions = Object.values(
       template.findResources("AWS::Lambda::Permission"),
     ).filter((resource) => resource.Properties.Principal === "apigateway.amazonaws.com");
-    expect(apiPermissions).toHaveLength(1);
-    expect(JSON.stringify(apiPermissions[0]?.Properties.FunctionName)).toContain(
-      aliasLogicalId,
-    );
+    expect(apiPermissions).toHaveLength(2);
+    for (const permission of apiPermissions) {
+      expect(JSON.stringify(permission.Properties.FunctionName)).toContain(aliasLogicalId);
+    }
   });
 
   test("fails closed before scale-up unless the release image is admitted", () => {
@@ -372,7 +374,12 @@ describe("RuntimeStack", () => {
       SHITTIM_ECS_SERVICE: expect.anything(),
       SHITTIM_STATUS_PUBLISHER_FUNCTION: expect.anything(),
     });
-    expect(JSON.stringify([ingress, status, reconciler])).not.toContain("participant-");
+    expect(ingress?.Environment?.Variables).toMatchObject({
+      SHITTIM_ARONA_PUBLIC_KEY_PARAMETER: "/shittim-chest/production/discord/participant-a/public-key",
+      SHITTIM_STUDENT_GACHA_ENABLED: { Ref: "StudentGachaEnabled" },
+    });
+    expect(JSON.stringify([status, reconciler])).not.toContain("participant-");
+    expect(JSON.stringify(ingress)).not.toMatch(/participant-[abc]\/token/);
     expect(JSON.stringify([ingress, status, reconciler])).not.toContain("OPENAI_API_KEY");
     const policies = Object.values(template.findResources("AWS::IAM::Policy"));
     const ingressPolicy = policies.find((policy) =>
@@ -384,12 +391,12 @@ describe("RuntimeStack", () => {
     expect(ingressPolicyText).toContain("/discord/moderator/public-key");
   });
 
-  test("exposes only the signed Discord POST route through HTTP API v2", () => {
+  test("exposes only the two signed Discord POST routes through HTTP API v2", () => {
     const { template } = fixture;
 
     template.resourceCountIs("AWS::ApiGatewayV2::Api", 1);
-    template.resourceCountIs("AWS::ApiGatewayV2::Integration", 1);
-    template.resourceCountIs("AWS::ApiGatewayV2::Route", 1);
+    template.resourceCountIs("AWS::ApiGatewayV2::Integration", 2);
+    template.resourceCountIs("AWS::ApiGatewayV2::Route", 2);
     template.resourceCountIs("AWS::ApiGatewayV2::Stage", 1);
     template.resourceCountIs("AWS::ApiGateway::RestApi", 0);
     template.hasResourceProperties("AWS::ApiGatewayV2::Api", {
@@ -403,6 +410,14 @@ describe("RuntimeStack", () => {
     template.hasResourceProperties("AWS::ApiGatewayV2::Route", {
       AuthorizationType: "NONE",
       RouteKey: "POST /interactions",
+    });
+    template.hasResourceProperties("AWS::ApiGatewayV2::Route", {
+      AuthorizationType: "NONE",
+      RouteKey: "POST /interactions/student-gacha",
+    });
+    template.hasParameter("StudentGachaEnabled", {
+      AllowedValues: ["true", "false"],
+      Default: "false",
     });
     template.hasResourceProperties("AWS::ApiGatewayV2::Stage", {
       AccessLogSettings: Match.objectLike({
@@ -710,6 +725,7 @@ describe("RuntimeStack", () => {
     expect(reconciler).toContain("/index/gsi2");
     expect(ingress).toContain("ssm:GetParameter");
     expect(ingress).toContain("discord/moderator/public-key");
+    expect(ingress).toContain("discord/participant-a/public-key");
     expect(ingress).toContain("production/runtime/");
     expect(ingress).not.toContain("lambda:InvokeFunction");
     expect(ingress).not.toContain("discord/moderator/token");
@@ -729,6 +745,9 @@ describe("RuntimeStack", () => {
       [
         "DiscordIngressFunctionRole",
         [
+          "GACHA#OFFER#*",
+          "GACHA#JOB#*",
+          "CONTROL#GACHA",
           "CONTROL#INGRESS",
           "CONTROL#INGRESS#ACTIVE",
           "INGRESS_OPERATION#*",
@@ -751,6 +770,8 @@ describe("RuntimeStack", () => {
       [
         "NormalTaskRole",
         [
+          "GACHA#*",
+          "CONTROL#GACHA",
           "AFFECTION#REQUESTER#*",
           "CONTROL#DEBATE",
           "CONTROL#GLOBAL",
@@ -771,6 +792,9 @@ describe("RuntimeStack", () => {
       [
         "DiscordIngressFunctionRole",
         [
+          "GACHA#OFFER#*",
+          "GACHA#JOB#*",
+          "CONTROL#GACHA",
           "CONTROL#INGRESS",
           "DEBATE#*",
           "INGRESS_OPERATION#*",
@@ -784,6 +808,7 @@ describe("RuntimeStack", () => {
       [
         "RuntimeReconcilerFunctionRole",
         [
+          "CONTROL#GACHA",
           "CONTROL#DEBATE",
           "CONTROL#GLOBAL",
           "CONTROL#INGRESS",
@@ -797,6 +822,8 @@ describe("RuntimeStack", () => {
       [
         "NormalTaskRole",
         [
+          "GACHA#*",
+          "CONTROL#GACHA",
           "AFFECTION#REQUESTER#*",
           "CONTROL#DEBATE",
           "CONTROL#GLOBAL",
@@ -826,6 +853,7 @@ describe("RuntimeStack", () => {
         "RuntimeReconcilerFunctionRole",
         [
           "CONTROL#DEPLOYMENT",
+          "CONTROL#GACHA",
           "CONTROL#DEBATE",
           "CONTROL#GLOBAL",
           "CONTROL#INGRESS",
@@ -840,6 +868,8 @@ describe("RuntimeStack", () => {
         "NormalTaskRole",
         [
           "CONTROL#DEPLOYMENT",
+          "GACHA#*",
+          "CONTROL#GACHA",
           "AFFECTION#REQUESTER#*",
           "CONTROL#DEBATE",
           "CONTROL#GLOBAL",
