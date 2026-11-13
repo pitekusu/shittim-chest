@@ -247,7 +247,7 @@ private fun RecordListCard(item: RecordListEntry, isSelected: Boolean, modifier:
       Text(item.questionPreview, style = MaterialTheme.typography.titleMedium,
         maxLines = 4, overflow = TextOverflow.Ellipsis,
         modifier = Modifier.testTag("journal-question-${item.recordId}"))
-      if (item.attachmentCount > 0) {
+      if (item.attachmentCountKnown && item.attachmentCount > 0) {
         val description = stringResource(R.string.attachment_count, item.attachmentCount)
         Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.small,
           modifier = Modifier.testTag("journal-images-${item.recordId}")

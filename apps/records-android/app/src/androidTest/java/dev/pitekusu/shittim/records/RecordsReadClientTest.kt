@@ -306,7 +306,7 @@ class RecordsReadClientTest {
     var requests = 0
     RecordsReadClient(MockEngine { request ->
       requests++
-      assertEquals("/api/v1/records?limit=12&sort=newest", request.url.toString()
+      assertEquals("/api/v1/records?limit=12&sort=newest&contract=record-attachments-v1", request.url.toString()
         .removePrefix("https://shittim.pitekusu.dev"))
       assertEquals("Bearer $token", request.headers[HttpHeaders.Authorization])
       assertFalse(request.headers.contains(HttpHeaders.Cookie))
@@ -318,6 +318,7 @@ class RecordsReadClientTest {
       assertEquals("アロナ", page.items.single().winnerName)
       assertEquals("participant-a", page.items.single().winnerSlot)
       assertEquals("cyan", page.items.single().requesterAvatar.fallbackVariant)
+      assertFalse(page.items.single().attachmentCountKnown)
       assertEquals("next.cursor", page.nextCursor)
     }
     assertEquals(1, requests)
@@ -335,8 +336,8 @@ class RecordsReadClientTest {
       assertEquals("next.cursor", client.recentRecords(token).nextCursor)
       assertFailure(RecordReadFailure.CURSOR_INVALID) { client.recentRecords(token, "next.cursor") }
     }
-    assertEquals(listOf("/api/v1/records?limit=12&sort=newest",
-      "/api/v1/records?limit=12&sort=newest&cursor=next.cursor"), paths)
+    assertEquals(listOf("/api/v1/records?limit=12&sort=newest&contract=record-attachments-v1",
+      "/api/v1/records?limit=12&sort=newest&cursor=next.cursor&contract=record-attachments-v1"), paths)
   }
 
   @Test
@@ -345,6 +346,7 @@ class RecordsReadClientTest {
       listPage().replace("\"kind\":\"placeholder\"", "\"kind\":\"unknown\""),
       listPage().replace("\"winner\":\"participant-a\"", "\"winner\":\"participant-x\""),
       listPage().replace("2026-09-24T00:00:00Z", "not-a-date"),
+      listPage().replace("\"questionPreview\":", "\"attachmentCount\":4,\"questionPreview\":"),
     )) {
       RecordsReadClient(MockEngine { respond(payload, headers = jsonHeader) }).use { client ->
         assertFailure(RecordReadFailure.INVALID_RESPONSE) { client.recentRecords(token) }

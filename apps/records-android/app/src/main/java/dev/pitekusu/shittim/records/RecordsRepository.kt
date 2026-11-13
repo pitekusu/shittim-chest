@@ -1,6 +1,7 @@
 package dev.pitekusu.shittim.records
 
 import android.content.Context
+import androidx.room3.withWriteTransaction
 import dev.pitekusu.shittim.records.storage.CachedRecordPart
 import dev.pitekusu.shittim.records.storage.EncryptedRecordImageStore
 import dev.pitekusu.shittim.records.storage.EncryptedRecordStore
@@ -47,14 +48,60 @@ internal class RecordsRepository(
     val page = remote.recentRecords(token, cursor)
     accountLock.withLock {
       prepare(accountId)
-      page.items.forEach { entry ->
-        save(accountId, entry.recordId, CachedRecordPart.LIST) {
-          json.encodeToString(CachedListEntry(1, entry))
-        }
-      }
+      if (page.items.isNotEmpty()) listRevision++
+      page.items.forEach { entry -> saveListEntry(accountId, entry) }
       requireActive(accountId)
     }
     return page
+  }
+
+  /** Seed the first page only while its verified foreground session and empty cache still match. */
+  suspend fun seedRecentRecords(token: String, accountId: String,
+    onSaved: () -> Unit = {}, sessionIsCurrent: () -> Boolean): RecordListPage? {
+    val revision = accountLock.withLock {
+      prepareRead(accountId)
+      if (!sessionIsCurrent() || cachedListIds(accountId).isNotEmpty()) return null
+      listRevision
+    }
+    val page = remote.recentRecords(token, cursor = null)
+    return accountLock.withLock {
+      if (!sessionIsCurrent()) return null
+      prepareRead(accountId)
+      // Sync can finish or confirm a deletion while the page is in flight.
+      if (revision != listRevision || cachedListIds(accountId).isNotEmpty()) return null
+      if (page.items.isNotEmpty()) {
+        try {
+          val committed = database.withWriteTransaction<Boolean> {
+            for (entry in page.items) {
+              if (!sessionIsCurrent()) rollback(false)
+              requireActive(accountId)
+              saveListEntry(accountId, entry)
+            }
+            if (!sessionIsCurrent()) rollback(false)
+            requireActive(accountId)
+            true
+          }
+          if (!committed) return null
+        } catch (error: CancellationException) { throw error }
+        catch (error: RecordReadException) { throw error }
+        catch (_: Exception) { throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE) }
+        listRevision++
+        onSaved()
+      }
+      page
+    }
+  }
+
+  private suspend fun cachedListIds(accountId: String): List<String> = try {
+    cache.recordIds(accountId, CachedRecordPart.LIST)
+  } catch (_: RecordCacheException) { throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE) }
+
+  // A completed index covers previously visible seed rows, including any committed since the Worker started.
+  suspend fun finishIndexDiscovery(accountId: String): Set<String> = accountLock.withLock {
+    prepareRead(accountId)
+    listRevision++
+    try { cache.listOnlyRecordIds(accountId).also { requireActive(accountId) } }
+    catch (_: RecordCacheException) { throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE) }
   }
 
   suspend fun record(token: String, accountId: String, recordId: String,
@@ -68,6 +115,7 @@ internal class RecordsRepository(
     if (result is RecordReadResult.Found) {
       accountLock.withLock {
         prepare(accountId)
+        listRevision++
         save(accountId, recordId, CachedRecordPart.DETAIL) {
           json.encodeToString(CachedDetail(1, result.preview.cachedImages()))
         }
@@ -75,7 +123,7 @@ internal class RecordsRepository(
           val savedEntry = RecordListEntry(entry.recordId, entry.questionPreview, entry.requesterName,
             RecordAvatar(entry.requesterAvatar.url, entry.requesterAvatar.fallbackVariant, revision = avatarRevision),
             entry.completedAt, entry.winnerName, entry.winnerSlot, entry.attachmentCount)
-          save(accountId, recordId, CachedRecordPart.LIST) { json.encodeToString(CachedListEntry(2, savedEntry)) }
+          saveListEntry(accountId, savedEntry)
         }
         requireActive(accountId)
       }
@@ -136,23 +184,40 @@ internal class RecordsRepository(
     ids
   }
 
-  override suspend fun cachedRecords(accountId: String): List<RecordListEntry> {
+  override suspend fun cachedRecords(accountId: String): List<RecordListEntry> = cachedRecords(accountId, null)
+
+  /** Publish recent authorized summaries while the full list and saved icons are being prepared. */
+  suspend fun cachedRecords(accountId: String,
+    onRecent: ((List<RecordListEntry>, Int) -> Unit)?): List<RecordListEntry> {
     try {
-      val (listRows, avatarRows) = accountLock.withLock {
+      val listRows = accountLock.withLock {
         prepareRead(accountId)
-        val lists = cache.rows(accountId, CachedRecordPart.LIST)
-        val avatars = cache.rows(accountId, CachedRecordPart.AVATAR)
-        prepareRead(accountId)
-        lists to avatars
+        cache.rows(accountId, CachedRecordPart.LIST).also { prepareRead(accountId) }
       }
       // A cold read yields the account lock between rows so fresh worker writes can proceed.
-      val wantedAvatars = listRows.mapNotNull { row ->
+      val decodedEntries = listRows.map { row ->
         accountLock.withLock {
           prepareRead(accountId)
-          avatarCacheKey(memoizedListEntry(accountId, row)).also { requireActive(accountId) }
+          memoizedListEntry(accountId, row).also { requireActive(accountId) }
         }
-      }.toSet()
-      avatarRows.filter { it.recordId in wantedAvatars }.forEach { row ->
+      }
+      val avatarRows = accountLock.withLock {
+        prepareRead(accountId)
+        val entries = if (onRecent == null) decodedEntries else {
+          // Reconcile against current ciphertext before publication. The old rows can belong
+          // to a cleared cache even when the same account has since signed back in.
+          memoizedListEntries(accountId, cache.rows(accountId, CachedRecordPart.LIST)).also { current ->
+            if (current.isNotEmpty()) {
+              val recent = RecordListQuery().sorted(current).take(INITIAL_RECORD_COUNT).map { it.offlineEntry() }
+              prepareRead(accountId)
+              onRecent(recent, current.size)
+            }
+          }
+        }
+        val wantedAvatars = entries.mapNotNull(::avatarCacheKey).toSet()
+        cache.rows(accountId, CachedRecordPart.AVATAR).filter { it.recordId in wantedAvatars }
+      }
+      avatarRows.forEach { row ->
         accountLock.withLock {
           prepareRead(accountId)
           memoizeAvatar(accountId, row)
@@ -179,10 +244,7 @@ internal class RecordsRepository(
               avatarMemo[it.recordId]?.bytes?.copyOf()
             }
           }
-          // Presigned URLs expire and offline browsing must not trigger image network requests.
-          RecordListEntry(entry.recordId, entry.questionPreview, entry.requesterName,
-            RecordAvatar(null, entry.requesterAvatar.fallbackVariant, bytes),
-            entry.completedAt, entry.winnerName, entry.winnerSlot, entry.attachmentCount)
+          entry.offlineEntry(bytes)
         }
         prepareRead(accountId)
         result
@@ -195,6 +257,12 @@ internal class RecordsRepository(
       throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE)
     }
   }
+
+  // Presigned URLs expire and offline browsing must not trigger image network requests.
+  private fun RecordListEntry.offlineEntry(avatarBytes: ByteArray? = null) =
+    RecordListEntry(recordId, questionPreview, requesterName,
+      RecordAvatar(null, requesterAvatar.fallbackVariant, avatarBytes),
+      completedAt, winnerName, winnerSlot, attachmentCount, attachmentCountKnown)
 
   private suspend fun memoizedListEntries(accountId: String, rows: List<EncryptedRecordRow>): List<RecordListEntry> {
     synchronized(memoLock) { listMemo.keys.retainAll(rows.map { it.recordId }.toSet()) }
@@ -328,6 +396,7 @@ internal class RecordsRepository(
 
   suspend fun removeRecords(accountId: String, recordIds: Set<String>): Unit = accountLock.withLock {
     prepareRead(accountId)
+    listRevision++
     try {
       recordIds.forEach { imageStore?.retain(accountId, it, emptyList()) }
       cache.deleteRecords(accountId, recordIds)
@@ -440,6 +509,12 @@ internal class RecordsRepository(
     memoAccountId = null
   }
 
+  private suspend fun saveListEntry(accountId: String, entry: RecordListEntry) {
+    // The legacy list format can recover an unknown count from a saved detail.
+    val schema = if (entry.attachmentCountKnown) 2 else 1
+    save(accountId, entry.recordId, CachedRecordPart.LIST) { json.encodeToString(CachedListEntry(schema, entry)) }
+  }
+
   private suspend fun save(accountId: String, recordId: String, part: CachedRecordPart, encode: () -> String) {
     val bytes = try {
       encode().toByteArray(Charsets.UTF_8)
@@ -486,10 +561,11 @@ internal class RecordsRepository(
         json.decodeFromString<CachedDetail>(it).also { detail -> check(detail.schemaVersion == 1) }
           .preview.attachments.size.also { count -> check(count in 0..3) }
       }
-    } ?: 0
+    }
     val entry = cached.entry
     return RecordListEntry(entry.recordId, entry.questionPreview, entry.requesterName, entry.requesterAvatar,
-      entry.completedAt, entry.winnerName, entry.winnerSlot, count)
+      entry.completedAt, entry.winnerName, entry.winnerSlot,
+      attachmentCount = count ?: 0, attachmentCountKnown = count != null)
   }
 
   override fun close() {
@@ -507,6 +583,8 @@ internal class RecordsRepository(
 
   companion object {
     private val accountLock = RecordCacheAccount.lock
+    private var listRevision = 0L // Accessed only while holding accountLock.
+    private const val INITIAL_RECORD_COUNT = 12
     private const val SYNC_RECORD_ID = "record-sync-v1" // Separate authenticated part, not an API record.
 
     fun open(context: Context, isActiveAccount: (String) -> Boolean, activateOwner: Boolean = true): RecordsRepository {

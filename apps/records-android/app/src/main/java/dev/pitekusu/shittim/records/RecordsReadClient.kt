@@ -34,7 +34,7 @@ import okhttp3.CookieJar
 
 internal enum class RecordReadFailure { AUTH_REQUIRED, NOT_FOUND, UNAVAILABLE, CURSOR_INVALID, INVALID_RESPONSE, STORAGE_UNAVAILABLE }
 
-internal class RecordReadException(val failure: RecordReadFailure) :
+internal class RecordReadException(val failure: RecordReadFailure, val serverRejectedSession: Boolean = false) :
   Exception("record_read_${failure.name.lowercase()}")
 
 @Serializable
@@ -142,6 +142,7 @@ internal class RecordListEntry(
   val winnerName: String,
   val winnerSlot: String? = null,
   val attachmentCount: Int = 0,
+  @Transient val attachmentCountKnown: Boolean = true,
 )
 
 @Serializable
@@ -448,7 +449,8 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     if (cursor != null && !validRecordCursor(cursor)) {
       throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
     }
-    val page: RecordListResponse = read("/api/v1/records?limit=12&sort=newest", accessToken, cursor)
+    val page: RecordListResponse = read("/api/v1/records?limit=12&sort=newest", accessToken, cursor,
+      contract = "record-attachments-v1")
     if (page.schemaVersion != 1 || page.items.size > 12 ||
       page.items.map { it.recordId }.toSet().size != page.items.size ||
       (page.nextCursor != null && (!validRecordCursor(page.nextCursor) || page.nextCursor == cursor))) {
@@ -458,6 +460,7 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
       RecordListPage(page.items.map { item ->
         if (item.schemaVersion != 1 || !mobileOpaqueValue.matches(item.recordId) ||
           item.questionPreview.isBlank() || item.requester.displayName.isBlank() ||
+          (item.attachmentCount != null && item.attachmentCount !in 0..3) ||
           item.participants.size != 3 ||
           item.participants.map { it.slot }.toSet() != PARTICIPANTS ||
           item.result.winner !in PARTICIPANTS) {
@@ -477,7 +480,8 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
         }
         RecordListEntry(item.recordId, item.questionPreview, item.requester.displayName,
           RecordAvatar(avatarUrl, avatar.fallbackVariant),
-          OffsetDateTime.parse(item.completedAt).toInstant(), winner.displayName, winner.slot)
+          OffsetDateTime.parse(item.completedAt).toInstant(), winner.displayName, winner.slot,
+          attachmentCount = item.attachmentCount ?: 0, attachmentCountKnown = item.attachmentCount != null)
       }, page.nextCursor)
     } catch (error: RecordReadException) {
       throw error
@@ -505,7 +509,7 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
       }
       when (response.status.value) {
         200 -> Unit
-        401 -> throw RecordReadException(RecordReadFailure.AUTH_REQUIRED)
+        401 -> throw RecordReadException(RecordReadFailure.AUTH_REQUIRED, serverRejectedSession = true)
         404 -> throw RecordReadException(RecordReadFailure.NOT_FOUND)
         400 -> {
           val error: RecordErrorResponse = response.body()
@@ -658,6 +662,7 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     val requester: RecordRequester,
     val participants: List<RecordParticipant>,
     val result: RecordResult,
+    val attachmentCount: Int? = null,
   )
   @Serializable private class RecordRequester(val displayName: String, val avatar: RecordAvatarRef)
   @Serializable private class RecordAvatarRef(
