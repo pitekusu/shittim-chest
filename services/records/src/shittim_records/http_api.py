@@ -48,6 +48,7 @@ if TYPE_CHECKING:
         GalleryDetailResponse,
         GalleryListResponse,
         GalleryOriginalResponse,
+        GallerySchoolLogosResponse,
         GalleryThumbnailsResponse,
     )
     from shittim_records.gallery_read import GalleryReadService
@@ -79,6 +80,7 @@ MOBILE_READ_ROUTES = frozenset(
     }
 )
 MAX_SEARCH_BODY_BYTES = 16 * 1024
+GALLERY_AVATAR_CONTRACT = "gallery-avatars-v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -371,6 +373,12 @@ class ReadHttpController:
             else:
                 return error_response(404, "ROUTE_NOT_FOUND", request.request_id)
             payload = result.model_dump(by_alias=True, mode="json")
+            if request.route_key in {"GET /api/v1/gallery", "GET /api/v1/gallery/{cardId}"}:
+                cards = payload["items"] if "items" in payload else (payload["card"],)
+                for card in cards:
+                    collector = card.get("collector")
+                    if collector is not None and collector.get("avatar") is None:
+                        collector.pop("avatar", None)
             if (
                 request.route_key
                 in {
@@ -416,13 +424,24 @@ class ReadHttpController:
         | GalleryDetailResponse
         | GalleryThumbnailsResponse
         | GalleryOriginalResponse
+        | GallerySchoolLogosResponse
     ):
         if self._gallery is None:
             raise ReadFailure("GALLERY_UNAVAILABLE", 503)
         query = _query(request.raw_query)
-        if request.route_key == "GET /api/v1/gallery" and set(query) <= {"cursor"}:
+        if request.route_key == "GET /api/v1/gallery/school-logos" and not query:
+            return self._gallery().get_school_logos()
+        if request.route_key == "GET /api/v1/gallery" and set(query) <= {"cursor", "contract"}:
             cursor = _optional_single(query, "cursor")
-            return self._gallery().list_cards(cursor=cursor, viewer=viewer, now=now)
+            return self._gallery().list_cards(
+                cursor=cursor, viewer=viewer, now=now, include_avatars=_gallery_avatars(query)
+            )
+        if request.route_key == "GET /api/v1/gallery/{cardId}" and set(query) <= {"contract"}:
+            return self._gallery().get_card(
+                card_id=request.path_parameters.get("cardId", ""),
+                viewer=viewer,
+                include_avatars=_gallery_avatars(query),
+            )
         if request.route_key == "GET /api/v1/gallery/thumbnails" and set(query) == {"ids"}:
             ids = _required_single(query, "ids")
             if len(ids) > 1943:
@@ -431,8 +450,6 @@ class ReadHttpController:
         if query or request.route_key in {"GET /api/v1/gallery", "GET /api/v1/gallery/thumbnails"}:
             raise ReadFailure("REQUEST_INVALID", 400)
         card_id = request.path_parameters.get("cardId", "")
-        if request.route_key == "GET /api/v1/gallery/{cardId}":
-            return self._gallery().get_card(card_id=card_id, viewer=viewer)
         if request.route_key == "GET /api/v1/gallery/{cardId}/original":
             return self._gallery().get_original(card_id=card_id, now=now)
         raise ReadFailure("ROUTE_NOT_FOUND", 404)
@@ -641,6 +658,13 @@ def _optional_single(query: Mapping[str, list[str]], name: str) -> str | None:
     if len(values) != 1 or not values[0]:
         raise AuthFailure("oauth_request_invalid")
     return values[0]
+
+
+def _gallery_avatars(query: Mapping[str, list[str]]) -> bool:
+    contract = _optional_single(query, "contract")
+    if contract not in {None, GALLERY_AVATAR_CONTRACT}:
+        raise ReadFailure("REQUEST_INVALID", 400)
+    return contract is not None
 
 
 def _limit(value: str | None) -> int:

@@ -574,7 +574,7 @@ describe("RecordsApplicationStack", () => {
     template.resourceCountIs("AWS::Lambda::Version", 7);
     template.resourceCountIs("AWS::Lambda::Alias", 7);
     template.resourceCountIs("AWS::ApiGatewayV2::Api", 1);
-    template.resourceCountIs("AWS::ApiGatewayV2::Route", 51);
+    template.resourceCountIs("AWS::ApiGatewayV2::Route", 52);
     template.resourceCountIs("AWS::ApiGatewayV2::Stage", 1);
     template.hasResourceProperties("AWS::ApiGatewayV2::Stage", {
       AutoDeploy: true,
@@ -1481,6 +1481,7 @@ describe("RecordsApplicationStack", () => {
     const gallery = routes.filter((route) => route.Properties.RouteKey.startsWith("GET /api/v1/gallery"));
     expect(gallery.map((route) => route.Properties.RouteKey).sort()).toEqual([
       "GET /api/v1/gallery",
+      "GET /api/v1/gallery/school-logos",
       "GET /api/v1/gallery/thumbnails",
       "GET /api/v1/gallery/{cardId}",
       "GET /api/v1/gallery/{cardId}/original",
@@ -1495,8 +1496,11 @@ describe("RecordsApplicationStack", () => {
       .filter((statement) => /student-gacha\/|GACHA#/.test(JSON.stringify(statement)));
     const read = galleryStatements("ReadFunctionRole");
     expect(read.flatMap(actionsOf).sort()).toEqual([
-      "dynamodb:BatchGetItem", "dynamodb:GetItem", "dynamodb:Query", "s3:GetObjectVersion",
+      "dynamodb:BatchGetItem", "dynamodb:GetItem", "dynamodb:Query", "s3:GetObject", "s3:GetObjectVersion",
     ]);
+    const logoRead = read.find((statement) => actionsOf(statement).includes("s3:GetObject"));
+    expect(JSON.stringify(logoRead?.Resource)).toContain("student-gacha/assets/blue_archive_school_logos.zip");
+    expect(JSON.stringify(logoRead?.Resource)).not.toContain("*");
     expect(JSON.stringify(read)).not.toContain("GACHA#OFFER#");
     for (const role of ["ProjectorFunctionRole", "BackfillFunctionRole"]) {
       const statements = galleryStatements(role);

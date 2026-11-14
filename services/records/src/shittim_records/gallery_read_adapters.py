@@ -2,9 +2,26 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import io
+import zipfile
+from functools import cached_property
 from typing import TYPE_CHECKING, Any, cast
 
+from botocore.exceptions import BotoCoreError, ClientError
+from PIL import Image
+from shittim_chest.adapters.assets.student_gacha import _ASSET_DIGESTS, SCHOOL_LOGOS_KEY, _read_body
+from shittim_chest.adapters.assets.student_gacha_schools import (
+    _MAX_INDEX_BYTES,
+    _ROOT,
+    SCHOOL_CATALOG_MAX_BYTES,
+    _parse_index,
+    _read_member,
+    school_branding,
+)
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
+from shittim_chest.application.student_gacha_models import GachaGenerationFailure
 
 from shittim_records.gallery_keys import GALLERY_RESULT_PREFIX
 from shittim_records.gallery_read import (
@@ -82,3 +99,47 @@ class DynamoGalleryStore:
             content_type="image/webp" if thumbnail else "image/png",
             expires_in=GALLERY_IMAGE_URL_TTL_SECONDS,
         )
+
+    def load_school_logos(self) -> dict[str, str]:
+        return self._school_logos
+
+    @cached_property
+    def _school_logos(self) -> dict[str, str]:
+        try:
+            result = self._s3.get_object(Bucket=self._bucket, Key=SCHOOL_LOGOS_KEY)
+            content = _read_body(result, maximum=SCHOOL_CATALOG_MAX_BYTES)
+            if hashlib.sha256(content).hexdigest() != _ASSET_DIGESTS[SCHOOL_LOGOS_KEY]:
+                raise ValueError
+            # Discover the official names from the pinned index. Read image members
+            # through the same validation used by the card generator.
+            with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                schools = _parse_index(
+                    _read_member(archive, _ROOT + "schools.json", _MAX_INDEX_BYTES)
+                )
+            return {
+                name: _logo_data_url(logo)
+                for name, entry in schools.items()
+                if entry is not None and (logo := school_branding(content, name).logo) is not None
+            }
+        except (
+            BotoCoreError,
+            ClientError,
+            GachaGenerationFailure,
+            KeyError,
+            OSError,
+            ValueError,
+            zipfile.BadZipFile,
+        ):
+            raise ReadFailure("GALLERY_UNAVAILABLE", 503) from None
+
+
+def _logo_data_url(content: bytes) -> str:
+    with (
+        Image.open(io.BytesIO(content), formats=["PNG"]) as source,
+        source.convert("RGBA") as image,
+        io.BytesIO() as output,
+    ):
+        image.thumbnail((64, 64), Image.Resampling.LANCZOS)
+        image.save(output, format="WEBP", quality=85)
+        encoded = base64.b64encode(output.getvalue()).decode("ascii")
+        return f"data:image/webp;base64,{encoded}"

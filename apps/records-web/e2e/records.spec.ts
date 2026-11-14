@@ -3161,8 +3161,9 @@ for (const directRoute of [
     test.skip(testInfo.project.name !== "desktop-chromium");
     const requestedAssets = observeAssetRequests(page);
     await mockAuthenticatedApi(page);
-    await page.route("**/api/v1/gallery", (route) =>
-      route.fulfill({ json: { schemaVersion: 1, items: [], nextCursor: null } }),
+    await page.route(
+      (url) => url.pathname === "/api/v1/gallery",
+      (route) => route.fulfill({ json: { schemaVersion: 1, items: [], nextCursor: null } }),
     );
 
     await page.goto(directRoute.path);

@@ -194,14 +194,23 @@
 }
 
 .filterAvatar,
+.filterIcon,
 .filterAllIcon {
   width: 28px;
   height: 28px;
 }
 
-.filterAvatar {
+.filterAvatar,
+.filterIcon {
   display: grid;
   place-items: center;
+}
+
+.filterIcon > img,
+.filterIcon > svg {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .filterAvatar > :first-child {
@@ -245,6 +254,14 @@
   transform: rotate(180deg);
 }
 
+.selectChevron[data-animate-chevron] {
+  transition: transform var(--records-popup-exit-duration) var(--records-ease-out);
+}
+
+.selectChevron[data-animate-chevron][data-popup-open] {
+  transition-duration: var(--records-popup-enter-duration);
+}
+
 .avatarSelectMenu {
   width: 100%;
   max-height: min(320px, var(--available-height));
@@ -274,6 +291,11 @@
   transition: none;
 }
 @media (prefers-reduced-motion: reduce) {
+  .selectChevron[data-animate-chevron][data-popup-open],
+  .selectChevron[data-animate-chevron] {
+    transition-duration: 0ms;
+  }
+
   .avatarSelectMenu {
     transition: none !important;
     transform: none !important;

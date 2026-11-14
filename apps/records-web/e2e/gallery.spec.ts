@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const endpoint = "/api/v1/gallery";
@@ -9,6 +10,7 @@ const thumbnailPath = fileURLToPath(
 const originalPath = fileURLToPath(
   new URL("../public/assets/shittim-chest-archive-og-5e706f31f069.png", import.meta.url),
 );
+const schoolLogo = `data:image/webp;base64,${readFileSync(new URL("../scripts/og-image-assets/participant-c.webp", import.meta.url)).toString("base64")}`;
 const privateCache = { "cache-control": "private, no-store" };
 const csp = [
   "default-src 'self'",
@@ -22,7 +24,16 @@ const csp = [
   "style-src 'self'",
 ].join("; ");
 const collectors = {
-  first: { id: "a".repeat(43), displayName: "春の先生" },
+  first: {
+    id: "a".repeat(43),
+    displayName: "春の先生",
+    avatar: {
+      kind: "image",
+      url: `${media}/avatar.webp`,
+      alt: "春の先生",
+      fallbackVariant: "cyan",
+    },
+  },
   second: { id: "b".repeat(43), displayName: "秋の先生" },
 };
 
@@ -78,7 +89,15 @@ async function mockGallery(
     (url) => url.pathname === endpoint || url.pathname.startsWith(`${endpoint}/`),
     async (route) => {
       const url = new URL(route.request().url());
-      if (url.pathname === endpoint) {
+      if (url.pathname === `${endpoint}/school-logos`) {
+        await route.fulfill({
+          headers: privateCache,
+          json: {
+            schemaVersion: 1,
+            logos: { アビドス高等学校: schoolLogo, ゲヘナ学園: schoolLogo },
+          },
+        });
+      } else if (url.pathname === endpoint) {
         const start = Number(url.searchParams.get("cursor") ?? "0");
         requests.pages.push(start);
         if (start === 100) await options.waitForSecondPage;
@@ -136,6 +155,9 @@ async function mockGallery(
     requests.thumbnails.push(new URL(route.request().url()).pathname);
     return route.fulfill({ path: thumbnailPath, contentType: "image/webp", headers: privateCache });
   });
+  await page.route(`${media}/avatar.webp`, (route) =>
+    route.fulfill({ path: thumbnailPath, contentType: "image/webp", headers: privateCache }),
+  );
   await page.route(`${media}/originals/**`, (route) => {
     const url = new URL(route.request().url());
     requests.png.push(`${url.pathname}${url.search}`);
@@ -202,18 +224,47 @@ test("loads a 1,000-card collection progressively and sorts and filters all meta
 
   await page.getByRole("combobox", { name: "並べ替え" }).click();
   await page.getByRole("option", { name: "レア度が高い順" }).click();
-  const lastPageCard = gallery.getByRole("link", { name: /アロナ（生徒1000）、★4/u });
+  const lastPageCard = gallery.getByRole("link", { name: /アロナ（生徒1000）、星4つ/u });
   await expect(lastPageCard).toBeVisible();
+  await expect(lastPageCard.getByText("★★★★", { exact: true })).toBeVisible();
   await expect(lastPageCard).toHaveAttribute("href", new RegExp(cards[999]!.cardId));
 
-  await page.getByRole("combobox", { name: "獲得者" }).click();
-  const search = page.getByRole("combobox", { name: "獲得者" });
-  await search.fill("秋の");
-  await expect(page.getByRole("option", { name: "春の先生" })).toHaveCount(0);
+  const collectorFilter = page.getByRole("combobox", { name: "獲得者" });
+  await expect(collectorFilter).toHaveJSProperty("tagName", "BUTTON");
+  await collectorFilter.click();
+  const collectorOptions = page.getByRole("listbox", { name: "獲得者" }).getByRole("option");
+  await expect(collectorOptions.first()).toHaveText("秋の先生");
+  await expect(collectorOptions.filter({ hasText: "春の先生" }).locator("img")).toHaveAttribute(
+    "src",
+    collectors.first.avatar.url,
+  );
   await page.getByRole("option", { name: "秋の先生" }).click();
   await expect(page.getByRole("status").filter({ hasText: "1枚" })).toHaveText("1枚");
   await expect(lastPageCard).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`collector=${collectors.second.id}`));
+  await collectorFilter.click();
+  await page.getByRole("option", { name: "すべて" }).click();
+  await expect(page.getByRole("status")).toHaveText("1,000枚");
+
+  const schoolFilter = page.getByRole("combobox", { name: "学校" });
+  await expect(schoolFilter).toHaveJSProperty("tagName", "BUTTON");
+  await schoolFilter.click();
+  const schoolOptions = page.getByRole("listbox", { name: "学校" }).getByRole("option");
+  await expect(schoolOptions.first()).toContainText("アビドス高等学校");
+  await expect(schoolOptions.first().locator("img")).toBeVisible();
+  await page.getByRole("option", { name: "ゲヘナ学園" }).click();
+  await expect(page.getByRole("status")).toHaveText("1枚");
+
+  await page.getByRole("combobox", { name: "アロプラ安倍" }).click();
+  for (const performer of ["アロナ", "プラナ", "安倍晋三"]) {
+    await expect(page.getByRole("option", { name: performer }).locator("img")).toBeVisible();
+  }
+  await page.keyboard.press("Escape");
+  await page.getByRole("combobox", { name: "レア度" }).click();
+  await expect(
+    page.getByRole("option", { name: "星3つ" }).getByText("★★★", { exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press("Escape");
   expect(requests.originals).toEqual([]);
   expect(requests.png).toEqual([]);
 });
@@ -290,9 +341,49 @@ test("supports dark reduced-motion mobile viewing and refreshes an expired PNG U
     .toBeGreaterThan(0);
   const zoom = dialog.getByRole("button", { name: "拡大", exact: true });
   await expect(zoom).toBeEnabled();
+  const next = dialog.getByRole("button", { name: "次のカード" });
+  await expect(next).toHaveCSS("opacity", "1");
   await zoom.tap();
   await expect(dialog.getByRole("button", { name: "縮小", exact: true })).toBeEnabled();
-  await dialog.getByRole("button", { name: "拡大表示を閉じる" }).tap();
-  await expect(dialog).toHaveCount(0);
+  await next.tap();
+  await expect(page.getByRole("dialog")).toHaveAccessibleName("アロナ（生徒2）");
+  await expect(page.getByRole("dialog").getByRole("button", { name: "前のカード" })).toBeVisible();
+  await page.getByRole("button", { name: "拡大表示を閉じる" }).tap();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(firstCard).toBeFocused();
+});
+
+test("reveals each viewer arrow only at its image edge on a desktop pointer", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  await mockGallery(page, 3);
+  await page.goto("/gallery");
+  await page.getByRole("link", { name: /アロナ（生徒2）/u }).click();
+
+  const dialog = page.getByRole("dialog");
+  const image = dialog.getByRole("img", { name: "アロナ（生徒2）" });
+  await expect(image).toBeVisible();
+  await image.evaluate((element: HTMLImageElement) => element.decode());
+  const previous = dialog.getByRole("button", { name: "前のカード" });
+  const next = dialog.getByRole("button", { name: "次のカード" });
+
+  await image.hover();
+  await expect(previous).toHaveCSS("opacity", "0");
+  await expect(next).toHaveCSS("opacity", "0");
+
+  const { width, height } = await image.evaluate((element) => ({
+    width: element.clientWidth,
+    height: element.clientHeight,
+  }));
+  await image.hover({ position: { x: width * 0.12, y: height / 2 } });
+  await expect(previous).toHaveCSS("opacity", "1");
+  await expect(next).toHaveCSS("opacity", "0");
+
+  await image.hover({ position: { x: width * 0.88, y: height / 2 } });
+  await expect(previous).toHaveCSS("opacity", "0");
+  await expect(next).toHaveCSS("opacity", "1");
+  await next.click();
+  await expect(dialog).toHaveAccessibleName("アロナ（生徒3）");
+  await expect(next).toBeDisabled();
 });
