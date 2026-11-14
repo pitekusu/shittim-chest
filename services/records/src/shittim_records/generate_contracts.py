@@ -243,6 +243,9 @@ def _gallery_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
     card_id = _parameter(
         "cardId", "path", {"type": "string", "pattern": GALLERY_CARD_ID_PATTERN}, required=True
     )
+    avatar_contract = _parameter(
+        "contract", "query", {"type": "string", "enum": ["gallery-avatars-v1"]}
+    )
     return {
         f"/api/v1/gallery{suffix}": {
             "get": {
@@ -258,15 +261,18 @@ def _gallery_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
                 "",
                 "listGalleryCards",
                 "GalleryListResponse",
-                "投稿済み作品のメタデータを新着順で返す。",
-                [_parameter("cursor", "query", {"type": "string", "maxLength": 256})],
+                "投稿済み作品のメタデータを新着順で返す。gallery-avatars-v1で獲得者のアイコンを含める。",
+                [
+                    _parameter("cursor", "query", {"type": "string", "maxLength": 256}),
+                    avatar_contract,
+                ],
             ),
             (
                 "/{cardId}",
                 "getGalleryCard",
                 "GalleryDetailResponse",
-                "作品のメタデータと原本の寸法を返す。",
-                [card_id],
+                "作品のメタデータと原本の寸法を返す。gallery-avatars-v1で獲得者のアイコンを含める。",
+                [card_id, avatar_contract],
             ),
             (
                 "/thumbnails",
@@ -281,6 +287,13 @@ def _gallery_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
                 "GalleryOriginalResponse",
                 "PNG原本の短命の署名URLを返す。",
                 [card_id],
+            ),
+            (
+                "/school-logos",
+                "getGallerySchoolLogos",
+                "GallerySchoolLogosResponse",
+                "登録済みの学校ロゴを正式名に対応付けた小さなWebPとして返す。",
+                [],
             ),
         )
     }

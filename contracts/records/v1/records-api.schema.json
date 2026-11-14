@@ -2395,6 +2395,21 @@
     "GalleryCollector": {
       "additionalProperties": false,
       "properties": {
+        "avatar": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImageAvatarRef"
+            },
+            {
+              "$ref": "#/$defs/PlaceholderAvatarRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Avatar"
+        },
         "displayName": {
           "minLength": 1,
           "pattern": "\\S",
@@ -2510,6 +2525,36 @@
         "schemaVersion"
       ],
       "title": "GalleryOriginalResponse",
+      "type": "object"
+    },
+    "GallerySchoolLogosResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "logos": {
+          "additionalProperties": {
+            "maxLength": 16384,
+            "pattern": "^data:image/webp;base64,[A-Za-z0-9+/]+={0,2}$",
+            "type": "string"
+          },
+          "maxProperties": 64,
+          "propertyNames": {
+            "maxLength": 40,
+            "minLength": 1
+          },
+          "title": "Logos",
+          "type": "object"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "logos"
+      ],
+      "title": "GallerySchoolLogosResponse",
       "type": "object"
     },
     "GalleryThumbnail": {
@@ -5142,6 +5187,9 @@
     },
     {
       "$ref": "#/$defs/GalleryOriginalResponse"
+    },
+    {
+      "$ref": "#/$defs/GallerySchoolLogosResponse"
     }
   ],
   "title": "Shittim Chest Records API v1"

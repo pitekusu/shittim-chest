@@ -22,19 +22,16 @@ import {
   galleryCardName,
   galleryDetailQuery,
   galleryImageUrl,
-  galleryRarityLabel,
+  galleryRarityAriaLabel,
   galleryThumbnailsQuery,
 } from "../lib/gallery";
 import styles from "../styles/gallery.module.css";
+import { GalleryCollector, GalleryRarity, GallerySchool } from "./GalleryMetadata";
 
 const galleryDate = new Intl.DateTimeFormat("ja-JP", {
   dateStyle: "medium",
   timeZone: "Asia/Tokyo",
 });
-
-export function galleryCollectorName(card: GalleryCard) {
-  return card.collector?.displayName ?? (card.isMine ? "自分" : "不明");
-}
 
 export function galleryDateText(postedAt: string) {
   return galleryDate.format(new Date(postedAt));
@@ -74,6 +71,7 @@ function GalleryThumbnail({ image }: { readonly image: Thumbnail }) {
 
 function GalleryGridCard({
   card,
+  schoolLogo,
   image,
   thumbnailSettled,
   scope,
@@ -83,6 +81,7 @@ function GalleryGridCard({
   onTab,
 }: {
   readonly card: GalleryCard;
+  readonly schoolLogo: string | undefined;
   readonly image: Thumbnail | undefined;
   readonly thumbnailSettled: boolean;
   readonly scope: number;
@@ -99,7 +98,7 @@ function GalleryGridCard({
   useEffect(() => () => window.clearTimeout(hoverTimer.current), []);
   return (
     <Link
-      aria-label={`${name}、${galleryRarityLabel(card.rarity)}を拡大`}
+      aria-label={`${name}、${galleryRarityAriaLabel(card.rarity)}を拡大`}
       className={styles.card}
       data-rarity={card.rarity ?? "unrecorded"}
       to={{ pathname: `/gallery/${card.cardId}`, search }}
@@ -130,13 +129,15 @@ function GalleryGridCard({
       <div className={styles.cardBody}>
         <div className={styles.cardTitle}>
           <strong title={name}>{name}</strong>
-          <span className={styles.rarity}>{galleryRarityLabel(card.rarity)}</span>
+          <span className={styles.rarity}>
+            <GalleryRarity rarity={card.rarity} />
+          </span>
         </div>
-        <span className={styles.school} title={card.schoolName}>
-          {card.schoolName}
+        <span className={styles.school}>
+          <GallerySchool schoolName={card.schoolName} logo={schoolLogo} />
         </span>
         <div className={styles.cardFooter}>
-          <span title={galleryCollectorName(card)}>{galleryCollectorName(card)}</span>
+          <GalleryCollector card={card} />
           <time dateTime={card.postedAt}>{galleryDateText(card.postedAt)}</time>
         </div>
       </div>
@@ -153,11 +154,13 @@ function gridColumns(width: number) {
 
 export function GalleryGrid({
   cards,
+  schoolLogos,
   scope,
   search,
   onOpen,
 }: {
   readonly cards: readonly GalleryCard[];
+  readonly schoolLogos: Readonly<Record<string, string>>;
   readonly scope: number;
   readonly search: string;
   readonly onOpen: (event: MouseEvent<HTMLAnchorElement>, card: GalleryCard) => void;
@@ -306,6 +309,7 @@ export function GalleryGrid({
               >
                 <GalleryGridCard
                   card={card}
+                  schoolLogo={schoolLogos[card.schoolName]}
                   image={thumbnails.get(card.cardId)}
                   thumbnailSettled={settled.has(card.cardId)}
                   scope={scope}

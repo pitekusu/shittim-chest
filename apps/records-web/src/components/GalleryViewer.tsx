@@ -1,7 +1,7 @@
 import { Dialog } from "@base-ui/react/dialog";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from "react";
-import Lightbox, { type Slide } from "yet-another-react-lightbox";
+import Lightbox, { NextIcon, PreviousIcon, type Slide } from "yet-another-react-lightbox";
 import Inline from "yet-another-react-lightbox/plugins/inline";
 import Zoom from "yet-another-react-lightbox/plugins/zoom";
 import "yet-another-react-lightbox/styles.css";
@@ -14,10 +14,10 @@ import {
   galleryDetailQuery,
   galleryImageUrl,
   galleryOriginalQuery,
-  galleryRarityLabel,
 } from "../lib/gallery";
 import styles from "../styles/gallery.module.css";
-import { galleryCollectorName, galleryDateText } from "./GalleryGrid";
+import { galleryDateText } from "./GalleryGrid";
+import { GalleryCollector, GalleryRarity, GallerySchool } from "./GalleryMetadata";
 
 declare module "yet-another-react-lightbox" {
   interface SlideTypes {
@@ -34,6 +34,22 @@ function subscribeMotion(callback: () => void) {
 }
 function getReducedMotion() {
   return window.matchMedia(reducedMotionQuery).matches;
+}
+
+function pointerEdge(stage: HTMLDivElement, x: number, y: number) {
+  const stageBounds = stage.getBoundingClientRect();
+  const image = stage.querySelector("img");
+  // Use the fitted size so zoom and pan leave the navigation at a stable location.
+  const width = Math.min(image?.clientWidth ?? stageBounds.width, stageBounds.width);
+  const height = Math.min(image?.clientHeight ?? stageBounds.height, stageBounds.height);
+  const left = stageBounds.left + (stageBounds.width - width) / 2;
+  const right = left + width;
+  const top = stageBounds.top + (stageBounds.height - height) / 2;
+  if (x < left || x > right || y < top || y > top + height) return undefined;
+  const edgeWidth = Math.min(width / 3, Math.max(64, width / 5));
+  if (x - left <= edgeWidth) return "left";
+  if (right - x <= edgeWidth) return "right";
+  return undefined;
 }
 
 function ViewerImageError({
@@ -63,12 +79,14 @@ function GalleryViewerContent({
   open,
   scope,
   cards,
+  schoolLogos,
   onSelect,
 }: {
   readonly cardId: string;
   readonly open: boolean;
   readonly scope: number;
   readonly cards: readonly GalleryCard[];
+  readonly schoolLogos: Readonly<Record<string, string>>;
   readonly onSelect: (cardId: string) => void;
 }) {
   const queryClient = useQueryClient();
@@ -94,6 +112,7 @@ function GalleryViewerContent({
 
   const lastFailedCard = useRef<string>(undefined);
   const [displayedImage, setDisplayedImage] = useState<{ cardId: string; url: string }>();
+  const [hoveredEdge, setHoveredEdge] = useState<ReturnType<typeof pointerEdge>>();
   const freshUrl = galleryImageUrl(original.data);
   if (freshUrl && (displayedImage?.cardId !== cardId || displayedImage.url !== freshUrl)) {
     setDisplayedImage({ cardId, url: freshUrl });
@@ -124,7 +143,8 @@ function GalleryViewerContent({
           <Dialog.Title className={styles.viewerTitle}>{title}</Dialog.Title>
           {card && (
             <Dialog.Description className={styles.viewerSubtitle}>
-              {card.schoolName} · {galleryRarityLabel(card.rarity)}
+              <GallerySchool schoolName={card.schoolName} logo={schoolLogos[card.schoolName]} />
+              <GalleryRarity rarity={card.rarity} />
             </Dialog.Description>
           )}
         </div>
@@ -142,101 +162,117 @@ function GalleryViewerContent({
       {unavailable ? (
         <output className={styles.viewerState}>この生徒カードは見つかりませんでした。</output>
       ) : (
-        <Lightbox
-          plugins={[Inline, Zoom]}
-          inline={{ className: styles.viewerImage }}
-          index={index}
-          slides={slides}
-          carousel={{
-            finite: true,
-            preload: 0,
-            padding: 0,
-            imageProps: { referrerPolicy: "no-referrer" },
+        <div
+          className={styles.viewerStage}
+          data-hovered-edge={hoveredEdge}
+          onPointerMoveCapture={(event) => {
+            if (event.pointerType !== "mouse") return;
+            setHoveredEdge(
+              event.buttons === 0
+                ? pointerEdge(event.currentTarget, event.clientX, event.clientY)
+                : undefined,
+            );
           }}
-          controller={{ closeOnEscape: false }}
-          animation={{
-            navigation: 0,
-            swipe: reducedMotion ? 0 : 160,
-            zoom: reducedMotion ? 0 : 140,
-          }}
-          toolbar={{ buttons: ["zoom"] }}
-          labels={{
-            Previous: "前のカード",
-            Next: "次のカード",
-            "Zoom in": "拡大",
-            "Zoom out": "縮小",
-          }}
-          on={{
-            view: ({ index: selectedIndex }) => {
-              const selected =
-                selectedIndex < index ? previous : selectedIndex > index ? next : undefined;
-              if (open && selected) onSelect(selected);
-            },
-          }}
-          render={{
-            buttonPrev: () => null,
-            buttonNext: () => null,
-            slide: ({ slide }) =>
-              slide.type === "gallery-placeholder" ? (
-                <div className={styles.viewerState}>
-                  <output>
-                    {loadError ? "原寸画像を読み込めませんでした。" : "原寸画像を読み込み中…"}
-                  </output>
-                  {loadError && (
-                    <button className={styles.viewerButton} type="button" onClick={retry}>
-                      もう一度試す
-                    </button>
-                  )}
-                </div>
-              ) : undefined,
-            iconError: () => (
-              <ViewerImageError
-                pending={original.isFetching}
-                onRetry={retry}
-                onFailure={() => {
-                  if (!open || lastFailedCard.current === cardId) return;
-                  lastFailedCard.current = cardId;
-                  void original.refetch();
-                }}
-              />
-            ),
-          }}
-        />
-      )}
-      {card && (
-        <footer className={styles.viewerFooter}>
-          <span>
-            獲得者 <strong>{galleryCollectorName(card)}</strong>
-          </span>
-          <time dateTime={card.postedAt}>{galleryDateText(card.postedAt)}</time>
-          {currentIndex >= 0 && (
-            <div className={styles.viewerNavigation}>
+          onPointerLeave={() => setHoveredEdge(undefined)}
+        >
+          <Lightbox
+            plugins={[Inline, Zoom]}
+            inline={{ className: styles.viewerImage }}
+            index={index}
+            slides={slides}
+            carousel={{
+              finite: true,
+              preload: 0,
+              padding: 0,
+              imageProps: { referrerPolicy: "no-referrer" },
+            }}
+            controller={{ closeOnEscape: false }}
+            animation={{
+              navigation: 0,
+              swipe: reducedMotion ? 0 : 160,
+              zoom: reducedMotion ? 0 : 140,
+            }}
+            toolbar={{ buttons: ["zoom"] }}
+            labels={{
+              Previous: "前のカード",
+              Next: "次のカード",
+              "Zoom in": "拡大",
+              "Zoom out": "縮小",
+            }}
+            on={{
+              view: ({ index: selectedIndex }) => {
+                const selected =
+                  selectedIndex < index ? previous : selectedIndex > index ? next : undefined;
+                if (open && selected) onSelect(selected);
+              },
+            }}
+            render={{
+              buttonPrev: () => null,
+              buttonNext: () => null,
+              slide: ({ slide }) =>
+                slide.type === "gallery-placeholder" ? (
+                  <div className={styles.viewerState}>
+                    <output>
+                      {loadError ? "原寸画像を読み込めませんでした。" : "原寸画像を読み込み中…"}
+                    </output>
+                    {loadError && (
+                      <button className={styles.viewerButton} type="button" onClick={retry}>
+                        もう一度試す
+                      </button>
+                    )}
+                  </div>
+                ) : undefined,
+              iconError: () => (
+                <ViewerImageError
+                  pending={original.isFetching}
+                  onRetry={retry}
+                  onFailure={() => {
+                    if (!open || lastFailedCard.current === cardId) return;
+                    lastFailedCard.current = cardId;
+                    void original.refetch();
+                  }}
+                />
+              ),
+            }}
+          />
+          {currentIndex >= 0 && cards.length > 1 && (
+            <>
               <button
                 aria-disabled={!previous}
                 aria-label="前のカード"
-                className={styles.viewerButton}
+                className={styles.viewerPrevious}
                 type="button"
                 onClick={() => {
                   if (previous) onSelect(previous);
                 }}
               >
-                ←
+                <PreviousIcon />
               </button>
-              <span aria-live="polite">
-                {currentIndex + 1} / {cards.length}
-              </span>
               <button
                 aria-disabled={!next}
                 aria-label="次のカード"
-                className={styles.viewerButton}
+                className={styles.viewerNext}
                 type="button"
                 onClick={() => {
                   if (next) onSelect(next);
                 }}
               >
-                →
+                <NextIcon />
               </button>
-            </div>
+            </>
+          )}
+        </div>
+      )}
+      {card && (
+        <footer className={styles.viewerFooter}>
+          <span className={styles.viewerCollector}>
+            獲得者 <GalleryCollector card={card} />
+          </span>
+          <time dateTime={card.postedAt}>{galleryDateText(card.postedAt)}</time>
+          {currentIndex >= 0 && (
+            <span className={styles.viewerCounter} aria-live="polite">
+              {currentIndex + 1} / {cards.length}
+            </span>
           )}
         </footer>
       )}
@@ -248,6 +284,7 @@ export default function GalleryViewer({
   cardId,
   scope,
   cards,
+  schoolLogos,
   onSelect,
   onClose,
   trigger,
@@ -256,6 +293,7 @@ export default function GalleryViewer({
   readonly cardId: string | undefined;
   readonly scope: number;
   readonly cards: readonly GalleryCard[];
+  readonly schoolLogos: Readonly<Record<string, string>>;
   readonly onSelect: (cardId: string) => void;
   readonly onClose: () => void;
   readonly trigger: RefObject<HTMLAnchorElement | null>;
@@ -286,6 +324,7 @@ export default function GalleryViewer({
                 open={cardId !== undefined}
                 scope={scope}
                 cards={cards}
+                schoolLogos={schoolLogos}
                 onSelect={onSelect}
               />
             )}

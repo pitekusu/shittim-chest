@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import io
 import json
 from dataclasses import replace
 from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any, cast
 from urllib.parse import urlencode
+from zipfile import ZipFile
 
 import pytest
+from PIL import Image
+from shittim_chest.adapters.assets.student_gacha import _ASSET_DIGESTS, SCHOOL_LOGOS_KEY
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from tests.test_http_api import NOW, SESSION_KEY, FakeSessionStore, event, session
 
@@ -110,18 +115,35 @@ class Dynamo:
 
 
 class Profiles:
+    def __init__(self) -> None:
+        self.requests: list[str] = []
+
     def load_profiles(self, *, requester_keys: tuple[str, ...]) -> dict[str, RequesterProfile]:
-        return {key: RequesterProfile("現在の名前", None) for key in requester_keys}
+        return {
+            key: RequesterProfile("現在の名前", f"requesters/{key}/avatar.webp")
+            for key in requester_keys
+        }
+
+    def avatar_url(self, *, asset_key: str) -> str:
+        self.requests.append(asset_key)
+        return "https://media.example.invalid/avatar"
 
 
 class Signer:
     def __init__(self) -> None:
         self.requests: list[dict[str, Any]] = []
+        self.catalog: bytes = b""
+        self.catalog_reads = 0
 
     def generate_presigned_url(self, operation: str, **arguments: Any) -> str:
         assert operation == "get_object"
         self.requests.append(arguments)
         return "https://media.example.invalid/signed"
+
+    def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:
+        assert Bucket == "media" and Key == SCHOOL_LOGOS_KEY
+        self.catalog_reads += 1
+        return {"Body": io.BytesIO(self.catalog), "ContentLength": len(self.catalog)}
 
 
 @pytest.fixture
@@ -169,6 +191,7 @@ def test_gallery_metadata_is_private_paginated_and_contains_no_signed_urls(setup
     assert card["isMine"] is True and card["thumbnailReady"] is True
     assert card["collector"]["displayName"] == VIEWER.display_name
     assert card["collector"]["id"] != VIEWER.requester_key
+    assert "avatar" not in card["collector"]
     assert "url" not in card and "ownerKey" not in card
     assert dynamo.requests[0]["ScanIndexForward"] is False
     assert unmarshal_item(dynamo.requests[0]["ExpressionAttributeValues"])[":pk"] == PARTITION
@@ -180,6 +203,7 @@ def test_gallery_metadata_is_private_paginated_and_contains_no_signed_urls(setup
     second_card = json.loads(second["body"])["items"][0]
     assert second_card["rarity"] is None and second_card["thumbnailReady"] is False
     assert second_card["collector"]["displayName"] == "現在の名前"
+    assert "avatar" not in second_card["collector"]
     assert second_card["isMine"] is False
     assert not signer.requests
     expired = controller.handle(
@@ -192,6 +216,94 @@ def test_gallery_metadata_is_private_paginated_and_contains_no_signed_urls(setup
     )
     with pytest.raises(RuntimeError, match="CURSOR_INVALID"):
         other_guild.list_cards(cursor=cursor, viewer=session(), now=NOW)
+
+
+def test_gallery_avatar_contract_keeps_existing_client_shape_and_signs_only_owned_icons(
+    setup: Any,
+) -> None:
+    controller, dynamo, _, gallery = setup
+    profiles = cast(Profiles, gallery._profiles)
+    query = "contract=gallery-avatars-v1"
+    legacy = controller.handle(event(ROOT, cookies=COOKIES), now=NOW)
+    assert "avatar" not in json.loads(legacy["body"])["items"][0]["collector"]
+    assert not profiles.requests
+
+    detail = controller.handle(
+        event(f"{ROOT}/{{cardId}}", query=query, path={"cardId": card_id()}, cookies=COOKIES),
+        now=NOW,
+    )
+    assert json.loads(detail["body"])["card"]["collector"]["avatar"]["kind"] == "placeholder"
+    assert not profiles.requests
+
+    cursor = json.loads(legacy["body"])["nextCursor"]
+    second = controller.handle(
+        event(ROOT, query=f"{query}&cursor={cursor}", cookies=COOKIES), now=NOW
+    )
+    collector = json.loads(second["body"])["items"][0]["collector"]
+    assert collector["avatar"]["kind"] == "image"
+    assert collector["avatar"]["url"] == "https://media.example.invalid/avatar"
+    assert profiles.requests == [f"requesters/{dynamo.second['owner_key']}/avatar.webp"]
+    assert (
+        controller.handle(event(ROOT, query="contract=unknown", cookies=COOKIES), now=NOW)[
+            "statusCode"
+        ]
+        == 400
+    )
+
+
+def test_school_logos_require_browser_auth_and_return_only_validated_catalog_icons(
+    setup: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    controller, _, signer, _ = setup
+    route = f"{ROOT}/school-logos"
+    with Image.new("RGBA", (180, 90), "red") as original, io.BytesIO() as output:
+        original.save(output, format="PNG")
+        png = output.getvalue()
+    with io.BytesIO() as output:
+        with ZipFile(output, "w") as archive:
+            archive.writestr(
+                "blue_archive_school_logos/schools.json",
+                json.dumps(
+                    [
+                        {
+                            "id": "gehenna",
+                            "name": "ゲヘナ学園",
+                            "kind": "school",
+                            "logo_path": "logos/gehenna.png",
+                            "width": 180,
+                            "height": 90,
+                            "format": "PNG",
+                            "sha256": hashlib.sha256(png).hexdigest(),
+                        },
+                        {
+                            "id": "no-logo",
+                            "name": "ロゴ未登録",
+                            "kind": "school",
+                            "logo_path": None,
+                        },
+                    ]
+                ),
+            )
+            archive.writestr("blue_archive_school_logos/logos/gehenna.png", png)
+        signer.catalog = output.getvalue()
+    assert controller.handle(event(route), now=NOW)["statusCode"] == 401
+    assert signer.catalog_reads == 0
+    assert controller.handle(event(route, cookies=COOKIES), now=NOW)["statusCode"] == 503
+    monkeypatch.setitem(
+        _ASSET_DIGESTS, SCHOOL_LOGOS_KEY, hashlib.sha256(signer.catalog).hexdigest()
+    )
+
+    response = controller.handle(event(route, cookies=COOKIES), now=NOW)
+    assert response["statusCode"] == 200
+    assert response["headers"]["Cache-Control"] == "private, no-store"
+    payload = json.loads(response["body"])
+    assert set(payload["logos"]) == {"ゲヘナ学園"}
+    prefix, data = payload["logos"]["ゲヘナ学園"].split(",", 1)
+    assert prefix == "data:image/webp;base64"
+    with Image.open(io.BytesIO(base64.b64decode(data)), formats=["WEBP"]) as logo:
+        assert logo.size == (64, 32)
+    assert controller.handle(event(route, cookies=COOKIES), now=NOW) == response
+    assert signer.catalog_reads == 2
 
 
 def test_gallery_signs_only_requested_ready_thumbnails_or_explicit_original(setup: Any) -> None:

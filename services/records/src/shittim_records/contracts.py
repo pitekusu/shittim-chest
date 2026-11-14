@@ -1250,6 +1250,7 @@ class MomotalkRoomResponse(PublicModel):
 class GalleryCollector(PublicModel):
     id: RecordId
     display_name: NonEmptyText
+    avatar: AvatarRef | None = None
 
 
 class GalleryCard(PublicModel):
@@ -1295,6 +1296,20 @@ class GalleryOriginalResponse(GalleryImage):
     schema_version: Literal[1]
 
 
+class GallerySchoolLogosResponse(PublicModel):
+    schema_version: Literal[1]
+    logos: Annotated[
+        dict[
+            Annotated[str, Field(min_length=1, max_length=40)],
+            Annotated[
+                str,
+                Field(max_length=16_384, pattern=r"^data:image/webp;base64,[A-Za-z0-9+/]+={0,2}$"),
+            ],
+        ],
+        Field(max_length=64),
+    ]
+
+
 PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
     DebateControlResponse,
     DebateAttachmentUploadResponse,
@@ -1326,6 +1341,7 @@ PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
     GalleryDetailResponse,
     GalleryThumbnailsResponse,
     GalleryOriginalResponse,
+    GallerySchoolLogosResponse,
 )
 
 PUBLIC_REQUEST_MODELS: tuple[type[BaseModel], ...] = (

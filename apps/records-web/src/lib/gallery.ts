@@ -71,7 +71,16 @@ export function galleryCardName(card: GalleryCard) {
 }
 
 export function galleryRarityLabel(rarity: GalleryCard["rarity"]) {
-  return rarity === null ? "未記録" : `★${rarity}`;
+  if (rarity === null) return "未記録";
+  return rarity === 0 ? "星なし" : "★".repeat(rarity);
+}
+
+export function galleryRarityAriaLabel(rarity: GalleryCard["rarity"]) {
+  return rarity === null ? "未記録" : `星${rarity}つ`;
+}
+
+export function galleryCollectorName(card: GalleryCard) {
+  return card.collector?.displayName ?? (card.isMine ? "自分" : "不明");
 }
 
 export const gallerySorts = {

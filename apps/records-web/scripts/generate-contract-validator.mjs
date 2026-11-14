@@ -34,6 +34,7 @@ const validators = [
   ["GalleryDetailResponse", "gallery-detail-response-validator.mjs"],
   ["GalleryThumbnailsResponse", "gallery-thumbnails-response-validator.mjs"],
   ["GalleryOriginalResponse", "gallery-original-response-validator.mjs"],
+  ["GallerySchoolLogosResponse", "gallery-school-logos-response-validator.mjs"],
   ["DebateRequestResponse", "debate-request-response-validator.mjs"],
   ["DebateRequestsResponse", "debate-requests-response-validator.mjs"],
 ];

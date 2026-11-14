@@ -15,15 +15,19 @@ from shittim_chest.application.student_gacha_models import student_gacha_image_k
 from shittim_records.auth import SessionRecord
 from shittim_records.contracts import (
     GALLERY_CARD_ID_PATTERN,
+    AvatarRef,
     GalleryCard,
     GalleryCollector,
     GalleryDetailResponse,
     GalleryListResponse,
     GalleryOriginalResponse,
+    GallerySchoolLogosResponse,
     GalleryThumbnail,
     GalleryThumbnailsResponse,
+    ImageAvatarRef,
     NonEmptyText,
     ParticipantSlot,
+    PlaceholderAvatarRef,
     RecordId,
 )
 from shittim_records.gallery_keys import (
@@ -108,9 +112,13 @@ class GalleryStore(Protocol):
 
     def sign(self, asset: GalleryAsset, *, thumbnail: bool) -> str: ...
 
+    def load_school_logos(self) -> dict[str, str]: ...
+
 
 class GalleryProfiles(Protocol):
     def load_profiles(self, *, requester_keys: tuple[str, ...]) -> dict[str, RequesterProfile]: ...
+
+    def avatar_url(self, *, asset_key: str) -> str: ...
 
 
 class GalleryReadService:
@@ -123,23 +131,36 @@ class GalleryReadService:
         self._cursor_codec = CursorCodec(session_key)
 
     def list_cards(
-        self, *, cursor: str | None, viewer: SessionRecord, now: datetime
+        self,
+        *,
+        cursor: str | None,
+        viewer: SessionRecord,
+        now: datetime,
+        include_avatars: bool = False,
     ) -> GalleryListResponse:
         after = self._decode_cursor(cursor, now) if cursor is not None else None
         items, next_key = self._store.list_page(self._partition, after)
         rows = [self._projection(item) for item in items]
         return GalleryListResponse(
             schema_version=1,
-            items=self._summaries(rows, viewer),
+            items=self._summaries(rows, viewer, include_avatars=include_avatars),
             next_cursor=None if next_key is None else self._encode_cursor(next_key, now),
         )
 
-    def get_card(self, *, card_id: str, viewer: SessionRecord) -> GalleryDetailResponse:
+    def get_card(
+        self, *, card_id: str, viewer: SessionRecord, include_avatars: bool = False
+    ) -> GalleryDetailResponse:
         row = self._load_card(card_id)
         width, height = RESULT_SIZE
         return GalleryDetailResponse(
-            schema_version=1, card=self._summaries([row], viewer)[0], width=width, height=height
+            schema_version=1,
+            card=self._summaries([row], viewer, include_avatars=include_avatars)[0],
+            width=width,
+            height=height,
         )
+
+    def get_school_logos(self) -> GallerySchoolLogosResponse:
+        return GallerySchoolLogosResponse(schema_version=1, logos=self._store.load_school_logos())
 
     def get_thumbnails(self, *, ids: tuple[str, ...], now: datetime) -> GalleryThumbnailsResponse:
         if not 1 <= len(ids) <= GALLERY_THUMBNAIL_BATCH_SIZE or len(set(ids)) != len(ids):
@@ -190,7 +211,9 @@ class GalleryReadService:
             raise ReadFailure("GALLERY_UNAVAILABLE", 503)
         return row
 
-    def _summaries(self, rows: list[GalleryProjection], viewer: SessionRecord) -> list[GalleryCard]:
+    def _summaries(
+        self, rows: list[GalleryProjection], viewer: SessionRecord, *, include_avatars: bool
+    ) -> list[GalleryCard]:
         keys = tuple(
             dict.fromkeys(
                 row.owner_key
@@ -199,7 +222,8 @@ class GalleryReadService:
             )
         )
         profiles = self._profiles.load_profiles(requester_keys=keys) if keys else {}
-        summaries = []
+        summaries: list[GalleryCard] = []
+        collectors: dict[tuple[str, str], GalleryCollector] = {}
         for row in rows:
             owner = row.owner_key
             is_mine = owner == viewer.requester_key
@@ -209,16 +233,25 @@ class GalleryReadService:
                 if is_mine
                 else (profile.display_name if profile else row.collector_display_name)
             )
-            collector = (
-                GalleryCollector(
-                    id=self._cursor_codec.sign_message(
-                        domain=f"gallery:collector:{self._partition}", value=owner
-                    ),
-                    display_name=name,
-                )
-                if owner is not None and name is not None
-                else None
-            )
+            collector = None
+            if owner is not None and name is not None:
+                collector = collectors.get((owner, name))
+                if collector is None:
+                    asset_key = (
+                        viewer.avatar_asset_key
+                        if is_mine
+                        else (profile.avatar_asset_key if profile is not None else None)
+                    )
+                    collector = GalleryCollector(
+                        id=self._cursor_codec.sign_message(
+                            domain=f"gallery:collector:{self._partition}", value=owner
+                        ),
+                        display_name=name,
+                        avatar=self._collector_avatar(owner, name, asset_key)
+                        if include_avatars
+                        else None,
+                    )
+                    collectors[owner, name] = collector
             summaries.append(
                 GalleryCard(
                     card_id=_card_id(row.sk),
@@ -233,6 +266,17 @@ class GalleryReadService:
                 )
             )
         return summaries
+
+    def _collector_avatar(self, owner: str, name: str, asset_key: str | None) -> AvatarRef:
+        alt = f"{name}のアバター"
+        if asset_key == f"requesters/{owner}/avatar.webp":
+            return ImageAvatarRef(
+                kind="image",
+                url=self._profiles.avatar_url(asset_key=asset_key),
+                alt=alt,
+                fallback_variant="cyan",
+            )
+        return PlaceholderAvatarRef(kind="placeholder", alt=alt, fallback_variant="cyan")
 
     def _encode_cursor(self, key: str, now: datetime) -> str:
         try:
