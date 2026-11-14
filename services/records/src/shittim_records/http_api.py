@@ -18,6 +18,7 @@ from shittim_records.auth import (
     AuthFailure,
     AuthService,
     AuthStore,
+    SessionRecord,
     authenticate_browser_session,
     csrf_token_matches,
     require_csrf_submission,
@@ -43,6 +44,13 @@ from shittim_records.read_api import (
 )
 
 if TYPE_CHECKING:
+    from shittim_records.contracts import (
+        GalleryDetailResponse,
+        GalleryListResponse,
+        GalleryOriginalResponse,
+        GalleryThumbnailsResponse,
+    )
+    from shittim_records.gallery_read import GalleryReadService
     from shittim_records.mobile_http import MobileAuthHttpController
     from shittim_records.momotalk_read import MomotalkReadService
 
@@ -211,6 +219,7 @@ class ReadHttpController:
         store: AuthStore,
         session_key: bytes,
         records: RecordsReadService,
+        gallery: Callable[[], GalleryReadService] | None = None,
         momotalk: Callable[[], MomotalkReadService] | None = None,
         mobile_store: MobileSessionReader | None = None,
         clock: Callable[[], datetime] | None = None,
@@ -219,6 +228,7 @@ class ReadHttpController:
         self._store = store
         self._session_key = session_key
         self._records = records
+        self._gallery = gallery
         self._momotalk = momotalk
         self._mobile_store = mobile_store
         self._clock = clock if clock is not None else lambda: datetime.now(UTC)
@@ -256,7 +266,13 @@ class ReadHttpController:
                 )
                 if session is None:
                     raise AuthFailure("session_required")
-            if request.route_key.startswith("GET /api/v1/momotalk/"):
+            if request.route_key == "GET /api/v1/gallery" or request.route_key.startswith(
+                "GET /api/v1/gallery/"
+            ):
+                if session is None:
+                    raise AuthFailure("session_required")
+                result = self._gallery_read(request, session, now)
+            elif request.route_key.startswith("GET /api/v1/momotalk/"):
                 result = self._momotalk_read(request, now)
             elif request.route_key == "GET /api/v1/records":
                 query = _query(request.raw_query)
@@ -392,6 +408,34 @@ class ReadHttpController:
             return response
         except ReadFailure as error:
             return error_response(error.status, error.code, request.request_id)
+
+    def _gallery_read(
+        self, request: Request, viewer: SessionRecord, now: datetime
+    ) -> (
+        GalleryListResponse
+        | GalleryDetailResponse
+        | GalleryThumbnailsResponse
+        | GalleryOriginalResponse
+    ):
+        if self._gallery is None:
+            raise ReadFailure("GALLERY_UNAVAILABLE", 503)
+        query = _query(request.raw_query)
+        if request.route_key == "GET /api/v1/gallery" and set(query) <= {"cursor"}:
+            cursor = _optional_single(query, "cursor")
+            return self._gallery().list_cards(cursor=cursor, viewer=viewer, now=now)
+        if request.route_key == "GET /api/v1/gallery/thumbnails" and set(query) == {"ids"}:
+            ids = _required_single(query, "ids")
+            if len(ids) > 1943:
+                raise ReadFailure("REQUEST_INVALID", 400)
+            return self._gallery().get_thumbnails(ids=tuple(ids.split(",")), now=now)
+        if query or request.route_key in {"GET /api/v1/gallery", "GET /api/v1/gallery/thumbnails"}:
+            raise ReadFailure("REQUEST_INVALID", 400)
+        card_id = request.path_parameters.get("cardId", "")
+        if request.route_key == "GET /api/v1/gallery/{cardId}":
+            return self._gallery().get_card(card_id=card_id, viewer=viewer)
+        if request.route_key == "GET /api/v1/gallery/{cardId}/original":
+            return self._gallery().get_original(card_id=card_id, now=now)
+        raise ReadFailure("ROUTE_NOT_FOUND", 404)
 
     def _momotalk_read(self, request: Request, now: datetime) -> Any:
         from shittim_records.momotalk import MomotalkFailure

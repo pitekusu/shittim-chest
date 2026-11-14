@@ -28,6 +28,10 @@ function PrivacyPolicy(): React.JSX.Element {
             議論の作成、記録の保存・閲覧・共有に利用します。
           </li>
           <li>
+            生徒ガチャで作成したカード画像と、獲得日時・レア度・キャラクターなどの情報を、
+            ギャラリーでの閲覧に利用します。カード画像には入力した先生の名前が含まれます。
+          </li>
+          <li>
             通知を利用する場合は、通知先の端末識別情報・通知トークンを登録し、結果を知らせます。
             通知には依頼者の表示名や記録の識別情報が含まれます。
           </li>
@@ -45,6 +49,10 @@ function PrivacyPolicy(): React.JSX.Element {
           Services（AWS）へ記録・画像などを保存します。相談内容・添付画像・結果は、
           指定Discordサーバーや当サービスの認可された利用者へ共有されます。
           ご自身や他の方の秘密、公開・共有したくない情報は入力しないでください。
+        </p>
+        <p>
+          生徒ガチャのギャラリーでは、カード画像と獲得者の表示名を、指定Discordサーバーへの参加が
+          確認された認可済みの利用者が閲覧できます。
         </p>
         <p>
           議論の質問・依頼者の表示名・アイコンなどは、公開リンクのプレビュー画像にも含まれます。
@@ -216,7 +224,9 @@ export default function PublicInformationPage({
           </Link>
         </nav>
         <h1>{title}</h1>
-        <p className={styles.updated}>シッテムの箱 · 更新日：2026年10月12日</p>
+        <p className={styles.updated}>
+          シッテムの箱 · 更新日：{privacy ? "2026年11月14日" : "2026年10月12日"}
+        </p>
         {privacy ? <PrivacyPolicy /> : <DataDeletion />}
       </main>
       <footer className={styles.footer}>シッテムの箱 · pitekusu</footer>

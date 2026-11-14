@@ -1,6 +1,9 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+
+import { staticClosure, type GuardChunk } from "../scripts/code-splitting-guard";
 
 const RECORD_ID = "r".repeat(43);
 const DARK_THEME_SNAPSHOT_MAX_DIFF_RATIO = 0.0001;
@@ -12,6 +15,8 @@ const AUTHENTICATED_ROUTE_CHUNK_NAMES = [
   "AdminPromptsPage",
   "MemorialPage",
   "MomotalkPage",
+  "GalleryPage",
+  "GalleryViewer",
 ] as const;
 
 function observeAssetRequests(page: Page): Set<string> {
@@ -21,6 +26,19 @@ function observeAssetRequests(page: Page): Set<string> {
     requestedAssets.add(new URL(request.url()).pathname);
   });
   return requestedAssets;
+}
+
+function routeStylesheets(routeName: string) {
+  const { chunks } = JSON.parse(
+    readFileSync(new URL("../dist/records-code-splitting.json", import.meta.url), "utf8"),
+  ) as { chunks: (GuardChunk & { route: string | null })[] };
+  const route = chunks.find((chunk) => chunk.route === routeName);
+  if (!route) throw new Error(`Missing manifest route ${routeName}`);
+  const byName = new Map(chunks.map((chunk) => [chunk.fileName, chunk]));
+  const styles = (chunk: GuardChunk) =>
+    [...staticClosure(chunk, byName)].flatMap((file) => byName.get(file)?.css ?? []);
+  const initial = new Set(chunks.filter((chunk) => chunk.isEntry).flatMap(styles));
+  return [...new Set(styles(route))].filter((file) => !initial.has(file));
 }
 
 function matchingChunkAssets(requestedAssets: ReadonlySet<string>, chunkName: string): string[] {
@@ -1131,6 +1149,9 @@ test("individual OGP follows detail navigation and returns to common preview", a
 });
 
 test("record detail identifies the requester and uses affection hearts", async ({ page }) => {
+  // The two navigation bars are verified separately and can overlap this tall clip.
+  const hideNavigation =
+    'nav[aria-label="議論内ナビゲーション"], nav[aria-label="モバイルナビゲーション"] { visibility: hidden; }';
   await mockAuthenticatedApi(page, detailWithAffection);
   await page.goto(`/records/${RECORD_ID}`);
 
@@ -1166,10 +1187,15 @@ test("record detail identifies the requester and uses affection hearts", async (
     await expect(card.getByText(change.reason)).toBeVisible();
   }
 
-  await expect(affection).toHaveScreenshot("records-detail-affection.png", {
-    animations: "disabled",
-    maxDiffPixels: 30,
-  });
+  const navigationStyle = await page.addStyleTag({ content: hideNavigation });
+  try {
+    await expect(affection).toHaveScreenshot("records-detail-affection.png", {
+      animations: "disabled",
+      maxDiffPixels: 30,
+    });
+  } finally {
+    await navigationStyle.evaluate((style) => style.parentNode?.removeChild(style));
+  }
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
 });
@@ -2204,7 +2230,7 @@ test("anonymous login does not request authenticated route assets", async ({ pag
   expect(matchingChunkAssets(requestedAssets, "AdminPanelState")).toEqual([]);
 });
 
-test("Memorial and SYSTEM ACCESS keep usable targets in the narrow mobile navigation", async ({
+test("Gallery, Memorial and SYSTEM ACCESS keep usable targets in the narrow mobile navigation", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
@@ -2219,7 +2245,8 @@ test("Memorial and SYSTEM ACCESS keep usable targets in the narrow mobile naviga
     name: "モバイルナビゲーション",
   });
   await expect(mobileNavigation).toBeVisible();
-  await expect(mobileNavigation.getByRole("link")).toHaveCount(4);
+  await expect(mobileNavigation.getByRole("link")).toHaveCount(5);
+  await expect(mobileNavigation.getByRole("link", { name: "生徒ガチャ" })).toBeVisible();
   await expect(mobileNavigation.getByRole("link", { name: "モモトーク" })).toBeVisible();
   await expect(
     mobileNavigation.getByRole("link", { name: "メモリアル", exact: true }),
@@ -3124,6 +3151,7 @@ for (const directRoute of [
   { path: `/records/${RECORD_ID}`, chunkName: "RecordDetail", heading: detail.question },
   { path: "/insights", chunkName: "RankingsPage", heading: "いろいろな記録" },
   { path: "/memorial", chunkName: "MemorialPage", heading: "メモリアルロビー" },
+  { path: "/gallery", chunkName: "GalleryPage", heading: "生徒ガチャ" },
   { path: "/admin", chunkName: "AdminPage", heading: "サービス状態確認" },
   { path: "/admin/prompts", chunkName: "AdminPromptsPage", heading: "プロンプト管理" },
 ] as const) {
@@ -3133,6 +3161,9 @@ for (const directRoute of [
     test.skip(testInfo.project.name !== "desktop-chromium");
     const requestedAssets = observeAssetRequests(page);
     await mockAuthenticatedApi(page);
+    await page.route("**/api/v1/gallery", (route) =>
+      route.fulfill({ json: { schemaVersion: 1, items: [], nextCursor: null } }),
+    );
 
     await page.goto(directRoute.path);
     await expect(
@@ -3144,15 +3175,9 @@ for (const directRoute of [
       requiredRouteAssets.filter((assetPath) => assetPath.endsWith(".js")),
       `${directRoute.chunkName} JavaScript`,
     ).toHaveLength(1);
-    const stylesheetChunk = directRoute.chunkName.startsWith("Admin")
-      ? "AdminPanelState"
-      : directRoute.chunkName;
-    expect(
-      matchingChunkAssets(requestedAssets, stylesheetChunk).filter((assetPath) =>
-        assetPath.endsWith(".css"),
-      ),
-      `${directRoute.chunkName} CSS`,
-    ).toHaveLength(1);
+    const stylesheets = routeStylesheets(directRoute.chunkName);
+    expect(stylesheets.length, `${directRoute.chunkName} lazy CSS`).toBeGreaterThan(0);
+    for (const stylesheet of stylesheets) expect(requestedAssets).toContain(`/${stylesheet}`);
     for (const unrelatedChunkName of AUTHENTICATED_ROUTE_CHUNK_NAMES.filter(
       (chunkName) => chunkName !== directRoute.chunkName,
     )) {

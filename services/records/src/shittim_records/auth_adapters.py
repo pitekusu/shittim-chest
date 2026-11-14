@@ -34,6 +34,22 @@ DISCORD_CDN_ROOT = "https://cdn.discordapp.com"
 MAX_AVATAR_BYTES = 512 * 1024
 
 
+def load_oauth_guild(client: SSMClient, parameter_name: str) -> str:
+    """Load the guild used by Discord OAuth without accessing the client secret."""
+    response = client.get_parameters(Names=[parameter_name], WithDecryption=True)
+    parameters = response.get("Parameters", [])
+    if (
+        response.get("InvalidParameters")
+        or len(parameters) != 1
+        or parameters[0].get("Name") != parameter_name
+    ):
+        raise AuthFailure("configuration_unavailable")
+    try:
+        return RecordsOAuthConfig.model_validate_json(parameters[0].get("Value", "")).guild_id
+    except ValueError:
+        raise AuthFailure("configuration_invalid") from None
+
+
 class AuthConfigurationRepository:
     """Load and validate the five private values used by the Auth Lambda."""
 

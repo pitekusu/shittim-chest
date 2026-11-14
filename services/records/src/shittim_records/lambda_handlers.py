@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 from shittim_chest.adapters.aws import SsmParameterReader
 from shittim_chest.adapters.discord import create_discord_status_http_client
+from shittim_chest.adapters.dynamodb.codec import unmarshal_item
 from shittim_chest.adapters.openai.prompts import LEGACY_RUNTIME_SYSTEM_PROMPT
 
 from shittim_records.adapters import (
@@ -103,12 +104,16 @@ from shittim_records.record_link_adapters import (
 )
 from shittim_records.record_link_notifications import RecordLinkNotificationService
 
+if TYPE_CHECKING:
+    from shittim_records.gallery_projection import GalleryProjector
+
 LOGGER = logging.getLogger(__name__)
 LOGGER.setLevel(logging.INFO)
 HTTPX_LOGGER = logging.getLogger("httpx")
 
 _PROJECTOR: ProjectorService | None = None
 _AFFECTION_PROJECTOR: AffectionProjectorService | None = None
+_GALLERY_PROJECTOR: GalleryProjector | None = None
 _BACKFILL: BackfillService | None = None
 _RANKING: RankingService | None = None
 _COSTS: CostCollectionService | None = None
@@ -129,6 +134,14 @@ def projector_handler(event: Mapping[str, Any], _context: object) -> dict[str, o
     for record in event.get("Records", []):
         sequence_number = _stream_sequence_number(record)
         try:
+            gallery_image = _gallery_stream_image(record)
+            if gallery_image is not None:
+                result = _gallery_projector_service().project_result(unmarshal_item(gallery_image))
+                if result.created:
+                    created += 1
+                else:
+                    skipped += 1
+                continue
             target, partition_key = _projection_target(record)
             if target == "skip":
                 skipped += 1
@@ -159,15 +172,34 @@ def projector_handler(event: Mapping[str, Any], _context: object) -> dict[str, o
     return {"batchItemFailures": failures}
 
 
-def backfill_handler(event: Mapping[str, Any], _context: object) -> dict[str, object]:
+def backfill_handler(event: Mapping[str, Any], context: object) -> dict[str, object]:
     """Run one content-free dry-run or apply backfill page."""
 
     mode = event.get("mode", "dry-run")
     if mode not in {"dry-run", "apply"}:
         raise ValueError("backfill mode must be dry-run or apply")
-    page_limit = event.get("page_limit", 100)
+    target = event.get("target", "records")
+    if target not in {"records", "student-gacha"}:
+        raise ValueError("backfill target is invalid")
+    page_limit = event.get("page_limit", 25 if target == "student-gacha" else 100)
     if isinstance(page_limit, bool) or not isinstance(page_limit, int):
         raise ValueError("backfill page limit must be an integer")
+    if target == "student-gacha":
+        cursor = event.get("cursor")
+        if cursor is not None and not isinstance(cursor, str):
+            raise ValueError("gallery backfill cursor is invalid")
+        page = _gallery_projector_service().backfill_page(
+            apply=mode == "apply",
+            limit=page_limit,
+            cursor=cursor,
+            deadline=_lambda_deadline(context, now=datetime.now(UTC)),
+        )
+        _log(
+            event="records_gallery_backfill_page",
+            mode=mode,
+            **{key: value for key, value in page.items() if key != "next_cursor"},
+        )
+        return {"target": target, "mode": mode, **page}
     result = _backfill_service().run_page(
         apply=mode == "apply",
         now=datetime.now(UTC),
@@ -399,6 +431,26 @@ def _backfill_service() -> BackfillService:
             ),
         )
     return _BACKFILL
+
+
+def _gallery_projector_service() -> GalleryProjector:
+    global _GALLERY_PROJECTOR
+    if _GALLERY_PROJECTOR is None:
+        from shittim_records.auth_adapters import load_oauth_guild
+        from shittim_records.gallery_projection import GalleryProjector
+
+        guild_id = load_oauth_guild(
+            boto3.client("ssm", config=SDK_CONFIG), _environment("OAUTH_CONFIG_PARAMETER_NAME")
+        )
+        _GALLERY_PROJECTOR = GalleryProjector(
+            boto3.client("dynamodb", config=SDK_CONFIG),
+            _regional_s3_client(),
+            source_table_name=_environment("SOURCE_TABLE_NAME"),
+            statistics_table_name=_environment("STATISTICS_TABLE_NAME"),
+            media_bucket_name=_environment("MEDIA_BUCKET_NAME"),
+            guild_id=guild_id,
+        )
+    return _GALLERY_PROJECTOR
 
 
 def _ranking_service() -> RankingService:
@@ -836,6 +888,26 @@ def _projection_target(record: Mapping[str, Any]) -> tuple[str, str]:
     ):
         raise ValueError("stream affection profile identity is invalid")
     return "affection", pk["S"]
+
+
+def _gallery_stream_image(record: Mapping[str, Any]) -> dict[str, Any] | None:
+    if record.get("eventName") != "INSERT":
+        return None
+    dynamodb = record.get("dynamodb")
+    if not isinstance(dynamodb, Mapping):
+        return None
+    keys = dynamodb.get("Keys")
+    if not isinstance(keys, Mapping):
+        return None
+    for name, prefix in (("PK", "GACHA#GUILD#"), ("SK", "RESULT#")):
+        attribute = keys.get(name)
+        key = attribute.get("S") if isinstance(attribute, Mapping) else None
+        if not isinstance(key, str) or not key.startswith(prefix):
+            return None
+    image = dynamodb.get("NewImage")
+    if not isinstance(image, dict) or any(image.get(name) != keys[name] for name in ("PK", "SK")):
+        raise ValueError("gallery_stream_image_invalid")
+    return image
 
 
 def _is_legacy_affection_profile_key(keys: object) -> bool:

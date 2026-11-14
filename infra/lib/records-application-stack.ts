@@ -48,6 +48,9 @@ const FIREBASE_SERVICE_ACCOUNT_PARAMETER_NAME =
   "/shittim-chest/production/records/firebase/service-account";
 const MODERATOR_TOKEN_PARAMETER_NAME =
   "/shittim-chest/production/discord/moderator/token";
+const GALLERY_TABLE_KEY = "GACHA#GALLERY#*";
+const GALLERY_ORIGINAL_PREFIX = "student-gacha/results";
+const GALLERY_THUMBNAIL_PREFIX = "student-gacha/thumbnails/v1";
 
 export class RecordsApplicationStack extends Stack {
   public readonly projectorFunction: lambda.Function;
@@ -347,6 +350,15 @@ export class RecordsApplicationStack extends Stack {
               },
             },
           }),
+          lambda.FilterCriteria.filter({
+            eventName: lambda.FilterRule.isEqual("INSERT"),
+            dynamodb: {
+              Keys: {
+                PK: { S: lambda.FilterRule.beginsWith("GACHA#GUILD#") },
+                SK: { S: lambda.FilterRule.beginsWith("RESULT#") },
+              },
+            },
+          }),
         ],
       }),
     );
@@ -370,6 +382,63 @@ export class RecordsApplicationStack extends Stack {
       allowScan: true,
       allowAffectionProjection: false,
     });
+    for (const worker of [this.projectorFunction, this.backfillFunction]) {
+      worker.addEnvironment("MEDIA_BUCKET_NAME", mediaBucket.bucketName);
+      worker.addEnvironment("OAUTH_CONFIG_PARAMETER_NAME", oauthConfigParameter.parameterName);
+      worker.addToRolePolicy(new iam.PolicyStatement({
+        actions: ["ssm:GetParameters"],
+        resources: [oauthConfigParameter.parameterArn],
+      }));
+      worker.addToRolePolicy(new iam.PolicyStatement({
+        actions: ["dynamodb:GetItem"],
+        resources: [sourceTable.tableArn],
+        conditions: {
+          "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["GACHA#OFFER#*"] },
+          "ForAllValues:StringEquals": {
+            "dynamodb:Attributes": ["PK", "SK", "guild_id", "state", "owner_key"],
+          },
+          StringEqualsIfExists: { "dynamodb:Select": "SPECIFIC_ATTRIBUTES" },
+          Null: { "dynamodb:LeadingKeys": "false", "dynamodb:Attributes": "false" },
+        },
+      }));
+      worker.addToRolePolicy(new iam.PolicyStatement({
+        actions: ["dynamodb:GetItem"],
+        resources: [statisticsTable.tableArn],
+        conditions: {
+          "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["AFFECTION#PROFILE"] },
+          Null: { "dynamodb:LeadingKeys": "false" },
+        },
+      }));
+      worker.addToRolePolicy(new iam.PolicyStatement({
+        actions: ["dynamodb:GetItem", "dynamodb:PutItem"],
+        resources: [statisticsTable.tableArn],
+        conditions: {
+          "ForAllValues:StringLike": { "dynamodb:LeadingKeys": [GALLERY_TABLE_KEY] },
+          Null: { "dynamodb:LeadingKeys": "false" },
+        },
+      }));
+      worker.addToRolePolicy(new iam.PolicyStatement({
+        actions: ["s3:GetObject"],
+        resources: [`${mediaBucket.bucketArn}/student-gacha/assets/blue_archive_school_logos.zip`],
+      }));
+      worker.addToRolePolicy(new iam.PolicyStatement({
+        actions: ["s3:GetObjectVersion"],
+        resources: [`${mediaBucket.bucketArn}/${GALLERY_ORIGINAL_PREFIX}/*`],
+      }));
+      worker.addToRolePolicy(new iam.PolicyStatement({
+        actions: ["s3:GetObject", "s3:PutObject"],
+        resources: [`${mediaBucket.bucketArn}/${GALLERY_THUMBNAIL_PREFIX}/*`],
+      }));
+      worker.role!.node.addMetadata(
+        Validations.ACKNOWLEDGED_RULES_METADATA_KEY,
+        Object.fromEntries(["arn:aws", "arn:<AWS::Partition>"].flatMap((partition) =>
+          [GALLERY_ORIGINAL_PREFIX, GALLERY_THUMBNAIL_PREFIX].map((prefix) => [
+            `AwsSolutions-IAM5[Resource::${partition}:s3:::shittim-chest-production-records-media-${nagAccount}/${prefix}/*]`,
+            "Student gacha projection reads immutable originals and writes only derived thumbnails.",
+          ]),
+        )),
+      );
+    }
 
     this.authFunction = this.httpFunctionWithRole({
       id: "AuthFunction",
@@ -858,8 +927,23 @@ export class RecordsApplicationStack extends Stack {
         SESSION_TABLE_NAME: sessionTable.tableName,
         MEDIA_BUCKET_NAME: mediaBucket.bucketName,
         SESSION_KEY_PARAMETER_NAME: sessionKeyParameter.parameterName,
+        OAUTH_CONFIG_PARAMETER_NAME: oauthConfigParameter.parameterName,
       },
       policyStatements: [
+        new iam.PolicyStatement({
+          actions: ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:BatchGetItem"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": [GALLERY_TABLE_KEY] },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["s3:GetObjectVersion"],
+          resources: [GALLERY_ORIGINAL_PREFIX, GALLERY_THUMBNAIL_PREFIX].map((prefix) =>
+            `${mediaBucket.bucketArn}/${prefix}/*`,
+          ),
+        }),
         new iam.PolicyStatement({
           actions: ["dynamodb:GetItem", "dynamodb:Query"],
           resources: [statisticsTable.tableArn],
@@ -908,7 +992,7 @@ export class RecordsApplicationStack extends Stack {
         }),
         new iam.PolicyStatement({
           actions: ["ssm:GetParameters"],
-          resources: [sessionKeyParameter.parameterArn],
+          resources: [sessionKeyParameter.parameterArn, oauthConfigParameter.parameterArn],
         }),
         new iam.PolicyStatement({
           actions: ["s3:GetObject"],
@@ -925,10 +1009,10 @@ export class RecordsApplicationStack extends Stack {
       Validations.ACKNOWLEDGED_RULES_METADATA_KEY,
       Object.fromEntries(
         ["arn:aws", "arn:<AWS::Partition>"].flatMap((partition) =>
-          ["participants", "requesters", "momotalk/images", "debate-images"].map((prefix) => [
+          ["participants", "requesters", "momotalk/images", "debate-images", GALLERY_ORIGINAL_PREFIX, GALLERY_THUMBNAIL_PREFIX].map((prefix) => [
             `AwsSolutions-IAM5[Resource::${partition}:s3:::` +
               `shittim-chest-production-records-media-${nagAccount}/${prefix}/*]`,
-            "Authenticated reads are restricted to avatars, published MomoTalk images, and immutable debate attachments.",
+            "Authenticated reads are restricted to avatars, published images, and immutable debate attachments.",
           ]),
         ),
       ),
@@ -2249,6 +2333,14 @@ export class RecordsApplicationStack extends Stack {
       methods: [apigatewayv2.HttpMethod.GET],
       integration: readIntegration,
     });
+    for (const path of [
+      "/api/v1/gallery",
+      "/api/v1/gallery/thumbnails",
+      "/api/v1/gallery/{cardId}",
+      "/api/v1/gallery/{cardId}/original",
+    ]) {
+      api.addRoutes({ path, methods: [apigatewayv2.HttpMethod.GET], integration: readIntegration });
+    }
     api.addRoutes({
       path: "/api/v1/insights/rankings",
       methods: [apigatewayv2.HttpMethod.GET],

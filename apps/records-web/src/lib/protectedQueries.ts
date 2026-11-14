@@ -8,6 +8,7 @@ const PROTECTED_QUERIES = new Set([
   "costs",
   "memorial",
   "momotalk",
+  "gallery",
   "admin",
 ]);
 const recoveries = new WeakMap<QueryClient, Promise<void>>();
