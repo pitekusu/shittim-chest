@@ -1,0 +1,2442 @@
+[
+  {
+    "name": "アカネ（バニーガール）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "アカネ（制服）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "アカリ（正月）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "アコ",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "アコ（ドレス）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "アズサ",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "アズサ（水着）",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "アズサ（レーシング）",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "アスナ（バニーガール）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "アスナ（制服）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "アツコ",
+    "school": "アリウス",
+    "rarity": 3
+  },
+  {
+    "name": "アリス",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "アリス（メイド）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "アリス（臨戦）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "アル",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "アル（正月）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "アル（ドレス）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "アンナ",
+    "school": "レッドウィンター",
+    "rarity": 3
+  },
+  {
+    "name": "イオリ",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "イオリ（水着）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "イズナ",
+    "school": "百鬼夜行",
+    "rarity": 3
+  },
+  {
+    "name": "イズナ（水着）",
+    "school": "百鬼夜行",
+    "rarity": 3
+  },
+  {
+    "name": "イズミ",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "イズミ（正月）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "イチカ",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "イブキ（水着）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "イロハ",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "イロハ（水着）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "ウイ",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "ウイ（水着）",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "ウタハ（応援団）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "ウミカ",
+    "school": "百鬼夜行",
+    "rarity": 3
+  },
+  {
+    "name": "エイミ",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "エイミ（水着）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "エイミ（臨戦）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "エリ",
+    "school": "ワイルドハント",
+    "rarity": 3
+  },
+  {
+    "name": "エリカ",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "エリナ",
+    "school": "レッドウィンター",
+    "rarity": 3
+  },
+  {
+    "name": "カエデ",
+    "school": "百鬼夜行",
+    "rarity": 3
+  },
+  {
+    "name": "カズサ",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "カズサ（バンド）",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "カスミ",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "カスミ（水着）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "カノエ",
+    "school": "ワイルドハント",
+    "rarity": 3
+  },
+  {
+    "name": "カホ",
+    "school": "百鬼夜行",
+    "rarity": 3
+  },
+  {
+    "name": "カヨコ（正月）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "カヨコ（ドレス）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "カリン",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "カリン（バニーガール）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "カンナ",
+    "school": "ヴァルキューレ",
+    "rarity": 3
+  },
+  {
+    "name": "カンナ（水着）",
+    "school": "ヴァルキューレ",
+    "rarity": 3
+  },
+  {
+    "name": "キキョウ",
+    "school": "百鬼夜行",
+    "rarity": 3
+  },
+  {
+    "name": "キキョウ（水着）",
+    "school": "百鬼夜行",
+    "rarity": 3
+  },
+  {
+    "name": "キサキ",
+    "school": "山海経",
+    "rarity": 3
+  },
+  {
+    "name": "キサキ（水着）",
+    "school": "山海経",
+    "rarity": 3
+  },
+  {
+    "name": "キララ",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "クルミ",
+    "school": "SRT",
+    "rarity": 3
+  },
+  {
+    "name": "ケイ",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "ココナ",
+    "school": "山海経",
+    "rarity": 3
+  },
+  {
+    "name": "ココロ",
+    "school": "オデュッセイア",
+    "rarity": 3
+  },
+  {
+    "name": "コタマ（キャンプ）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "コトネ",
+    "school": "オデュッセイア",
+    "rarity": 3
+  },
+  {
+    "name": "コトリ（応援団）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "コノカ",
+    "school": "ヴァルキューレ",
+    "rarity": 3
+  },
+  {
+    "name": "コハル",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "コユキ",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "コユキ（パジャマ）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "サオリ",
+    "school": "アリウス",
+    "rarity": 3
+  },
+  {
+    "name": "サオリ（水着）",
+    "school": "アリウス",
+    "rarity": 3
+  },
+  {
+    "name": "サオリ（ドレス）",
+    "school": "アリウス",
+    "rarity": 3
+  },
+  {
+    "name": "サキ",
+    "school": "SRT",
+    "rarity": 3
+  },
+  {
+    "name": "サキ（水着）",
+    "school": "SRT",
+    "rarity": 3
+  },
+  {
+    "name": "サクラコ",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "サクラコ（アイドル）",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "サツキ",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "サツキ（水着）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "サヤ",
+    "school": "山海経",
+    "rarity": 3
+  },
+  {
+    "name": "サヤ（私服）",
+    "school": "山海経",
+    "rarity": 3
+  },
+  {
+    "name": "シグレ",
+    "school": "レッドウィンター",
+    "rarity": 3
+  },
+  {
+    "name": "シグレ（温泉）",
+    "school": "レッドウィンター",
+    "rarity": 3
+  },
+  {
+    "name": "ジュリ（アルバイト）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "シュン",
+    "school": "山海経",
+    "rarity": 3
+  },
+  {
+    "name": "シュン（幼女）",
+    "school": "山海経",
+    "rarity": 3
+  },
+  {
+    "name": "シュン（水着）",
+    "school": "山海経",
+    "rarity": 3
+  },
+  {
+    "name": "シロコ",
+    "school": "アビドス",
+    "rarity": 3
+  },
+  {
+    "name": "シロコ（ライディング）",
+    "school": "アビドス",
+    "rarity": 3
+  },
+  {
+    "name": "シロコ（水着）",
+    "school": "アビドス",
+    "rarity": 3
+  },
+  {
+    "name": "シロコ＊テラー",
+    "school": "アビドス",
+    "rarity": 3
+  },
+  {
+    "name": "スズミ（マジカル）",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "スバル",
+    "school": "アリウス",
+    "rarity": 3
+  },
+  {
+    "name": "スミレ",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "スミレ（アルバイト）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "セイア",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "セイア（水着）",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "セナ",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "セナ（私服）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "セリカ（正月）",
+    "school": "アビドス",
+    "rarity": 3
+  },
+  {
+    "name": "セリカ（水着）",
+    "school": "アビドス",
+    "rarity": 3
+  },
+  {
+    "name": "セリナ（クリスマス）",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "タカネ",
+    "school": "レッドウィンター",
+    "rarity": 3
+  },
+  {
+    "name": "チアキ",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "チェリノ",
+    "school": "レッドウィンター",
+    "rarity": 3
+  },
+  {
+    "name": "チェリノ（温泉）",
+    "school": "レッドウィンター",
+    "rarity": 3
+  },
+  {
+    "name": "チセ（水着）",
+    "school": "百鬼夜行",
+    "rarity": 3
+  },
+  {
+    "name": "チナツ（温泉）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "チヒロ",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "ツクヨ",
+    "school": "百鬼夜行",
+    "rarity": 3
+  },
+  {
+    "name": "ツクヨ（ドレス）",
+    "school": "百鬼夜行",
+    "rarity": 3
+  },
+  {
+    "name": "ツバキ（ガイド）",
+    "school": "百鬼夜行",
+    "rarity": 3
+  },
+  {
+    "name": "ツムギ",
+    "school": "ワイルドハント",
+    "rarity": 3
+  },
+  {
+    "name": "ツルギ",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "トキ",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "トキ（バニーガール）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "トモエ（チーパオ）",
+    "school": "レッドウィンター",
+    "rarity": 3
+  },
+  {
+    "name": "ナギサ",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "ナギサ（水着）",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "ナグサ",
+    "school": "百鬼夜行",
+    "rarity": 3
+  },
+  {
+    "name": "ナグサ（水着）",
+    "school": "百鬼夜行",
+    "rarity": 3
+  },
+  {
+    "name": "ナツ",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "ナツ（バンド）",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "ニコ",
+    "school": "SRT",
+    "rarity": 3
+  },
+  {
+    "name": "ニヤ",
+    "school": "百鬼夜行",
+    "rarity": 3
+  },
+  {
+    "name": "ネル",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "ネル（バニーガール）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "ネル（制服）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "ノア",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "ノア（パジャマ）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "ノゾミ",
+    "school": "ハイランダー",
+    "rarity": 3
+  },
+  {
+    "name": "ノドカ（温泉）",
+    "school": "レッドウィンター",
+    "rarity": 3
+  },
+  {
+    "name": "ノノミ（水着）",
+    "school": "アビドス",
+    "rarity": 3
+  },
+  {
+    "name": "ハスミ（水着）",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "ハナエ（クリスマス）",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "ハナコ（水着）",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "ハルカ（正月）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "ハルカ（ドレス）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "ハルナ",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "ハルナ（正月）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "ハルナ（体操服）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "ハレ（キャンプ）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "ヒカリ",
+    "school": "ハイランダー",
+    "rarity": 3
+  },
+  {
+    "name": "ヒナ",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "ヒナ（水着）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "ヒナ（ドレス）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "ヒナタ",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "ヒナタ（水着）",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "ヒビキ",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "ヒフミ",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "ヒフミ（水着）",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "ヒフミ（レーシング）",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "ヒマリ",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "ヒマリ（臨戦）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "ヒヨリ",
+    "school": "アリウス",
+    "rarity": 3
+  },
+  {
+    "name": "ヒヨリ（水着）",
+    "school": "アリウス",
+    "rarity": 3
+  },
+  {
+    "name": "フィーナ（ガイド）",
+    "school": "百鬼夜行",
+    "rarity": 3
+  },
+  {
+    "name": "フウカ（正月）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "フブキ（水着）",
+    "school": "ヴァルキューレ",
+    "rarity": 3
+  },
+  {
+    "name": "フユ",
+    "school": "ワイルドハント",
+    "rarity": 3
+  },
+  {
+    "name": "ホシノ",
+    "school": "アビドス",
+    "rarity": 3
+  },
+  {
+    "name": "ホシノ（水着）",
+    "school": "アビドス",
+    "rarity": 3
+  },
+  {
+    "name": "ホシノ（臨戦）",
+    "school": "アビドス",
+    "rarity": 3
+  },
+  {
+    "name": "マキ",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "マキ（キャンプ）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "マコト",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "マコト（水着）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "マシロ",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "マシロ（水着）",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "マリー（体操服）",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "マリー（アイドル）",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "マリナ",
+    "school": "レッドウィンター",
+    "rarity": 3
+  },
+  {
+    "name": "マリナ（チーパオ）",
+    "school": "レッドウィンター",
+    "rarity": 3
+  },
+  {
+    "name": "ミカ",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "ミカ（水着）",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "ミサキ",
+    "school": "アリウス",
+    "rarity": 3
+  },
+  {
+    "name": "ミサキ（水着）",
+    "school": "アリウス",
+    "rarity": 3
+  },
+  {
+    "name": "ミチル（ドレス）",
+    "school": "百鬼夜行",
+    "rarity": 3
+  },
+  {
+    "name": "ミドリ",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "ミドリ（メイド）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "ミナ",
+    "school": "山海経",
+    "rarity": 3
+  },
+  {
+    "name": "ミネ",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "ミノリ",
+    "school": "レッドウィンター",
+    "rarity": 3
+  },
+  {
+    "name": "ミモリ",
+    "school": "百鬼夜行",
+    "rarity": 3
+  },
+  {
+    "name": "ミモリ（水着）",
+    "school": "百鬼夜行",
+    "rarity": 3
+  },
+  {
+    "name": "ミヤコ",
+    "school": "SRT",
+    "rarity": 3
+  },
+  {
+    "name": "ミヤコ（水着）",
+    "school": "SRT",
+    "rarity": 3
+  },
+  {
+    "name": "ミユ",
+    "school": "SRT",
+    "rarity": 3
+  },
+  {
+    "name": "ミヨ",
+    "school": "ワイルドハント",
+    "rarity": 3
+  },
+  {
+    "name": "ムツキ（正月）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "ムツキ（ドレス）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "メグ",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "メル",
+    "school": "レッドウィンター",
+    "rarity": 3
+  },
+  {
+    "name": "モエ",
+    "school": "SRT",
+    "rarity": 3
+  },
+  {
+    "name": "モエ（水着）",
+    "school": "SRT",
+    "rarity": 3
+  },
+  {
+    "name": "モモイ（メイド）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "ヤクモ",
+    "school": "レッドウィンター",
+    "rarity": 3
+  },
+  {
+    "name": "ユウカ（体操服）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "ユウカ（パジャマ）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "ユカリ",
+    "school": "百鬼夜行",
+    "rarity": 3
+  },
+  {
+    "name": "ユカリ（水着）",
+    "school": "百鬼夜行",
+    "rarity": 3
+  },
+  {
+    "name": "ユズ",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "ユズ（臨戦）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "ヨシミ（バンド）",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "リオ",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "リオ（臨戦）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "リツ",
+    "school": "ワイルドハント",
+    "rarity": 3
+  },
+  {
+    "name": "ルミ",
+    "school": "山海経",
+    "rarity": 3
+  },
+  {
+    "name": "レイ",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "レイサ",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "レイサ（マジカル）",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "レイジョ",
+    "school": "山海経",
+    "rarity": 3
+  },
+  {
+    "name": "レナ",
+    "school": "ワイルドハント",
+    "rarity": 3
+  },
+  {
+    "name": "レンゲ",
+    "school": "百鬼夜行",
+    "rarity": 3
+  },
+  {
+    "name": "ワカモ",
+    "school": "百鬼夜行",
+    "rarity": 3
+  },
+  {
+    "name": "ワカモ（水着）",
+    "school": "百鬼夜行",
+    "rarity": 3
+  },
+  {
+    "name": "御坂美琴",
+    "school": "常盤台中学",
+    "rarity": 3
+  },
+  {
+    "name": "初音ミク",
+    "school": "その他",
+    "rarity": 3
+  },
+  {
+    "name": "食蜂操祈",
+    "school": "常盤台中学",
+    "rarity": 3
+  },
+  {
+    "name": "アイリ",
+    "school": "トリニティ",
+    "rarity": 2
+  },
+  {
+    "name": "アカネ",
+    "school": "ミレニアム",
+    "rarity": 2
+  },
+  {
+    "name": "アカリ",
+    "school": "ゲヘナ",
+    "rarity": 2
+  },
+  {
+    "name": "アヤネ",
+    "school": "アビドス",
+    "rarity": 2
+  },
+  {
+    "name": "ウタハ",
+    "school": "ミレニアム",
+    "rarity": 2
+  },
+  {
+    "name": "カヨコ",
+    "school": "ゲヘナ",
+    "rarity": 2
+  },
+  {
+    "name": "キリノ",
+    "school": "ヴァルキューレ",
+    "rarity": 2
+  },
+  {
+    "name": "シズコ",
+    "school": "百鬼夜行",
+    "rarity": 2
+  },
+  {
+    "name": "ジュンコ",
+    "school": "ゲヘナ",
+    "rarity": 2
+  },
+  {
+    "name": "セリカ",
+    "school": "アビドス",
+    "rarity": 2
+  },
+  {
+    "name": "チセ",
+    "school": "百鬼夜行",
+    "rarity": 2
+  },
+  {
+    "name": "ツバキ",
+    "school": "百鬼夜行",
+    "rarity": 2
+  },
+  {
+    "name": "ノノミ",
+    "school": "アビドス",
+    "rarity": 2
+  },
+  {
+    "name": "ハスミ",
+    "school": "トリニティ",
+    "rarity": 2
+  },
+  {
+    "name": "ハナエ",
+    "school": "トリニティ",
+    "rarity": 2
+  },
+  {
+    "name": "ハナコ",
+    "school": "トリニティ",
+    "rarity": 2
+  },
+  {
+    "name": "ハレ",
+    "school": "ミレニアム",
+    "rarity": 2
+  },
+  {
+    "name": "フウカ",
+    "school": "ゲヘナ",
+    "rarity": 2
+  },
+  {
+    "name": "マリー",
+    "school": "トリニティ",
+    "rarity": 2
+  },
+  {
+    "name": "ムツキ",
+    "school": "ゲヘナ",
+    "rarity": 2
+  },
+  {
+    "name": "モミジ",
+    "school": "レッドウィンター",
+    "rarity": 2
+  },
+  {
+    "name": "モモイ",
+    "school": "ミレニアム",
+    "rarity": 2
+  },
+  {
+    "name": "ユウカ",
+    "school": "ミレニアム",
+    "rarity": 2
+  },
+  {
+    "name": "レンゲ（水着）",
+    "school": "百鬼夜行",
+    "rarity": 2
+  },
+  {
+    "name": "アイリ（バンド）",
+    "school": "トリニティ",
+    "rarity": 1
+  },
+  {
+    "name": "アオバ",
+    "school": "ハイランダー",
+    "rarity": 3
+  },
+  {
+    "name": "アスナ",
+    "school": "ミレニアム",
+    "rarity": 1
+  },
+  {
+    "name": "アツコ（水着）",
+    "school": "アリウス",
+    "rarity": 1
+  },
+  {
+    "name": "アヤネ（水着）",
+    "school": "アビドス",
+    "rarity": 1
+  },
+  {
+    "name": "イズミ（水着）",
+    "school": "ゲヘナ",
+    "rarity": 1
+  },
+  {
+    "name": "イチカ（水着）",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "イブキ",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "オトギ",
+    "school": "SRT",
+    "rarity": 1
+  },
+  {
+    "name": "カリン（制服）",
+    "school": "ミレニアム",
+    "rarity": 3
+  },
+  {
+    "name": "キリノ（水着）",
+    "school": "ヴァルキューレ",
+    "rarity": 1
+  },
+  {
+    "name": "コタマ",
+    "school": "ミレニアム",
+    "rarity": 1
+  },
+  {
+    "name": "コトリ",
+    "school": "ミレニアム",
+    "rarity": 1
+  },
+  {
+    "name": "コハル（水着）",
+    "school": "トリニティ",
+    "rarity": 1
+  },
+  {
+    "name": "シズコ（水着）",
+    "school": "百鬼夜行",
+    "rarity": 1
+  },
+  {
+    "name": "シミコ",
+    "school": "トリニティ",
+    "rarity": 1
+  },
+  {
+    "name": "ジュリ",
+    "school": "ゲヘナ",
+    "rarity": 1
+  },
+  {
+    "name": "ジュンコ（正月）",
+    "school": "ゲヘナ",
+    "rarity": 1
+  },
+  {
+    "name": "スズミ",
+    "school": "トリニティ",
+    "rarity": 1
+  },
+  {
+    "name": "セリナ",
+    "school": "トリニティ",
+    "rarity": 1
+  },
+  {
+    "name": "チアキ（水着）",
+    "school": "ゲヘナ",
+    "rarity": 3
+  },
+  {
+    "name": "チナツ",
+    "school": "ゲヘナ",
+    "rarity": 1
+  },
+  {
+    "name": "ツルギ（水着）",
+    "school": "トリニティ",
+    "rarity": 1
+  },
+  {
+    "name": "トキ（臨戦）",
+    "school": "ミレニアム",
+    "rarity": 1
+  },
+  {
+    "name": "トモエ",
+    "school": "レッドウィンター",
+    "rarity": 1
+  },
+  {
+    "name": "ノドカ",
+    "school": "レッドウィンター",
+    "rarity": 1
+  },
+  {
+    "name": "ハスミ（体操服）",
+    "school": "トリニティ",
+    "rarity": 1
+  },
+  {
+    "name": "ハルカ",
+    "school": "ゲヘナ",
+    "rarity": 1
+  },
+  {
+    "name": "ヒビキ（応援団）",
+    "school": "ミレニアム",
+    "rarity": 1
+  },
+  {
+    "name": "フィーナ",
+    "school": "百鬼夜行",
+    "rarity": 1
+  },
+  {
+    "name": "フブキ",
+    "school": "ヴァルキューレ",
+    "rarity": 1
+  },
+  {
+    "name": "ミチル",
+    "school": "百鬼夜行",
+    "rarity": 1
+  },
+  {
+    "name": "ミネ（アイドル）",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "ミユ（水着）",
+    "school": "SRT",
+    "rarity": 1
+  },
+  {
+    "name": "ユズ（メイド）",
+    "school": "ミレニアム",
+    "rarity": 1
+  },
+  {
+    "name": "ヨシミ",
+    "school": "トリニティ",
+    "rarity": 1
+  },
+  {
+    "name": "ラナ",
+    "school": "レッドウィンター",
+    "rarity": 3
+  },
+  {
+    "name": "ラブ",
+    "school": "トリニティ",
+    "rarity": 3
+  },
+  {
+    "name": "佐天涙子",
+    "school": "柵川中学",
+    "rarity": 3
+  },
+  {
+    "name": "アロナ",
+    "school": "シッテムの箱",
+    "rarity": 4
+  },
+  {
+    "name": "プラナ",
+    "school": "シッテムの箱",
+    "rarity": 4
+  },
+  {
+    "name": "安倍晋三",
+    "school": "自民党",
+    "rarity": 4
+  },
+  {
+    "name": "ユメ",
+    "school": "アビドス高等学校",
+    "rarity": 0
+  },
+  {
+    "name": "マイア",
+    "school": "アリウス分校",
+    "rarity": 0
+  },
+  {
+    "name": "バルバラ",
+    "school": "アリウス分校",
+    "rarity": 0
+  },
+  {
+    "name": "アリウス生徒",
+    "school": "アリウス分校",
+    "rarity": 0
+  },
+  {
+    "name": "ユスティナ信徒",
+    "school": "アリウス分校",
+    "rarity": 0
+  },
+  {
+    "name": "水着信徒",
+    "school": "アリウス分校",
+    "rarity": 0
+  },
+  {
+    "name": "黙示録の天使",
+    "school": "アリウス分校",
+    "rarity": 0
+  },
+  {
+    "name": "ミスズ",
+    "school": "ヴァルキューレ警察学校",
+    "rarity": 0
+  },
+  {
+    "name": "ヴァルキューレ生徒",
+    "school": "ヴァルキューレ警察学校",
+    "rarity": 0
+  },
+  {
+    "name": "ヴァルキューレ海警",
+    "school": "ヴァルキューレ警察学校",
+    "rarity": 0
+  },
+  {
+    "name": "ミナト",
+    "school": "オデュッセイア海洋高等学校",
+    "rarity": 0
+  },
+  {
+    "name": "アミ",
+    "school": "オデュッセイア海洋高等学校",
+    "rarity": 0
+  },
+  {
+    "name": "スミカ",
+    "school": "オデュッセイア海洋高等学校",
+    "rarity": 0
+  },
+  {
+    "name": "ミツキ",
+    "school": "オデュッセイア海洋高等学校",
+    "rarity": 0
+  },
+  {
+    "name": "サナエ",
+    "school": "オデュッセイア海洋高等学校",
+    "rarity": 0
+  },
+  {
+    "name": "マキナ",
+    "school": "オデュッセイア海洋高等学校",
+    "rarity": 0
+  },
+  {
+    "name": "サユリ",
+    "school": "オデュッセイア海洋高等学校",
+    "rarity": 0
+  },
+  {
+    "name": "ナナミ",
+    "school": "オデュッセイア海洋高等学校",
+    "rarity": 0
+  },
+  {
+    "name": "オデュッセイア生徒",
+    "school": "オデュッセイア海洋高等学校",
+    "rarity": 0
+  },
+  {
+    "name": "トライデント部員",
+    "school": "オデュッセイア海洋高等学校",
+    "rarity": 0
+  },
+  {
+    "name": "クルーズ運営部員",
+    "school": "オデュッセイア海洋高等学校",
+    "rarity": 0
+  },
+  {
+    "name": "バニーガール・ガード",
+    "school": "オデュッセイア海洋高等学校",
+    "rarity": 0
+  },
+  {
+    "name": "マイ",
+    "school": "クロノススクール",
+    "rarity": 0
+  },
+  {
+    "name": "シノン",
+    "school": "クロノススクール",
+    "rarity": 0
+  },
+  {
+    "name": "マユミ",
+    "school": "ゲヘナ学園",
+    "rarity": 0
+  },
+  {
+    "name": "カレン",
+    "school": "ゲヘナ学園",
+    "rarity": 0
+  },
+  {
+    "name": "ショウコ",
+    "school": "ゲヘナ学園",
+    "rarity": 0
+  },
+  {
+    "name": "ゲヘナ生徒",
+    "school": "ゲヘナ学園",
+    "rarity": 0
+  },
+  {
+    "name": "風紀委員",
+    "school": "ゲヘナ学園",
+    "rarity": 0
+  },
+  {
+    "name": "救急医学部員",
+    "school": "ゲヘナ学園",
+    "rarity": 0
+  },
+  {
+    "name": "温泉開発部員",
+    "school": "ゲヘナ学園",
+    "rarity": 0
+  },
+  {
+    "name": "万魔殿",
+    "school": "ゲヘナ学園",
+    "rarity": 0
+  },
+  {
+    "name": "陸上部員",
+    "school": "ゲヘナ学園",
+    "rarity": 0
+  },
+  {
+    "name": "カナエ",
+    "school": "山海経高級中学校",
+    "rarity": 0
+  },
+  {
+    "name": "カグヤ",
+    "school": "山海経高級中学校",
+    "rarity": 0
+  },
+  {
+    "name": "山海経生徒",
+    "school": "山海経高級中学校",
+    "rarity": 0
+  },
+  {
+    "name": "玄武商会メンバー",
+    "school": "山海経高級中学校",
+    "rarity": 0
+  },
+  {
+    "name": "玄龍門",
+    "school": "山海経高級中学校",
+    "rarity": 0
+  },
+  {
+    "name": "京劇部員",
+    "school": "山海経高級中学校",
+    "rarity": 0
+  },
+  {
+    "name": "トリニティ生徒",
+    "school": "トリニティ総合学園",
+    "rarity": 0
+  },
+  {
+    "name": "ティーパーティー",
+    "school": "トリニティ総合学園",
+    "rarity": 0
+  },
+  {
+    "name": "正義実現委員会部員",
+    "school": "トリニティ総合学園",
+    "rarity": 0
+  },
+  {
+    "name": "正義実現委員会部員（体操服）",
+    "school": "トリニティ総合学園",
+    "rarity": 0
+  },
+  {
+    "name": "シスターフッド",
+    "school": "トリニティ総合学園",
+    "rarity": 0
+  },
+  {
+    "name": "スオウ",
+    "school": "ハイランダー鉄道学園",
+    "rarity": 0
+  },
+  {
+    "name": "列車乗務員",
+    "school": "ハイランダー鉄道学園",
+    "rarity": 0
+  },
+  {
+    "name": "クズノハ",
+    "school": "百鬼夜行連合学院",
+    "rarity": 0
+  },
+  {
+    "name": "アヤメ",
+    "school": "百鬼夜行連合学院",
+    "rarity": 0
+  },
+  {
+    "name": "アラタ",
+    "school": "百鬼夜行連合学院",
+    "rarity": 0
+  },
+  {
+    "name": "コクリコ",
+    "school": "百鬼夜行連合学院",
+    "rarity": 0
+  },
+  {
+    "name": "シュロ",
+    "school": "百鬼夜行連合学院",
+    "rarity": 0
+  },
+  {
+    "name": "アザミ",
+    "school": "百鬼夜行連合学院",
+    "rarity": 0
+  },
+  {
+    "name": "ナツキ",
+    "school": "百鬼夜行連合学院",
+    "rarity": 0
+  },
+  {
+    "name": "百鬼夜行生徒",
+    "school": "百鬼夜行連合学院",
+    "rarity": 0
+  },
+  {
+    "name": "百鬼夜行生徒（水着）",
+    "school": "百鬼夜行連合学院",
+    "rarity": 0
+  },
+  {
+    "name": "魑魅一座（MG）",
+    "school": "百鬼夜行連合学院",
+    "rarity": 0
+  },
+  {
+    "name": "魑魅一座（RL）",
+    "school": "百鬼夜行連合学院",
+    "rarity": 0
+  },
+  {
+    "name": "ミライ",
+    "school": "ミレニアムサイエンススクール",
+    "rarity": 0
+  },
+  {
+    "name": "ツバサ",
+    "school": "ミレニアムサイエンススクール",
+    "rarity": 0
+  },
+  {
+    "name": "ミレニアム生徒",
+    "school": "ミレニアムサイエンススクール",
+    "rarity": 0
+  },
+  {
+    "name": "AMAS",
+    "school": "ミレニアムサイエンススクール",
+    "rarity": 0
+  },
+  {
+    "name": "AMAS（小型）",
+    "school": "ミレニアムサイエンススクール",
+    "rarity": 0
+  },
+  {
+    "name": "レッドウィンター生徒",
+    "school": "レッドウィンター連邦学園",
+    "rarity": 0
+  },
+  {
+    "name": "親衛隊員",
+    "school": "レッドウィンター連邦学園",
+    "rarity": 0
+  },
+  {
+    "name": "工務部員",
+    "school": "レッドウィンター連邦学園",
+    "rarity": 0
+  },
+  {
+    "name": "連邦生徒会長",
+    "school": "連邦生徒会",
+    "rarity": 0
+  },
+  {
+    "name": "リン",
+    "school": "連邦生徒会",
+    "rarity": 0
+  },
+  {
+    "name": "モモカ",
+    "school": "連邦生徒会",
+    "rarity": 0
+  },
+  {
+    "name": "アユム",
+    "school": "連邦生徒会",
+    "rarity": 0
+  },
+  {
+    "name": "カヤ",
+    "school": "連邦生徒会",
+    "rarity": 0
+  },
+  {
+    "name": "アオイ",
+    "school": "連邦生徒会",
+    "rarity": 0
+  },
+  {
+    "name": "ハイネ",
+    "school": "連邦生徒会",
+    "rarity": 0
+  },
+  {
+    "name": "スモモ",
+    "school": "連邦生徒会",
+    "rarity": 0
+  },
+  {
+    "name": "連邦生徒会長（金髪）",
+    "school": "連邦生徒会",
+    "rarity": 0
+  },
+  {
+    "name": "行政官",
+    "school": "連邦生徒会",
+    "rarity": 0
+  },
+  {
+    "name": "ユキノ",
+    "school": "SRT特殊学園",
+    "rarity": 0
+  },
+  {
+    "name": "アキラ",
+    "school": "ワイルドハント芸術学院",
+    "rarity": 0
+  },
+  {
+    "name": "ヒロミ",
+    "school": "ワイルドハント芸術学院",
+    "rarity": 0
+  },
+  {
+    "name": "ワイルドハント生徒",
+    "school": "ワイルドハント芸術学院",
+    "rarity": 0
+  },
+  {
+    "name": "寮監隊",
+    "school": "ワイルドハント芸術学院",
+    "rarity": 0
+  },
+  {
+    "name": "カイ",
+    "school": "その他生徒",
+    "rarity": 0
+  },
+  {
+    "name": "アケミ",
+    "school": "その他生徒",
+    "rarity": 0
+  },
+  {
+    "name": "ニヤニヤ教授",
+    "school": "その他生徒",
+    "rarity": 0
+  },
+  {
+    "name": "スイコ",
+    "school": "その他生徒",
+    "rarity": 0
+  },
+  {
+    "name": "ナゴミ",
+    "school": "その他生徒",
+    "rarity": 0
+  },
+  {
+    "name": "ヨウコ",
+    "school": "その他生徒",
+    "rarity": 0
+  },
+  {
+    "name": "スケバン（MG）",
+    "school": "その他生徒",
+    "rarity": 0
+  },
+  {
+    "name": "スケバン（SMG）",
+    "school": "その他生徒",
+    "rarity": 0
+  },
+  {
+    "name": "スケバン（SR）",
+    "school": "その他生徒",
+    "rarity": 0
+  },
+  {
+    "name": "海辺のスケバン（MG）",
+    "school": "その他生徒",
+    "rarity": 0
+  },
+  {
+    "name": "海辺のスケバン（SMG）",
+    "school": "その他生徒",
+    "rarity": 0
+  },
+  {
+    "name": "ヘルメット団幹部",
+    "school": "その他生徒",
+    "rarity": 0
+  },
+  {
+    "name": "ヘルメット団",
+    "school": "その他生徒",
+    "rarity": 0
+  },
+  {
+    "name": "暴走族ボス",
+    "school": "その他生徒",
+    "rarity": 0
+  },
+  {
+    "name": "暴走族",
+    "school": "その他生徒",
+    "rarity": 0
+  },
+  {
+    "name": "傭兵",
+    "school": "その他生徒",
+    "rarity": 0
+  },
+  {
+    "name": "マフィア",
+    "school": "その他生徒",
+    "rarity": 0
+  },
+  {
+    "name": "組織員",
+    "school": "その他生徒",
+    "rarity": 0
+  },
+  {
+    "name": "海賊",
+    "school": "その他生徒",
+    "rarity": 0
+  },
+  {
+    "name": "ソラ",
+    "school": "エンジェル24",
+    "rarity": 0
+  },
+  {
+    "name": "カイテンレッド",
+    "school": "カイテンジャー",
+    "rarity": 0
+  },
+  {
+    "name": "カイテンブラック",
+    "school": "カイテンジャー",
+    "rarity": 0
+  },
+  {
+    "name": "カイテングリーン",
+    "school": "カイテンジャー",
+    "rarity": 0
+  },
+  {
+    "name": "カイテンイエロー",
+    "school": "カイテンジャー",
+    "rarity": 0
+  },
+  {
+    "name": "カイテンピンク",
+    "school": "カイテンジャー",
+    "rarity": 0
+  },
+  {
+    "name": "プレジデント",
+    "school": "カイザーコーポレーション",
+    "rarity": 0
+  },
+  {
+    "name": "ジェネラル",
+    "school": "カイザーコーポレーション",
+    "rarity": 0
+  },
+  {
+    "name": "カイザーPMC理事",
+    "school": "カイザーコーポレーション",
+    "rarity": 0
+  },
+  {
+    "name": "PMC兵士",
+    "school": "カイザーコーポレーション",
+    "rarity": 0
+  },
+  {
+    "name": "カイザーの特殊部隊員",
+    "school": "カイザーコーポレーション",
+    "rarity": 0
+  },
+  {
+    "name": "黒亀組の組員",
+    "school": "黒亀組",
+    "rarity": 0
+  },
+  {
+    "name": "黒服",
+    "school": "ゲマトリア",
+    "rarity": 0
+  },
+  {
+    "name": "マエストロ",
+    "school": "ゲマトリア",
+    "rarity": 0
+  },
+  {
+    "name": "ゴルコンダ＆デカルコマニー",
+    "school": "ゲマトリア",
+    "rarity": 0
+  },
+  {
+    "name": "フランシス",
+    "school": "ゲマトリア",
+    "rarity": 0
+  },
+  {
+    "name": "オーウェル",
+    "school": "ゲマトリア",
+    "rarity": 0
+  },
+  {
+    "name": "ベアトリーチェ",
+    "school": "ゲマトリア",
+    "rarity": 0
+  },
+  {
+    "name": "地下生活者",
+    "school": "ゲマトリア",
+    "rarity": 0
+  },
+  {
+    "name": "プレナパテス",
+    "school": "色彩",
+    "rarity": 0
+  },
+  {
+    "name": "デカグラマトン",
+    "school": "デカグラマトン",
+    "rarity": 0
+  },
+  {
+    "name": "マルクト",
+    "school": "デカグラマトン",
+    "rarity": 0
+  },
+  {
+    "name": "アイン",
+    "school": "デカグラマトン",
+    "rarity": 0
+  },
+  {
+    "name": "ソフ",
+    "school": "デカグラマトン",
+    "rarity": 0
+  },
+  {
+    "name": "オウル",
+    "school": "デカグラマトン",
+    "rarity": 0
+  },
+  {
+    "name": "デカグラマトンの兵士",
+    "school": "デカグラマトン",
+    "rarity": 0
+  },
+  {
+    "name": "レイバー",
+    "school": "デカグラマトン",
+    "rarity": 0
+  },
+  {
+    "name": "ドン・アランチーノ",
+    "school": "ブラックマーケット関連",
+    "rarity": 0
+  },
+  {
+    "name": "無名の司祭",
+    "school": "無名の司祭",
+    "rarity": 0
+  },
+  {
+    "name": "オートマタ兵士（ロボット）",
+    "school": "無名の司祭",
+    "rarity": 0
+  },
+  {
+    "name": "無名の守護者",
+    "school": "無名の司祭",
+    "rarity": 0
+  },
+  {
+    "name": "無貌の形代",
+    "school": "百物語",
+    "rarity": 0
+  },
+  {
+    "name": "付喪神（化け傘）",
+    "school": "百物語",
+    "rarity": 0
+  },
+  {
+    "name": "くねくね",
+    "school": "ロア",
+    "rarity": 0
+  },
+  {
+    "name": "ペロロ",
+    "school": "モモフレンズ",
+    "rarity": 0
+  },
+  {
+    "name": "柴大将",
+    "school": "市民",
+    "rarity": 0
+  },
+  {
+    "name": "ニャン天丸",
+    "school": "市民",
+    "rarity": 0
+  },
+  {
+    "name": "デカルト",
+    "school": "市民",
+    "rarity": 0
+  },
+  {
+    "name": "スズメ亭の女将",
+    "school": "市民",
+    "rarity": 0
+  },
+  {
+    "name": "DJ B.o.B",
+    "school": "市民",
+    "rarity": 0
+  },
+  {
+    "name": "シャインキャット",
+    "school": "市民",
+    "rarity": 0
+  },
+  {
+    "name": "動物市民",
+    "school": "市民",
+    "rarity": 0
+  },
+  {
+    "name": "動物市民（子供）",
+    "school": "市民",
+    "rarity": 0
+  },
+  {
+    "name": "動物市民（婦人）",
+    "school": "市民",
+    "rarity": 0
+  },
+  {
+    "name": "動物市民（海辺）",
+    "school": "市民",
+    "rarity": 0
+  },
+  {
+    "name": "ロボット市民",
+    "school": "市民",
+    "rarity": 0
+  },
+  {
+    "name": "コユキ（バニーガール）",
+    "school": "ミレニアムサイエンススクール",
+    "rarity": 0
+  },
+  {
+    "name": "メル（温泉）",
+    "school": "レッドウィンター連邦学園",
+    "rarity": 0
+  },
+  {
+    "name": "ハナエ（応援団）",
+    "school": "トリニティ総合学園",
+    "rarity": 0
+  },
+  {
+    "name": "セリナ（ナース）",
+    "school": "トリニティ総合学園",
+    "rarity": 0
+  },
+  {
+    "name": "チヒロ（キャンプ）",
+    "school": "ミレニアムサイエンススクール",
+    "rarity": 0
+  },
+  {
+    "name": "マコト（ドレス）",
+    "school": "ゲヘナ学園",
+    "rarity": 0
+  },
+  {
+    "name": "イブキ（ドレス）",
+    "school": "ゲヘナ学園",
+    "rarity": 0
+  },
+  {
+    "name": "ムツキ（スーツ）",
+    "school": "ゲヘナ学園",
+    "rarity": 0
+  },
+  {
+    "name": "ハルカ（スーツ）",
+    "school": "ゲヘナ学園",
+    "rarity": 0
+  },
+  {
+    "name": "カエデ（ガイド）",
+    "school": "百鬼夜行連合学院",
+    "rarity": 0
+  },
+  {
+    "name": "ラブ（水着）",
+    "school": "トリニティ総合学園",
+    "rarity": 0
+  },
+  {
+    "name": "チェリノ（チーパオ）",
+    "school": "レッドウィンター連邦学園",
+    "rarity": 0
+  },
+  {
+    "name": "ルミ（幼女）",
+    "school": "山海経高級中学校",
+    "rarity": 0
+  },
+  {
+    "name": "セリカ（アイドル）",
+    "school": "アビドス高等学校",
+    "rarity": 0
+  },
+  {
+    "name": "アヤネ（アイドル）",
+    "school": "アビドス高等学校",
+    "rarity": 0
+  },
+  {
+    "name": "フブキ（アイドル）",
+    "school": "ヴァルキューレ警察学校",
+    "rarity": 0
+  },
+  {
+    "name": "キリノ（アイドル）",
+    "school": "ヴァルキューレ警察学校",
+    "rarity": 0
+  },
+  {
+    "name": "ウタハ（演歌）",
+    "school": "ミレニアムサイエンススクール",
+    "rarity": 0
+  },
+  {
+    "name": "ナツ（お化け屋敷カフェ）",
+    "school": "トリニティ総合学園",
+    "rarity": 0
+  },
+  {
+    "name": "ヨシミ（お化け屋敷カフェ）",
+    "school": "トリニティ総合学園",
+    "rarity": 0
+  },
+  {
+    "name": "カズサ（お化け屋敷カフェ）",
+    "school": "トリニティ総合学園",
+    "rarity": 0
+  },
+  {
+    "name": "アイリ（お化け屋敷カフェ）",
+    "school": "トリニティ総合学園",
+    "rarity": 0
+  },
+  {
+    "name": "イチカ（演劇）",
+    "school": "トリニティ総合学園",
+    "rarity": 0
+  },
+  {
+    "name": "ツルギ（演劇）",
+    "school": "トリニティ総合学園",
+    "rarity": 0
+  },
+  {
+    "name": "ハレ（パジャマ）",
+    "school": "ミレニアムサイエンススクール",
+    "rarity": 0
+  },
+  {
+    "name": "マキ（パジャマ）",
+    "school": "ミレニアムサイエンススクール",
+    "rarity": 0
+  },
+  {
+    "name": "チヒロ（パジャマ）",
+    "school": "ミレニアムサイエンススクール",
+    "rarity": 0
+  },
+  {
+    "name": "コタマ（パジャマ）",
+    "school": "ミレニアムサイエンススクール",
+    "rarity": 0
+  },
+  {
+    "name": "トキ（制服）",
+    "school": "ミレニアムサイエンススクール",
+    "rarity": 0
+  },
+  {
+    "name": "フウカ（私服）",
+    "school": "ゲヘナ学園",
+    "rarity": 0
+  },
+  {
+    "name": "メグ（水着）",
+    "school": "ゲヘナ学園",
+    "rarity": 0
+  },
+  {
+    "name": "シミコ（マジカル）",
+    "school": "トリニティ総合学園",
+    "rarity": 0
+  },
+  {
+    "name": "イズナ（ドレス）",
+    "school": "百鬼夜行連合学院",
+    "rarity": 0
+  },
+  {
+    "name": "ココナ（水着）",
+    "school": "山海経高級中学校",
+    "rarity": 0
+  },
+  {
+    "name": "ルミ（水着）",
+    "school": "山海経高級中学校",
+    "rarity": 0
+  },
+  {
+    "name": "ホシノ（1年生）",
+    "school": "アビドス高等学校",
+    "rarity": 0
+  },
+  {
+    "name": "ホシノ（2年生）",
+    "school": "アビドス高等学校",
+    "rarity": 0
+  },
+  {
+    "name": "シロコ（1年生）",
+    "school": "アビドス高等学校",
+    "rarity": 0
+  },
+  {
+    "name": "ノノミ（1年生）",
+    "school": "アビドス高等学校",
+    "rarity": 0
+  },
+  {
+    "name": "ホシノ＊テラー",
+    "school": "アビドス高等学校",
+    "rarity": 0
+  },
+  {
+    "name": "ヒナ（パジャマ）",
+    "school": "ゲヘナ学園",
+    "rarity": 0
+  },
+  {
+    "name": "リン（オペレーター）",
+    "school": "連邦生徒会",
+    "rarity": 0
+  },
+  {
+    "name": "モモカ（オペレーター）",
+    "school": "連邦生徒会",
+    "rarity": 0
+  },
+  {
+    "name": "アユム（オペレーター）",
+    "school": "連邦生徒会",
+    "rarity": 0
+  },
+  {
+    "name": "アコ（オペレーター）",
+    "school": "ゲヘナ学園",
+    "rarity": 0
+  },
+  {
+    "name": "アヤネ（オペレーター）",
+    "school": "アビドス高等学校",
+    "rarity": 0
+  },
+  {
+    "name": "カヨコ（オペレーター）",
+    "school": "ゲヘナ学園",
+    "rarity": 0
+  },
+  {
+    "name": "ハナコ（オペレーター）",
+    "school": "トリニティ総合学園",
+    "rarity": 0
+  },
+  {
+    "name": "ユウカ（オペレーター）",
+    "school": "ミレニアムサイエンススクール",
+    "rarity": 0
+  },
+  {
+    "name": "ユカリ（中学生）",
+    "school": "百鬼夜行連合学院",
+    "rarity": 0
+  },
+  {
+    "name": "ユカリ（巫女）",
+    "school": "百鬼夜行連合学院",
+    "rarity": 0
+  },
+  {
+    "name": "アリス（防寒スーツ）",
+    "school": "ミレニアムサイエンススクール",
+    "rarity": 0
+  },
+  {
+    "name": "モモイ（防寒スーツ）",
+    "school": "ミレニアムサイエンススクール",
+    "rarity": 0
+  },
+  {
+    "name": "ミドリ（防寒スーツ）",
+    "school": "ミレニアムサイエンススクール",
+    "rarity": 0
+  },
+  {
+    "name": "ユズ（防寒スーツ）",
+    "school": "ミレニアムサイエンススクール",
+    "rarity": 0
+  },
+  {
+    "name": "リオ（防寒スーツ）",
+    "school": "ミレニアムサイエンススクール",
+    "rarity": 0
+  },
+  {
+    "name": "モモイ（臨戦）",
+    "school": "ミレニアムサイエンススクール",
+    "rarity": 0
+  },
+  {
+    "name": "ミドリ（臨戦）",
+    "school": "ミレニアムサイエンススクール",
+    "rarity": 0
+  },
+  {
+    "name": "ワカモ（私服）",
+    "school": "百鬼夜行連合学院",
+    "rarity": 0
+  },
+  {
+    "name": "リン（私服）",
+    "school": "連邦生徒会",
+    "rarity": 0
+  },
+  {
+    "name": "カヤ（囚人服）",
+    "school": "連邦生徒会",
+    "rarity": 0
+  }
+]

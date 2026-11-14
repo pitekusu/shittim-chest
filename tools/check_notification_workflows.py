@@ -17,6 +17,8 @@ RECORDS_CI_WORKFLOW = "records-ci.yml"
 RECORDS_RELEASE_WORKFLOW = "records-release.yml"
 RECORDS_BACKFILL_WORKFLOW = "records-backfill.yml"
 ANDROID_RELEASE_WORKFLOW = "android-release.yml"
+ROSTER_RELEASE_WORKFLOW = "student-gacha-roster-release.yml"
+ROSTER_PUBLISH_WORKFLOW = "student-gacha-roster-publish.yml"
 WORKFLOW_RUN_NOTIFICATION = "discord-workflow-run.yml"
 PINNED_BUILDX_VERSION = "v0.38.2"
 PERMISSIONS_KEY = re.compile(r"(?<![a-zA-Z0-9_-])(?:\"|')?permissions(?:\"|')?\s*:")
@@ -112,6 +114,7 @@ def validate_notification_workflows(directory: Path = WORKFLOW_DIRECTORY) -> int
     _validate_android_release(directory)
     _validate_drift(directory)
     _validate_aws_capability_boundary(directory)
+    _validate_roster_release(directory)
     _validate_workflow_run_allowlist(directory)
     _validate_vulnerability_alerts_permission(directory)
     return 1
@@ -232,6 +235,8 @@ def _validate_aws_capability_boundary(directory: Path) -> None:
         DRIFT_WORKFLOW,
         RECORDS_RELEASE_WORKFLOW,
         RECORDS_BACKFILL_WORKFLOW,
+        ROSTER_RELEASE_WORKFLOW,
+        ROSTER_PUBLISH_WORKFLOW,
     }
     for path in sorted((*directory.glob("*.yml"), *directory.glob("*.yaml"))):
         if path.name in approved:
@@ -245,6 +250,82 @@ def _validate_aws_capability_boundary(directory: Path) -> None:
             raise WorkflowPolicyError(
                 f"workflow {path.name} contains AWS or deployment capability outside Deploy Guard"
             )
+
+
+def _validate_roster_release(directory: Path) -> None:
+    """Fence the roster-only AWS publication from general deployment workflows."""
+    caller = (directory / ROSTER_RELEASE_WORKFLOW).read_text(encoding="utf-8")
+    publisher = (directory / ROSTER_PUBLISH_WORKFLOW).read_text(encoding="utf-8")
+    expected_permissions = (
+        (),
+        (
+            ("actions", "read"),
+            ("checks", "read"),
+            ("contents", "read"),
+            ("id-token", "write"),
+        ),
+    )
+    for text, trigger in ((caller, "workflow_dispatch"), (publisher, "workflow_call")):
+        if _top_level_triggers(text) != (trigger,):
+            raise WorkflowPolicyError(f"Roster release must use only {trigger}")
+        if _permission_blocks(text) != expected_permissions:
+            raise WorkflowPolicyError("Roster release permissions are not canonical")
+        if (
+            re.search(
+                r"(?m)^\s*(?:if:|secrets:|continue-on-error:)|"
+                r"\baws\s+(?:cloudformation|dynamodb|ecr|ecs|ssm|sts)\b|"
+                r"\bcdk\s+deploy\b|runs-on:\s*self-hosted",
+                text,
+            )
+            or _contains_untrusted_run_expression(text)
+            or _contains_run_expression(text, "${{ inputs.")
+        ):
+            raise WorkflowPolicyError("Roster release contains unauthorized workflow capability")
+    if re.search(r"(?m)^\s*environment:", caller) or re.findall(
+        r"(?m)^\s*environment:\s*([^\r\n]*)", publisher
+    ) != ["student-gacha-roster"]:
+        raise WorkflowPolicyError("Roster release must use its isolated Environment")
+    reusable = f"./.github/workflows/{ROSTER_PUBLISH_WORKFLOW}"
+    if re.findall(r"(?m)^\s*(?:-\s*)?uses:\s*(\S+)", caller) != [reusable] or "run:" in caller:
+        raise WorkflowPolicyError("Roster release dispatch must call only its reusable publisher")
+    caller_required = (
+        "group: student-gacha-roster-release",
+        "cancel-in-progress: false",
+        "expected_sha: ${{ inputs.expected_sha }}",
+    )
+    publisher_required = (
+        'test "${RELEASE_ENABLED}" = true',
+        'test "${GITHUB_EVENT_NAME}" = workflow_dispatch',
+        'test "${GITHUB_REPOSITORY}" = pitekusu/shittim-chest',
+        'test "${GITHUB_REPOSITORY_ID}" = 1302516701',
+        'test "${GITHUB_REF}" = refs/heads/main',
+        f"/.github/workflows/{ROSTER_RELEASE_WORKFLOW}@refs/heads/main",
+        'test "${GITHUB_SHA}" = "${EXPECTED_SHA}"',
+        'test "${GITHUB_WORKFLOW_SHA}" = "${EXPECTED_SHA}"',
+        "ref: ${{ github.sha }}",
+        "persist-credentials: false",
+        "python3 tools/check_release_ci.py",
+        "python3 -m tools.update_student_gacha_roster --check",
+        "ShittimChest-Prod-GitHub-StudentGachaRosterRelease",
+        "role-to-assume: ${{ steps.identity.outputs.role }}",
+        "allowed-account-ids: ${{ steps.identity.outputs.account }}",
+        "role-duration-seconds: 900",
+        "run: bash tools/publish_student_gacha_roster.sh",
+    )
+    if any(marker not in caller for marker in caller_required) or any(
+        marker not in publisher for marker in publisher_required
+    ):
+        raise WorkflowPolicyError(
+            "Roster release identity, preflight, or publication guard missing"
+        )
+    actions = re.findall(r"(?m)^\s*(?:-\s*)?uses:\s*([^@\s#]+)(?:@[^\s#]+)?", publisher)
+    if actions != [
+        "actions/checkout",
+        "./.github/actions/configure-tls",
+        "aws-actions/configure-aws-credentials",
+    ]:
+        raise WorkflowPolicyError("Roster release publisher actions are not canonical")
+    _require_full_action_pins(publisher, "Roster release publisher")
 
 
 def _validate_android_release(directory: Path) -> None:
