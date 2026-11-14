@@ -284,15 +284,16 @@ async def test_render_uses_approved_image_model_and_inserts_name_only_into_png()
         ("format.jpg", b"layout", "image/jpeg"),
     ]
     assert "live-action photography" in payload["prompt"]
+    assert "Backdrop palette: vivid purple, lavender and pink." in payload["prompt"]
     assert _TEACHER not in repr(payload)
     client.with_options.assert_called_once_with(max_retries=0)
     with Image.open(io.BytesIO(result)) as image:
         assert image.size == (1792, 828)
-        # The artwork survives intact at the corner where the prototype had a label.
-        assert image.getpixel((1720, 802)) == (190, 183, 214)
+        # Backdrop effects leave the center of the generated artwork intact.
+        assert image.getpixel((770, 400)) == (190, 183, 214)
 
     other = await adapter.render(
-        replace(presentation, performer=ParticipantSlot.PARTICIPANT_B),
+        replace(presentation, student=_STUDENT, performer=ParticipantSlot.PARTICIPANT_B),
         teacher_name="別の先生",
         references=(b"layout", b"portrait"),
     )
@@ -300,6 +301,7 @@ async def test_render_uses_approved_image_model_and_inserts_name_only_into_png()
     assert "crisp anime illustration" in prompt
     assert "Plana from image 1" in prompt
     assert "halo, and head accessories exactly as shown" in prompt
+    assert "iridescent rainbow hues, bright prismatic light" in prompt
     assert json.loads(prompt.split("Costume JSON: ", 1)[1]) == {"clothing": "青いドレス"}
     assert _STUDENT.name not in prompt
     assert other != result

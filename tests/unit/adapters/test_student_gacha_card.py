@@ -66,16 +66,39 @@ def test_card_displays_student_and_performer_as_a_single_name(artwork: bytes) ->
     assert all(not name.startswith("コスプレ") for name in labels)
 
 
+@pytest.mark.parametrize("rarity", [None, 0, 1, 2, 3])
+def test_card_background_matches_rarity_without_tinting_the_center(
+    artwork: bytes, rarity: int | None
+) -> None:
+    with Image.open(BytesIO(_render(artwork, rarity))) as card:
+        edge = card.getpixel((0, 30))
+        assert isinstance(edge, tuple)
+        red, green, blue = edge
+        match rarity:
+            case None:
+                assert edge == _ART_COLOR
+            case 0:
+                assert min(edge) > 228 and max(edge) - min(edge) < 18
+            case 1:
+                assert blue > green > red and blue - red > 60
+            case 2:
+                assert red > green > blue and red - blue > 70
+            case 3:
+                assert blue > red > green and red - green > 20
+        assert card.getpixel((640, 240)) == _ART_COLOR
+
+
 def test_four_star_reveal_changes_the_edges_and_preserves_portrait_and_panel(
     artwork: bytes,
 ) -> None:
     rare = _render(artwork, 4)
     assert rare == _render(artwork, 4)
-    with Image.open(BytesIO(rare)) as card, Image.open(BytesIO(_render(artwork, 3))) as normal:
+    with Image.open(BytesIO(rare)) as card, Image.open(BytesIO(_render(artwork, None))) as normal:
         assert card.size == (1792, 828)
         assert card.getpixel((84, 96)) == (255, 243, 191)
         assert normal.getpixel((84, 96)) == _ART_COLOR
         assert card.getpixel((24, 230)) != normal.getpixel((24, 230))
+        assert len({card.getpixel((0, y)) for y in (0, 118, 236, 354, 472, 590, 708)}) == 7
         assert (
             card.crop((560, 100, 1000, 550)).tobytes()
             == normal.crop((560, 100, 1000, 550)).tobytes()

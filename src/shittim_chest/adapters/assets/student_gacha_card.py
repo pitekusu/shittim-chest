@@ -39,6 +39,22 @@ _STAR_CENTERS = (
     (35, 69, 103),
     (27, 56, 85, 114),
 )
+_BACKGROUND_PALETTES = (
+    ("#c6cfdf", "#f3f6fa", "#ffffff"),
+    ("#1949a8", "#499ef4", "#c9efff"),
+    ("#a4510e", "#f8b842", "#fff3b8"),
+    ("#6d3cc0", "#ae6ae0", "#ffc2e4"),
+)
+_RAINBOW = (
+    "#4d40ed",
+    "#ad49ef",
+    "#ff4fac",
+    "#ff9a56",
+    "#fff47d",
+    "#56e6ac",
+    "#3acbf5",
+    "#7764ff",
+)
 _SPARKLES = (
     (84, 96, 26),
     (154, 180, 10),
@@ -77,8 +93,16 @@ def render_card(art: bytes, presentation: GachaPresentation, teacher: str) -> by
                 if source.size != _ART_SIZE or getattr(source, "n_frames", 1) != 1:
                     raise GachaGenerationFailure("gacha_image_invalid")
                 canvas = ImageOps.fit(source.convert("RGBA"), RESULT_SIZE)
-        if presentation.student.rarity == 4:
+        rarity = presentation.student.rarity
+        if rarity == 4:
             canvas.alpha_composite(_rare_reveal())
+        elif rarity is not None:
+            black, mid, white = _BACKGROUND_PALETTES[rarity]
+            tinted = ImageOps.colorize(
+                ImageOps.grayscale(canvas), black=black, mid=mid, white=white
+            )
+            tinted.putalpha(_edge_mask(236))
+            canvas.alpha_composite(tinted)
         canvas.alpha_composite(_dossier(presentation), dest=(1125, 141))
         canvas.alpha_composite(_dialogue(presentation, teacher), dest=(132, 555))
         output = io.BytesIO()
@@ -95,19 +119,37 @@ def render_card(art: bytes, presentation: GachaPresentation, teacher: str) -> by
 
 
 @cache
-def _rare_reveal() -> Image.Image:
-    """Decorate the edges while keeping the center of the artwork untouched."""
+def _edge_mask(strength: int) -> Image.Image:
     width = RESULT_SIZE[0]
-    wash = ImageOps.colorize(
-        Image.linear_gradient("L"),
-        black="#8357ff",
-        mid="#ed419c",
-        white="#36d7f2",
-    ).resize(RESULT_SIZE, Image.Resampling.BILINEAR)
-    alpha = bytes(round(150 * max(0, 1 - min(x, width - 1 - x) / 440) ** 1.5) for x in range(width))
-    wash.putalpha(Image.frombytes("L", (width, 1), alpha).resize(RESULT_SIZE))
-    sparkles = Image.new("RGBA", RESULT_SIZE)
-    draw = ImageDraw.Draw(sparkles)
+    # The tint fades to zero before the central portrait area.
+    alpha = bytes(
+        round(strength * max(0, 1 - min(x, width - 1 - x) / 480) ** 1.3) for x in range(width)
+    )
+    return Image.frombytes("L", (width, 1), alpha).resize(RESULT_SIZE)
+
+
+@cache
+def _rare_reveal() -> Image.Image:
+    """Add bright spectral bands and translucent facets outside the portrait area."""
+    width, height = RESULT_SIZE
+    swatch = Image.new("RGB", (1, len(_RAINBOW)))
+    swatch_draw = ImageDraw.Draw(swatch)
+    for y, color in enumerate(_RAINBOW):
+        swatch_draw.point((0, y), fill=color)
+    spectrum = swatch.resize((width // 2, height), Image.Resampling.BILINEAR)
+    wash = Image.new("RGBA", RESULT_SIZE)
+    wash.paste(spectrum, (0, 0))
+    wash.paste(ImageOps.flip(spectrum), (width // 2, 0))
+    wash.putalpha(_edge_mask(202))
+
+    effects = Image.new("RGBA", RESULT_SIZE)
+    draw = ImageDraw.Draw(effects)
+    draw.polygon(((0, 50), (390, 161), (0, 218)), fill="#f7f4ff30", outline="#fcf6ff74", width=2)
+    draw.polygon(((0, 489), (327, 315), (0, 562)), fill="#edfcff3d", outline="#fbffff78", width=2)
+    draw.line(((0, 663), (297, 497)), fill="#faffff80", width=3)
+    draw.line(((0, 672), (270, 518)), fill="#c8faff44", width=2)
+    effects = Image.alpha_composite(effects, effects.transpose(Image.Transpose.ROTATE_180))
+    draw = ImageDraw.Draw(effects)
     for x, y, radius in _SPARKLES:
         glow = radius * 1.35
         draw.ellipse((x - glow, y - glow, x + glow, y + glow), fill="#ffe5ff38")
@@ -125,7 +167,7 @@ def _rare_reveal() -> Image.Image:
             ),
             fill="#fff3bf" if radius >= 18 else "#effdff",
         )
-    return Image.alpha_composite(wash, sparkles)
+    return Image.alpha_composite(wash, effects)
 
 
 def _dialogue(presentation: GachaPresentation, teacher: str) -> Image.Image:
