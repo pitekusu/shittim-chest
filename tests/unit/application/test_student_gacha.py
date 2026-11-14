@@ -97,6 +97,31 @@ async def test_stored_draw_resumes_after_discord_failure(
 
 
 @pytest.mark.asyncio
+async def test_unconfirmed_appearance_reopens_the_same_draw(
+    worker_fixture: tuple[StudentGachaWorker, AsyncMock, AsyncMock, AsyncMock, AsyncMock],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    worker, store, media, generator, discord = worker_fixture
+    student = Student("キキョウ(水着)", "百鬼夜行")
+    performer = ParticipantSlot.PARTICIPANT_A
+    store.claim_next.return_value = _job(student=student, performer=performer)
+    media.loading_gif.return_value = b"loop GIF"
+    discord.send_loading.return_value = "103"
+    generator.prepare.side_effect = GachaGenerationFailure("gacha_appearance_unconfirmed")
+
+    await worker.process_next()
+
+    generator.render.assert_not_awaited()
+    discord.delete_loading.assert_awaited_once()
+    job = store.finish.await_args.args[0]
+    assert (job.offer_id, job.student, job.performer) == (OFFER, student, performer)
+    assert job.teacher_name is None
+    assert store.finish.await_args.kwargs["reopen"] is True
+    assert "reason_code=gacha_appearance_unconfirmed" in caplog.text
+    assert "試験先生" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_ambiguous_paid_call_uses_saved_state_instead_of_rendering_again(
     worker_fixture: tuple[StudentGachaWorker, AsyncMock, AsyncMock, AsyncMock, AsyncMock],
 ) -> None:

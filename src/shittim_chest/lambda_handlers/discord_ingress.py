@@ -33,6 +33,7 @@ from shittim_chest.adapters.discord_http import (
 )
 from shittim_chest.adapters.dynamodb.debate_lookup import DynamoDbDebateAuthorizationLookup
 from shittim_chest.adapters.dynamodb.ingress import DynamoDbIngressRepository
+from shittim_chest.adapters.dynamodb.student_gacha import DynamoDbStudentGachaRepository
 from shittim_chest.application.discord_http import DiscordHttpOperation
 from shittim_chest.application.ingress import (
     DiscordIngressApplication,
@@ -52,8 +53,6 @@ from shittim_chest.application.student_gacha_discord import (
     StudentGachaInteractions,
 )
 from shittim_chest.config.ingress import (
-    IngressBootstrapSettings,
-    IngressRuntimeSettings,
     load_ingress_bootstrap_settings,
     load_ingress_runtime_settings,
 )
@@ -159,7 +158,7 @@ class DiscordVerifiedIngressFailure(RuntimeError):
 
 
 class DiscordIngressLambda:
-    """Verify before lazily constructing any DynamoDB or Lambda dependency."""
+    """Verify the raw request before invoking either application."""
 
     __slots__ = (
         "_application",
@@ -212,9 +211,8 @@ class DiscordIngressLambda:
             remaining_seconds = self._remaining_seconds(entry_at)
             if remaining_seconds <= 0:
                 raise DiscordIngressDeadlineExceeded
-            # Client construction is intentionally synchronous and local. Keep it
-            # outside the event loop so it cannot postpone asyncio's timeout callback,
-            # then remeasure the entry budget before any SDK request can start.
+            # Select the prebuilt application before starting the event loop,
+            # then remeasure the budget before any SDK request can start.
             with _measure_stage(timings, "application_prepare"):
                 accept = self._prepare_accept(operation)
             remaining_seconds = self._remaining_seconds(entry_at)
@@ -373,7 +371,22 @@ def _build_handler(environ: Mapping[str, str]) -> DiscordIngressLambda:
         client=create_ssm_client(region_name=settings.aws_region),
     )
     runtime = asyncio.run(load_ingress_runtime_settings(settings, ssm))
-    application = _lazy_application(settings, runtime)
+    # Create one SDK client before the SnapStart snapshot. No DynamoDB requests
+    # run here. Keep botocore's default refreshable Lambda credential provider.
+    dynamodb = create_ingress_dynamodb_client(region_name=settings.aws_region)
+    application = DiscordIngressApplication(
+        runtime_config=runtime.discord,
+        ingress=DynamoDbIngressRepository(client=dynamodb, table_name=settings.table_name),
+        debates=DynamoDbDebateAuthorizationLookup(client=dynamodb, table_name=settings.table_name),
+    )
+    student_gacha = (
+        StudentGachaInteractions(
+            store=DynamoDbStudentGachaRepository(client=dynamodb, table_name=settings.table_name),
+            config=runtime.discord,
+        )
+        if runtime.student_gacha_enabled
+        else None
+    )
     return DiscordIngressLambda(
         boundary=DiscordHttpBoundary(
             DiscordRequestVerifier(runtime.public_key_hex),
@@ -383,62 +396,10 @@ def _build_handler(environ: Mapping[str, str]) -> DiscordIngressLambda:
                 else None
             ),
         ),
-        application=application,
+        application=lambda: application,
         clock=SystemClock(),
-        student_gacha=(
-            _lazy_student_gacha(settings, runtime) if runtime.student_gacha_enabled else None
-        ),
+        student_gacha=None if student_gacha is None else lambda: student_gacha,
     )
-
-
-def _lazy_application(
-    settings: IngressBootstrapSettings,
-    runtime: IngressRuntimeSettings,
-) -> Callable[[], DiscordIngressApplication]:
-    cached: DiscordIngressApplication | None = None
-
-    def load() -> DiscordIngressApplication:
-        nonlocal cached
-        if cached is not None:
-            return cached
-        dynamodb = create_ingress_dynamodb_client(region_name=settings.aws_region)
-        cached = DiscordIngressApplication(
-            runtime_config=runtime.discord,
-            ingress=DynamoDbIngressRepository(
-                client=dynamodb,
-                table_name=settings.table_name,
-            ),
-            debates=DynamoDbDebateAuthorizationLookup(
-                client=dynamodb,
-                table_name=settings.table_name,
-            ),
-        )
-        return cached
-
-    return load
-
-
-def _lazy_student_gacha(
-    settings: IngressBootstrapSettings,
-    runtime: IngressRuntimeSettings,
-) -> Callable[[], StudentGachaInteractions]:
-    cached: StudentGachaInteractions | None = None
-
-    def load() -> StudentGachaInteractions:
-        nonlocal cached
-        if cached is None:
-            from shittim_chest.adapters.dynamodb.student_gacha import DynamoDbStudentGachaRepository
-
-            cached = StudentGachaInteractions(
-                store=DynamoDbStudentGachaRepository(
-                    client=create_ingress_dynamodb_client(region_name=settings.aws_region),
-                    table_name=settings.table_name,
-                ),
-                config=runtime.discord,
-            )
-        return cached
-
-    return load
 
 
 def _request_id(context: object) -> str:
@@ -461,7 +422,7 @@ def _failure_category(error: Exception) -> str:
 
 
 def _initialize_for_lambda(environ: Mapping[str, str]) -> None:
-    """Resolve immutable SecureStrings during init so requests never call SSM."""
+    """Resolve configuration and build ingress applications before taking a snapshot."""
 
     global _handler
     if environ.get("AWS_LAMBDA_FUNCTION_NAME") and _handler is None:

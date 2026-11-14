@@ -304,11 +304,8 @@ class StudentGachaWorker:
             await self._store.finish(job, at=self._clock.now(), reopen=True)
 
     async def _park(self, job: GachaJob) -> None:
-        _LOGGER.error(
-            "student_gacha_requires_recovery",
-            extra={"draw_job_id": job.job_id, "offer_id": job.offer_id},
-        )
         await self._store.finish(job, at=self._clock.now(), park=True)
+        _LOGGER.error("student_gacha_requires_recovery offer_id=%s", _required(job.offer_id))
 
     async def _generate(self, job: GachaJob) -> GachaJob:
         offer_id = _required(job.offer_id)
@@ -335,8 +332,9 @@ class StudentGachaWorker:
             return await self._checkpoint(job, stored=stored, teacher_name=None)
         except GachaGenerationFailure as error:
             _LOGGER.warning(
-                "student_gacha_generation_failed",
-                extra={"draw_job_id": job.job_id, "reason_code": error.code},
+                "student_gacha_generation_failed offer_id=%s reason_code=%s",
+                offer_id,
+                error.code,
             )
             if error.ambiguous and job.paid_started:
                 # Recovery consults S3 before allowing an explicit retry.
