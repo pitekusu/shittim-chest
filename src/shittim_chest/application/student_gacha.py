@@ -125,6 +125,14 @@ class _Discord(Protocol):
         after_message_id: str | None,
         content: bytes,
     ) -> str: ...
+    async def send_gallery_notice(
+        self,
+        *,
+        guild_id: str,
+        channel_id: str,
+        publication_id: str,
+        result_message_id: str,
+    ) -> str: ...
     async def send_failure(
         self,
         *,
@@ -389,18 +397,31 @@ class StudentGachaWorker:
         await self._store.finish(job, at=self._clock.now(), reopen=True)
 
     async def _publish_result(self, job: GachaJob) -> None:
+        offer_id = _required(job.offer_id)
         if job.result_message_id is None:
             content = await self._media.load(_required(job.stored))
             await self._remove_loading(job)
             message_id = await self._discord.send_result(
                 guild_id=job.guild_id,
                 channel_id=job.channel_id,
-                publication_id=_required(job.offer_id),
+                publication_id=offer_id,
                 after_message_id=job.result_after_message_id or job.after_message_id,
                 content=content,
             )
             job = await self._checkpoint(job, result_message_id=message_id)
-        await self._store.finish(job, at=self._clock.now(), result_message_id=job.result_message_id)
+        result_message_id = _required(job.result_message_id)
+        await self._store.finish(job, at=self._clock.now(), result_message_id=result_message_id)
+        try:
+            await self._discord.send_gallery_notice(
+                guild_id=job.guild_id,
+                channel_id=job.channel_id,
+                publication_id=offer_id,
+                result_message_id=result_message_id,
+            )
+        except GachaDeliveryFailure:
+            _LOGGER.warning(
+                "student_gacha_gallery_notice_failed", extra={"draw_job_id": job.job_id}
+            )
         await self._disable(job.guild_id, job.channel_id, job.after_message_id)
 
     async def _checkpoint(self, job: GachaJob, **changes: object) -> GachaJob:
