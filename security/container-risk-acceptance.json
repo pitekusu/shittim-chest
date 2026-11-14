@@ -7,14 +7,15 @@
       "package": "libc6",
       "image_config_digests": {
         "production": [
-          "sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f"
+          "sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f",
+          "sha256:c50375aea95ec72b836fdbd3d53b566379997724e8ca0bdc41b1dadd86b11019"
         ]
       },
       "status": "affected",
-      "justification": "所有者がPR #708の実測ARM64 production configに残る同じHigh 10組を、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この1 configに限る。",
+      "justification": "所有者がPR #708の実測ARM64 production configに残る同じHigh 10組を、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この1 configに限る。 所有者がPR #710の実測ARM64 production configに残る同じHigh 10組についても、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この2つのconfigに限る。",
       "impact": "libc6 2.41-12+deb13u4+dhi1のgettextでLANGUAGEのdirectory traversalにより攻撃者が用意した.moを読み込むと、不正なoffsetによるクラッシュや、printf等と翻訳formatの不一致による未定義動作・プロセス権限での任意コード実行の可能性が残る。",
       "exploitability": "成立にはLANGUAGE等の環境変数の制御、非C系localeの選択、読み取り可能な場所への悪性.mo配置、環境変数の信頼境界越えが必要。imageにlocale環境変数指定はなく、宣言・コードで入力由来の環境変数変更経路は確認していない。非root・読み取り専用rootだが、完成プロセスの全入力経路やnative依存の内部呼出しを実測しておらず、到達不能とは扱わない。tmpfsのnoexecは.mo読み込みを防ぐ根拠にしない。",
-      "evidence": "https://security-tracker.debian.org/tracker/CVE-2026-84243 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14096830950 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14095928819 。同一実行の署名付きDHI VEX・完成ARM64 SBOM・TLS60件を実測config sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f に照合。libc6 2.41-12+deb13u4+dhi1 はVEX適用後もHighで修正版未検出。Expat +dhi2の2組は解消し、Criticalおよび修正可能なHigh/Criticalは0組。",
+      "evidence": "https://security-tracker.debian.org/tracker/CVE-2026-84243 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14096830950 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14095928819 。同一実行の署名付きDHI VEX・完成ARM64 SBOM・TLS60件を実測config sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f に照合。libc6 2.41-12+deb13u4+dhi1 はVEX適用後もHighで修正版未検出。Expat +dhi2の2組は解消し、Criticalおよび修正可能なHigh/Criticalは0組。 PR #710の実測ARM64 config sha256:c50375aea95ec72b836fdbd3d53b566379997724e8ca0bdc41b1dadd86b11019 を、[同一実行の完成SBOM・署名付きDHI VEX・TLS60件](https://github.com/pitekusu/shittim-chest/actions/runs/43553053850/artifacts/14097077143)と[Grype 0.121.1の全件・VEX適用後レポート](https://github.com/pitekusu/shittim-chest/actions/runs/43553053850/artifacts/14097460642)で照合した。2026-11-13T15:40:34Z生成DBでraw High 24組とVEX適用後High 10組が既承認の構成と一致し、追加・Critical・修正可能なHigh/Criticalは0組。",
       "approved_on": "2026-11-14",
       "expires_on": "2026-11-19",
       "reevaluation_conditions": "正式修正版または提供元の技術的判断の公開、locale・環境変数やファイル入力境界の変化、新しい検出、パッケージ版・実測config digestの変化、期限到達で再評価する。対象・digest・期限を自動で追加・延長せず、修正可能な検出とその他の未追跡High/Criticalの拒否を維持する。",
@@ -25,14 +26,15 @@
       "package": "libc6",
       "image_config_digests": {
         "production": [
-          "sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f"
+          "sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f",
+          "sha256:c50375aea95ec72b836fdbd3d53b566379997724e8ca0bdc41b1dadd86b11019"
         ]
       },
       "status": "affected",
-      "justification": "所有者がPR #708の実測ARM64 production configに残る同じHigh 10組を、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この1 configに限る。",
+      "justification": "所有者がPR #708の実測ARM64 production configに残る同じHigh 10組を、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この1 configに限る。 所有者がPR #710の実測ARM64 production configに残る同じHigh 10組についても、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この2つのconfigに限る。",
       "impact": "libc6 2.41-12+deb13u4+dhi1の非推奨DNSレコード整形APIでTSIGレコードを出力すると、呼出元が指定したbuffer長を守らず範囲外書込みに至る。Debian 13と当該DHI版は未修正である。",
       "exploitability": "アプリに該当APIやTSIG整形の直接呼出しは見つからない。通常のDNS名前解決と同一経路とは扱わないが、native依存を含む全経路の到達不能は証明していない。no-dsaを非影響・修正済みの根拠にしない。",
-      "evidence": "https://security-tracker.debian.org/tracker/CVE-2026-5435 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14096830950 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14095928819 。同一実行の署名付きDHI VEX・完成ARM64 SBOM・TLS60件を実測config sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f に照合。libc6 2.41-12+deb13u4+dhi1 はVEX適用後もHighで修正版未検出。Expat +dhi2の2組は解消し、Criticalおよび修正可能なHigh/Criticalは0組。",
+      "evidence": "https://security-tracker.debian.org/tracker/CVE-2026-5435 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14096830950 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14095928819 。同一実行の署名付きDHI VEX・完成ARM64 SBOM・TLS60件を実測config sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f に照合。libc6 2.41-12+deb13u4+dhi1 はVEX適用後もHighで修正版未検出。Expat +dhi2の2組は解消し、Criticalおよび修正可能なHigh/Criticalは0組。 PR #710の実測ARM64 config sha256:c50375aea95ec72b836fdbd3d53b566379997724e8ca0bdc41b1dadd86b11019 を、[同一実行の完成SBOM・署名付きDHI VEX・TLS60件](https://github.com/pitekusu/shittim-chest/actions/runs/43553053850/artifacts/14097077143)と[Grype 0.121.1の全件・VEX適用後レポート](https://github.com/pitekusu/shittim-chest/actions/runs/43553053850/artifacts/14097460642)で照合した。2026-11-13T15:40:34Z生成DBでraw High 24組とVEX適用後High 10組が既承認の構成と一致し、追加・Critical・修正可能なHigh/Criticalは0組。",
       "approved_on": "2026-11-14",
       "expires_on": "2026-11-19",
       "reevaluation_conditions": "正式修正版または具体的な技術根拠を伴う提供元判断の公開、入力境界・component構成・パッケージ版・実測config digestの変化、新しい検出、期限到達で再評価する。対象・digest・期限を自動で追加・延長せず、修正可能な検出と他の未追跡High/Criticalの拒否を維持する。",
@@ -43,14 +45,15 @@
       "package": "libuuid1",
       "image_config_digests": {
         "production": [
-          "sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f"
+          "sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f",
+          "sha256:c50375aea95ec72b836fdbd3d53b566379997724e8ca0bdc41b1dadd86b11019"
         ]
       },
       "status": "under_investigation",
-      "justification": "所有者がPR #708の実測ARM64 production configに残る同じHigh 10組を、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この1 configに限る。",
+      "justification": "所有者がPR #708の実測ARM64 production configに残る同じHigh 10組を、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この1 configに限る。 所有者がPR #710の実測ARM64 production configに残る同じHigh 10組についても、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この2つのconfigに限る。",
       "impact": "util-linuxのlibmountがmount helper失敗後にもX-mount.idmap/owner等の特権hookを実行し、既存filesystemの権限変更や特権昇格を招く問題。検査は同じsource package由来のlibuuid1 2.41.5-0+deb13u1+dhi3にもHighを報告する。",
       "exploitability": "完成runtimeの標準Syft全file一覧にmount/umount/nsenter/libmountと/etc/fstabはなく、util-linux由来はlibuuid1だけである。上流libuuidのbuild対象にも該当機能はない。source package単位の検出波及と確認したが、no-dsaだけの提供元VEXを自動採用したり自前の非影響VEXへ置き換えたりせず、未確定の検出として期限付きで受容する。この完成runtimeの判断をbuilderや他のimageへ一般化しない。",
-      "evidence": "https://security-tracker.debian.org/tracker/CVE-2026-76642 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14096830950 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14095928819 。同一実行の署名付きDHI VEX・完成ARM64 SBOM・TLS60件を実測config sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f に照合。libuuid1 2.41.5-0+deb13u1+dhi3 はVEX適用後もHighで修正版未検出。Expat +dhi2の2組は解消し、Criticalおよび修正可能なHigh/Criticalは0組。",
+      "evidence": "https://security-tracker.debian.org/tracker/CVE-2026-76642 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14096830950 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14095928819 。同一実行の署名付きDHI VEX・完成ARM64 SBOM・TLS60件を実測config sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f に照合。libuuid1 2.41.5-0+deb13u1+dhi3 はVEX適用後もHighで修正版未検出。Expat +dhi2の2組は解消し、Criticalおよび修正可能なHigh/Criticalは0組。 PR #710の実測ARM64 config sha256:c50375aea95ec72b836fdbd3d53b566379997724e8ca0bdc41b1dadd86b11019 を、[同一実行の完成SBOM・署名付きDHI VEX・TLS60件](https://github.com/pitekusu/shittim-chest/actions/runs/43553053850/artifacts/14097077143)と[Grype 0.121.1の全件・VEX適用後レポート](https://github.com/pitekusu/shittim-chest/actions/runs/43553053850/artifacts/14097460642)で照合した。2026-11-13T15:40:34Z生成DBでraw High 24組とVEX適用後High 10組が既承認の構成と一致し、追加・Critical・修正可能なHigh/Criticalは0組。",
       "approved_on": "2026-11-14",
       "expires_on": "2026-11-19",
       "reevaluation_conditions": "正式修正版または具体的な技術根拠を伴う提供元判断の公開、入力境界・component構成・パッケージ版・実測config digestの変化、新しい検出、期限到達で再評価する。対象・digest・期限を自動で追加・延長せず、修正可能な検出と他の未追跡High/Criticalの拒否を維持する。",
@@ -61,14 +64,15 @@
       "package": "libuuid1",
       "image_config_digests": {
         "production": [
-          "sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f"
+          "sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f",
+          "sha256:c50375aea95ec72b836fdbd3d53b566379997724e8ca0bdc41b1dadd86b11019"
         ]
       },
       "status": "under_investigation",
-      "justification": "所有者がPR #708の実測ARM64 production configに残る同じHigh 10組を、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この1 configに限る。",
+      "justification": "所有者がPR #708の実測ARM64 production configに残る同じHigh 10組を、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この1 configに限る。 所有者がPR #710の実測ARM64 production configに残る同じHigh 10組についても、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この2つのconfigに限る。",
       "impact": "util-linuxのnsenter --join-cgroupがrootで開いたcgroup.procsのFDをnamespace/資格情報変更やexec後まで保持し、攻撃者側programが他processのcgroup移動・終了に利用できる問題。検査は同じsource package由来のlibuuid1にもHighを報告する。",
       "exploitability": "完成runtimeの標準Syft全file一覧にmount/umount/nsenter/libmountと/etc/fstabはなく、util-linux由来はlibuuid1だけである。上流libuuidのbuild対象にも該当機能はない。source package単位の検出波及と確認したが、no-dsaだけの提供元VEXを自動採用したり自前の非影響VEXへ置き換えたりせず、未確定の検出として期限付きで受容する。この完成runtimeの判断をbuilderや他のimageへ一般化しない。",
-      "evidence": "https://security-tracker.debian.org/tracker/CVE-2026-78408 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14096830950 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14095928819 。同一実行の署名付きDHI VEX・完成ARM64 SBOM・TLS60件を実測config sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f に照合。libuuid1 2.41.5-0+deb13u1+dhi3 はVEX適用後もHighで修正版未検出。Expat +dhi2の2組は解消し、Criticalおよび修正可能なHigh/Criticalは0組。",
+      "evidence": "https://security-tracker.debian.org/tracker/CVE-2026-78408 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14096830950 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14095928819 。同一実行の署名付きDHI VEX・完成ARM64 SBOM・TLS60件を実測config sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f に照合。libuuid1 2.41.5-0+deb13u1+dhi3 はVEX適用後もHighで修正版未検出。Expat +dhi2の2組は解消し、Criticalおよび修正可能なHigh/Criticalは0組。 PR #710の実測ARM64 config sha256:c50375aea95ec72b836fdbd3d53b566379997724e8ca0bdc41b1dadd86b11019 を、[同一実行の完成SBOM・署名付きDHI VEX・TLS60件](https://github.com/pitekusu/shittim-chest/actions/runs/43553053850/artifacts/14097077143)と[Grype 0.121.1の全件・VEX適用後レポート](https://github.com/pitekusu/shittim-chest/actions/runs/43553053850/artifacts/14097460642)で照合した。2026-11-13T15:40:34Z生成DBでraw High 24組とVEX適用後High 10組が既承認の構成と一致し、追加・Critical・修正可能なHigh/Criticalは0組。",
       "approved_on": "2026-11-14",
       "expires_on": "2026-11-19",
       "reevaluation_conditions": "正式修正版または具体的な技術根拠を伴う提供元判断の公開、入力境界・component構成・パッケージ版・実測config digestの変化、新しい検出、期限到達で再評価する。対象・digest・期限を自動で追加・延長せず、修正可能な検出と他の未追跡High/Criticalの拒否を維持する。",
@@ -79,14 +83,15 @@
       "package": "libuuid1",
       "image_config_digests": {
         "production": [
-          "sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f"
+          "sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f",
+          "sha256:c50375aea95ec72b836fdbd3d53b566379997724e8ca0bdc41b1dadd86b11019"
         ]
       },
       "status": "under_investigation",
-      "justification": "所有者がPR #708の実測ARM64 production configに残る同じHigh 10組を、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この1 configに限る。",
+      "justification": "所有者がPR #708の実測ARM64 production configに残る同じHigh 10組を、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この1 configに限る。 所有者がPR #710の実測ARM64 production configに残る同じHigh 10組についても、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この2つのconfigに限る。",
       "impact": "util-linuxのlibmountでLinux 6.15以降のX-mount.subdirのpath解決が中間symlinkを制限せず、fstabで許可された操作からhost側pathをmountできる問題。検査は同じsource package由来のlibuuid1にもHighを報告する。",
       "exploitability": "完成runtimeの標準Syft全file一覧にmount/umount/nsenter/libmountと/etc/fstabはなく、util-linux由来はlibuuid1だけである。上流libuuidのbuild対象にも該当機能はない。source package単位の検出波及と確認したが、no-dsaだけの提供元VEXを自動採用したり自前の非影響VEXへ置き換えたりせず、未確定の検出として期限付きで受容する。この完成runtimeの判断をbuilderや他のimageへ一般化しない。",
-      "evidence": "https://security-tracker.debian.org/tracker/CVE-2026-78409 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14096830950 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14095928819 。同一実行の署名付きDHI VEX・完成ARM64 SBOM・TLS60件を実測config sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f に照合。libuuid1 2.41.5-0+deb13u1+dhi3 はVEX適用後もHighで修正版未検出。Expat +dhi2の2組は解消し、Criticalおよび修正可能なHigh/Criticalは0組。",
+      "evidence": "https://security-tracker.debian.org/tracker/CVE-2026-78409 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14096830950 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14095928819 。同一実行の署名付きDHI VEX・完成ARM64 SBOM・TLS60件を実測config sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f に照合。libuuid1 2.41.5-0+deb13u1+dhi3 はVEX適用後もHighで修正版未検出。Expat +dhi2の2組は解消し、Criticalおよび修正可能なHigh/Criticalは0組。 PR #710の実測ARM64 config sha256:c50375aea95ec72b836fdbd3d53b566379997724e8ca0bdc41b1dadd86b11019 を、[同一実行の完成SBOM・署名付きDHI VEX・TLS60件](https://github.com/pitekusu/shittim-chest/actions/runs/43553053850/artifacts/14097077143)と[Grype 0.121.1の全件・VEX適用後レポート](https://github.com/pitekusu/shittim-chest/actions/runs/43553053850/artifacts/14097460642)で照合した。2026-11-13T15:40:34Z生成DBでraw High 24組とVEX適用後High 10組が既承認の構成と一致し、追加・Critical・修正可能なHigh/Criticalは0組。",
       "approved_on": "2026-11-14",
       "expires_on": "2026-11-19",
       "reevaluation_conditions": "正式修正版または具体的な技術根拠を伴う提供元判断の公開、入力境界・component構成・パッケージ版・実測config digestの変化、新しい検出、期限到達で再評価する。対象・digest・期限を自動で追加・延長せず、修正可能な検出と他の未追跡High/Criticalの拒否を維持する。",
@@ -97,14 +102,15 @@
       "package": "libuuid1",
       "image_config_digests": {
         "production": [
-          "sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f"
+          "sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f",
+          "sha256:c50375aea95ec72b836fdbd3d53b566379997724e8ca0bdc41b1dadd86b11019"
         ]
       },
       "status": "under_investigation",
-      "justification": "所有者がPR #708の実測ARM64 production configに残る同じHigh 10組を、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この1 configに限る。",
+      "justification": "所有者がPR #708の実測ARM64 production configに残る同じHigh 10組を、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この1 configに限る。 所有者がPR #710の実測ARM64 production configに残る同じHigh 10組についても、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この2つのconfigに限る。",
       "impact": "util-linuxのSUID mountがfstabのbind元を固定しない競合で、書換可能なpathを持つlocal利用者が別host directoryへ向け、owner/group/mode変更を悪用できる問題。検査は同じsource package由来のlibuuid1にもHighを報告する。",
       "exploitability": "完成runtimeの標準Syft全file一覧にmount/umount/nsenter/libmountと/etc/fstabはなく、util-linux由来はlibuuid1だけである。上流libuuidのbuild対象にも該当機能はない。source package単位の検出波及と確認したが、no-dsaだけの提供元VEXを自動採用したり自前の非影響VEXへ置き換えたりせず、未確定の検出として期限付きで受容する。この完成runtimeの判断をbuilderや他のimageへ一般化しない。",
-      "evidence": "https://security-tracker.debian.org/tracker/CVE-2026-78410 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14096830950 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14095928819 。同一実行の署名付きDHI VEX・完成ARM64 SBOM・TLS60件を実測config sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f に照合。libuuid1 2.41.5-0+deb13u1+dhi3 はVEX適用後もHighで修正版未検出。Expat +dhi2の2組は解消し、Criticalおよび修正可能なHigh/Criticalは0組。",
+      "evidence": "https://security-tracker.debian.org/tracker/CVE-2026-78410 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14096830950 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14095928819 。同一実行の署名付きDHI VEX・完成ARM64 SBOM・TLS60件を実測config sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f に照合。libuuid1 2.41.5-0+deb13u1+dhi3 はVEX適用後もHighで修正版未検出。Expat +dhi2の2組は解消し、Criticalおよび修正可能なHigh/Criticalは0組。 PR #710の実測ARM64 config sha256:c50375aea95ec72b836fdbd3d53b566379997724e8ca0bdc41b1dadd86b11019 を、[同一実行の完成SBOM・署名付きDHI VEX・TLS60件](https://github.com/pitekusu/shittim-chest/actions/runs/43553053850/artifacts/14097077143)と[Grype 0.121.1の全件・VEX適用後レポート](https://github.com/pitekusu/shittim-chest/actions/runs/43553053850/artifacts/14097460642)で照合した。2026-11-13T15:40:34Z生成DBでraw High 24組とVEX適用後High 10組が既承認の構成と一致し、追加・Critical・修正可能なHigh/Criticalは0組。",
       "approved_on": "2026-11-14",
       "expires_on": "2026-11-19",
       "reevaluation_conditions": "正式修正版または具体的な技術根拠を伴う提供元判断の公開、入力境界・component構成・パッケージ版・実測config digestの変化、新しい検出、期限到達で再評価する。対象・digest・期限を自動で追加・延長せず、修正可能な検出と他の未追跡High/Criticalの拒否を維持する。",
@@ -115,14 +121,15 @@
       "package": "ncurses-base",
       "image_config_digests": {
         "production": [
-          "sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f"
+          "sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f",
+          "sha256:c50375aea95ec72b836fdbd3d53b566379997724e8ca0bdc41b1dadd86b11019"
         ]
       },
       "status": "under_investigation",
-      "justification": "所有者がPR #708の実測ARM64 production configに残る同じHigh 10組を、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この1 configに限る。",
+      "justification": "所有者がPR #708の実測ARM64 production configに残る同じHigh 10組を、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この1 configに限る。 所有者がPR #710の実測ARM64 production configに残る同じHigh 10組についても、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この2つのconfigに限る。",
       "impact": "細工したterminfo定義をinfocmp -iで解析した際に過長文字列でスタックメモリを破壊する欠陥。検査はncurses source由来のncurses-base/ncurses-bin/libncursesw6/libtinfo6 6.5+20250216-2+deb13u0+dhi5の4 packageにHighを報告する。",
       "exploitability": "新完成runtimeにinfocmp/tic/tputと関連共有libraryは存在するが、Core sourceにそれらの直接呼出しやterminfo入力処理は見つからない。全native依存の到達不能は証明していない。現+dhi5の公開recipeは公式修正と一致するpatchを適用し、関連する実ELF5件は旧検証imageと全て同hashであり未修正回帰を支持しない。一方、現在の署名VEXはno-dsaだけで、署名SLSA/sourceと公開recipe commit/patchへの完全な結合は未確認。未修正とも非影響とも断定せず、提供元の技術的VEX整合を調査中として扱う。",
-      "evidence": "https://security-tracker.debian.org/tracker/CVE-2025-69720 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14096830950 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14095928819 。同一実行の署名付きDHI VEX・完成ARM64 SBOM・TLS60件を実測config sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f に照合。ncurses-base 6.5+20250216-2+deb13u0+dhi5 はVEX適用後もHighで修正版未検出。Expat +dhi2の2組は解消し、Criticalおよび修正可能なHigh/Criticalは0組。 Docker公式recipe https://github.com/docker-hardened-images/catalog/blob/c320263cabcb842e07a3412167e3142f301b82fb/package/deb/main/ncurses/debian-13/6.yaml に修正patchがあり、署名付きDHI APT索引で認証した同版4パッケージの実ファイルを完成imageのSBOMと照合した。対象のinfocmpはSHA-256 9e394e6ffa610d9a42110ebd07169060944a4583065c5af0199e5b4933fb44beで一致し、同梱changelogに当該CVEの修正がある。提供元のOCI VEXはno-dsaの根拠だけであり、既存のVEX検証では4組とも残存するため調査中として期限付きで記録する。",
+      "evidence": "https://security-tracker.debian.org/tracker/CVE-2025-69720 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14096830950 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14095928819 。同一実行の署名付きDHI VEX・完成ARM64 SBOM・TLS60件を実測config sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f に照合。ncurses-base 6.5+20250216-2+deb13u0+dhi5 はVEX適用後もHighで修正版未検出。Expat +dhi2の2組は解消し、Criticalおよび修正可能なHigh/Criticalは0組。 Docker公式recipe https://github.com/docker-hardened-images/catalog/blob/c320263cabcb842e07a3412167e3142f301b82fb/package/deb/main/ncurses/debian-13/6.yaml に修正patchがあり、署名付きDHI APT索引で認証した同版4パッケージの実ファイルを完成imageのSBOMと照合した。対象のinfocmpはSHA-256 9e394e6ffa610d9a42110ebd07169060944a4583065c5af0199e5b4933fb44beで一致し、同梱changelogに当該CVEの修正がある。提供元のOCI VEXはno-dsaの根拠だけであり、既存のVEX検証では4組とも残存するため調査中として期限付きで記録する。 PR #710の実測ARM64 config sha256:c50375aea95ec72b836fdbd3d53b566379997724e8ca0bdc41b1dadd86b11019 を、[同一実行の完成SBOM・署名付きDHI VEX・TLS60件](https://github.com/pitekusu/shittim-chest/actions/runs/43553053850/artifacts/14097077143)と[Grype 0.121.1の全件・VEX適用後レポート](https://github.com/pitekusu/shittim-chest/actions/runs/43553053850/artifacts/14097460642)で照合した。2026-11-13T15:40:34Z生成DBでraw High 24組とVEX適用後High 10組が既承認の構成と一致し、追加・Critical・修正可能なHigh/Criticalは0組。",
       "approved_on": "2026-11-14",
       "expires_on": "2026-11-19",
       "reevaluation_conditions": "具体的な技術根拠を伴う提供元VEXや新修正の公開、入力経路・component・実package版・config digestの変化、新検出、期限到達で再評価する。対象・digest・期限を自動追加・延長せず、修正可能な検出と他の未追跡High/Criticalは拒否する。修正適用と検出解消を確認したら削除する。",
@@ -133,14 +140,15 @@
       "package": "ncurses-bin",
       "image_config_digests": {
         "production": [
-          "sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f"
+          "sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f",
+          "sha256:c50375aea95ec72b836fdbd3d53b566379997724e8ca0bdc41b1dadd86b11019"
         ]
       },
       "status": "under_investigation",
-      "justification": "所有者がPR #708の実測ARM64 production configに残る同じHigh 10組を、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この1 configに限る。",
+      "justification": "所有者がPR #708の実測ARM64 production configに残る同じHigh 10組を、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この1 configに限る。 所有者がPR #710の実測ARM64 production configに残る同じHigh 10組についても、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この2つのconfigに限る。",
       "impact": "細工したterminfo定義をinfocmp -iで解析した際に過長文字列でスタックメモリを破壊する欠陥。検査はncurses source由来のncurses-base/ncurses-bin/libncursesw6/libtinfo6 6.5+20250216-2+deb13u0+dhi5の4 packageにHighを報告する。",
       "exploitability": "新完成runtimeにinfocmp/tic/tputと関連共有libraryは存在するが、Core sourceにそれらの直接呼出しやterminfo入力処理は見つからない。全native依存の到達不能は証明していない。現+dhi5の公開recipeは公式修正と一致するpatchを適用し、関連する実ELF5件は旧検証imageと全て同hashであり未修正回帰を支持しない。一方、現在の署名VEXはno-dsaだけで、署名SLSA/sourceと公開recipe commit/patchへの完全な結合は未確認。未修正とも非影響とも断定せず、提供元の技術的VEX整合を調査中として扱う。",
-      "evidence": "https://security-tracker.debian.org/tracker/CVE-2025-69720 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14096830950 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14095928819 。同一実行の署名付きDHI VEX・完成ARM64 SBOM・TLS60件を実測config sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f に照合。ncurses-bin 6.5+20250216-2+deb13u0+dhi5 はVEX適用後もHighで修正版未検出。Expat +dhi2の2組は解消し、Criticalおよび修正可能なHigh/Criticalは0組。 Docker公式recipe https://github.com/docker-hardened-images/catalog/blob/c320263cabcb842e07a3412167e3142f301b82fb/package/deb/main/ncurses/debian-13/6.yaml に修正patchがあり、署名付きDHI APT索引で認証した同版4パッケージの実ファイルを完成imageのSBOMと照合した。対象のinfocmpはSHA-256 9e394e6ffa610d9a42110ebd07169060944a4583065c5af0199e5b4933fb44beで一致し、同梱changelogに当該CVEの修正がある。提供元のOCI VEXはno-dsaの根拠だけであり、既存のVEX検証では4組とも残存するため調査中として期限付きで記録する。",
+      "evidence": "https://security-tracker.debian.org/tracker/CVE-2025-69720 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14096830950 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14095928819 。同一実行の署名付きDHI VEX・完成ARM64 SBOM・TLS60件を実測config sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f に照合。ncurses-bin 6.5+20250216-2+deb13u0+dhi5 はVEX適用後もHighで修正版未検出。Expat +dhi2の2組は解消し、Criticalおよび修正可能なHigh/Criticalは0組。 Docker公式recipe https://github.com/docker-hardened-images/catalog/blob/c320263cabcb842e07a3412167e3142f301b82fb/package/deb/main/ncurses/debian-13/6.yaml に修正patchがあり、署名付きDHI APT索引で認証した同版4パッケージの実ファイルを完成imageのSBOMと照合した。対象のinfocmpはSHA-256 9e394e6ffa610d9a42110ebd07169060944a4583065c5af0199e5b4933fb44beで一致し、同梱changelogに当該CVEの修正がある。提供元のOCI VEXはno-dsaの根拠だけであり、既存のVEX検証では4組とも残存するため調査中として期限付きで記録する。 PR #710の実測ARM64 config sha256:c50375aea95ec72b836fdbd3d53b566379997724e8ca0bdc41b1dadd86b11019 を、[同一実行の完成SBOM・署名付きDHI VEX・TLS60件](https://github.com/pitekusu/shittim-chest/actions/runs/43553053850/artifacts/14097077143)と[Grype 0.121.1の全件・VEX適用後レポート](https://github.com/pitekusu/shittim-chest/actions/runs/43553053850/artifacts/14097460642)で照合した。2026-11-13T15:40:34Z生成DBでraw High 24組とVEX適用後High 10組が既承認の構成と一致し、追加・Critical・修正可能なHigh/Criticalは0組。",
       "approved_on": "2026-11-14",
       "expires_on": "2026-11-19",
       "reevaluation_conditions": "具体的な技術根拠を伴う提供元VEXや新修正の公開、入力経路・component・実package版・config digestの変化、新検出、期限到達で再評価する。対象・digest・期限を自動追加・延長せず、修正可能な検出と他の未追跡High/Criticalは拒否する。修正適用と検出解消を確認したら削除する。",
@@ -151,14 +159,15 @@
       "package": "libncursesw6",
       "image_config_digests": {
         "production": [
-          "sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f"
+          "sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f",
+          "sha256:c50375aea95ec72b836fdbd3d53b566379997724e8ca0bdc41b1dadd86b11019"
         ]
       },
       "status": "under_investigation",
-      "justification": "所有者がPR #708の実測ARM64 production configに残る同じHigh 10組を、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この1 configに限る。",
+      "justification": "所有者がPR #708の実測ARM64 production configに残る同じHigh 10組を、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この1 configに限る。 所有者がPR #710の実測ARM64 production configに残る同じHigh 10組についても、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この2つのconfigに限る。",
       "impact": "細工したterminfo定義をinfocmp -iで解析した際に過長文字列でスタックメモリを破壊する欠陥。検査はncurses source由来のncurses-base/ncurses-bin/libncursesw6/libtinfo6 6.5+20250216-2+deb13u0+dhi5の4 packageにHighを報告する。",
       "exploitability": "新完成runtimeにinfocmp/tic/tputと関連共有libraryは存在するが、Core sourceにそれらの直接呼出しやterminfo入力処理は見つからない。全native依存の到達不能は証明していない。現+dhi5の公開recipeは公式修正と一致するpatchを適用し、関連する実ELF5件は旧検証imageと全て同hashであり未修正回帰を支持しない。一方、現在の署名VEXはno-dsaだけで、署名SLSA/sourceと公開recipe commit/patchへの完全な結合は未確認。未修正とも非影響とも断定せず、提供元の技術的VEX整合を調査中として扱う。",
-      "evidence": "https://security-tracker.debian.org/tracker/CVE-2025-69720 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14096830950 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14095928819 。同一実行の署名付きDHI VEX・完成ARM64 SBOM・TLS60件を実測config sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f に照合。libncursesw6 6.5+20250216-2+deb13u0+dhi5 はVEX適用後もHighで修正版未検出。Expat +dhi2の2組は解消し、Criticalおよび修正可能なHigh/Criticalは0組。 Docker公式recipe https://github.com/docker-hardened-images/catalog/blob/c320263cabcb842e07a3412167e3142f301b82fb/package/deb/main/ncurses/debian-13/6.yaml に修正patchがあり、署名付きDHI APT索引で認証した同版4パッケージの実ファイルを完成imageのSBOMと照合した。対象のinfocmpはSHA-256 9e394e6ffa610d9a42110ebd07169060944a4583065c5af0199e5b4933fb44beで一致し、同梱changelogに当該CVEの修正がある。提供元のOCI VEXはno-dsaの根拠だけであり、既存のVEX検証では4組とも残存するため調査中として期限付きで記録する。",
+      "evidence": "https://security-tracker.debian.org/tracker/CVE-2025-69720 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14096830950 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14095928819 。同一実行の署名付きDHI VEX・完成ARM64 SBOM・TLS60件を実測config sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f に照合。libncursesw6 6.5+20250216-2+deb13u0+dhi5 はVEX適用後もHighで修正版未検出。Expat +dhi2の2組は解消し、Criticalおよび修正可能なHigh/Criticalは0組。 Docker公式recipe https://github.com/docker-hardened-images/catalog/blob/c320263cabcb842e07a3412167e3142f301b82fb/package/deb/main/ncurses/debian-13/6.yaml に修正patchがあり、署名付きDHI APT索引で認証した同版4パッケージの実ファイルを完成imageのSBOMと照合した。対象のinfocmpはSHA-256 9e394e6ffa610d9a42110ebd07169060944a4583065c5af0199e5b4933fb44beで一致し、同梱changelogに当該CVEの修正がある。提供元のOCI VEXはno-dsaの根拠だけであり、既存のVEX検証では4組とも残存するため調査中として期限付きで記録する。 PR #710の実測ARM64 config sha256:c50375aea95ec72b836fdbd3d53b566379997724e8ca0bdc41b1dadd86b11019 を、[同一実行の完成SBOM・署名付きDHI VEX・TLS60件](https://github.com/pitekusu/shittim-chest/actions/runs/43553053850/artifacts/14097077143)と[Grype 0.121.1の全件・VEX適用後レポート](https://github.com/pitekusu/shittim-chest/actions/runs/43553053850/artifacts/14097460642)で照合した。2026-11-13T15:40:34Z生成DBでraw High 24組とVEX適用後High 10組が既承認の構成と一致し、追加・Critical・修正可能なHigh/Criticalは0組。",
       "approved_on": "2026-11-14",
       "expires_on": "2026-11-19",
       "reevaluation_conditions": "具体的な技術根拠を伴う提供元VEXや新修正の公開、入力経路・component・実package版・config digestの変化、新検出、期限到達で再評価する。対象・digest・期限を自動追加・延長せず、修正可能な検出と他の未追跡High/Criticalは拒否する。修正適用と検出解消を確認したら削除する。",
@@ -169,14 +178,15 @@
       "package": "libtinfo6",
       "image_config_digests": {
         "production": [
-          "sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f"
+          "sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f",
+          "sha256:c50375aea95ec72b836fdbd3d53b566379997724e8ca0bdc41b1dadd86b11019"
         ]
       },
       "status": "under_investigation",
-      "justification": "所有者がPR #708の実測ARM64 production configに残る同じHigh 10組を、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この1 configに限る。",
+      "justification": "所有者がPR #708の実測ARM64 production configに残る同じHigh 10組を、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この1 configに限る。 所有者がPR #710の実測ARM64 production configに残る同じHigh 10組についても、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、必須CI通過後のマージ・本番配信を明示承認した。この2つのconfigに限る。",
       "impact": "細工したterminfo定義をinfocmp -iで解析した際に過長文字列でスタックメモリを破壊する欠陥。検査はncurses source由来のncurses-base/ncurses-bin/libncursesw6/libtinfo6 6.5+20250216-2+deb13u0+dhi5の4 packageにHighを報告する。",
       "exploitability": "新完成runtimeにinfocmp/tic/tputと関連共有libraryは存在するが、Core sourceにそれらの直接呼出しやterminfo入力処理は見つからない。全native依存の到達不能は証明していない。現+dhi5の公開recipeは公式修正と一致するpatchを適用し、関連する実ELF5件は旧検証imageと全て同hashであり未修正回帰を支持しない。一方、現在の署名VEXはno-dsaだけで、署名SLSA/sourceと公開recipe commit/patchへの完全な結合は未確認。未修正とも非影響とも断定せず、提供元の技術的VEX整合を調査中として扱う。",
-      "evidence": "https://security-tracker.debian.org/tracker/CVE-2025-69720 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14096830950 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14095928819 。同一実行の署名付きDHI VEX・完成ARM64 SBOM・TLS60件を実測config sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f に照合。libtinfo6 6.5+20250216-2+deb13u0+dhi5 はVEX適用後もHighで修正版未検出。Expat +dhi2の2組は解消し、Criticalおよび修正可能なHigh/Criticalは0組。 Docker公式recipe https://github.com/docker-hardened-images/catalog/blob/c320263cabcb842e07a3412167e3142f301b82fb/package/deb/main/ncurses/debian-13/6.yaml に修正patchがあり、署名付きDHI APT索引で認証した同版4パッケージの実ファイルを完成imageのSBOMと照合した。対象のinfocmpはSHA-256 9e394e6ffa610d9a42110ebd07169060944a4583065c5af0199e5b4933fb44beで一致し、同梱changelogに当該CVEの修正がある。提供元のOCI VEXはno-dsaの根拠だけであり、既存のVEX検証では4組とも残存するため調査中として期限付きで記録する。",
+      "evidence": "https://security-tracker.debian.org/tracker/CVE-2025-69720 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14096830950 ; https://github.com/pitekusu/shittim-chest/actions/runs/43551306028/artifacts/14095928819 。同一実行の署名付きDHI VEX・完成ARM64 SBOM・TLS60件を実測config sha256:6829b37864880a7232cbba44aedc2716ca4d3c6d60099174f6b7ac7bf585a17f に照合。libtinfo6 6.5+20250216-2+deb13u0+dhi5 はVEX適用後もHighで修正版未検出。Expat +dhi2の2組は解消し、Criticalおよび修正可能なHigh/Criticalは0組。 Docker公式recipe https://github.com/docker-hardened-images/catalog/blob/c320263cabcb842e07a3412167e3142f301b82fb/package/deb/main/ncurses/debian-13/6.yaml に修正patchがあり、署名付きDHI APT索引で認証した同版4パッケージの実ファイルを完成imageのSBOMと照合した。対象のinfocmpはSHA-256 9e394e6ffa610d9a42110ebd07169060944a4583065c5af0199e5b4933fb44beで一致し、同梱changelogに当該CVEの修正がある。提供元のOCI VEXはno-dsaの根拠だけであり、既存のVEX検証では4組とも残存するため調査中として期限付きで記録する。 PR #710の実測ARM64 config sha256:c50375aea95ec72b836fdbd3d53b566379997724e8ca0bdc41b1dadd86b11019 を、[同一実行の完成SBOM・署名付きDHI VEX・TLS60件](https://github.com/pitekusu/shittim-chest/actions/runs/43553053850/artifacts/14097077143)と[Grype 0.121.1の全件・VEX適用後レポート](https://github.com/pitekusu/shittim-chest/actions/runs/43553053850/artifacts/14097460642)で照合した。2026-11-13T15:40:34Z生成DBでraw High 24組とVEX適用後High 10組が既承認の構成と一致し、追加・Critical・修正可能なHigh/Criticalは0組。",
       "approved_on": "2026-11-14",
       "expires_on": "2026-11-19",
       "reevaluation_conditions": "具体的な技術根拠を伴う提供元VEXや新修正の公開、入力経路・component・実package版・config digestの変化、新検出、期限到達で再評価する。対象・digest・期限を自動追加・延長せず、修正可能な検出と他の未追跡High/Criticalは拒否する。修正適用と検出解消を確認したら削除する。",
