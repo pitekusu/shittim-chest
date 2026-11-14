@@ -256,11 +256,15 @@ class CursorCodec:
         return payload
 
     def _signature(self, encoded: str, *, scope: str) -> str:
+        return self.sign_message(domain=scope, value=encoded)
+
+    def sign_message(self, *, domain: str, value: str) -> str:
+        """Sign a domain-separated Records message with the cursor key."""
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.hmac import HMAC
 
         signature = HMAC(self._key, hashes.SHA256())
-        signature.update(f"records:{scope}:{encoded}".encode())
+        signature.update(f"records:{domain}:{value}".encode())
         return _base64url(signature.finalize())
 
     def encode_filtered(

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import re
 from datetime import datetime, timedelta
 from typing import Annotated, Literal, Protocol
@@ -212,7 +211,9 @@ class GalleryReadService:
             )
             collector = (
                 GalleryCollector(
-                    id=_collector_id(self._partition, owner),
+                    id=self._cursor_codec.sign_message(
+                        domain=f"gallery:collector:{self._partition}", value=owner
+                    ),
                     display_name=name,
                 )
                 if owner is not None and name is not None
@@ -263,10 +264,3 @@ def _result_key(card_id: str, *, error_code: str, status: int) -> str:
     except ValueError:
         pass
     raise ReadFailure(error_code, status)
-
-
-def _collector_id(partition: str, owner: str) -> str:
-    # The owner key is already an HMAC of the private identity. Derive a separate,
-    # stable gallery identifier without disclosing that shared internal key.
-    digest = hashlib.sha256(f"records:gallery:collector:{partition}:{owner}".encode()).digest()
-    return base64.urlsafe_b64encode(digest).decode().rstrip("=")
