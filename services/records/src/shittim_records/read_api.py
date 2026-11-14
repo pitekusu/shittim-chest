@@ -181,10 +181,10 @@ class CursorCodec:
         if query.sync_index:
             payload["version"] = 3
             payload["kind"] = "sync-index"
-        return self._encode_payload(payload, scope="records:cursor")
+        return self._encode_payload(payload, scope="cursor")
 
     def decode(self, *, query: ListQuery, now: datetime) -> tuple[str, DynamoItem]:
-        payload = self._decode_payload(query.cursor, scope="records:cursor")
+        payload = self._decode_payload(query.cursor, scope="cursor")
         expected_fields = {
             "version",
             "index",
@@ -224,11 +224,11 @@ class CursorCodec:
         """Sign a position with a server-selected scope kept outside the public payload."""
         return self._encode_payload(
             {"position": position, "expires_at": int((_utc(now) + CURSOR_TTL).timestamp())},
-            scope=f"records:position:{scope}",
+            scope=f"position:{scope}",
         )
 
     def decode_position(self, cursor: str, *, scope: str, now: datetime) -> str:
-        payload = self._decode_payload(cursor, scope=f"records:position:{scope}")
+        payload = self._decode_payload(cursor, scope=f"position:{scope}")
         if (
             set(payload) != {"position", "expires_at"}
             or not isinstance(payload["position"], str)
@@ -257,7 +257,7 @@ class CursorCodec:
         return payload
 
     def _signature(self, encoded: str, *, scope: str) -> str:
-        return _base64url(sign_session_message(self._key, f"{scope}:{encoded}"))
+        return _base64url(sign_session_message(self._key, domain=scope, value=encoded))
 
     def encode_filtered(
         self,

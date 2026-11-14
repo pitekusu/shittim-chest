@@ -1149,6 +1149,9 @@ test("individual OGP follows detail navigation and returns to common preview", a
 });
 
 test("record detail identifies the requester and uses affection hearts", async ({ page }) => {
+  // The two navigation bars are verified separately and can overlap this tall clip.
+  const hideNavigation =
+    'nav[aria-label="議論内ナビゲーション"], nav[aria-label="モバイルナビゲーション"] { visibility: hidden; }';
   await mockAuthenticatedApi(page, detailWithAffection);
   await page.goto(`/records/${RECORD_ID}`);
 
@@ -1187,6 +1190,7 @@ test("record detail identifies the requester and uses affection hearts", async (
   await expect(affection).toHaveScreenshot("records-detail-affection.png", {
     animations: "disabled",
     maxDiffPixels: 30,
+    style: hideNavigation,
   });
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);

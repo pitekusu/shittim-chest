@@ -212,7 +212,7 @@ class GalleryReadService:
             )
             collector = (
                 GalleryCollector(
-                    id=_digest(self._session_key, f"gallery:collector:{self._partition}:{owner}"),
+                    id=_collector_id(self._session_key, self._partition, owner),
                     display_name=name,
                 )
                 if owner is not None and name is not None
@@ -265,6 +265,6 @@ def _result_key(card_id: str, *, error_code: str, status: int) -> str:
     raise ReadFailure(error_code, status)
 
 
-def _digest(key: bytes, value: str) -> str:
-    digest = sign_session_message(key, value)
+def _collector_id(key: bytes, partition: str, owner: str) -> str:
+    digest = sign_session_message(key, domain=f"gallery:collector:{partition}", value=owner)
     return base64.urlsafe_b64encode(digest).decode().rstrip("=")
