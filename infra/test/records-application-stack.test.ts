@@ -1441,7 +1441,7 @@ describe("RecordsApplicationStack", () => {
     expect(parameters.RecordsCertificateArn).toBeUndefined();
   });
 
-  test("filters completed metadata and bounds every stream retry dimension", () => {
+  test("routes affection profiles independently of schema version and bounds stream retries", () => {
     const { template } = fixture;
 
     template.hasResourceProperties("AWS::Lambda::EventSourceMapping", {
@@ -1456,7 +1456,7 @@ describe("RecordsApplicationStack", () => {
           },
           {
             Pattern:
-              '{"eventName":["INSERT","MODIFY"],"dynamodb":{"NewImage":{"record_type":{"S":["affection_profile"]},"schema_version":{"N":["8","9","10"]}}}}',
+              '{"eventName":["INSERT","MODIFY"],"dynamodb":{"Keys":{"PK":{"S":[{"prefix":"AFFECTION#REQUESTER#"}]},"SK":{"S":["PROFILE"]}},"NewImage":{"record_type":{"S":["affection_profile"]}}}}',
           },
           {
             Pattern:
