@@ -51,6 +51,7 @@ const MODERATOR_TOKEN_PARAMETER_NAME =
 const GALLERY_TABLE_KEY = "GACHA#GALLERY#*";
 const GALLERY_ORIGINAL_PREFIX = "student-gacha/results";
 const GALLERY_THUMBNAIL_PREFIX = "student-gacha/thumbnails/v1";
+const GALLERY_SCHOOL_CATALOG_KEY = "student-gacha/assets/blue_archive_school_logos.zip";
 
 export class RecordsApplicationStack extends Stack {
   public readonly projectorFunction: lambda.Function;
@@ -419,7 +420,7 @@ export class RecordsApplicationStack extends Stack {
       }));
       worker.addToRolePolicy(new iam.PolicyStatement({
         actions: ["s3:GetObject"],
-        resources: [`${mediaBucket.bucketArn}/student-gacha/assets/blue_archive_school_logos.zip`],
+        resources: [`${mediaBucket.bucketArn}/${GALLERY_SCHOOL_CATALOG_KEY}`],
       }));
       worker.addToRolePolicy(new iam.PolicyStatement({
         actions: ["s3:GetObjectVersion"],
@@ -943,6 +944,10 @@ export class RecordsApplicationStack extends Stack {
           resources: [GALLERY_ORIGINAL_PREFIX, GALLERY_THUMBNAIL_PREFIX].map((prefix) =>
             `${mediaBucket.bucketArn}/${prefix}/*`,
           ),
+        }),
+        new iam.PolicyStatement({
+          actions: ["s3:GetObject"],
+          resources: [`${mediaBucket.bucketArn}/${GALLERY_SCHOOL_CATALOG_KEY}`],
         }),
         new iam.PolicyStatement({
           actions: ["dynamodb:GetItem", "dynamodb:Query"],
@@ -2335,6 +2340,7 @@ export class RecordsApplicationStack extends Stack {
     });
     for (const path of [
       "/api/v1/gallery",
+      "/api/v1/gallery/school-logos",
       "/api/v1/gallery/thumbnails",
       "/api/v1/gallery/{cardId}",
       "/api/v1/gallery/{cardId}/original",

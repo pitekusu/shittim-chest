@@ -2396,6 +2396,21 @@
       "GalleryCollector": {
         "additionalProperties": false,
         "properties": {
+          "avatar": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImageAvatarRef"
+              },
+              {
+                "$ref": "#/components/schemas/PlaceholderAvatarRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Avatar"
+          },
           "displayName": {
             "minLength": 1,
             "pattern": "\\S",
@@ -2511,6 +2526,36 @@
           "schemaVersion"
         ],
         "title": "GalleryOriginalResponse",
+        "type": "object"
+      },
+      "GallerySchoolLogosResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "logos": {
+            "additionalProperties": {
+              "maxLength": 16384,
+              "pattern": "^data:image/webp;base64,[A-Za-z0-9+/]+={0,2}$",
+              "type": "string"
+            },
+            "maxProperties": 64,
+            "propertyNames": {
+              "maxLength": 40,
+              "minLength": 1
+            },
+            "title": "Logos",
+            "type": "object"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "logos"
+        ],
+        "title": "GallerySchoolLogosResponse",
         "type": "object"
       },
       "GalleryThumbnail": {
@@ -7630,7 +7675,7 @@
     },
     "/api/v1/gallery": {
       "get": {
-        "description": "投稿済み作品のメタデータを新着順で返す。",
+        "description": "投稿済み作品のメタデータを新着順で返す。gallery-avatars-v1で獲得者のアイコンを含める。",
         "operationId": "listGalleryCards",
         "parameters": [
           {
@@ -7639,6 +7684,17 @@
             "required": false,
             "schema": {
               "maxLength": 256,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "contract",
+            "required": false,
+            "schema": {
+              "enum": [
+                "gallery-avatars-v1"
+              ],
               "type": "string"
             }
           }
@@ -7652,7 +7708,101 @@
                 }
               }
             },
-            "description": "投稿済み作品のメタデータを新着順で返す。"
+            "description": "投稿済み作品のメタデータを新着順で返す。gallery-avatars-v1で獲得者のアイコンを含める。"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Record not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Projection conflict"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/gallery/school-logos": {
+      "get": {
+        "description": "登録済みの学校ロゴを正式名に対応付けた小さなWebPとして返す。",
+        "operationId": "getGallerySchoolLogos",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GallerySchoolLogosResponse"
+                }
+              }
+            },
+            "description": "登録済みの学校ロゴを正式名に対応付けた小さなWebPとして返す。"
           },
           "400": {
             "content": {
@@ -7838,7 +7988,7 @@
     },
     "/api/v1/gallery/{cardId}": {
       "get": {
-        "description": "作品のメタデータと原本の寸法を返す。",
+        "description": "作品のメタデータと原本の寸法を返す。gallery-avatars-v1で獲得者のアイコンを含める。",
         "operationId": "getGalleryCard",
         "parameters": [
           {
@@ -7847,6 +7997,17 @@
             "required": true,
             "schema": {
               "pattern": "^[A-Za-z0-9_-]{80}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "contract",
+            "required": false,
+            "schema": {
+              "enum": [
+                "gallery-avatars-v1"
+              ],
               "type": "string"
             }
           }
@@ -7860,7 +8021,7 @@
                 }
               }
             },
-            "description": "作品のメタデータと原本の寸法を返す。"
+            "description": "作品のメタデータと原本の寸法を返す。gallery-avatars-v1で獲得者のアイコンを含める。"
           },
           "400": {
             "content": {
