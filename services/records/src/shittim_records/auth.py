@@ -468,13 +468,18 @@ def _valid_requester_asset_key(value: str) -> bool:
 
 
 def _digest(key: bytes, domain: str, value: str) -> str:
+    return sign_session_message(key, f"records:{domain}:{value}").hex()
+
+
+def sign_session_message(key: bytes, message: str) -> bytes:
+    """Authenticate a domain-separated message using the Records session key."""
     if len(key) < 32:
         raise AuthFailure("configuration_invalid")
-    # Values are independent 256-bit random bearer tokens, not low-entropy passwords;
-    # keyed HMAC-SHA256 is the intentional lookup-key derivation required by the design.
+    # The key is randomly generated and the messages contain domain-separated tokens,
+    # cursors or opaque requester identifiers. HMAC authenticates these messages.
 
     # codeql[py/weak-sensitive-data-hashing]
-    return hmac.digest(key, f"records:{domain}:{value}".encode(), "sha256").hex()
+    return hmac.digest(key, message.encode(), "sha256")
 
 
 def _cookie(name: str, value: str, *, max_age: int, http_only: bool = True) -> str:

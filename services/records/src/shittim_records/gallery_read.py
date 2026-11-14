@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import base64
-import hashlib
-import hmac
 import re
 from datetime import datetime, timedelta
 from typing import Annotated, Literal, Protocol
@@ -14,7 +12,7 @@ from shittim_chest.adapters.assets.student_gacha import RESULT_SIZE
 from shittim_chest.adapters.dynamodb.serializer import DynamoItem
 from shittim_chest.application.student_gacha_models import student_gacha_image_key
 
-from shittim_records.auth import SessionRecord
+from shittim_records.auth import SessionRecord, sign_session_message
 from shittim_records.contracts import (
     GALLERY_CARD_ID_PATTERN,
     GalleryCard,
@@ -268,5 +266,5 @@ def _result_key(card_id: str, *, error_code: str, status: int) -> str:
 
 
 def _digest(key: bytes, value: str) -> str:
-    digest = hmac.new(key, value.encode(), hashlib.sha256).digest()
+    digest = sign_session_message(key, value)
     return base64.urlsafe_b64encode(digest).decode().rstrip("=")
