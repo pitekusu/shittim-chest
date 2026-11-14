@@ -1022,6 +1022,7 @@ export class RuntimeStack extends Stack {
       "student-gacha/roster/blue_archive_characters_with_npcs.json",
       "student-gacha/assets/show.gif",
       "student-gacha/assets/format.jpg",
+      "student-gacha/assets/blue_archive_school_logos.zip",
       "participants/participant-a/memorial-reference.png",
       "participants/participant-b/memorial-reference.webp",
       "participants/participant-c/memorial-reference.webp",

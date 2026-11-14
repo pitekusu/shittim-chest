@@ -16,6 +16,10 @@ from PIL import Image, UnidentifiedImageError
 
 from shittim_chest.adapters.assets.images import DebateImageFailure, validate_image
 from shittim_chest.adapters.assets.student_gacha_costumes import load_wiki_costume
+from shittim_chest.adapters.assets.student_gacha_schools import (
+    SCHOOL_CATALOG_MAX_BYTES,
+    school_branding,
+)
 from shittim_chest.application.student_gacha_models import (
     STUDENT_GACHA_RARITIES,
     GachaGenerationFailure,
@@ -29,10 +33,13 @@ if TYPE_CHECKING:
     from mypy_boto3_s3.client import S3Client
     from mypy_boto3_s3.type_defs import GetObjectOutputTypeDef, HeadObjectOutputTypeDef
 
+    from shittim_chest.application.student_gacha_models import SchoolBranding
+
 STUDENT_GACHA_ASSET_PREFIX: Final = "student-gacha/assets/"
 ROSTER_KEY: Final = "student-gacha/roster/blue_archive_characters_with_npcs.json"
 LOADING_GIF_KEY: Final = STUDENT_GACHA_ASSET_PREFIX + "show.gif"
 FORMAT_KEY: Final = STUDENT_GACHA_ASSET_PREFIX + "format.jpg"
+SCHOOL_LOGOS_KEY: Final = STUDENT_GACHA_ASSET_PREFIX + "blue_archive_school_logos.zip"
 # Same private objects already used by Records memorial and Momotalk generation.
 PARTICIPANT_REFERENCE_KEYS: dict[ParticipantSlot, str] = {
     ParticipantSlot.PARTICIPANT_A: "participants/participant-a/memorial-reference.png",
@@ -47,6 +54,7 @@ _SPECIAL_COSTUME_PARTICIPANTS: Final = {
 _ASSET_DIGESTS: Final = {
     LOADING_GIF_KEY: "a902598c659185353850dbe9e26c18fa0dd57d9f5d6288d2673b3c1e7e47ad63",
     FORMAT_KEY: "4d921dc67519a8b826a7ef6cf4853acaffca6db69c81e737816378f2ea9e80e0",
+    SCHOOL_LOGOS_KEY: "c4090aa1613efab81b3255b0ee74db79f8ff240a1cd5cbec6ab51d453e4a23e8",
 }
 _MAX_REFERENCE_BYTES = 10 * 1024 * 1024
 _ROSTER_MAX_BYTES = 256 * 1024
@@ -80,6 +88,9 @@ class StudentGachaMedia:
         if performer is not None and student.rarity in {None, 4}:
             return await asyncio.to_thread(self._special_costume_reference, performer)
         return await load_wiki_costume(student)
+
+    async def school_branding(self, school: str) -> SchoolBranding:
+        return await asyncio.to_thread(self._school_branding, school)
 
     async def save(self, draw_id: str, png: bytes) -> StoredGachaImage:
         return await asyncio.to_thread(self._save, student_gacha_image_key(draw_id), png)
@@ -130,6 +141,10 @@ class StudentGachaMedia:
             return validate_image(content, content_type=content_type).vision
         except DebateImageFailure:
             raise GachaGenerationFailure("gacha_costume_reference_invalid") from None
+
+    def _school_branding(self, school: str) -> SchoolBranding:
+        catalog = self._read_asset(SCHOOL_LOGOS_KEY, maximum=SCHOOL_CATALOG_MAX_BYTES)
+        return school_branding(catalog, school)
 
     def _read_asset(self, key: str, *, maximum: int) -> bytes:
         content = self._read(key, maximum=maximum)

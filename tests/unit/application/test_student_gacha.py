@@ -21,6 +21,7 @@ from shittim_chest.application.student_gacha_discord import GachaDeliveryFailure
 from shittim_chest.application.student_gacha_models import (
     GachaGenerationFailure,
     GachaPresentation,
+    SchoolBranding,
     StoredGachaImage,
     Student,
 )
@@ -95,6 +96,7 @@ def worker_fixture() -> tuple[StudentGachaWorker, AsyncMock, AsyncMock, AsyncMoc
     )
     store.checkpoint.side_effect = lambda old, new, **kwargs: new
     media.costume_reference.return_value = b"costume WebP"
+    media.school_branding.return_value = SchoolBranding("ゲヘナ学園", b"logo")
     return worker, store, media, generator, discord
 
 
@@ -182,10 +184,14 @@ async def test_ambiguous_paid_call_uses_saved_state_instead_of_rendering_again(
     await worker.process_next()
     generator.render.assert_awaited_once()
     media.costume_reference.assert_awaited_once_with(student)
+    media.school_branding.assert_awaited_once_with(student.school)
     generator.prepare.assert_awaited_once_with(
         student=student, performer=performer, costume_reference=costume
     )
     assert generator.render.await_args.kwargs["costume_reference"] is costume
+    assert (
+        generator.render.await_args.kwargs["school_branding"] is media.school_branding.return_value
+    )
     store.finish.assert_not_awaited()
     pending = store.reschedule.await_args.args[0]
     assert pending.paid_started and pending.presentation == presentation
@@ -201,8 +207,17 @@ async def test_ambiguous_paid_call_uses_saved_state_instead_of_rendering_again(
 
 
 @pytest.mark.asyncio
-async def test_failed_costume_reference_read_leaves_image_request_unstarted(
+@pytest.mark.parametrize(
+    ("asset", "code"),
+    [
+        ("costume_reference", "gacha_costume_source_unavailable"),
+        ("school_branding", "gacha_school_catalog_invalid"),
+    ],
+)
+async def test_failed_asset_read_leaves_image_request_unstarted(
     worker_fixture: tuple[StudentGachaWorker, AsyncMock, AsyncMock, AsyncMock, AsyncMock],
+    asset: str,
+    code: str,
 ) -> None:
     worker, store, media, generator, discord = worker_fixture
     student = Student("アツコ\uff08水着\uff09", "アリウス", 1)
@@ -210,7 +225,7 @@ async def test_failed_costume_reference_read_leaves_image_request_unstarted(
     store.claim_next.return_value = _job(student=student, performer=performer)
     media.loading_gif.return_value = b"loop GIF"
     discord.send_loading.return_value = "103"
-    media.costume_reference.side_effect = GachaGenerationFailure("gacha_costume_source_unavailable")
+    getattr(media, asset).side_effect = GachaGenerationFailure(code)
 
     await worker.process_next()
 

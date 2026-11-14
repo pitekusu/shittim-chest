@@ -668,6 +668,16 @@ describe("RuntimeStack", () => {
     expect(rosterResources).toContain("student-gacha/roster/blue_archive_characters_with_npcs.json");
     expect(rosterResources).not.toContain("student-gacha/assets/blue_archive_characters");
     expect(rosterResources).not.toContain("*");
+    const schoolLogosStatements = normal?.Properties.PolicyDocument.Statement.filter(
+      (statement: { Action?: string | string[]; Resource?: unknown }) =>
+        JSON.stringify(statement.Resource).includes("student-gacha/assets/blue_archive_school_logos.zip"),
+    );
+    expect(schoolLogosStatements).toHaveLength(1);
+    expect(schoolLogosStatements?.[0]).toMatchObject({
+      Action: "s3:GetObject",
+      Effect: "Allow",
+    });
+    expect(JSON.stringify(schoolLogosStatements?.[0].Resource)).not.toContain("*");
     expect(JSON.stringify(normal)).not.toContain("ssm:GetParametersByPath");
     expect(JSON.stringify(normal)).not.toContain("ssm:DescribeParameters");
     expect(JSON.stringify(normal)).not.toContain("ssmmessages:");

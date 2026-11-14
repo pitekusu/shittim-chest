@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from shittim_chest.application.ports import Clock
     from shittim_chest.application.student_gacha_models import (
         GachaPresentation,
+        SchoolBranding,
         StoredGachaImage,
         Student,
     )
@@ -57,6 +58,7 @@ class _Media(Protocol):
     async def loading_gif(self) -> bytes: ...
     async def references(self, performer: ParticipantSlot) -> tuple[bytes, bytes]: ...
     async def costume_reference(self, student: Student) -> bytes: ...
+    async def school_branding(self, school: str) -> SchoolBranding: ...
     async def save(self, draw_id: str, png: bytes) -> StoredGachaImage: ...
     async def load(self, stored: StoredGachaImage) -> bytes: ...
     async def find(self, draw_id: str) -> StoredGachaImage | None: ...
@@ -73,6 +75,7 @@ class _Generator(Protocol):
         teacher_name: str,
         references: tuple[bytes, bytes],
         costume_reference: bytes,
+        school_branding: SchoolBranding,
     ) -> bytes: ...
 
 
@@ -322,6 +325,7 @@ class StudentGachaWorker:
                 )
             performer = _required(job.performer)
             student = _required(job.student)
+            school_branding = await self._media.school_branding(student.school)
             costume_reference = await self._media.costume_reference(student)
             if job.presentation is None:
                 presentation = await self._generator.prepare(
@@ -335,6 +339,7 @@ class StudentGachaWorker:
                 teacher_name=_required(job.teacher_name),
                 references=references,
                 costume_reference=costume_reference,
+                school_branding=school_branding,
             )
             stored = await self._media.save(offer_id, png)
             return await self._checkpoint(job, stored=stored, teacher_name=None)

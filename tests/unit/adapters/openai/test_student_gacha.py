@@ -24,6 +24,7 @@ from shittim_chest.application.student_gacha_models import (
     TEACHER_PLACEHOLDER,
     GachaGenerationFailure,
     GachaPresentation,
+    SchoolBranding,
     Student,
 )
 from shittim_chest.domain import PARTICIPANTS, ParticipantSlot
@@ -31,6 +32,7 @@ from shittim_chest.domain import PARTICIPANTS, ParticipantSlot
 _STUDENT = Student("アコ\uff08ドレス\uff09", "ゲヘナ", rarity=4)
 _TEACHER = "サンプル先生"
 _COSTUME = b"costume-webp"
+_SCHOOL_BRANDING = SchoolBranding("ゲヘナ学園")
 _PERFORMER = ParticipantSlot.PARTICIPANT_C
 
 
@@ -230,6 +232,7 @@ async def test_render_uses_approved_image_model_and_inserts_name_only_into_png()
         teacher_name=_TEACHER,
         references=(b"layout", b"portrait"),
         costume_reference=_COSTUME,
+        school_branding=_SCHOOL_BRANDING,
     )
     payload = edit.call_args.kwargs
     assert payload["model"] == IMAGE_MODEL
@@ -254,6 +257,7 @@ async def test_render_uses_approved_image_model_and_inserts_name_only_into_png()
         teacher_name="別の先生",
         references=(b"layout", b"portrait"),
         costume_reference=_COSTUME,
+        school_branding=_SCHOOL_BRANDING,
     )
     prompt = edit.call_args.kwargs["prompt"]
     assert "crisp anime illustration" in prompt
@@ -288,6 +292,7 @@ async def test_render_uses_costume_image_for_a_previously_prepared_draw(
         teacher_name=_TEACHER,
         references=(b"layout", b"portrait"),
         costume_reference=_COSTUME,
+        school_branding=_SCHOOL_BRANDING,
     )
 
     edit.assert_awaited_once()
@@ -302,7 +307,10 @@ async def test_render_uses_costume_image_for_a_previously_prepared_draw(
     assert "head accessories come exclusively from image 1" in prompt
     assert "以前の説明" not in prompt
     assert _TEACHER not in repr(payload)
-    render_card.assert_called_once_with(b"art", presentation, _TEACHER)
+    assert _SCHOOL_BRANDING.name not in repr(payload)
+    render_card.assert_called_once_with(
+        b"art", presentation, _TEACHER, school_branding=_SCHOOL_BRANDING
+    )
     assert result == b"card"
 
 
@@ -325,6 +333,7 @@ async def test_image_timeout_is_ambiguous_and_is_not_retried_by_adapter() -> Non
             teacher_name=_TEACHER,
             references=(b"layout", b"portrait"),
             costume_reference=_COSTUME,
+            school_branding=_SCHOOL_BRANDING,
         )
 
     assert failure.value.ambiguous

@@ -7,7 +7,7 @@ import base64
 import json
 import logging
 from dataclasses import dataclass
-from typing import Final
+from typing import TYPE_CHECKING, Final
 from unicodedata import normalize
 from uuid import uuid4
 
@@ -42,6 +42,9 @@ from shittim_chest.application.student_gacha_models import (
 )
 from shittim_chest.domain import ParticipantSlot
 from shittim_chest.domain.attachments import ImageInput
+
+if TYPE_CHECKING:
+    from shittim_chest.application.student_gacha_models import SchoolBranding
 
 _LOGGER = logging.getLogger(__name__)
 IMAGE_MODEL: Final = "gpt-image-2.5-sunburst"
@@ -236,6 +239,7 @@ class OpenAIStudentGacha:
         teacher_name: str,
         references: tuple[bytes, bytes],
         costume_reference: bytes,
+        school_branding: SchoolBranding,
     ) -> bytes:
         """Render once with SDK retries disabled. The name only enters local composition."""
         teacher = normalize_teacher_name(teacher_name)
@@ -290,7 +294,9 @@ class OpenAIStudentGacha:
             raw = base64.b64decode(encoded, validate=True)
         except ValueError:
             raise GachaGenerationFailure("gacha_image_invalid") from None
-        return await asyncio.to_thread(render_card, raw, presentation, teacher)
+        return await asyncio.to_thread(
+            render_card, raw, presentation, teacher, school_branding=school_branding
+        )
 
 
 def _display_text(value: str) -> str:

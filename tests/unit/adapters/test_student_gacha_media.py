@@ -16,12 +16,15 @@ from botocore.stub import Stubber
 from PIL import Image
 
 from shittim_chest.adapters.assets.student_gacha import (
+    _ASSET_DIGESTS,
     RESULT_SIZE,
+    SCHOOL_LOGOS_KEY,
     StudentGachaMedia,
     _parse_roster,
 )
 from shittim_chest.application.student_gacha_models import (
     GachaGenerationFailure,
+    SchoolBranding,
     Student,
     normalize_teacher_name,
     student_gacha_image_key,
@@ -161,6 +164,47 @@ async def test_invalid_special_costume_has_no_usable_reference() -> None:
 
     with pytest.raises(GachaGenerationFailure, match="gacha_costume_reference_invalid"):
         await media.costume_reference(Student("安倍晋三", "自民党", 4))
+    assert buffer.closed
+
+
+@pytest.mark.asyncio
+async def test_reads_only_the_verified_private_school_logo_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog = b"verified school logo bundle"
+    buffer = io.BytesIO(catalog)
+    branding = SchoolBranding("ゲヘナ学園")
+    lookup = Mock(return_value=branding)
+    monkeypatch.setitem(_ASSET_DIGESTS, SCHOOL_LOGOS_KEY, hashlib.sha256(catalog).hexdigest())
+    monkeypatch.setattr("shittim_chest.adapters.assets.student_gacha.school_branding", lookup)
+    client = Mock()
+    client.get_object.return_value = {"ContentLength": len(catalog), "Body": buffer}
+
+    result = await StudentGachaMedia(client, bucket_name="private-media").school_branding("ゲヘナ")
+
+    assert result == branding
+    client.get_object.assert_called_once_with(
+        Bucket="private-media", Key="student-gacha/assets/blue_archive_school_logos.zip"
+    )
+    lookup.assert_called_once_with(catalog, "ゲヘナ")
+    assert buffer.closed
+
+
+@pytest.mark.asyncio
+async def test_school_logo_bundle_checksum_mismatch_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog = b"different school logo bundle"
+    buffer = io.BytesIO(catalog)
+    lookup = Mock()
+    monkeypatch.setattr("shittim_chest.adapters.assets.student_gacha.school_branding", lookup)
+    client = Mock()
+    client.get_object.return_value = {"ContentLength": len(catalog), "Body": buffer}
+
+    with pytest.raises(GachaGenerationFailure, match="gacha_asset_checksum_mismatch"):
+        await StudentGachaMedia(client, bucket_name="private-media").school_branding("ゲヘナ")
+
+    lookup.assert_not_called()
     assert buffer.closed
 
 

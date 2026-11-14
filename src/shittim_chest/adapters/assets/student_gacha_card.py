@@ -20,7 +20,7 @@ from shittim_chest.application.student_gacha_models import (
 from shittim_chest.domain import ParticipantSlot
 
 if TYPE_CHECKING:
-    from shittim_chest.application.student_gacha_models import GachaPresentation
+    from shittim_chest.application.student_gacha_models import GachaPresentation, SchoolBranding
 
 _PERFORMER_NAMES: dict[ParticipantSlot, str] = {
     ParticipantSlot.PARTICIPANT_A: "アロナ",
@@ -85,7 +85,13 @@ _SPARKLES = (
 )
 
 
-def render_card(art: bytes, presentation: GachaPresentation, teacher: str) -> bytes:
+def render_card(
+    art: bytes,
+    presentation: GachaPresentation,
+    teacher: str,
+    *,
+    school_branding: SchoolBranding | None = None,
+) -> bytes:
     """Render the approved layout, without sending the display name to the provider."""
     if not 1 <= len(art) <= RESULT_MAX_BYTES:
         raise GachaGenerationFailure("gacha_image_invalid")
@@ -107,7 +113,7 @@ def render_card(art: bytes, presentation: GachaPresentation, teacher: str) -> by
             )
             tinted.putalpha(_edge_mask(236))
             canvas.alpha_composite(tinted)
-        canvas.alpha_composite(_dossier(presentation), dest=(1125, 141))
+        canvas.alpha_composite(_dossier(presentation, school_branding), dest=(1125, 141))
         canvas.alpha_composite(_dialogue(presentation, teacher), dest=(132, 555))
         output = io.BytesIO()
         canvas.convert("RGB").save(output, format="PNG", compress_level=6)
@@ -205,7 +211,9 @@ def _dialogue(presentation: GachaPresentation, teacher: str) -> Image.Image:
     return layer
 
 
-def _dossier(presentation: GachaPresentation) -> Image.Image:
+def _dossier(
+    presentation: GachaPresentation, school_branding: SchoolBranding | None
+) -> Image.Image:
     layer = Image.new("RGBA", (483, 506))
     draw = ImageDraw.Draw(layer)
     draw.rounded_rectangle((20, 30, 478, 498), radius=17, fill="#273a663d")
@@ -214,17 +222,15 @@ def _dossier(presentation: GachaPresentation) -> Image.Image:
     )
     draw.rounded_rectangle((21, 7, 450, 475), radius=8, fill=_WHITE, outline="#ffffff", width=2)
     draw.rectangle((41, 55, 431, 452), outline="#a9b7cc")
-    draw.rounded_rectangle((63, 79, 123, 140), radius=12, fill="#17283f")
-    draw.polygon(((93, 87), (115, 121), (93, 133), (71, 121)), outline="#e9f2ff", width=2)
-    draw.polygon(((93, 94), (104, 117), (93, 123), (82, 117)), outline="#e9f2ff", width=2)
     _label(draw, (43, 25), "生徒募集", 16, 360, "#54748f", bold=True)
-    school = (
-        "ゲヘナ学園" if presentation.student.school == "ゲヘナ" else presentation.student.school
-    )
-    school_y = 80 if school == "ゲヘナ学園" else 91
-    _label(draw, (141, school_y), school, 33, 267, "#182a41", bold=True)
-    if school == "ゲヘナ学園":
-        _label(draw, (142, 121), "GEHENNA ACADEMY", 16, 267, "#59708a")
+    school = school_branding.name if school_branding is not None else presentation.student.school
+    school_x = 63
+    if school_branding is not None and school_branding.logo is not None:
+        logo = _school_logo(school_branding.logo)
+        if logo is not None:
+            layer.alpha_composite(logo, dest=(93 - logo.width // 2, 109 - logo.height // 2))
+            school_x = 141
+    _label(draw, (school_x, 93), school, 33, 408 - school_x, "#182a41", bold=True)
 
     rows = (
         ("部活", presentation.club, _INK),
@@ -237,6 +243,19 @@ def _dossier(presentation: GachaPresentation) -> Image.Image:
         _label(draw, (236, y + 7), label, 18, 350, _MUTED, center=True)
         _label(draw, (236, y + 48), value, 31, 350, color, bold=True, center=True)
     return layer.rotate(3, resample=Image.Resampling.BICUBIC, expand=True)
+
+
+def _school_logo(png: bytes) -> Image.Image | None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", Image.DecompressionBombWarning)
+        with Image.open(io.BytesIO(png), formats=["PNG"]) as source:
+            logo = source.convert("RGBA")
+    bounds = logo.getchannel("A").getbbox()
+    if bounds is None:
+        return None
+    logo = logo.crop(bounds)
+    logo.thumbnail((64, 64), resample=Image.Resampling.LANCZOS)
+    return logo
 
 
 def _star(x: int, y: int, *, radius: int) -> list[tuple[float, float]]:
