@@ -660,13 +660,13 @@ describe("RuntimeStack", () => {
     expect(JSON.stringify(identityHmacStatements?.[0].Resource)).not.toContain("*");
     const rosterReadStatements = normal?.Properties.PolicyDocument.Statement.filter(
       (statement: { Action?: string | string[]; Resource?: unknown }) =>
-        [statement.Action].flat().includes("s3:GetObject") &&
-        JSON.stringify(statement.Resource).includes("student-gacha/assets/"),
+        JSON.stringify(statement.Resource).includes("student-gacha/roster/"),
     );
     expect(rosterReadStatements).toHaveLength(1);
+    expect(rosterReadStatements?.[0].Action).toBe("s3:GetObject");
     const rosterResources = JSON.stringify(rosterReadStatements?.[0].Resource);
-    expect(rosterResources).toContain("student-gacha/assets/blue_archive_characters_with_npcs.json");
-    expect(rosterResources).not.toContain("student-gacha/assets/blue_archive_characters.json");
+    expect(rosterResources).toContain("student-gacha/roster/blue_archive_characters_with_npcs.json");
+    expect(rosterResources).not.toContain("student-gacha/assets/blue_archive_characters");
     expect(rosterResources).not.toContain("*");
     expect(JSON.stringify(normal)).not.toContain("ssm:GetParametersByPath");
     expect(JSON.stringify(normal)).not.toContain("ssm:DescribeParameters");

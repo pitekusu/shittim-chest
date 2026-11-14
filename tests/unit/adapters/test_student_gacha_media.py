@@ -6,8 +6,13 @@ import io
 import json
 from unittest.mock import Mock
 
+import boto3
 import pytest
+from botocore import UNSIGNED
+from botocore.config import Config
 from botocore.exceptions import ClientError
+from botocore.response import StreamingBody
+from botocore.stub import Stubber
 from PIL import Image
 
 from shittim_chest.adapters.assets.student_gacha import (
@@ -89,6 +94,83 @@ def _roster_rows() -> list[dict[str, object]]:
     ]
 
 
+@pytest.mark.asyncio
+async def test_reads_the_versioned_published_roster_with_s3_checksum_validation() -> None:
+    client = boto3.client(
+        "s3", region_name="ap-northeast-1", config=Config(signature_version=UNSIGNED)
+    )
+    raw = json.dumps(_roster_rows()).encode()
+    buffer = io.BytesIO(raw)
+    with Stubber(client) as stubber:
+        stubber.add_response(
+            "get_object",
+            {
+                "ContentLength": len(raw),
+                "ContentType": "application/json",
+                "VersionId": "published-version",
+                "ChecksumType": "FULL_OBJECT",
+                "ChecksumSHA256": base64.b64encode(hashlib.sha256(raw).digest()).decode("ascii"),
+                "Body": StreamingBody(buffer, len(raw)),
+            },
+            {
+                "Bucket": "private-media",
+                "Key": "student-gacha/roster/blue_archive_characters_with_npcs.json",
+                "ChecksumMode": "ENABLED",
+            },
+        )
+        entries = await StudentGachaMedia(client, bucket_name="private-media").roster()
+        stubber.assert_no_pending_responses()
+
+    assert list(entry.rarity for entry in entries) == list(range(5))
+    assert buffer.closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metadata", "code"),
+    [
+        ({"ChecksumSHA256": None}, "gacha_asset_checksum_mismatch"),
+        ({"ChecksumSHA256": "unexpected"}, "gacha_asset_checksum_mismatch"),
+        ({"ChecksumType": "COMPOSITE"}, "gacha_asset_checksum_mismatch"),
+        ({"VersionId": "null"}, "gacha_roster_invalid"),
+        ({"ContentType": "text/html"}, "gacha_roster_invalid"),
+        ({"ContentLength": 256 * 1024 + 1}, "gacha_media_invalid"),
+    ],
+)
+async def test_rejects_the_unverified_published_roster(
+    metadata: dict[str, object], code: str
+) -> None:
+    raw = json.dumps(_roster_rows()).encode()
+    buffer = io.BytesIO(raw)
+    client = Mock()
+    client.get_object.return_value = {
+        "ContentLength": len(raw),
+        "ContentType": "application/json",
+        "VersionId": "published-version",
+        "ChecksumType": "FULL_OBJECT",
+        "ChecksumSHA256": base64.b64encode(hashlib.sha256(raw).digest()).decode("ascii"),
+        "Body": buffer,
+        **metadata,
+    }
+
+    with pytest.raises(GachaGenerationFailure, match=code):
+        await StudentGachaMedia(client, bucket_name="private-media").roster()
+
+    assert buffer.closed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("service_code", ["NoSuchKey", "AccessDenied"])
+async def test_unavailable_publication_does_not_read_another_object(service_code: str) -> None:
+    client = Mock()
+    client.get_object.side_effect = ClientError({"Error": {"Code": service_code}}, "GetObject")
+
+    with pytest.raises(GachaGenerationFailure, match="gacha_media_unavailable"):
+        await StudentGachaMedia(client, bucket_name="private-media").roster()
+
+    assert client.get_object.call_count == 1
+
+
 def test_roster_keeps_npcs_costume_variants_and_rarity() -> None:
     rows = _roster_rows()
     entries = _parse_roster(json.dumps(rows).encode())
@@ -96,6 +178,20 @@ def test_roster_keeps_npcs_costume_variants_and_rarity() -> None:
     assert [(entry.name, entry.rarity) for entry in entries] == [
         (row["name"], row["rarity"]) for row in rows
     ]
+
+
+@pytest.mark.parametrize("name", ["アロナ", "プラナ"])
+def test_roster_excludes_arona_and_plana_from_rarity_zero(name: str) -> None:
+    rows = _roster_rows()
+    rows[0]["name"] = name
+    rows[0]["school"] = "シッテムの箱"
+    with pytest.raises(GachaGenerationFailure, match="gacha_roster_invalid"):
+        _parse_roster(json.dumps(rows).encode())
+
+    rows[0]["name"] = "リン"
+    rows[4]["name"] = name
+    rows[4]["school"] = "シッテムの箱"
+    assert _parse_roster(json.dumps(rows).encode())[-1].rarity == 4
 
 
 @pytest.mark.parametrize("invalid_rarity", [-1, 5, 0.0, True, "0", None])
