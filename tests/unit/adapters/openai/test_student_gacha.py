@@ -9,7 +9,8 @@ from unittest.mock import AsyncMock, Mock
 
 import httpx2
 import pytest
-from openai import APITimeoutError
+from openai import APIStatusError, APITimeoutError
+from openai.types.responses import Response
 from openai.types.responses.response_function_web_search import (
     ActionSearch,
     ResponseFunctionWebSearch,
@@ -24,7 +25,11 @@ from shittim_chest.adapters.openai.student_gacha import (
     _AppearanceBrief,
     _CardBrief,
 )
-from shittim_chest.application.student_gacha_models import GachaGenerationFailure, Student
+from shittim_chest.application.student_gacha_models import (
+    TEACHER_PLACEHOLDER,
+    GachaGenerationFailure,
+    Student,
+)
 from shittim_chest.domain import PARTICIPANTS, ParticipantSlot
 
 _STUDENT = Student("アコ\uff08ドレス\uff09", "ゲヘナ")
@@ -52,26 +57,50 @@ def _card(appearance: str | None) -> _CardBrief:
         club="戦略研究会",
         role="SPECIAL・サポーター",
         weapon="HG",
-        greeting=("お待たせしました、{teacher}。", "警備はお任せを。", "段取りは完璧です。"),
+        greeting=(
+            "お待たせしました。",
+            f"警備はお任せを、{TEACHER_PLACEHOLDER}。",
+            "段取りは完璧です。",
+        ),
+    )
+
+
+def _response(
+    brief: _AppearanceBrief, *, search: ResponseFunctionWebSearch | None = None
+) -> SimpleNamespace:
+    message = SimpleNamespace(
+        type="message",
+        status="completed",
+        phase="final_answer",
+        content=[SimpleNamespace(type="output_text", text=brief.model_dump_json())],
+    )
+    return SimpleNamespace(
+        status="completed",
+        output=[message] if search is None else [search, message],
     )
 
 
 @pytest.mark.asyncio
 async def test_known_appearance_uses_one_text_request_without_search() -> None:
     client = Mock()
-    client.responses.parse = AsyncMock(
-        return_value=SimpleNamespace(status="completed", output_parsed=_card("青いドレス"))
-    )
+    client.responses.create = AsyncMock(return_value=_response(_card("青いドレス")))
 
     result = await _adapter(client).prepare(student=_STUDENT, performer=_PERFORMER)
 
     assert result.appearance == "青いドレス"
     assert result.club == "戦略研究会"
-    client.responses.parse.assert_awaited_once()
-    payload = client.responses.parse.call_args.kwargs
-    assert "tools" not in payload
+    assert result.greeting == (
+        "お待たせしました。",
+        f"警備はお任せを、{TEACHER_PLACEHOLDER}。",
+        "段取りは完璧です。",
+    )
+    client.responses.create.assert_awaited_once()
+    payload = client.responses.create.call_args.kwargs
+    assert payload["tools"] == []
+    assert payload["tool_choice"] == "none"
     assert not payload["store"]
-    assert _PRIVATE_PERSONA in payload["instructions"]
+    assert _PRIVATE_PERSONA not in payload["instructions"]
+    assert json.loads(payload["input"])["performer_reference"]["preferences"] == _PRIVATE_PERSONA
 
 
 @pytest.mark.asyncio
@@ -86,26 +115,143 @@ async def test_uncertain_appearance_uses_only_the_student_identity_for_web_searc
         ),
     )
     client = Mock()
-    client.responses.parse = AsyncMock(
+    client.responses.create = AsyncMock(
         side_effect=[
-            SimpleNamespace(status="completed", output_parsed=_card(None)),
-            SimpleNamespace(
-                status="completed",
-                output_parsed=_AppearanceBrief(appearance="サファイア色のドレス"),
-                output=[search],
-            ),
+            _response(_card(None)),
+            _response(_AppearanceBrief(appearance="サファイア色のドレス"), search=search),
         ]
     )
 
     result = await _adapter(client).prepare(student=_STUDENT, performer=_PERFORMER)
 
     assert result.appearance == "サファイア色のドレス"
-    payload = client.responses.parse.call_args.kwargs
+    payload = client.responses.create.call_args.kwargs
     assert json.loads(payload["input"]) == {"name": _STUDENT.name, "school": _STUDENT.school}
     assert payload["tools"] == [{"type": "web_search", "search_context_size": "low"}]
     assert payload["max_tool_calls"] == 2
     assert _PRIVATE_PERSONA not in repr(payload)
     assert _TEACHER not in repr(payload)
+
+
+@pytest.mark.asyncio
+async def test_exact_verified_outfit_survives_missing_model_appearance_without_web_search() -> None:
+    client = Mock()
+    client.responses.create = AsyncMock(return_value=_response(_card(None)))
+    student = Student("キキョウ\uff08水着\uff09", "百鬼夜行")
+
+    result = await _adapter(client).prepare(student=student, performer=_PERFORMER)
+
+    client.responses.create.assert_awaited_once()
+    assert result.student == student
+    assert "淡い水色の羽織" in result.appearance
+    assert "不透明な紺のスポーツ水着" in result.appearance
+    payload = client.responses.create.call_args.kwargs
+    assert json.loads(payload["input"])["verified_costume"] == result.appearance
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_appearance_does_not_proceed_to_image(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = Mock()
+    client.responses.create = AsyncMock(
+        side_effect=[_response(_card(None)), _response(_AppearanceBrief(appearance="ドレス"))],
+    )
+
+    with pytest.raises(GachaGenerationFailure, match="gacha_appearance_unconfirmed"):
+        await _adapter(client).prepare(student=_STUDENT, performer=_PERFORMER)
+
+    assert client.responses.create.await_count == 2
+    assert "stage=appearance_search category=source_unconfirmed" in caplog.text
+    assert "ドレス" not in caplog.text
+    client.with_options.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_display_fields_are_flattened_and_teacher_placeholder_keeps_its_position() -> None:
+    client = Mock()
+    card = _card("青い\nドレス").model_copy(
+        update={
+            "greeting": ("お待たせしました。", "警備は\nお任せを。", "{teacher} 段取りは完璧です。")
+        },
+    )
+    client.responses.create = AsyncMock(return_value=_response(card))
+
+    result = await _adapter(client).prepare(student=_STUDENT, performer=_PERFORMER)
+
+    assert result.appearance == "青い ドレス"
+    assert result.greeting == (
+        "お待たせしました。",
+        "警備は お任せを。",
+        f"{TEACHER_PLACEHOLDER} 段取りは完璧です。",
+    )
+    client.responses.create.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_incomplete_response_is_classified_before_parsing_with_locked_sdk(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    response_text = "raw-provider-incomplete-output"
+    client = Mock()
+    client.responses.create = AsyncMock(
+        return_value=Response.model_construct(
+            **{
+                "id": "resp_test",
+                "object": "response",
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"},
+                "output": [
+                    {
+                        "id": "msg_test",
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "incomplete",
+                        "phase": "final_answer",
+                        "content": [
+                            {"type": "output_text", "text": response_text, "annotations": []}
+                        ],
+                    }
+                ],
+            }
+        ),
+    )
+
+    with pytest.raises(GachaGenerationFailure, match="gacha_presentation_unavailable"):
+        await _adapter(client).prepare(student=_STUDENT, performer=_PERFORMER)
+
+    client.responses.create.assert_awaited_once()
+    payload = client.responses.create.call_args.kwargs
+    assert payload["max_output_tokens"] == 1_600
+    assert payload["text"]["format"]["strict"] is True
+    assert "stage=brief category=incomplete_response detail=max_output_tokens" in caplog.text
+    assert response_text not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_provider_error_diagnostic_logs_only_allowlisted_fields(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = Mock()
+    client.responses.create = AsyncMock(
+        side_effect=APIStatusError(
+            "raw provider message",
+            response=httpx2.Response(
+                400, request=httpx2.Request("POST", "https://api.openai.com/v1/responses")
+            ),
+            body={"code": "invalid_json_schema", "param": "private-provider-field"},
+        ),
+    )
+
+    with pytest.raises(GachaGenerationFailure, match="gacha_presentation_unavailable"):
+        await _adapter(client).prepare(student=_STUDENT, performer=_PERFORMER)
+
+    assert (
+        "stage=brief category=api_status http_status=400 code=invalid_json_schema parameter=other"
+        in (caplog.text)
+    )
+    assert "raw provider message" not in caplog.text
+    assert "private-provider-field" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -116,9 +262,7 @@ async def test_render_uses_approved_image_model_and_inserts_name_only_into_png()
         data=[SimpleNamespace(b64_json=base64.b64encode(picture.getvalue()).decode("ascii"))]
     )
     client = Mock()
-    client.responses.parse = AsyncMock(
-        return_value=SimpleNamespace(status="completed", output_parsed=_card("青いドレス"))
-    )
+    client.responses.create = AsyncMock(return_value=_response(_card("青いドレス")))
     edit = AsyncMock(return_value=image_response)
     client.with_options.return_value.images.edit = edit
     adapter = _adapter(client)
@@ -153,9 +297,7 @@ async def test_render_uses_approved_image_model_and_inserts_name_only_into_png()
 @pytest.mark.asyncio
 async def test_image_timeout_is_ambiguous_and_is_not_retried_by_adapter() -> None:
     client = Mock()
-    client.responses.parse = AsyncMock(
-        return_value=SimpleNamespace(status="completed", output_parsed=_card("青いドレス"))
-    )
+    client.responses.create = AsyncMock(return_value=_response(_card("青いドレス")))
     edit = AsyncMock(
         side_effect=APITimeoutError(request=httpx2.Request("POST", "https://api.openai.com"))
     )
