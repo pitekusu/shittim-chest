@@ -321,22 +321,25 @@ def update_roster(previous: list[StudentRow], players_html: str, npc_html: str) 
         affiliations.setdefault(row["name"], set()).add(school)
 
     for name in sorted(costumes - players.keys() - npcs.keys()):
+        if "水着" in name:
+            continue
         school = _costume_school(name, affiliations)
         if (name, school) not in NPC_EXCLUSIONS:
             npcs[name] = {"name": name, "school": school, "rarity": 0}
 
     custom = {row["name"]: row for row in previous if row["rarity"] == 4}
-    current = npcs | players | custom
-    previous_names = {row["name"] for row in previous}
+    current = {name: row for name, row in (npcs | players | custom).items() if "水着" not in name}
+    eligible_previous = [row for row in previous if "水着" not in row["name"]]
+    previous_names = {row["name"] for row in eligible_previous}
     missing_names = sorted(previous_names - current.keys())
     if missing_names:
         raise ValueError(
             f"Wikiの一覧から既存の{len(missing_names)}件を確認できません: "
             + "、".join(missing_names[:5])
         )
-    if any(row["rarity"] > 0 and current[row["name"]]["rarity"] == 0 for row in previous):
+    if any(row["rarity"] > 0 and current[row["name"]]["rarity"] == 0 for row in eligible_previous):
         raise ValueError("Wikiで既存のプレイアブルキャラクターがNPCとしてのみ見つかりました")
-    updated = [current[row["name"]] for row in previous]
+    updated = [current[row["name"]] for row in eligible_previous]
     updated.extend(current[name] for name in sorted(current.keys() - previous_names))
     return _validate_roster(updated)
 
@@ -410,8 +413,14 @@ def main() -> int:
             print(f"名簿に差分はありません ({len(current)}件)")
             return 0
         args.roster.write_bytes(updated)
-        changed = sum(old != new for old, new in zip(previous, current, strict=False))
-        print(f"名簿を更新しました (追加{len(current) - len(previous)}件、変更{changed}件)")
+        old_rows = {row["name"]: row for row in previous}
+        new_rows = {row["name"]: row for row in current}
+        added = len(new_rows.keys() - old_rows.keys())
+        removed = len(old_rows.keys() - new_rows.keys())
+        changed = sum(
+            old_rows[name] != new_rows[name] for name in old_rows.keys() & new_rows.keys()
+        )
+        print(f"名簿を更新しました (追加{added}件、変更{changed}件、削除{removed}件)")
     except (OSError, ValueError, RecursionError, HTTPException) as error:
         print(f"名簿の確認に失敗しました: {error}", file=sys.stderr)
         return 1

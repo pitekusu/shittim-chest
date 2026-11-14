@@ -152,6 +152,7 @@ def prepare(path: Path, state: dict[str, Any], updated: bytes) -> int:
                 "キャラクター一覧とNPC一覧を月次照合し、生徒募集の名簿を更新します。\n\n"
                 "- 星1かつ入手欄に◇があるキャラクターはレアリティ3とします。\n"
                 "- レアリティ0のアロナとプラナは対象外です。\n"
+                "- 名前に水着を含むキャラクターは対象外です。\n"
                 "- 必須CIとCodeQLの成功後にsquash mergeし、名簿を配信します。\n"
             ),
         },
@@ -172,7 +173,14 @@ def merge_ready(number: int, state: dict[str, Any]) -> str | None:
     ):
         raise RuntimeError("the PR no longer matches the roster update")
     if pr["merged"]:
-        return commit_sha(pr["merge_commit_sha"])
+        # GitHub's 2026-03-10 REST response removed merge_commit_sha.
+        merged_pr = json.loads(
+            gh("pr", "view", str(number), "-R", REPO, "--json", "state,mergeCommit")
+        )
+        merge_commit = merged_pr["mergeCommit"]
+        if merged_pr["state"] != "MERGED" or merge_commit is None:
+            return None
+        return commit_sha(merge_commit["oid"])
     if pr["state"] != "open":
         raise RuntimeError(f"roster PR #{number} was closed before merge")
     files = api(f"pulls/{number}/files?per_page=2")
