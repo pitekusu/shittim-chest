@@ -28,10 +28,10 @@ regexes = ['''^\s*ECR_CREDENTIAL_HELPER_SHA256:\s+5bdd30fb6c7a92462f5b454cce1aa9
 paths = ['''^\.github/workflows/release\.yml$''']
 
 [[rules.allowlists]]
-description = "Exact SHA-256 checksums of the three student gacha assets"
+description = "Exact SHA-256 checksums of current and historical student gacha assets"
 condition = "AND"
 regexTarget = "line"
-regexes = ['''^\s*(?:ROSTER_KEY: "561318df841fd812e90166c30506d61d83e9c07f4d5954a6ed7f3850b43cbbc6"|LOADING_GIF_KEY: "a902598c659185353850dbe9e26c18fa0dd57d9f5d6288d2673b3c1e7e47ad63"|FORMAT_KEY: "4d921dc67519a8b826a7ef6cf4853acaffca6db69c81e737816378f2ea9e80e0"),\s*$''']
+regexes = ['''^\s*(?:ROSTER_KEY: "40dba2b9261072e25a8e9a1378447880e07658446c82cbc3836ce5759336cabd"|ROSTER_KEY: "561318df841fd812e90166c30506d61d83e9c07f4d5954a6ed7f3850b43cbbc6"|LOADING_GIF_KEY: "a902598c659185353850dbe9e26c18fa0dd57d9f5d6288d2673b3c1e7e47ad63"|FORMAT_KEY: "4d921dc67519a8b826a7ef6cf4853acaffca6db69c81e737816378f2ea9e80e0"),\s*$''']
 paths = ['''^src/shittim_chest/adapters/assets/student_gacha\.py$''']
 
 [[rules]]

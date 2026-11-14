@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
+import json
 from unittest.mock import Mock
 
 import pytest
@@ -81,14 +82,43 @@ async def test_missing_result_is_distinguished_from_access_denied() -> None:
         await media.find(_DRAW_ID)
 
 
-def test_roster_keeps_costume_variants_and_rejects_duplicate_weights() -> None:
-    rows = """
-        [{"name": "アコ", "school": "ゲヘナ"},
-        {"name": "アコ\uff08ドレス\uff09", "school": "ゲヘナ"}]
-        """.encode()
-    assert [entry.name for entry in _parse_roster(rows)] == ["アコ", "アコ\uff08ドレス\uff09"]
+def _roster_rows() -> list[dict[str, object]]:
+    names = ("リン", "アコ", "アコ\uff08ドレス\uff09", "キキョウ", "ヒナ")
+    return [
+        {"name": name, "school": "ゲヘナ", "rarity": rarity} for rarity, name in enumerate(names)
+    ]
+
+
+def test_roster_keeps_npcs_costume_variants_and_rarity() -> None:
+    rows = _roster_rows()
+    entries = _parse_roster(json.dumps(rows).encode())
+
+    assert [(entry.name, entry.rarity) for entry in entries] == [
+        (row["name"], row["rarity"]) for row in rows
+    ]
+
+
+@pytest.mark.parametrize("invalid_rarity", [-1, 5, 0.0, True, "0", None])
+def test_roster_rejects_invalid_rarity(invalid_rarity: object) -> None:
+    rows = _roster_rows()
+    rows[0]["rarity"] = invalid_rarity
     with pytest.raises(GachaGenerationFailure, match="gacha_roster_invalid"):
-        _parse_roster(b'[{"name":"Ako","school":"A"},{"name":"Ako","school":"B"}]')
+        _parse_roster(json.dumps(rows).encode())
+
+
+def test_roster_rejects_missing_rank_duplicate_name_and_unexpected_fields() -> None:
+    rows = _roster_rows()
+    for malformed in (
+        rows[1:],
+        [*rows, {**rows[0], "school": "トリニティ"}],
+        [{**rows[0], "description": "unexpected"}, *rows[1:]],
+        [{"name": "リン", "school": "ゲヘナ"}, *rows[1:]],
+    ):
+        with pytest.raises(GachaGenerationFailure, match="gacha_roster_invalid"):
+            _parse_roster(json.dumps(malformed).encode())
+    duplicate_key = json.dumps(rows).replace('"rarity": 0', '"rarity": 0, "rarity": 0')
+    with pytest.raises(GachaGenerationFailure, match="gacha_roster_invalid"):
+        _parse_roster(duplicate_key.encode())
 
 
 def test_teacher_name_is_normalized_and_rejects_control_characters() -> None:

@@ -15,6 +15,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from PIL import Image, UnidentifiedImageError
 
 from shittim_chest.application.student_gacha_models import (
+    STUDENT_GACHA_RARITIES,
     GachaGenerationFailure,
     StoredGachaImage,
     Student,
@@ -27,7 +28,7 @@ if TYPE_CHECKING:
     from mypy_boto3_s3.type_defs import HeadObjectOutputTypeDef
 
 STUDENT_GACHA_ASSET_PREFIX: Final = "student-gacha/assets/"
-ROSTER_KEY: Final = STUDENT_GACHA_ASSET_PREFIX + "blue_archive_characters.json"
+ROSTER_KEY: Final = STUDENT_GACHA_ASSET_PREFIX + "blue_archive_characters_with_npcs.json"
 LOADING_GIF_KEY: Final = STUDENT_GACHA_ASSET_PREFIX + "show.gif"
 FORMAT_KEY: Final = STUDENT_GACHA_ASSET_PREFIX + "format.jpg"
 # Same private objects already used by Records memorial and Momotalk generation.
@@ -37,7 +38,7 @@ PARTICIPANT_REFERENCE_KEYS: dict[ParticipantSlot, str] = {
     ParticipantSlot.PARTICIPANT_C: "participants/participant-c/memorial-reference.webp",
 }
 _ASSET_DIGESTS: Final = {
-    ROSTER_KEY: "561318df841fd812e90166c30506d61d83e9c07f4d5954a6ed7f3850b43cbbc6",
+    ROSTER_KEY: "40dba2b9261072e25a8e9a1378447880e07658446c82cbc3836ce5759336cabd",
     LOADING_GIF_KEY: "a902598c659185353850dbe9e26c18fa0dd57d9f5d6288d2673b3c1e7e47ad63",
     FORMAT_KEY: "4d921dc67519a8b826a7ef6cf4853acaffca6db69c81e737816378f2ea9e80e0",
 }
@@ -188,22 +189,39 @@ def _receipt(key: str, head: HeadObjectOutputTypeDef) -> StoredGachaImage:
 
 def _parse_roster(content: bytes) -> tuple[Student, ...]:
     try:
-        rows: object = json.loads(content)
+        rows: object = json.loads(content, object_pairs_hook=_unique_roster_row)
         if not isinstance(rows, list) or not 1 <= len(rows) <= 500:
             raise ValueError
         students: list[Student] = []
         names: set[str] = set()
+        rarities: set[int] = set()
         for row in rows:
-            if not isinstance(row, dict) or set(row) != {"name", "school"}:
+            if not isinstance(row, dict) or set(row) != {"name", "school", "rarity"}:
                 raise ValueError
-            name, school = row["name"], row["school"]
-            if not isinstance(name, str) or not isinstance(school, str) or name in names:
+            name, school, rarity = row["name"], row["school"], row["rarity"]
+            if (
+                not isinstance(name, str)
+                or not isinstance(school, str)
+                or name in names
+                or type(rarity) is not int
+                or rarity not in STUDENT_GACHA_RARITIES
+            ):
                 raise ValueError
-            students.append(Student(name, school))
+            students.append(Student(name, school, rarity=rarity))
             names.add(name)
+            rarities.add(rarity)
+        if rarities != STUDENT_GACHA_RARITIES:
+            raise ValueError
         return tuple(students)
     except UnicodeError, ValueError, RecursionError:
         raise GachaGenerationFailure("gacha_roster_invalid") from None
+
+
+def _unique_roster_row(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    row = dict(pairs)
+    if len(row) != len(pairs):
+        raise ValueError
+    return row
 
 
 def _require_image(
