@@ -372,6 +372,7 @@ def test_missing_upload_can_be_resumed_and_ready_complete_is_replayed(missing_co
     )
     service = DebateAttachmentService(cast(Any, repository), store)
     key = repository.item["upload_key"]
+    assert isinstance(key, str)
     s3.objects[key + ".other"] = {}
     with pytest.raises(AttachmentFailure, match="ATTACHMENT_NOT_READY") as failure:
         service.complete("owner", ID, datetime.now(UTC))
