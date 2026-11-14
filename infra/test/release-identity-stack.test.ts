@@ -68,7 +68,7 @@ describe("ReleaseIdentityStack", () => {
     const { template } = synthesize();
 
     template.resourceCountIs("AWS::IAM::OIDCProvider", 0);
-    template.resourceCountIs("AWS::IAM::Role", 7);
+    template.resourceCountIs("AWS::IAM::Role", 8);
     expect(JSON.stringify(template.toJSON())).toContain(
       "oidc-provider/token.actions.githubusercontent.com",
     );
@@ -80,6 +80,7 @@ describe("ReleaseIdentityStack", () => {
       "ShittimChest-Prod-GitHub-RecordsDeploy",
       "ShittimChest-Prod-GitHub-RecordsBackfill",
       "ShittimChest-Prod-GitHub-RecordsDrift",
+      "ShittimChest-Prod-GitHub-StudentGachaRosterRelease",
     ]) {
       template.hasResourceProperties("AWS::IAM::Role", {
         RoleName: roleName,
@@ -105,6 +106,55 @@ describe("ReleaseIdentityStack", () => {
     );
     expect(trusts).not.toContain("StringLike");
     expect(trusts).not.toContain("repo:pitekusu/shittim-chest:");
+  });
+
+  test("binds roster publication to one main workflow and conditional writes to one object", () => {
+    const { template } = synthesize();
+    template.hasResourceProperties("AWS::IAM::Role", {
+      RoleName: "ShittimChest-Prod-GitHub-StudentGachaRosterRelease",
+      AssumeRolePolicyDocument: {
+        Statement: [{
+          Action: "sts:AssumeRoleWithWebIdentity",
+          Condition: { StringEquals: {
+            "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+            "token.actions.githubusercontent.com:sub":
+              "repo:pitekusu@12059348/shittim-chest@1302516701:environment:student-gacha-roster",
+            "token.actions.githubusercontent.com:ref": "refs/heads/main",
+            "token.actions.githubusercontent.com:job_workflow_ref":
+              "pitekusu/shittim-chest/.github/workflows/student-gacha-roster-publish.yml@refs/heads/main",
+          } },
+          Effect: "Allow",
+          Principal: { Federated: Match.anyValue() },
+        }],
+      },
+    });
+    const policies = Object.values(template.findResources("AWS::IAM::Policy"));
+    const policy = policies.find((entry) =>
+      JSON.stringify(entry.Properties.Roles).includes("StudentGachaRosterReleaseRole"),
+    );
+    const statements = policy?.Properties.PolicyDocument.Statement;
+    expect(statements).toHaveLength(4);
+    const bucket = "shittim-chest-production-records-media-";
+    const key = "/student-gacha/roster/blue_archive_characters_with_npcs.json";
+    expect(statements[0].Action).toBe("s3:GetBucketVersioning");
+    expect(JSON.stringify(statements[0].Resource)).toContain(bucket);
+    expect(JSON.stringify(statements[0].Resource)).not.toContain(key);
+    expect(statements[1].Action).toEqual(["s3:GetObject", "s3:GetObjectVersion"]);
+    for (const statement of statements.slice(1)) {
+      const resource = JSON.stringify(statement.Resource);
+      expect(resource).toContain(bucket);
+      expect(resource).toContain(key);
+      expect(resource).not.toContain("*");
+    }
+    for (const [index, header] of ["s3:if-none-match", "s3:if-match"].entries()) {
+      expect(statements[index + 2]).toMatchObject({
+        Action: "s3:PutObject",
+        Condition: {
+          Null: { [header]: "false" },
+          StringEquals: { "s3:x-amz-server-side-encryption": "AES256" },
+        },
+      });
+    }
   });
 
   test("binds Records planning and drift to main and writes to production approval", () => {

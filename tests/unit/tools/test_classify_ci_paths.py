@@ -79,6 +79,8 @@ def test_records_changes_require_records_ci(path: str) -> None:
         (("infra/lib/records-application-stack.ts",), {"infra", "records_infra"}),
         (("package-lock.json",), {"infra", "records_infra"}),
         (("docs/11_Discord詳細設計.md",), set()),
+        (("data/student-gacha/blue_archive_characters_with_npcs.json",), set()),
+        (("data/student-gacha/unclassified.json",), set(classifier.SCOPES)),
         (("docs/24_シッテムの箱 議事録設計.md",), set()),
         (
             ("apps/records-android/app/build.gradle.kts", "docs/29_Androidアプリ設計.md"),

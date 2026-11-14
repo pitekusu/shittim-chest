@@ -1,0 +1,12 @@
+[Unit]
+Description=Update and release the Shittim Chest student gacha roster
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/bin:/usr/bin:/bin
+Environment=GH_PROMPT_DISABLED=1
+StateDirectory=shittim-chest/student-gacha-roster
+UMask=0077
+WorkingDirectory=%h/.local/lib/shittim-student-gacha-roster
+ExecStart=/usr/bin/python3 -Es -m tools.maintain_student_gacha_roster --state-directory %S/shittim-chest/student-gacha-roster
+TimeoutStartSec=105min

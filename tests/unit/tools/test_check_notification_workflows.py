@@ -21,6 +21,8 @@ from tools.check_notification_workflows import (
     RECORDS_CI_WORKFLOW,
     RECORDS_RELEASE_WORKFLOW,
     RELEASE_WORKFLOW,
+    ROSTER_PUBLISH_WORKFLOW,
+    ROSTER_RELEASE_WORKFLOW,
     WORKFLOW_DIRECTORY,
     WORKFLOW_RUN_NOTIFICATION,
     WorkflowPolicyError,
@@ -46,6 +48,8 @@ def directory(tmp_path: Path) -> Path:
         RECORDS_RELEASE_WORKFLOW,
         RECORDS_BACKFILL_WORKFLOW,
         ANDROID_RELEASE_WORKFLOW,
+        ROSTER_RELEASE_WORKFLOW,
+        ROSTER_PUBLISH_WORKFLOW,
     ):
         (directory / name).write_bytes((WORKFLOW_DIRECTORY / name).read_bytes())
     shutil.copytree(WORKFLOW_DIRECTORY.parent / "actions", directory.parent / "actions")
@@ -60,6 +64,41 @@ def _replace(path: Path, old: str, new: str, count: int = -1) -> None:
 
 def test_repository_target_workflow_is_accepted(directory: Path) -> None:
     assert validate_notification_workflows(directory) == 1
+
+
+@pytest.mark.parametrize(
+    "workflow,before,after",
+    (
+        (ROSTER_RELEASE_WORKFLOW, "workflow_dispatch:", "pull_request:"),
+        (
+            ROSTER_RELEASE_WORKFLOW,
+            "./.github/workflows/student-gacha-roster-publish.yml",
+            "./.github/workflows/other-publisher.yml",
+        ),
+        (ROSTER_PUBLISH_WORKFLOW, "checks: read", "checks: write"),
+        (
+            ROSTER_PUBLISH_WORKFLOW,
+            "environment: student-gacha-roster",
+            "environment: production",
+        ),
+        (
+            ROSTER_PUBLISH_WORKFLOW,
+            "python3 tools/check_release_ci.py",
+            "echo skipped",
+        ),
+        (
+            ROSTER_PUBLISH_WORKFLOW,
+            "run: bash tools/publish_student_gacha_roster.sh",
+            "run: aws cloudformation execute-change-set",
+        ),
+    ),
+)
+def test_roster_release_rejects_widened_workflow_permissions_or_missing_gate(
+    directory: Path, workflow: str, before: str, after: str
+) -> None:
+    _replace(directory / workflow, before, after)
+    with pytest.raises(WorkflowPolicyError, match="Roster release"):
+        validate_notification_workflows(directory)
 
 
 @pytest.mark.parametrize("workflow", ("ci.yml", RELEASE_WORKFLOW))

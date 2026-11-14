@@ -1,0 +1,9 @@
+[Unit]
+Description=Compare the Shittim Chest student gacha roster monthly
+
+[Timer]
+OnCalendar=*-*-01 09:17:00 Asia/Tokyo
+Persistent=true
+
+[Install]
+WantedBy=timers.target
