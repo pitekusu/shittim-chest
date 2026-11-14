@@ -11,7 +11,7 @@ import json
 import warnings
 from typing import TYPE_CHECKING, Final
 
-from botocore.exceptions import BotoCoreError, ClientError
+from botocore.exceptions import BotoCoreError, ClientError, FlexibleChecksumError
 from PIL import Image, UnidentifiedImageError
 
 from shittim_chest.application.student_gacha_models import (
@@ -25,10 +25,10 @@ from shittim_chest.domain import ParticipantSlot
 
 if TYPE_CHECKING:
     from mypy_boto3_s3.client import S3Client
-    from mypy_boto3_s3.type_defs import HeadObjectOutputTypeDef
+    from mypy_boto3_s3.type_defs import GetObjectOutputTypeDef, HeadObjectOutputTypeDef
 
 STUDENT_GACHA_ASSET_PREFIX: Final = "student-gacha/assets/"
-ROSTER_KEY: Final = STUDENT_GACHA_ASSET_PREFIX + "blue_archive_characters_with_npcs.json"
+ROSTER_KEY: Final = "student-gacha/roster/blue_archive_characters_with_npcs.json"
 LOADING_GIF_KEY: Final = STUDENT_GACHA_ASSET_PREFIX + "show.gif"
 FORMAT_KEY: Final = STUDENT_GACHA_ASSET_PREFIX + "format.jpg"
 # Same private objects already used by Records memorial and Momotalk generation.
@@ -38,11 +38,12 @@ PARTICIPANT_REFERENCE_KEYS: dict[ParticipantSlot, str] = {
     ParticipantSlot.PARTICIPANT_C: "participants/participant-c/memorial-reference.webp",
 }
 _ASSET_DIGESTS: Final = {
-    ROSTER_KEY: "40dba2b9261072e25a8e9a1378447880e07658446c82cbc3836ce5759336cabd",
     LOADING_GIF_KEY: "a902598c659185353850dbe9e26c18fa0dd57d9f5d6288d2673b3c1e7e47ad63",
     FORMAT_KEY: "4d921dc67519a8b826a7ef6cf4853acaffca6db69c81e737816378f2ea9e80e0",
 }
 _MAX_REFERENCE_BYTES = 10 * 1024 * 1024
+_ROSTER_MAX_BYTES = 256 * 1024
+_ROSTER_MAX_ROWS = 2_000
 RESULT_MAX_BYTES: Final = 8 * 1024 * 1024
 RESULT_SIZE: Final = (1792, 828)
 _MAX_PIXELS = 12_000_000
@@ -58,9 +59,7 @@ class StudentGachaMedia:
         self._bucket = bucket_name
 
     async def roster(self) -> tuple[Student, ...]:
-        return await asyncio.to_thread(
-            lambda: _parse_roster(self._read_asset(ROSTER_KEY, maximum=64 * 1024))
-        )
+        return await asyncio.to_thread(self._roster)
 
     async def loading_gif(self) -> bytes:
         # The pinned hash validates the animated, indefinitely looping source byte for byte.
@@ -77,6 +76,30 @@ class StudentGachaMedia:
 
     async def find(self, draw_id: str) -> StoredGachaImage | None:
         return await asyncio.to_thread(self._find, student_gacha_image_key(draw_id))
+
+    def _roster(self) -> tuple[Student, ...]:
+        try:
+            response = self._client.get_object(
+                Bucket=self._bucket, Key=ROSTER_KEY, ChecksumMode="ENABLED"
+            )
+            content = _read_body(response, maximum=_ROSTER_MAX_BYTES)
+        except FlexibleChecksumError:
+            raise GachaGenerationFailure("gacha_asset_checksum_mismatch") from None
+        except BotoCoreError, ClientError:
+            raise GachaGenerationFailure("gacha_media_unavailable") from None
+        if response.get("ContentType") != "application/json" or response.get("VersionId") in {
+            None,
+            "",
+            "null",
+        }:
+            raise GachaGenerationFailure("gacha_roster_invalid")
+        checksum = base64.b64encode(hashlib.sha256(content).digest()).decode("ascii")
+        if (
+            response.get("ChecksumType") != "FULL_OBJECT"
+            or response.get("ChecksumSHA256") != checksum
+        ):
+            raise GachaGenerationFailure("gacha_asset_checksum_mismatch")
+        return _parse_roster(content)
 
     def _references(self, performer: ParticipantSlot) -> tuple[bytes, bytes]:
         layout = self._read_asset(FORMAT_KEY, maximum=512 * 1024)
@@ -99,19 +122,9 @@ class StudentGachaMedia:
                 if version is not None
                 else self._client.get_object(Bucket=self._bucket, Key=key)
             )
-            body = response["Body"]
-            try:
-                size = response.get("ContentLength", 0)
-                if not 1 <= size <= maximum:
-                    raise GachaGenerationFailure("gacha_media_invalid")
-                content = body.read(maximum + 1)
-            finally:
-                body.close()
+            return _read_body(response, maximum=maximum)
         except BotoCoreError, ClientError:
             raise GachaGenerationFailure("gacha_media_unavailable") from None
-        if len(content) != size:
-            raise GachaGenerationFailure("gacha_media_invalid")
-        return content
 
     def _save(self, key: str, png: bytes) -> StoredGachaImage:
         if not 1 <= len(png) <= RESULT_MAX_BYTES:
@@ -174,6 +187,20 @@ class StudentGachaMedia:
         return not any(item.get("Key") == key for item in listing.get("Contents", []))
 
 
+def _read_body(response: GetObjectOutputTypeDef, *, maximum: int) -> bytes:
+    body = response["Body"]
+    try:
+        size = response.get("ContentLength", 0)
+        if not 1 <= size <= maximum:
+            raise GachaGenerationFailure("gacha_media_invalid")
+        content = body.read(maximum + 1)
+    finally:
+        body.close()
+    if len(content) != size:
+        raise GachaGenerationFailure("gacha_media_invalid")
+    return content
+
+
 def _receipt(key: str, head: HeadObjectOutputTypeDef) -> StoredGachaImage:
     if (
         head.get("ContentType") != "image/png"
@@ -189,8 +216,8 @@ def _receipt(key: str, head: HeadObjectOutputTypeDef) -> StoredGachaImage:
 
 def _parse_roster(content: bytes) -> tuple[Student, ...]:
     try:
-        rows: object = json.loads(content, object_pairs_hook=_unique_roster_row)
-        if not isinstance(rows, list) or not 1 <= len(rows) <= 500:
+        rows: object = json.loads(content.decode("utf-8"), object_pairs_hook=_unique_roster_row)
+        if not isinstance(rows, list) or not 1 <= len(rows) <= _ROSTER_MAX_ROWS:
             raise ValueError
         students: list[Student] = []
         names: set[str] = set()
@@ -205,6 +232,7 @@ def _parse_roster(content: bytes) -> tuple[Student, ...]:
                 or name in names
                 or type(rarity) is not int
                 or rarity not in STUDENT_GACHA_RARITIES
+                or (rarity == 0 and name in {"アロナ", "プラナ"})
             ):
                 raise ValueError
             students.append(Student(name, school, rarity=rarity))

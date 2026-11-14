@@ -181,8 +181,11 @@ Discord送信は同じ送信識別子と保存画像で再開し、応答不明�
 配信を一時停止する場合は新規受付を無効にする。保存済みの作品は非公開のまま保持する。
 
 有効化前に、非公開Mediaバケットの `student-gacha/assets/` に原本の
-`blue_archive_characters_with_npcs.json`、`show.gif`、`format.jpg` を登録し、S3上のチェックサムと参照肖像3点を確認する。
-キャラクター一覧の各行は `name`・`school`・整数の `rarity` を含み、0〜4の各レアリティに候補を1件以上含める。
+`show.gif` と `format.jpg` を登録し、S3上のチェックサムと参照肖像3点を確認する。
+名簿配信により `student-gacha/roster/blue_archive_characters_with_npcs.json` を登録してからCoreを配信する。
+新規抽選はS3の現行バージョンを読み、完全オブジェクトのSHA-256と行を検証する。
+各行は `name`・`school`・整数の `rarity` を含み、0〜4の各レアリティに候補を1件以上含める。
+月次更新と配信は[GitHub・CI-CD詳細設計](15_GitHub・CI-CD詳細設計.md)を参照する。
 アロナBotの公開鍵を `/shittim-chest/production/discord/participant-a/public-key` に登録する。
 対象チャンネルで、アロナBotが閲覧・投稿・履歴参照・ファイル添付・リンク埋め込みをできることを確認する。
 Core Releaseの `student_gacha_enabled` に `true` を指定して配信し、CloudFormation出力

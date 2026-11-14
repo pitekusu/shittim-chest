@@ -1019,7 +1019,7 @@ export class RuntimeStack extends Stack {
   private grantStudentGachaMedia(role: iam.Role): void {
     const media = `arn:${this.partition}:s3:::shittim-chest-production-records-media-${this.account}`;
     const assets = [
-      "student-gacha/assets/blue_archive_characters_with_npcs.json",
+      "student-gacha/roster/blue_archive_characters_with_npcs.json",
       "student-gacha/assets/show.gif",
       "student-gacha/assets/format.jpg",
       "participants/participant-a/memorial-reference.png",
