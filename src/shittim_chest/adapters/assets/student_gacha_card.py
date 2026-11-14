@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import math
+import re
 import warnings
 from functools import cache
 from importlib.resources import files
@@ -32,6 +33,9 @@ _INK = "#293b54"
 _WHITE = "#fcfdff"
 _MUTED = "#506680"
 _GOLD = "#f8ce61"
+_COSTUME_NAME = re.compile(
+    r"([^()\uff08\uff09]+)(?:\uff08([^()\uff08\uff09]+)\uff09|\(([^()\uff08\uff09]+)\))"
+)
 _STAR_CENTERS = (
     (),
     (69,),
@@ -187,7 +191,13 @@ def _dialogue(presentation: GachaPresentation, teacher: str) -> Image.Image:
         draw.line((139, 12, 139, 69), fill="#687da4")
         name_x, name_width = 159, 355
     performer = _PERFORMER_NAMES[presentation.performer]
-    name = f"{presentation.student.name}\uff08{performer}\uff09"
+    student_name = presentation.student.name
+    costume = _COSTUME_NAME.fullmatch(student_name)
+    if costume is None:
+        name = f"{performer}\uff08{student_name}\uff09"
+    else:
+        student, fullwidth_variant, ascii_variant = costume.groups()
+        name = f"{performer}\uff08{student}\uff09\uff08{fullwidth_variant or ascii_variant}\uff09"
     _label(draw, (name_x, 23), name, 37, name_width, _WHITE, bold=True)
     for index, greeting in enumerate(presentation.greeting):
         line = greeting.replace(TEACHER_PLACEHOLDER, teacher)

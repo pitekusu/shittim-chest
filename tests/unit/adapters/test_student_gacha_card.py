@@ -55,13 +55,22 @@ def test_card_shows_the_selected_number_of_stars(
     assert stars == expected
 
 
-def test_card_displays_student_and_performer_as_a_single_name(artwork: bytes) -> None:
-    student_name = "キキョウ\uff08水着\uff09"
+@pytest.mark.parametrize(
+    ("student_name", "expected"),
+    [
+        ("キキョウ\uff08水着\uff09", "プラナ\uff08キキョウ\uff09\uff08水着\uff09"),
+        ("キキョウ(水着)", "プラナ\uff08キキョウ\uff09\uff08水着\uff09"),
+        ("キキョウ", "プラナ\uff08キキョウ\uff09"),
+    ],
+)
+def test_card_displays_performer_then_student_and_variant(
+    artwork: bytes, student_name: str, expected: str
+) -> None:
     with patch("shittim_chest.adapters.assets.student_gacha_card._label") as label:
         _render(artwork, 3, student_name=student_name, performer=ParticipantSlot.PARTICIPANT_B)
 
     labels = [call.args[2] for call in label.call_args_list]
-    assert labels.count(f"{student_name}\uff08プラナ\uff09") == 1
+    assert labels.count(expected) == 1
     assert "プラナ" not in labels
     assert all(not name.startswith("コスプレ") for name in labels)
 
