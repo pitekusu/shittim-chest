@@ -255,6 +255,11 @@
   font-weight: 750;
 }
 
+.schoolIcon:has(img) {
+  /* The catalog logos have dark artwork on transparent backgrounds. */
+  background: #f5fbff;
+}
+
 .schoolIcon img {
   width: 100%;
   height: 100%;
