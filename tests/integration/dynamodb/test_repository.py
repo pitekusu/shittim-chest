@@ -31,6 +31,7 @@ from shittim_chest.adapters.dynamodb.serializer import (
     LEGACY_AFFECTION_SCHEMA_VERSION,
     DynamoItem,
     serialize_outbox,
+    serialize_runtime_state,
     serialize_snapshot,
 )
 from shittim_chest.adapters.dynamodb.student_gacha import DynamoDbStudentGachaRepository
@@ -65,7 +66,7 @@ from shittim_chest.application.ports import (
     RepositoryTransactionConflict,
     RepositoryTransactionStage,
 )
-from shittim_chest.application.scale_to_zero import IngressSource
+from shittim_chest.application.scale_to_zero import IngressSource, RuntimeState, RuntimeStatus
 from shittim_chest.application.student_gacha_state import GachaJobKind
 from shittim_chest.domain import (
     AffectionReasonStatus,
@@ -1160,7 +1161,20 @@ async def test_terminal_finalize_atomically_completes_origin_ingress_status(
     assert publication.state is StatusPublicationState.PREPARED
 
     if gacha is not None:
-        notice = await gacha.claim_next(claim_owner="worker", at=NOW + timedelta(seconds=2))
+        started = (
+            RuntimeState.stopped(at=NOW)
+            .resume_for_work(at=NOW)
+            .mark_started(at=NOW, runtime_instance_id="runtime-instance")
+        )
+        dynamodb_client.put_item(
+            TableName=dynamodb_table,
+            Item=marshal_item(
+                serialize_runtime_state(started.transition(RuntimeStatus.READY, at=NOW))
+            ),
+        )
+        notice = await gacha.claim_next(
+            claim_owner="runtime-instance", at=NOW + timedelta(seconds=2)
+        )
         assert notice is not None and notice.kind is GachaJobKind.PROGRESS
         assert notice.remaining == 4 and notice.after_message_id == "100"
 

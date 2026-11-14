@@ -16,12 +16,13 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.deployment_lock import deployment_lock_open_check
-from shittim_chest.adapters.dynamodb.serializer import DynamoItem
+from shittim_chest.adapters.dynamodb.serializer import RUNTIME_STATE_KEY, DynamoItem
 from shittim_chest.adapters.dynamodb.student_gacha_activity import (
     STUDENT_GACHA_ACTIVITY_KEY,
     STUDENT_GACHA_ACTIVITY_TYPE,
 )
 from shittim_chest.application.ports import RepositoryConflict, RepositoryUnavailable
+from shittim_chest.application.scale_to_zero import RuntimeStatus
 from shittim_chest.application.student_gacha_models import (
     STUDENT_GACHA_RARITIES,
     GachaPresentation,
@@ -434,8 +435,27 @@ class DynamoDbStudentGachaRepository:
                 next_available_at=at + _CLAIM_TIME,
                 version=job.version + 1,
             )
+            # A warm task still polls during IDLE. Wait until wake recovery opens
+            # READY/BUSY so its generation change cannot interrupt a fresh claim.
+            runtime_ready: TransactWriteItemTypeDef = {
+                "ConditionCheck": {
+                    "TableName": self._table_name,
+                    "Key": marshal_item(RUNTIME_STATE_KEY),
+                    "ConditionExpression": (
+                        "#state IN (:ready, :busy) AND runtime_instance_id = :owner"
+                    ),
+                    "ExpressionAttributeNames": {"#state": "state"},
+                    "ExpressionAttributeValues": marshal_item(
+                        {
+                            ":ready": RuntimeStatus.READY.value,
+                            ":busy": RuntimeStatus.BUSY.value,
+                            ":owner": claim_owner,
+                        }
+                    ),
+                }
+            }
             try:
-                self._transact(*self._move_job(job, claimed))
+                self._transact(runtime_ready, *self._move_job(job, claimed))
             except RepositoryConflict:
                 continue
             return claimed
