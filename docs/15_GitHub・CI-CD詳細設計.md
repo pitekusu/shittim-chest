@@ -948,6 +948,32 @@ Androidは`gradle/actions/dependency-submission`で依存解決結果を送信�
 送信は`main`限定の専用jobに`contents: write`を与え、PRのコードへ書込権限を渡さない。
 Gradleの直接依存は更新PRの対象になるが、推移的依存だけの警告では親依存や制約の更新が必要になる場合がある。
 
+### 生徒募集の名簿
+
+名簿の正本は `data/student-gacha/blue_archive_characters_with_npcs.json` とする。
+[キャラクター一覧](https://bluearchive.wikiru.jp/?cmd=read&page=%E3%82%AD%E3%83%A3%E3%83%A9%E3%82%AF%E3%82%BF%E3%83%BC%E4%B8%80%E8%A6%A7)の星1で入手欄に◇がある場合はレアリティ3とする。
+[NPC一覧](https://bluearchive.wikiru.jp/?cmd=read&page=NPC%E4%B8%80%E8%A6%A7)のキャラクターと衣装替えはレアリティ0とし、
+シッテムの箱所属のアロナとプラナをレアリティ0から除外する。既存のレアリティ4は保持する。
+取得や構造の検証に失敗した場合、既存名簿を保護して終了する。
+
+`shittim-student-gacha-roster.timer` は毎月1日09:17（日本時間）に起動する。
+`tools/systemd/` のserviceとtimerをユーザーのsystemdへ登録し、同じ版の
+`tools/maintain_student_gacha_roster.py`、`tools/update_student_gacha_roster.py`、
+`tools/check_release_ci.py` をserviceの作業ディレクトリの `tools/` に置く。
+既存のGitHub CLI所有者ログインを使うため、資格情報を追加で保存する必要はない。
+名簿に差分がある場合はJSONだけを変更するPRを作成し、必須CIとCodeQLを待ってsquash mergeする。
+タイマーが途中で失敗した場合は保存したPR番号・配信runから再照合して再開できる。
+Wiki照合だけを実行する場合は `python -m tools.update_student_gacha_roster`、
+ネットワークを使わない形式検証には `--check` を使う。
+
+初回はReleaseIdentityに名簿専用ロールを作成し、GitHub Environment `student-gacha-roster` を
+`main` に限定する。`STUDENT_GACHA_ROSTER_RELEASE_ENABLED=true` を設定したら、同一SHAの必須CI成功後に
+`Student Gacha Roster Release` を `expected_sha` 付きで実行する。
+既存の非公開・バージョニング済みメディアバケットの `student-gacha/roster/` 配下にある名簿1件に限り、
+条件付きで更新し、S3から同一バージョンと現在のバージョンを再取得してチェックサムと内容を照合する。
+この初回配信と読み戻しを済ませてから同じキーを読むCoreを配信する。
+以降の名簿だけの差分は同じActionsで反映する。CoreとRecordsのコード配信には既存の本番承認を適用する。
+
 正確な時刻・対象・権限は[ワークフロー定義](https://github.com/pitekusu/shittim-chest/tree/main/.github/workflows)、
 通知の挙動は[通知運用設計](21_GitHub・Discord通知運用設計.md)を正とする。
 ソース取得は`persist-credentials=false`、権限はジョブ単位で最小化する。

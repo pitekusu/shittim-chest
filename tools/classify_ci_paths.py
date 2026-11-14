@@ -28,6 +28,7 @@ RUNTIME_CONTEXT_FILES = frozenset(
     }
 )
 RUNTIME_CONTEXT_PREFIXES = ("src/",)
+STUDENT_GACHA_ROSTER_PATH = "data/student-gacha/blue_archive_characters_with_npcs.json"
 RUNTIME_VALIDATION_FILES = frozenset(
     {
         "tools/check_ci_scope.py",
@@ -125,6 +126,9 @@ def _normalized(path: str) -> str:
 def _path_scopes(path: str) -> set[str]:
     if path in PIPELINE_FILES or path.startswith(".github/actions/"):
         return set(SCOPES)
+    if path == STUDENT_GACHA_ROSTER_PATH:
+        # The quality job validates this data before its own S3-only release.
+        return set()
     if path.startswith("docs/") or path == "AGENTS.md":
         return set()
     if path.startswith(ANDROID_PREFIX):

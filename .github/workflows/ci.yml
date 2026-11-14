@@ -157,6 +157,8 @@ jobs:
           uv run --frozen python -m tools.sync_cdk_helper_ca --check
           uv run --frozen python tools/check_tool_versions.py validate \
             .github/tool-versions.json
+      - name: Validate the versioned student gacha roster
+        run: python3 -m tools.update_student_gacha_roster --check
       - name: Check types with ty
         id: ty
         run: >-
