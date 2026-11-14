@@ -7,6 +7,7 @@ import dev.pitekusu.shittim.records.auth.RECORDS_ORIGIN
 internal enum class RecordsWebPage(@StringRes val title: Int, private val path: String,
   val administrator: Boolean = false) {
   Memorial(R.string.menu_memorial, "/memorial"),
+  StudentGacha(R.string.menu_student_gacha, "/gallery"),
   Status(R.string.menu_status, "/admin", administrator = true),
   Prompts(R.string.menu_prompts, "/admin/prompts", administrator = true);
 
