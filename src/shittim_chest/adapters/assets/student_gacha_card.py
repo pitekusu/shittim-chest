@@ -31,6 +31,39 @@ _NAVY = "#14284b"
 _INK = "#293b54"
 _WHITE = "#fcfdff"
 _MUTED = "#506680"
+_GOLD = "#f8ce61"
+_STAR_CENTERS = (
+    (),
+    (69,),
+    (52, 86),
+    (35, 69, 103),
+    (27, 56, 85, 114),
+)
+_SPARKLES = (
+    (84, 96, 26),
+    (154, 180, 10),
+    (276, 66, 17),
+    (366, 133, 8),
+    (55, 320, 16),
+    (231, 284, 20),
+    (322, 368, 8),
+    (117, 449, 24),
+    (44, 562, 12),
+    (72, 707, 20),
+    (104, 761, 7),
+    (1280, 70, 13),
+    (1380, 106, 10),
+    (1488, 56, 25),
+    (1598, 120, 9),
+    (1687, 94, 22),
+    (1738, 251, 13),
+    (1659, 350, 9),
+    (1717, 493, 24),
+    (1658, 603, 13),
+    (1574, 714, 19),
+    (1429, 765, 12),
+    (1719, 750, 22),
+)
 
 
 def render_card(art: bytes, presentation: GachaPresentation, teacher: str) -> bytes:
@@ -44,6 +77,8 @@ def render_card(art: bytes, presentation: GachaPresentation, teacher: str) -> by
                 if source.size != _ART_SIZE or getattr(source, "n_frames", 1) != 1:
                     raise GachaGenerationFailure("gacha_image_invalid")
                 canvas = ImageOps.fit(source.convert("RGBA"), RESULT_SIZE)
+        if presentation.student.rarity == 4:
+            canvas.alpha_composite(_rare_reveal())
         canvas.alpha_composite(_dossier(presentation), dest=(1125, 141))
         canvas.alpha_composite(_dialogue(presentation, teacher), dest=(132, 555))
         output = io.BytesIO()
@@ -59,6 +94,40 @@ def render_card(art: bytes, presentation: GachaPresentation, teacher: str) -> by
     return output.getvalue()
 
 
+@cache
+def _rare_reveal() -> Image.Image:
+    """Decorate the edges while keeping the center of the artwork untouched."""
+    width = RESULT_SIZE[0]
+    wash = ImageOps.colorize(
+        Image.linear_gradient("L"),
+        black="#8357ff",
+        mid="#ed419c",
+        white="#36d7f2",
+    ).resize(RESULT_SIZE, Image.Resampling.BILINEAR)
+    alpha = bytes(round(150 * max(0, 1 - min(x, width - 1 - x) / 440) ** 1.5) for x in range(width))
+    wash.putalpha(Image.frombytes("L", (width, 1), alpha).resize(RESULT_SIZE))
+    sparkles = Image.new("RGBA", RESULT_SIZE)
+    draw = ImageDraw.Draw(sparkles)
+    for x, y, radius in _SPARKLES:
+        glow = radius * 1.35
+        draw.ellipse((x - glow, y - glow, x + glow, y + glow), fill="#ffe5ff38")
+        inner = max(2, radius // 4)
+        draw.polygon(
+            (
+                (x, y - radius),
+                (x + inner, y - inner),
+                (x + radius, y),
+                (x + inner, y + inner),
+                (x, y + radius),
+                (x - inner, y + inner),
+                (x - radius, y),
+                (x - inner, y - inner),
+            ),
+            fill="#fff3bf" if radius >= 18 else "#effdff",
+        )
+    return Image.alpha_composite(wash, sparkles)
+
+
 def _dialogue(presentation: GachaPresentation, teacher: str) -> Image.Image:
     layer = Image.new("RGBA", (702, 225))
     draw = ImageDraw.Draw(layer)
@@ -68,11 +137,16 @@ def _dialogue(presentation: GachaPresentation, teacher: str) -> Image.Image:
     )
     draw.rounded_rectangle((21, 80, 680, 206), radius=9, outline="#b5c0d487")
     draw.rounded_rectangle((0, 0, 547, 81), radius=12, fill=_NAVY, outline="#4e628b")
-    for x in (35, 69, 103):
-        draw.polygon(_star(x, 30), fill="#f8ce61")
-    draw.line((139, 12, 139, 69), fill="#687da4")
-    _label(draw, (159, 7), _PERFORMER_NAMES[presentation.performer], 37, 355, _WHITE, bold=True)
-    _label(draw, (159, 51), f"コスプレ　{presentation.student.name}", 21, 355, "#bce3ff")
+    rarity = 3 if presentation.student.rarity is None else presentation.student.rarity
+    for x in _STAR_CENTERS[rarity]:
+        draw.polygon(_star(x, 30, radius=13 if rarity == 4 else 16), fill=_GOLD)
+    name_x, name_width = 23, 491
+    if rarity:
+        draw.line((139, 12, 139, 69), fill="#687da4")
+        name_x, name_width = 159, 355
+    performer = _PERFORMER_NAMES[presentation.performer]
+    name = f"{presentation.student.name}\uff08{performer}\uff09"
+    _label(draw, (name_x, 23), name, 37, name_width, _WHITE, bold=True)
     for index, greeting in enumerate(presentation.greeting):
         line = greeting.replace(TEACHER_PLACEHOLDER, teacher)
         _label(draw, (43, 95 + index * 34), line, 26, 600, _INK)
@@ -113,12 +187,12 @@ def _dossier(presentation: GachaPresentation) -> Image.Image:
     return layer.rotate(3, resample=Image.Resampling.BICUBIC, expand=True)
 
 
-def _star(x: int, y: int) -> list[tuple[float, float]]:
+def _star(x: int, y: int, *, radius: int) -> list[tuple[float, float]]:
     points = []
     for index in range(10):
         angle = index * math.pi / 5 - math.pi / 2
-        radius = 16 if index % 2 == 0 else 7
-        points.append((x + radius * math.cos(angle), y + radius * math.sin(angle)))
+        distance = radius if index % 2 == 0 else round(radius * 7 / 16)
+        points.append((x + distance * math.cos(angle), y + distance * math.sin(angle)))
     return points
 
 

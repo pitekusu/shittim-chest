@@ -10,6 +10,7 @@ import pytest
 from mypy_boto3_dynamodb.client import DynamoDBClient
 
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
+from shittim_chest.adapters.dynamodb.serializer import DynamoItem
 from shittim_chest.adapters.dynamodb.student_gacha import DynamoDbStudentGachaRepository
 from shittim_chest.adapters.dynamodb.student_gacha_activity import STUDENT_GACHA_ACTIVITY_KEY
 from shittim_chest.application.ports import RepositoryConflict
@@ -26,8 +27,9 @@ OWNER = "fixture-opaque-owner"
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("rarity", [None, 0], ids=["legacy", "zero-star"])
 async def test_cycle_eligibility_survives_contention_and_cannot_cross_a_reward(
-    dynamodb_client: DynamoDBClient, dynamodb_table: str
+    dynamodb_client: DynamoDBClient, dynamodb_table: str, rarity: int | None
 ) -> None:
     repository = DynamoDbStudentGachaRepository(client=dynamodb_client, table_name=dynamodb_table)
 
@@ -138,7 +140,7 @@ async def test_cycle_eligibility_survives_contention_and_cannot_cross_a_reward(
     assert await submit("75")
     first_job = await repository.claim_next(claim_owner="first", at=NOW)
     assert first_job is not None and first_job.kind is GachaJobKind.DRAW
-    student = Student("コハル", "トリニティ")
+    student = Student("コハル", "トリニティ", rarity=rarity)
     performer = ParticipantSlot.PARTICIPANT_A
     presentation = GachaPresentation(
         student,
@@ -166,7 +168,8 @@ async def test_cycle_eligibility_survives_contention_and_cannot_cross_a_reward(
     later = NOW + timedelta(minutes=6)
     second_job = await repository.claim_next(claim_owner="second", at=later)
     assert second_job is not None and second_job.stored == stored
-    assert second_job.presentation == presentation and second_job.teacher_name is None
+    assert second_job.student == student and second_job.presentation == presentation
+    assert second_job.teacher_name is None
     with pytest.raises(RepositoryConflict, match="gacha transaction conflict"):
         await repository.finish(first_job, at=NOW, reopen=True)
 
@@ -187,6 +190,7 @@ async def test_cycle_eligibility_survives_contention_and_cannot_cross_a_reward(
     assert recovered_job.job_id == second_job.job_id
     assert recovered_job.version > second_job.version
     assert recovered_job.paid_started and recovered_job.stored == stored
+    assert recovered_job.student == student and recovered_job.presentation == presentation
     assert recovered_job.after_message_id == "6" and recovered_job.result_after_message_id == "6"
     assert recovered_job.teacher_name is None
     with pytest.raises(RepositoryConflict, match="gacha transaction conflict"):
@@ -199,6 +203,7 @@ async def test_cycle_eligibility_survives_contention_and_cannot_cross_a_reward(
     third_job = await repository.claim_next(claim_owner="third", at=later)
     assert third_job is not None and third_job.paid_started and third_job.stored == stored
     assert third_job.result_after_message_id == "6"
+    assert third_job.student == student and third_job.presentation == presentation
     third_job = await repository.checkpoint(
         third_job, replace(third_job, result_message_id="8", teacher_name=None), at=later
     )
@@ -213,7 +218,10 @@ async def test_cycle_eligibility_survives_contention_and_cannot_cross_a_reward(
     assert len(gallery["Items"]) == 1
     result = unmarshal_item(gallery["Items"][0])
     assert result["offer_id"] == offer_id and result["performer"] == performer.value
-    assert result["student"] == {"name": student.name, "school": student.school}
+    expected_student: DynamoItem = {"name": student.name, "school": student.school}
+    if rarity is not None:
+        expected_student["rarity"] = rarity
+    assert result["student"] == expected_student
     assert result["stored"] == {
         "key": stored.key,
         "version_id": stored.version_id,

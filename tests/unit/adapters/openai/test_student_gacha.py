@@ -32,7 +32,7 @@ from shittim_chest.application.student_gacha_models import (
 )
 from shittim_chest.domain import PARTICIPANTS, ParticipantSlot
 
-_STUDENT = Student("アコ\uff08ドレス\uff09", "ゲヘナ")
+_STUDENT = Student("アコ\uff08ドレス\uff09", "ゲヘナ", rarity=4)
 _TEACHER = "サンプル先生"
 _PRIVATE_PERSONA = "private-persona-for-test"
 _PERFORMER = ParticipantSlot.PARTICIPANT_C
@@ -101,6 +101,10 @@ async def test_known_appearance_uses_one_text_request_without_search() -> None:
     assert not payload["store"]
     assert _PRIVATE_PERSONA not in payload["instructions"]
     assert json.loads(payload["input"])["performer_reference"]["preferences"] == _PRIVATE_PERSONA
+    assert json.loads(payload["input"])["student"] == {
+        "name": _STUDENT.name,
+        "school": _STUDENT.school,
+    }
 
 
 @pytest.mark.asyncio
@@ -145,6 +149,8 @@ async def test_exact_verified_outfit_survives_missing_model_appearance_without_w
     assert result.student == student
     assert "淡い水色の羽織" in result.appearance
     assert "不透明な紺のスポーツ水着" in result.appearance
+    assert "ヘイロー" not in result.appearance
+    assert "グレーのボブ" not in result.appearance
     payload = client.responses.create.call_args.kwargs
     assert json.loads(payload["input"])["verified_costume"] == result.appearance
 
@@ -266,7 +272,7 @@ async def test_render_uses_approved_image_model_and_inserts_name_only_into_png()
     edit = AsyncMock(return_value=image_response)
     client.with_options.return_value.images.edit = edit
     adapter = _adapter(client)
-    presentation = await adapter.prepare(student=_STUDENT, performer=_PERFORMER)
+    presentation = await adapter.prepare(student=replace(_STUDENT, rarity=3), performer=_PERFORMER)
 
     result = await adapter.render(
         presentation, teacher_name=_TEACHER, references=(b"layout", b"portrait")
@@ -274,8 +280,8 @@ async def test_render_uses_approved_image_model_and_inserts_name_only_into_png()
     payload = edit.call_args.kwargs
     assert payload["model"] == IMAGE_MODEL
     assert payload["image"] == [
-        ("format.jpg", b"layout", "image/jpeg"),
         ("performer.webp", b"portrait", "image/webp"),
+        ("format.jpg", b"layout", "image/jpeg"),
     ]
     assert "live-action photography" in payload["prompt"]
     assert _TEACHER not in repr(payload)
@@ -286,11 +292,16 @@ async def test_render_uses_approved_image_model_and_inserts_name_only_into_png()
         assert image.getpixel((1720, 802)) == (190, 183, 214)
 
     other = await adapter.render(
-        replace(presentation, performer=ParticipantSlot.PARTICIPANT_A),
+        replace(presentation, performer=ParticipantSlot.PARTICIPANT_B),
         teacher_name="別の先生",
         references=(b"layout", b"portrait"),
     )
-    assert "crisp anime illustration" in edit.call_args.kwargs["prompt"]
+    prompt = edit.call_args.kwargs["prompt"]
+    assert "crisp anime illustration" in prompt
+    assert "Plana from image 1" in prompt
+    assert "halo, and head accessories exactly as shown" in prompt
+    assert json.loads(prompt.split("Costume JSON: ", 1)[1]) == {"clothing": "青いドレス"}
+    assert _STUDENT.name not in prompt
     assert other != result
 
 

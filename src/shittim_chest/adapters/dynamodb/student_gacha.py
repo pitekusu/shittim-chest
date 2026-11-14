@@ -23,6 +23,7 @@ from shittim_chest.adapters.dynamodb.student_gacha_activity import (
 )
 from shittim_chest.application.ports import RepositoryConflict, RepositoryUnavailable
 from shittim_chest.application.student_gacha_models import (
+    STUDENT_GACHA_RARITIES,
     GachaPresentation,
     StoredGachaImage,
     Student,
@@ -792,7 +793,10 @@ def _job_pointer_key(job: GachaJob) -> DynamoItem:
 def _serialize_selection(job: GachaJob) -> DynamoItem:
     item: DynamoItem = {}
     if job.student is not None:
-        item["student"] = {"name": job.student.name, "school": job.student.school}
+        student: DynamoItem = {"name": job.student.name, "school": job.student.school}
+        if job.student.rarity is not None:
+            student["rarity"] = job.student.rarity
+        item["student"] = student
     if job.performer is not None:
         item["performer"] = job.performer.value
     if job.presentation is not None:
@@ -881,7 +885,12 @@ def _deserialize_job(job_id: str, item: DynamoItem) -> GachaJob:
 
 def _student(item: DynamoItem) -> Student | None:
     source = _optional_map(item, "student")
-    return None if source is None else Student(_text(source, "name"), _text(source, "school"))
+    if source is None:
+        return None
+    rarity = _number(source, "rarity") if "rarity" in source else None
+    if rarity is not None and rarity not in STUDENT_GACHA_RARITIES:
+        raise RepositoryConflict("gacha student rarity is invalid")
+    return Student(_text(source, "name"), _text(source, "school"), rarity=rarity)
 
 
 def _performer(item: DynamoItem) -> ParticipantSlot | None:

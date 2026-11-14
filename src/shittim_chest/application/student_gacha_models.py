@@ -10,6 +10,7 @@ from shittim_chest.domain import ParticipantSlot
 
 STUDENT_GACHA_IMAGE_PREFIX = "student-gacha/results/"
 TEACHER_PLACEHOLDER = "{teacher}"
+STUDENT_GACHA_RARITIES = frozenset(range(5))
 _DRAW_ID = re.compile(r"[0-9a-f]{32}")
 _IMAGE_KEY = re.compile(re.escape(STUDENT_GACHA_IMAGE_PREFIX) + r"[0-9a-f]{32}\.png")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -19,10 +20,15 @@ _SHA256 = re.compile(r"[0-9a-f]{64}")
 class Student:
     name: str
     school: str
+    rarity: int | None = None
 
     def __post_init__(self) -> None:
         _require_printable(self.name, 60)
         _require_printable(self.school, 40)
+        if self.rarity is not None and (
+            type(self.rarity) is not int or self.rarity not in STUDENT_GACHA_RARITIES
+        ):
+            raise ValueError("invalid_student_gacha_rarity")
 
 
 @dataclass(frozen=True, slots=True)

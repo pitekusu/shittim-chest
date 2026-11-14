@@ -1,5 +1,6 @@
-"""Ensure the worker never spends another image request to retry Discord."""
+"""Test recruitment probabilities and durable draw recovery."""
 
+from collections import Counter
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import cast
@@ -11,6 +12,7 @@ from shittim_chest.application.ports import Clock
 from shittim_chest.application.student_gacha import (
     StudentGachaWorker,
     _Discord,
+    _draw_student,
     _Generator,
     _Media,
     _Store,
@@ -28,6 +30,36 @@ from shittim_chest.domain import ParticipantSlot
 NOW = datetime(2026, 11, 14, tzinfo=UTC)
 OFFER = "e" * 32
 STORED = StoredGachaImage(f"student-gacha/results/{OFFER}.png", "v1", "f" * 64)
+
+
+def test_student_draw_uses_exact_rarity_probabilities(monkeypatch: pytest.MonkeyPatch) -> None:
+    roster = tuple(
+        Student(f"student-{rank}-{index}", "school", rank)
+        for rank in range(5)
+        for index in range(rank + 1)
+    )
+    expected = [0] * 5 + [1] * 55 + [2] * 30 + [3] * 8 + [4] * 2
+    rolls = iter(range(100))
+    groups: list[tuple[Student, ...]] = []
+
+    def roll(limit: int) -> int:
+        assert limit == 100
+        return next(rolls)
+
+    def select(candidates: tuple[Student, ...]) -> Student:
+        groups.append(candidates)
+        return candidates[-1]
+
+    monkeypatch.setattr("shittim_chest.application.student_gacha.secrets.randbelow", roll)
+    monkeypatch.setattr("shittim_chest.application.student_gacha.secrets.choice", select)
+
+    rarities = [_draw_student(roster).rarity for _ in expected]
+
+    assert rarities == expected
+    assert Counter(rarities) == {0: 5, 1: 55, 2: 30, 3: 8, 4: 2}
+    assert groups == [
+        tuple(student for student in roster if student.rarity == rank) for rank in expected
+    ]
 
 
 def _job(**changes: object) -> GachaJob:

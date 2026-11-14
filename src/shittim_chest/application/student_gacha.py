@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
+from bisect import bisect_right
 from dataclasses import replace
 from datetime import datetime
 from typing import TYPE_CHECKING, Protocol
@@ -29,6 +30,8 @@ _JOB_TIMEOUT_SECONDS = 330
 _IDLE_POLL_SECONDS = 5
 _NOTICE_ATTEMPTS = 8
 _DRAW_ATTEMPTS = 12
+# Upper roll boundaries for rarity 0 through 3. Rolls 98 and 99 select rarity 4.
+_RARITY_THRESHOLDS = (5, 60, 90, 98)
 
 
 class _Store(Protocol):
@@ -313,7 +316,7 @@ class StudentGachaWorker:
             if job.student is None:
                 roster = await self._media.roster()
                 job = await self._checkpoint(
-                    job, student=secrets.choice(roster), performer=secrets.choice(PARTICIPANTS)
+                    job, student=_draw_student(roster), performer=secrets.choice(PARTICIPANTS)
                 )
             performer = _required(job.performer)
             if job.presentation is None:
@@ -398,3 +401,9 @@ def _required[Value](value: Value | None) -> Value:
     if value is None:
         raise RepositoryConflict("student gacha job is incomplete")
     return value
+
+
+def _draw_student(roster: tuple[Student, ...]) -> Student:
+    rarity = bisect_right(_RARITY_THRESHOLDS, secrets.randbelow(100))
+    candidates = tuple(student for student in roster if student.rarity == rarity)
+    return secrets.choice(candidates)
