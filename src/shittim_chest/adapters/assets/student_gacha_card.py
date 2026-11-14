@@ -43,7 +43,6 @@ _BACKGROUND_PALETTES = (
     ("#c6cfdf", "#f3f6fa", "#ffffff"),
     ("#1949a8", "#499ef4", "#c9efff"),
     ("#a4510e", "#f8b842", "#fff3b8"),
-    ("#6d3cc0", "#ae6ae0", "#ffc2e4"),
 )
 _RAINBOW = (
     "#4d40ed",
@@ -96,7 +95,8 @@ def render_card(art: bytes, presentation: GachaPresentation, teacher: str) -> by
         rarity = presentation.student.rarity
         if rarity == 4:
             canvas.alpha_composite(_rare_reveal())
-        elif rarity is not None:
+        # Three-star cards use the original soft reveal lighting from the artwork.
+        elif rarity is not None and rarity < len(_BACKGROUND_PALETTES):
             black, mid, white = _BACKGROUND_PALETTES[rarity]
             tinted = ImageOps.colorize(
                 ImageOps.grayscale(canvas), black=black, mid=mid, white=white

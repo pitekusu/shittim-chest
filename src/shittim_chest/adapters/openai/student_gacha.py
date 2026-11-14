@@ -97,7 +97,7 @@ _BACKDROP_BY_RARITY = {
     0: "white and soft pearl-gray",
     1: "saturated blue and light cyan",
     2: "warm gold, champagne and amber",
-    3: "vivid purple, lavender and pink",
+    3: "soft pink, lavender and ice-blue, with the supplied layout's gentle light",
     4: "iridescent rainbow hues, bright prismatic light and reflective holographic highlights",
 }
 _TEXT_INSTRUCTIONS = """ブルーアーカイブの生徒募集を模したコスプレカードを準備する。

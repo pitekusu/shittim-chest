@@ -284,7 +284,8 @@ async def test_render_uses_approved_image_model_and_inserts_name_only_into_png()
         ("format.jpg", b"layout", "image/jpeg"),
     ]
     assert "live-action photography" in payload["prompt"]
-    assert "Backdrop palette: vivid purple, lavender and pink." in payload["prompt"]
+    assert "Backdrop palette: soft pink, lavender and ice-blue" in payload["prompt"]
+    assert "the supplied layout's gentle light" in payload["prompt"]
     assert _TEACHER not in repr(payload)
     client.with_options.assert_called_once_with(max_retries=0)
     with Image.open(io.BytesIO(result)) as image:

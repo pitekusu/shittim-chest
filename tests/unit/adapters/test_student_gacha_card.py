@@ -75,7 +75,7 @@ def test_card_background_matches_rarity_without_tinting_the_center(
         assert isinstance(edge, tuple)
         red, green, blue = edge
         match rarity:
-            case None:
+            case None | 3:
                 assert edge == _ART_COLOR
             case 0:
                 assert min(edge) > 228 and max(edge) - min(edge) < 18
@@ -83,8 +83,6 @@ def test_card_background_matches_rarity_without_tinting_the_center(
                 assert blue > green > red and blue - red > 60
             case 2:
                 assert red > green > blue and red - blue > 70
-            case 3:
-                assert blue > red > green and red - green > 20
         assert card.getpixel((640, 240)) == _ART_COLOR
 
 
