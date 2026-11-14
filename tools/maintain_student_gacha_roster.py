@@ -251,23 +251,21 @@ def release(path: Path, state: dict[str, Any]) -> bool:
         state["run_id"] = run_id
         store(path, state)
     run = api(f"actions/runs/{state['run_id']}")
-    if run["head_sha"] != sha:
-        if run["status"] != "completed":
-            return False
-        if run["conclusion"] == "success":
-            raise RuntimeError("release workflow reported success for an unexpected commit")
-        # The dispatch raced a main update. The workflow rejected the mismatch.
-        for key in ("dispatch_sha", "dispatch_requested", "requested_at", "run_id"):
-            state.pop(key, None)
-        store(path, state)
-        return False
     if run["status"] != "completed":
         return False
     if run["conclusion"] != "success":
+        if run["head_sha"] != sha or main_sha() != sha:
+            # Recheck the current main and the merged roster on the next poll.
+            for key in ("dispatch_sha", "dispatch_requested", "requested_at", "run_id"):
+                state.pop(key, None)
+            store(path, state)
+            return False
         raise RuntimeError(
             f"roster release failed: {run['html_url']}. "
             "Resolve the failure, rerun that workflow, and restart this service."
         )
+    if run["head_sha"] != sha:
+        raise RuntimeError("release workflow reported success for an unexpected commit")
     print(f"Roster release verified by workflow: {run['html_url']}", flush=True)
     return True
 
