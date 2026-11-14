@@ -325,6 +325,13 @@ test("supports dark reduced-motion mobile viewing and refreshes an expired PNG U
   const { cards, requests } = await mockGallery(page, 3, { expireFirstOriginal: true });
   await page.goto("/gallery");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  const schoolFilter = page.getByRole("combobox", { name: "学校", exact: true });
+  await schoolFilter.tap();
+  const schoolLogoChip = page
+    .getByRole("option", { name: "ゲヘナ学園" })
+    .locator("span:has(> img)");
+  await expect(schoolLogoChip).toHaveCSS("background-color", "rgb(245, 251, 255)");
+  await page.keyboard.press("Escape");
   const firstCard = page.getByRole("link", { name: /アロナ（生徒1）、未記録/u });
   await firstCard.tap();
   const dialog = page.getByRole("dialog", { name: "アロナ（生徒1）" });
