@@ -64,8 +64,8 @@ class RecordsPublicPageTest {
     RecordsWebPage.entries.forEach { page ->
       runtime.openWebPage(page) { assertTrue(launchRecordsWebPage(context, it)) }
     }
-    assertEquals(listOf("https://shittim.pitekusu.dev/memorial", "https://shittim.pitekusu.dev/admin",
-      "https://shittim.pitekusu.dev/admin/prompts"), intents.map { it.dataString })
+    assertEquals(listOf("https://shittim.pitekusu.dev/memorial", "https://shittim.pitekusu.dev/gallery",
+      "https://shittim.pitekusu.dev/admin", "https://shittim.pitekusu.dev/admin/prompts"), intents.map { it.dataString })
     assertBrowserIntentsHaveNoNativeCredentials()
     runtime.deactivate()
   }
