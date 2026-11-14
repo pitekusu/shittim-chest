@@ -30,11 +30,6 @@
     "rarity": 3
   },
   {
-    "name": "アズサ（水着）",
-    "school": "トリニティ",
-    "rarity": 3
-  },
-  {
     "name": "アズサ（レーシング）",
     "school": "トリニティ",
     "rarity": 3
@@ -95,17 +90,7 @@
     "rarity": 3
   },
   {
-    "name": "イオリ（水着）",
-    "school": "ゲヘナ",
-    "rarity": 3
-  },
-  {
     "name": "イズナ",
-    "school": "百鬼夜行",
-    "rarity": 3
-  },
-  {
-    "name": "イズナ（水着）",
     "school": "百鬼夜行",
     "rarity": 3
   },
@@ -125,27 +110,12 @@
     "rarity": 3
   },
   {
-    "name": "イブキ（水着）",
-    "school": "ゲヘナ",
-    "rarity": 3
-  },
-  {
     "name": "イロハ",
     "school": "ゲヘナ",
     "rarity": 3
   },
   {
-    "name": "イロハ（水着）",
-    "school": "ゲヘナ",
-    "rarity": 3
-  },
-  {
     "name": "ウイ",
-    "school": "トリニティ",
-    "rarity": 3
-  },
-  {
-    "name": "ウイ（水着）",
     "school": "トリニティ",
     "rarity": 3
   },
@@ -161,11 +131,6 @@
   },
   {
     "name": "エイミ",
-    "school": "ミレニアム",
-    "rarity": 3
-  },
-  {
-    "name": "エイミ（水着）",
     "school": "ミレニアム",
     "rarity": 3
   },
@@ -210,11 +175,6 @@
     "rarity": 3
   },
   {
-    "name": "カスミ（水着）",
-    "school": "ゲヘナ",
-    "rarity": 3
-  },
-  {
     "name": "カノエ",
     "school": "ワイルドハント",
     "rarity": 3
@@ -250,27 +210,12 @@
     "rarity": 3
   },
   {
-    "name": "カンナ（水着）",
-    "school": "ヴァルキューレ",
-    "rarity": 3
-  },
-  {
     "name": "キキョウ",
     "school": "百鬼夜行",
     "rarity": 3
   },
   {
-    "name": "キキョウ（水着）",
-    "school": "百鬼夜行",
-    "rarity": 3
-  },
-  {
     "name": "キサキ",
-    "school": "山海経",
-    "rarity": 3
-  },
-  {
-    "name": "キサキ（水着）",
     "school": "山海経",
     "rarity": 3
   },
@@ -340,22 +285,12 @@
     "rarity": 3
   },
   {
-    "name": "サオリ（水着）",
-    "school": "アリウス",
-    "rarity": 3
-  },
-  {
     "name": "サオリ（ドレス）",
     "school": "アリウス",
     "rarity": 3
   },
   {
     "name": "サキ",
-    "school": "SRT",
-    "rarity": 3
-  },
-  {
-    "name": "サキ（水着）",
     "school": "SRT",
     "rarity": 3
   },
@@ -371,11 +306,6 @@
   },
   {
     "name": "サツキ",
-    "school": "ゲヘナ",
-    "rarity": 3
-  },
-  {
-    "name": "サツキ（水着）",
     "school": "ゲヘナ",
     "rarity": 3
   },
@@ -415,22 +345,12 @@
     "rarity": 3
   },
   {
-    "name": "シュン（水着）",
-    "school": "山海経",
-    "rarity": 3
-  },
-  {
     "name": "シロコ",
     "school": "アビドス",
     "rarity": 3
   },
   {
     "name": "シロコ（ライディング）",
-    "school": "アビドス",
-    "rarity": 3
-  },
-  {
-    "name": "シロコ（水着）",
     "school": "アビドス",
     "rarity": 3
   },
@@ -465,11 +385,6 @@
     "rarity": 3
   },
   {
-    "name": "セイア（水着）",
-    "school": "トリニティ",
-    "rarity": 3
-  },
-  {
     "name": "セナ",
     "school": "ゲヘナ",
     "rarity": 3
@@ -481,11 +396,6 @@
   },
   {
     "name": "セリカ（正月）",
-    "school": "アビドス",
-    "rarity": 3
-  },
-  {
-    "name": "セリカ（水着）",
     "school": "アビドス",
     "rarity": 3
   },
@@ -512,11 +422,6 @@
   {
     "name": "チェリノ（温泉）",
     "school": "レッドウィンター",
-    "rarity": 3
-  },
-  {
-    "name": "チセ（水着）",
-    "school": "百鬼夜行",
     "rarity": 3
   },
   {
@@ -575,17 +480,7 @@
     "rarity": 3
   },
   {
-    "name": "ナギサ（水着）",
-    "school": "トリニティ",
-    "rarity": 3
-  },
-  {
     "name": "ナグサ",
-    "school": "百鬼夜行",
-    "rarity": 3
-  },
-  {
-    "name": "ナグサ（水着）",
     "school": "百鬼夜行",
     "rarity": 3
   },
@@ -645,22 +540,7 @@
     "rarity": 3
   },
   {
-    "name": "ノノミ（水着）",
-    "school": "アビドス",
-    "rarity": 3
-  },
-  {
-    "name": "ハスミ（水着）",
-    "school": "トリニティ",
-    "rarity": 3
-  },
-  {
     "name": "ハナエ（クリスマス）",
-    "school": "トリニティ",
-    "rarity": 3
-  },
-  {
-    "name": "ハナコ（水着）",
     "school": "トリニティ",
     "rarity": 3
   },
@@ -705,11 +585,6 @@
     "rarity": 3
   },
   {
-    "name": "ヒナ（水着）",
-    "school": "ゲヘナ",
-    "rarity": 3
-  },
-  {
     "name": "ヒナ（ドレス）",
     "school": "ゲヘナ",
     "rarity": 3
@@ -720,22 +595,12 @@
     "rarity": 3
   },
   {
-    "name": "ヒナタ（水着）",
-    "school": "トリニティ",
-    "rarity": 3
-  },
-  {
     "name": "ヒビキ",
     "school": "ミレニアム",
     "rarity": 3
   },
   {
     "name": "ヒフミ",
-    "school": "トリニティ",
-    "rarity": 3
-  },
-  {
-    "name": "ヒフミ（水着）",
     "school": "トリニティ",
     "rarity": 3
   },
@@ -760,11 +625,6 @@
     "rarity": 3
   },
   {
-    "name": "ヒヨリ（水着）",
-    "school": "アリウス",
-    "rarity": 3
-  },
-  {
     "name": "フィーナ（ガイド）",
     "school": "百鬼夜行",
     "rarity": 3
@@ -775,22 +635,12 @@
     "rarity": 3
   },
   {
-    "name": "フブキ（水着）",
-    "school": "ヴァルキューレ",
-    "rarity": 3
-  },
-  {
     "name": "フユ",
     "school": "ワイルドハント",
     "rarity": 3
   },
   {
     "name": "ホシノ",
-    "school": "アビドス",
-    "rarity": 3
-  },
-  {
-    "name": "ホシノ（水着）",
     "school": "アビドス",
     "rarity": 3
   },
@@ -815,17 +665,7 @@
     "rarity": 3
   },
   {
-    "name": "マコト（水着）",
-    "school": "ゲヘナ",
-    "rarity": 3
-  },
-  {
     "name": "マシロ",
-    "school": "トリニティ",
-    "rarity": 3
-  },
-  {
-    "name": "マシロ（水着）",
     "school": "トリニティ",
     "rarity": 3
   },
@@ -855,17 +695,7 @@
     "rarity": 3
   },
   {
-    "name": "ミカ（水着）",
-    "school": "トリニティ",
-    "rarity": 3
-  },
-  {
     "name": "ミサキ",
-    "school": "アリウス",
-    "rarity": 3
-  },
-  {
-    "name": "ミサキ（水着）",
     "school": "アリウス",
     "rarity": 3
   },
@@ -905,17 +735,7 @@
     "rarity": 3
   },
   {
-    "name": "ミモリ（水着）",
-    "school": "百鬼夜行",
-    "rarity": 3
-  },
-  {
     "name": "ミヤコ",
-    "school": "SRT",
-    "rarity": 3
-  },
-  {
-    "name": "ミヤコ（水着）",
     "school": "SRT",
     "rarity": 3
   },
@@ -955,11 +775,6 @@
     "rarity": 3
   },
   {
-    "name": "モエ（水着）",
-    "school": "SRT",
-    "rarity": 3
-  },
-  {
     "name": "モモイ（メイド）",
     "school": "ミレニアム",
     "rarity": 3
@@ -981,11 +796,6 @@
   },
   {
     "name": "ユカリ",
-    "school": "百鬼夜行",
-    "rarity": 3
-  },
-  {
-    "name": "ユカリ（水着）",
     "school": "百鬼夜行",
     "rarity": 3
   },
@@ -1056,11 +866,6 @@
   },
   {
     "name": "ワカモ",
-    "school": "百鬼夜行",
-    "rarity": 3
-  },
-  {
-    "name": "ワカモ（水着）",
     "school": "百鬼夜行",
     "rarity": 3
   },
@@ -1195,11 +1000,6 @@
     "rarity": 2
   },
   {
-    "name": "レンゲ（水着）",
-    "school": "百鬼夜行",
-    "rarity": 2
-  },
-  {
     "name": "アイリ（バンド）",
     "school": "トリニティ",
     "rarity": 1
@@ -1213,26 +1013,6 @@
     "name": "アスナ",
     "school": "ミレニアム",
     "rarity": 1
-  },
-  {
-    "name": "アツコ（水着）",
-    "school": "アリウス",
-    "rarity": 1
-  },
-  {
-    "name": "アヤネ（水着）",
-    "school": "アビドス",
-    "rarity": 1
-  },
-  {
-    "name": "イズミ（水着）",
-    "school": "ゲヘナ",
-    "rarity": 1
-  },
-  {
-    "name": "イチカ（水着）",
-    "school": "トリニティ",
-    "rarity": 3
   },
   {
     "name": "イブキ",
@@ -1250,11 +1030,6 @@
     "rarity": 3
   },
   {
-    "name": "キリノ（水着）",
-    "school": "ヴァルキューレ",
-    "rarity": 1
-  },
-  {
     "name": "コタマ",
     "school": "ミレニアム",
     "rarity": 1
@@ -1262,16 +1037,6 @@
   {
     "name": "コトリ",
     "school": "ミレニアム",
-    "rarity": 1
-  },
-  {
-    "name": "コハル（水着）",
-    "school": "トリニティ",
-    "rarity": 1
-  },
-  {
-    "name": "シズコ（水着）",
-    "school": "百鬼夜行",
     "rarity": 1
   },
   {
@@ -1300,18 +1065,8 @@
     "rarity": 1
   },
   {
-    "name": "チアキ（水着）",
-    "school": "ゲヘナ",
-    "rarity": 3
-  },
-  {
     "name": "チナツ",
     "school": "ゲヘナ",
-    "rarity": 1
-  },
-  {
-    "name": "ツルギ（水着）",
-    "school": "トリニティ",
     "rarity": 1
   },
   {
@@ -1363,11 +1118,6 @@
     "name": "ミネ（アイドル）",
     "school": "トリニティ",
     "rarity": 3
-  },
-  {
-    "name": "ミユ（水着）",
-    "school": "SRT",
-    "rarity": 1
   },
   {
     "name": "ユズ（メイド）",
@@ -1431,11 +1181,6 @@
   },
   {
     "name": "ユスティナ信徒",
-    "school": "アリウス分校",
-    "rarity": 0
-  },
-  {
-    "name": "水着信徒",
     "school": "アリウス分校",
     "rarity": 0
   },
@@ -1676,11 +1421,6 @@
   },
   {
     "name": "百鬼夜行生徒",
-    "school": "百鬼夜行連合学院",
-    "rarity": 0
-  },
-  {
-    "name": "百鬼夜行生徒（水着）",
     "school": "百鬼夜行連合学院",
     "rarity": 0
   },
@@ -2185,11 +1925,6 @@
     "rarity": 0
   },
   {
-    "name": "ラブ（水着）",
-    "school": "トリニティ総合学園",
-    "rarity": 0
-  },
-  {
     "name": "チェリノ（チーパオ）",
     "school": "レッドウィンター連邦学園",
     "rarity": 0
@@ -2285,11 +2020,6 @@
     "rarity": 0
   },
   {
-    "name": "メグ（水着）",
-    "school": "ゲヘナ学園",
-    "rarity": 0
-  },
-  {
     "name": "シミコ（マジカル）",
     "school": "トリニティ総合学園",
     "rarity": 0
@@ -2297,16 +2027,6 @@
   {
     "name": "イズナ（ドレス）",
     "school": "百鬼夜行連合学院",
-    "rarity": 0
-  },
-  {
-    "name": "ココナ（水着）",
-    "school": "山海経高級中学校",
-    "rarity": 0
-  },
-  {
-    "name": "ルミ（水着）",
-    "school": "山海経高級中学校",
     "rarity": 0
   },
   {
