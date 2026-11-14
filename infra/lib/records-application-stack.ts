@@ -334,9 +334,15 @@ export class RecordsApplicationStack extends Stack {
           lambda.FilterCriteria.filter({
             eventName: lambda.FilterRule.or("INSERT", "MODIFY"),
             dynamodb: {
+              Keys: {
+                PK: {
+                  S: lambda.FilterRule.beginsWith("AFFECTION#REQUESTER#"),
+                },
+                SK: { S: lambda.FilterRule.isEqual("PROFILE") },
+              },
+              // The Projector validates the schema so new versions cannot be silently filtered out.
               NewImage: {
                 record_type: { S: lambda.FilterRule.isEqual("affection_profile") },
-                schema_version: { N: lambda.FilterRule.or("8", "9", "10") },
               },
             },
           }),

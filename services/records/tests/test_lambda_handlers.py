@@ -235,8 +235,8 @@ def test_projector_handler_routes_affection_profile_without_logging_private_iden
     assert service.partition_count == 1
 
 
-@pytest.mark.parametrize("profile_schema", [9, 10])
-def test_projector_handler_routes_v9_opaque_affection_profile(
+@pytest.mark.parametrize("profile_schema", [9, 10, 11])
+def test_projector_handler_routes_opaque_affection_profile(
     monkeypatch: Any,
     profile_schema: int,
 ) -> None:
