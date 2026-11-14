@@ -116,6 +116,13 @@ async def test_stored_draw_resumes_after_discord_failure(
     await worker.process_next()
     store.reschedule.assert_awaited_once()
     store.finish.assert_not_awaited()
+    discord.send_gallery_notice.assert_not_awaited()
+
+    async def verify_gallery_notice(**_kwargs: object) -> str:
+        assert store.finish.await_args.kwargs["result_message_id"] == "104"
+        return "105"
+
+    discord.send_gallery_notice.side_effect = verify_gallery_notice
     await worker.process_next()
 
     generator.render.assert_not_awaited()
@@ -128,7 +135,31 @@ async def test_stored_draw_resumes_after_discord_failure(
         "delete_loading",
         "send_result",
     ]
+    discord.send_gallery_notice.assert_awaited_once_with(
+        guild_id="100", channel_id="101", publication_id=OFFER, result_message_id="104"
+    )
     assert store.finish.await_args.kwargs["result_message_id"] == "104"
+
+
+@pytest.mark.asyncio
+async def test_gallery_notice_failure_keeps_the_confirmed_draw_complete(
+    worker_fixture: tuple[StudentGachaWorker, AsyncMock, AsyncMock, AsyncMock, AsyncMock],
+) -> None:
+    worker, store, media, generator, discord = worker_fixture
+    job = _job(stored=STORED, paid_started=True, result_message_id="104")
+    store.claim_next.return_value = job
+    discord.send_gallery_notice.side_effect = GachaDeliveryFailure(retryable=True, ambiguous=True)
+
+    await worker.process_next()
+
+    media.load.assert_not_awaited()
+    generator.render.assert_not_awaited()
+    discord.send_result.assert_not_awaited()
+    store.finish.assert_awaited_once_with(job, at=NOW, result_message_id="104")
+    store.reschedule.assert_not_awaited()
+    discord.disable_offer.assert_awaited_once_with(
+        guild_id="100", channel_id="101", message_id="102"
+    )
 
 
 @pytest.mark.asyncio

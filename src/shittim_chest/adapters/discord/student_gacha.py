@@ -31,6 +31,9 @@ from shittim_chest.application.discord import DiscordBotSlot, DiscordRuntimeConf
 from shittim_chest.application.student_gacha_discord import GachaDeliveryFailure
 
 _LOADING_TEXT = "⏳ 生徒を募集しています!"
+_GALLERY_NOTICE = (
+    "過去の募集結果は[ギャラリー](https://shittim.pitekusu.dev/gallery)で見れますよ\uff01"
+)
 _LOADING_FILENAME = re.compile(r"show-[A-Za-z0-9_-]{22}\.gif\Z")
 _HISTORY_LIMIT = 500
 _UNKNOWN_MESSAGE = 10008
@@ -51,6 +54,7 @@ class _Publication:
     attachment: bytes | None = field(default=None, repr=False)
     custom_id: str | None = None
     reply_to_anchor: bool = False
+    suppress_embeds: bool = False
 
 
 class DiscordStudentGacha:
@@ -171,6 +175,22 @@ class DiscordStudentGacha:
             ),
         )
 
+    async def send_gallery_notice(
+        self,
+        *,
+        guild_id: str,
+        channel_id: str,
+        publication_id: str,
+        result_message_id: str,
+    ) -> str:
+        return await self._send(
+            guild_id,
+            channel_id,
+            f"{publication_id}:gallery",
+            result_message_id,
+            _Publication(_GALLERY_NOTICE, reply_to_anchor=True, suppress_embeds=True),
+        )
+
     async def send_failure(
         self,
         *,
@@ -283,6 +303,7 @@ class DiscordStudentGacha:
                     publication.content,
                     nonce=nonce,
                     allowed_mentions=discord.AllowedMentions.none(),
+                    suppress_embeds=publication.suppress_embeds,
                     embeds=[] if marker is None else [_marker_embed(marker)],
                     files=[] if file is None else [file],
                     **options,

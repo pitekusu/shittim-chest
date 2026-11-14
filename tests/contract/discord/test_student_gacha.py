@@ -300,6 +300,54 @@ async def test_progress_recovers_nonce_less_message_without_reposting(
 
 
 @pytest.mark.asyncio
+async def test_gallery_notice_links_to_gallery_and_recovers_the_same_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = delivery.DiscordStudentGacha(
+        clients={DiscordBotSlot.PARTICIPANT_A: cast(discord.Client, object())},
+        config=_config(),
+    )
+    channel = SimpleNamespace(id=102, guild=SimpleNamespace(id=101), send=AsyncMock())
+    content = "過去の募集結果は[ギャラリー](https://shittim.pitekusu.dev/gallery)で見れますよ\uff01"
+    notice = SimpleNamespace(
+        id=121,
+        author=SimpleNamespace(id=202),
+        channel=channel,
+        nonce=None,
+        content=content,
+        components=[],
+        embeds=[],
+        reference=discord.MessageReference(message_id=120, channel_id=102),
+        attachments=[],
+    )
+
+    async def history(**kwargs: object) -> AsyncIterator[object]:
+        assert kwargs["after"] == discord.Object(id=120)
+        if channel.send.await_count:
+            yield notice
+
+    channel.history = history
+    channel.send.return_value = notice
+    monkeypatch.setattr(gateway, "_channel", AsyncMock(return_value=channel))
+
+    for _ in range(2):
+        assert (
+            await gateway.send_gallery_notice(
+                guild_id="101", channel_id="102", publication_id=OFFER_ID, result_message_id="120"
+            )
+            == "121"
+        )
+
+    channel.send.assert_awaited_once()
+    assert channel.send.await_args.args == (content,)
+    options = channel.send.await_args.kwargs
+    assert options["reference"].message_id == 120
+    assert options["nonce"] == delivery._nonce(f"{OFFER_ID}:gallery")
+    assert options["allowed_mentions"].to_dict() == discord.AllowedMentions.none().to_dict()
+    assert options["suppress_embeds"] is True
+
+
+@pytest.mark.asyncio
 async def test_loading_cleanup_checks_sender_and_attachment_before_delete(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
