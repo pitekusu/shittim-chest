@@ -256,7 +256,9 @@ class CursorCodec:
         return payload
 
     def _signature(self, encoded: str, *, scope: str) -> str:
-        return _base64url(hmac.digest(self._key, f"{scope}:{encoded}".encode(), "sha256"))
+        return _base64url(
+            hmac.new(self._key, f"{scope}:{encoded}".encode(), hashlib.sha256).digest()
+        )
 
     def encode_filtered(
         self,

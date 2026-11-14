@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import hmac
 import re
 from datetime import datetime, timedelta
@@ -267,4 +268,5 @@ def _result_key(card_id: str, *, error_code: str, status: int) -> str:
 
 
 def _digest(key: bytes, value: str) -> str:
-    return base64.urlsafe_b64encode(hmac.digest(key, value.encode(), "sha256")).decode().rstrip("=")
+    digest = hmac.new(key, value.encode(), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(digest).decode().rstrip("=")
