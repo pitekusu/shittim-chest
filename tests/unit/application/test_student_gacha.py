@@ -94,6 +94,7 @@ def worker_fixture() -> tuple[StudentGachaWorker, AsyncMock, AsyncMock, AsyncMoc
         claim_owner="test-runtime",
     )
     store.checkpoint.side_effect = lambda old, new, **kwargs: new
+    media.costume_reference.return_value = b"costume WebP"
     return worker, store, media, generator, discord
 
 
@@ -129,7 +130,7 @@ async def test_stored_draw_resumes_after_discord_failure(
 
 
 @pytest.mark.asyncio
-async def test_unconfirmed_appearance_reopens_the_same_draw(
+async def test_card_preparation_failure_reopens_the_same_draw(
     worker_fixture: tuple[StudentGachaWorker, AsyncMock, AsyncMock, AsyncMock, AsyncMock],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -139,7 +140,7 @@ async def test_unconfirmed_appearance_reopens_the_same_draw(
     store.claim_next.return_value = _job(student=student, performer=performer)
     media.loading_gif.return_value = b"loop GIF"
     discord.send_loading.return_value = "103"
-    generator.prepare.side_effect = GachaGenerationFailure("gacha_appearance_unconfirmed")
+    generator.prepare.side_effect = GachaGenerationFailure("gacha_presentation_unavailable")
 
     await worker.process_next()
 
@@ -149,7 +150,7 @@ async def test_unconfirmed_appearance_reopens_the_same_draw(
     assert (job.offer_id, job.student, job.performer) == (OFFER, student, performer)
     assert job.teacher_name is None
     assert store.finish.await_args.kwargs["reopen"] is True
-    assert "reason_code=gacha_appearance_unconfirmed" in caplog.text
+    assert "reason_code=gacha_presentation_unavailable" in caplog.text
     assert "試験先生" not in caplog.text
 
 
@@ -173,11 +174,18 @@ async def test_ambiguous_paid_call_uses_saved_state_instead_of_rendering_again(
     media.loading_gif.return_value = b"loop GIF"
     discord.send_loading.return_value = "103"
     media.references.return_value = (b"layout", b"portrait")
+    costume = b"costume WebP"
+    media.costume_reference.return_value = costume
     generator.prepare.return_value = presentation
     generator.render.side_effect = GachaGenerationFailure("image_unavailable", ambiguous=True)
 
     await worker.process_next()
     generator.render.assert_awaited_once()
+    media.costume_reference.assert_awaited_once_with(student)
+    generator.prepare.assert_awaited_once_with(
+        student=student, performer=performer, costume_reference=costume
+    )
+    assert generator.render.await_args.kwargs["costume_reference"] is costume
     store.finish.assert_not_awaited()
     pending = store.reschedule.await_args.args[0]
     assert pending.paid_started and pending.presentation == presentation
@@ -189,4 +197,28 @@ async def test_ambiguous_paid_call_uses_saved_state_instead_of_rendering_again(
     generator.render.assert_awaited_once()
     assert store.finish.await_args.kwargs["reopen"] is True
     assert store.finish.await_args.args[0].teacher_name is None
+    discord.delete_loading.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_failed_costume_reference_read_leaves_image_request_unstarted(
+    worker_fixture: tuple[StudentGachaWorker, AsyncMock, AsyncMock, AsyncMock, AsyncMock],
+) -> None:
+    worker, store, media, generator, discord = worker_fixture
+    student = Student("アツコ\uff08水着\uff09", "アリウス", 1)
+    performer = ParticipantSlot.PARTICIPANT_C
+    store.claim_next.return_value = _job(student=student, performer=performer)
+    media.loading_gif.return_value = b"loop GIF"
+    discord.send_loading.return_value = "103"
+    media.costume_reference.side_effect = GachaGenerationFailure("gacha_costume_source_unavailable")
+
+    await worker.process_next()
+
+    generator.prepare.assert_not_awaited()
+    generator.render.assert_not_awaited()
+    finished = store.finish.await_args.args[0]
+    assert finished.student == student
+    assert finished.performer is performer
+    assert not finished.paid_started
+    assert store.finish.await_args.kwargs["reopen"] is True
     discord.delete_loading.assert_awaited_once()

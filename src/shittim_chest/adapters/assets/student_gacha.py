@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Final
 from botocore.exceptions import BotoCoreError, ClientError, FlexibleChecksumError
 from PIL import Image, UnidentifiedImageError
 
+from shittim_chest.adapters.assets.images import DebateImageFailure, validate_image
+from shittim_chest.adapters.assets.student_gacha_costumes import load_wiki_costume
 from shittim_chest.application.student_gacha_models import (
     STUDENT_GACHA_RARITIES,
     GachaGenerationFailure,
@@ -36,6 +38,11 @@ PARTICIPANT_REFERENCE_KEYS: dict[ParticipantSlot, str] = {
     ParticipantSlot.PARTICIPANT_A: "participants/participant-a/memorial-reference.png",
     ParticipantSlot.PARTICIPANT_B: "participants/participant-b/memorial-reference.webp",
     ParticipantSlot.PARTICIPANT_C: "participants/participant-c/memorial-reference.webp",
+}
+_SPECIAL_COSTUME_PARTICIPANTS: Final = {
+    ("アロナ", "シッテムの箱"): ParticipantSlot.PARTICIPANT_A,
+    ("プラナ", "シッテムの箱"): ParticipantSlot.PARTICIPANT_B,
+    ("安倍晋三", "自民党"): ParticipantSlot.PARTICIPANT_C,
 }
 _ASSET_DIGESTS: Final = {
     LOADING_GIF_KEY: "a902598c659185353850dbe9e26c18fa0dd57d9f5d6288d2673b3c1e7e47ad63",
@@ -67,6 +74,12 @@ class StudentGachaMedia:
 
     async def references(self, performer: ParticipantSlot) -> tuple[bytes, bytes]:
         return await asyncio.to_thread(self._references, performer)
+
+    async def costume_reference(self, student: Student) -> bytes:
+        performer = _SPECIAL_COSTUME_PARTICIPANTS.get((student.name, student.school))
+        if performer is not None and student.rarity in {None, 4}:
+            return await asyncio.to_thread(self._special_costume_reference, performer)
+        return await load_wiki_costume(student)
 
     async def save(self, draw_id: str, png: bytes) -> StoredGachaImage:
         return await asyncio.to_thread(self._save, student_gacha_image_key(draw_id), png)
@@ -108,6 +121,15 @@ class StudentGachaMedia:
         expected_format = "PNG" if key.endswith(".png") else "WEBP"
         _require_image(portrait, expected_format=expected_format)
         return layout, portrait
+
+    def _special_costume_reference(self, performer: ParticipantSlot) -> bytes:
+        key = PARTICIPANT_REFERENCE_KEYS[performer]
+        content = self._read(key, maximum=_MAX_REFERENCE_BYTES)
+        content_type = "image/png" if key.endswith(".png") else "image/webp"
+        try:
+            return validate_image(content, content_type=content_type).vision
+        except DebateImageFailure:
+            raise GachaGenerationFailure("gacha_costume_reference_invalid") from None
 
     def _read_asset(self, key: str, *, maximum: int) -> bytes:
         content = self._read(key, maximum=maximum)
