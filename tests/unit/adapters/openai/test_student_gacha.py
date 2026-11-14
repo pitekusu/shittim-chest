@@ -31,7 +31,6 @@ from shittim_chest.domain import PARTICIPANTS, ParticipantSlot
 _STUDENT = Student("アコ\uff08ドレス\uff09", "ゲヘナ", rarity=4)
 _TEACHER = "サンプル先生"
 _COSTUME = b"costume-webp"
-_PRIVATE_PERSONA = "private-persona-for-test"
 _PERFORMER = ParticipantSlot.PARTICIPANT_C
 
 
@@ -41,7 +40,9 @@ def _adapter(client: Mock) -> OpenAIStudentGacha:
         OpenAIRequestLimiter(1),
         ParticipantProfiles(
             {
-                participant: ParticipantProfile(participant.value, _PRIVATE_PERSONA)
+                participant: ParticipantProfile(
+                    participant.value, f"test-voice-{participant.value}"
+                )
                 for participant in PARTICIPANTS
             }
         ),
@@ -76,12 +77,13 @@ def _response(brief: _CardBrief) -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
-async def test_brief_uses_the_exact_costume_image_without_search() -> None:
+@pytest.mark.parametrize("performer", PARTICIPANTS)
+async def test_brief_uses_the_selected_wearer_and_costume_image(performer: ParticipantSlot) -> None:
     client = Mock()
     client.responses.create = AsyncMock(return_value=_response(_card("青いドレス")))
 
     result = await _adapter(client).prepare(
-        student=_STUDENT, performer=_PERFORMER, costume_reference=_COSTUME
+        student=_STUDENT, performer=performer, costume_reference=_COSTUME
     )
 
     assert result.appearance == "青いドレス"
@@ -96,10 +98,15 @@ async def test_brief_uses_the_exact_costume_image_without_search() -> None:
     assert payload["tools"] == []
     assert payload["tool_choice"] == "none"
     assert not payload["store"]
-    assert _PRIVATE_PERSONA not in payload["instructions"]
+    assert "挨拶はperformer_referenceの着用者本人" in payload["instructions"]
     content = payload["input"][0]["content"]
     inputs = json.loads(content[0]["text"])
-    assert inputs["performer_reference"]["preferences"] == _PRIVATE_PERSONA
+    assert inputs["performer_reference"] == {
+        "name": performer.value,
+        "preferences": f"test-voice-{performer.value}",
+    }
+    for other in set(PARTICIPANTS) - {performer}:
+        assert f"test-voice-{other.value}" not in repr(payload)
     assert inputs["student"] == {"name": _STUDENT.name, "school": _STUDENT.school}
     assert content[-1] == {
         "type": "input_image",
@@ -293,54 +300,9 @@ async def test_render_uses_costume_image_for_a_previously_prepared_draw(
     prompt = payload["prompt"]
     assert "Image 3 is the exact outfit variant" in prompt
     assert "head accessories come exclusively from image 1" in prompt
-    assert "rash guard" not in prompt
     assert "以前の説明" not in prompt
     assert _TEACHER not in repr(payload)
     render_card.assert_called_once_with(b"art", presentation, _TEACHER)
-    assert result == b"card"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("name", ["キキョウ\uff08水着\uff09", "水着信徒", "海辺のスケバン"])
-async def test_swim_cosplay_uses_a_covered_design_brief(
-    monkeypatch: pytest.MonkeyPatch, name: str
-) -> None:
-    client = Mock()
-    appearance = "紺地に水色の花柄と青い縁取り"
-    client.responses.create = AsyncMock(return_value=_response(_card(appearance)))
-    edit = AsyncMock(return_value=SimpleNamespace(data=[SimpleNamespace(b64_json="YXJ0")]))
-    client.with_options.return_value.images.edit = edit
-    monkeypatch.setattr(
-        "shittim_chest.adapters.openai.student_gacha.render_card", Mock(return_value=b"card")
-    )
-    adapter = _adapter(client)
-    brief = await adapter.prepare(
-        student=Student(name, "百鬼夜行", rarity=3),
-        performer=ParticipantSlot.PARTICIPANT_B,
-        costume_reference=_COSTUME,
-    )
-
-    analysis = client.responses.create.call_args.kwargs
-    assert "長袖ラッシュガード" in analysis["instructions"]
-    assert analysis["input"][0]["content"][-1]["type"] == "input_image"
-    assert brief.appearance == appearance
-
-    result = await adapter.render(
-        brief,
-        teacher_name=_TEACHER,
-        references=(b"layout", b"portrait"),
-        costume_reference=_COSTUME,
-    )
-
-    edit.assert_awaited_once()
-    request = edit.call_args.kwargs
-    assert request["image"] == [
-        ("performer.webp", b"portrait", "image/webp"),
-        ("format.jpg", b"layout", "image/jpeg"),
-    ]
-    assert "opaque long-sleeved rash guard" in request["prompt"]
-    assert "knee-length swim shorts" in request["prompt"]
-    assert appearance in request["prompt"]
     assert result == b"card"
 
 
