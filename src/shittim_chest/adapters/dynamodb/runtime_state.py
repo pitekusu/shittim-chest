@@ -13,7 +13,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 if TYPE_CHECKING:
     from mypy_boto3_dynamodb.client import DynamoDBClient
-    from mypy_boto3_dynamodb.type_defs import TransactWriteItemTypeDef
+    from mypy_boto3_dynamodb.type_defs import PutTypeDef, TransactWriteItemTypeDef
 else:
     TransactWriteItemTypeDef = object
 
@@ -29,6 +29,7 @@ from shittim_chest.adapters.dynamodb.repository import (
 )
 from shittim_chest.adapters.dynamodb.serializer import (
     CURRENT_SCHEMA_VERSION,
+    RUNTIME_STATE_KEY,
     DynamoItem,
     DynamoValue,
     IngressActivePointer,
@@ -169,7 +170,7 @@ class DynamoDbRuntimeStateRepository:
             raise RepositoryConflict("runtime state record is invalid") from None
 
     def _get(self) -> RuntimeState:
-        item = self._get_item(_runtime_key())
+        item = self._get_item(RUNTIME_STATE_KEY)
         if item is None:
             raise RepositoryConflict("runtime state record is missing")
         return deserialize_runtime_state(item)
@@ -283,16 +284,36 @@ class DynamoDbRuntimeStateRepository:
                 return expected
             raise RepositoryConflict("runtime state changed before no-op replacement")
         condition, names, values = _runtime_cas(expected)
+        put: PutTypeDef = {
+            "TableName": self._table_name,
+            "Item": marshal_item(serialize_runtime_state(updated)),
+            "ConditionExpression": condition,
+            "ExpressionAttributeNames": names,
+            "ExpressionAttributeValues": marshal_item(values),
+        }
         try:
-            self._client.put_item(
-                TableName=self._table_name,
-                Item=marshal_item(serialize_runtime_state(updated)),
-                ConditionExpression=condition,
-                ExpressionAttributeNames=names,
-                ExpressionAttributeValues=marshal_item(values),
-                ReturnConsumedCapacity="NONE",
-            )
-        except self._client.exceptions.ConditionalCheckFailedException:
+            if updated.status is RuntimeStatus.IDLE and expected.status is not RuntimeStatus.IDLE:
+                # Activity was sampled separately. A draw queued since that
+                # read must prevent IDLE from interrupting its READY/BUSY claim.
+                actions: list[TransactWriteItemTypeDef] = [
+                    {"Put": put},
+                    student_gacha_idle_check(self._table_name),
+                ]
+                self._client.transact_write_items(
+                    TransactItems=actions,
+                    ClientRequestToken=_transaction_token("enter-idle", actions),
+                    ReturnConsumedCapacity="NONE",
+                )
+            else:
+                self._client.put_item(**put, ReturnConsumedCapacity="NONE")
+        except (
+            self._client.exceptions.ConditionalCheckFailedException,
+            self._client.exceptions.TransactionCanceledException,
+        ) as error:
+            if isinstance(
+                error, self._client.exceptions.TransactionCanceledException
+            ) and not is_condition_only_cancellation(error):
+                raise RepositoryUnavailable from None
             current = self._get()
             if current == updated:
                 return updated
@@ -689,10 +710,6 @@ class DynamoDbRuntimeStateRepository:
         )
         raw = response.get("Item")
         return None if raw is None else unmarshal_item(raw)
-
-
-def _runtime_key() -> DynamoItem:
-    return {"PK": "CONTROL#RUNTIME", "SK": "STATE"}
 
 
 def _operation_key(interaction_id: str) -> DynamoItem:

@@ -94,6 +94,7 @@ LEGACY_AFFECTION_SCHEMA_VERSION = 8
 OPAQUE_AFFECTION_SCHEMA_VERSIONS = frozenset({9, 10, 11})
 MAX_ITEM_BYTES = 400 * 1024
 INGRESS_ACTIVE_POINTER_RECORD_SCHEMA_VERSION = 1
+RUNTIME_STATE_KEY = {"PK": "CONTROL#RUNTIME", "SK": "STATE"}
 
 
 class PersistenceFormatError(ValueError):
@@ -1714,8 +1715,7 @@ def serialize_runtime_state(state: RuntimeState) -> DynamoItem:
     """Serialize the singleton generation-fenced runtime control record."""
 
     item: DynamoItem = {
-        "PK": "CONTROL#RUNTIME",
-        "SK": "STATE",
+        **RUNTIME_STATE_KEY,
         "record_type": "runtime_state",
         "schema_version": CURRENT_SCHEMA_VERSION,
         "record_schema_version": state.schema_version,
@@ -1772,7 +1772,7 @@ def deserialize_runtime_state(raw_item: Mapping[str, DynamoValue]) -> RuntimeSta
         )
     except ValueError as error:
         raise PersistenceFormatError("invalid runtime state") from error
-    if _text(item, "PK") != "CONTROL#RUNTIME" or _text(item, "SK") != "STATE":
+    if any(item.get(key) != value for key, value in RUNTIME_STATE_KEY.items()):
         raise PersistenceFormatError("runtime state has an invalid key")
     return state
 
