@@ -2167,6 +2167,15 @@ export class RecordsApplicationStack extends Stack {
       actions: ["s3:GetObject", "s3:PutObject"], resources: [`${memorialUploadBucket.bucketArn}/debate-uploads/*`],
     }));
     this.mobileDebateFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ["s3:ListBucket"],
+      resources: [memorialUploadBucket.bucketArn],
+      // GetObject can return 403 for a missing upload. Confirm only the reserved key.
+      conditions: {
+        StringLike: { "s3:prefix": `debate-uploads/${"?".repeat(43)}.bin` },
+        NumericEquals: { "s3:max-keys": 1 },
+      },
+    }));
+    this.mobileDebateFunction.addToRolePolicy(new iam.PolicyStatement({
       actions: ["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject"], resources: [`${mediaBucket.bucketArn}/debate-images/*`],
     }));
     const attachmentCleanup = this.httpFunctionWithRole({

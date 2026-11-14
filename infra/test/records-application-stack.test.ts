@@ -223,7 +223,7 @@ describe("RecordsApplicationStack", () => {
     template.resourceCountIs("AWS::S3::Bucket", 0);
   });
 
-  test("allows only attachment cleanup to check missing objects in the debate image prefix", () => {
+  test("isolates S3 existence checks for staged debate uploads and expired debate images", () => {
     const policies = Object.entries(fixture.template.findResources("AWS::IAM::Policy"));
     const cleanup = policies.filter(([id]) => id.startsWith("DebateAttachmentCleanupFunctionRole"));
     const cleanupStatements = cleanup.flatMap(([, policy]) => policy.Properties.PolicyDocument.Statement) as PolicyStatement[];
@@ -237,12 +237,28 @@ describe("RecordsApplicationStack", () => {
         ]] },
       },
     ]);
+    const native = policies.filter(([id]) => id.startsWith("MobileDebateFunctionRole"));
+    const nativeStatements = native.flatMap(([, policy]) => policy.Properties.PolicyDocument.Statement) as PolicyStatement[];
+    expect(nativeStatements.filter(statement => actionsOf(statement).includes("s3:ListBucket"))).toEqual([
+      {
+        Action: "s3:ListBucket",
+        Condition: {
+          StringLike: { "s3:prefix": `debate-uploads/${"?".repeat(43)}.bin` },
+          NumericEquals: { "s3:max-keys": 1 },
+        },
+        Effect: "Allow",
+        Resource: { "Fn::Join": ["", [
+          "arn:", { Ref: "AWS::Partition" }, ":s3:::shittim-chest-production-records-memorial-upload-000000000000",
+        ]] },
+      },
+    ]);
     for (const [id, policy] of policies) {
-      if (id.startsWith("DebateAttachmentCleanupFunctionRole")) continue;
+      if (id.startsWith("DebateAttachmentCleanupFunctionRole") || id.startsWith("MobileDebateFunctionRole")) continue;
       const listStatements = (policy.Properties.PolicyDocument.Statement as PolicyStatement[])
         .filter(statement => actionsOf(statement).includes("s3:ListBucket"));
       expect(JSON.stringify(listStatements)).not.toContain("debate-images");
-      if (id.startsWith("ReadFunctionRole") || id.startsWith("MobileDebateFunctionRole")) {
+      expect(JSON.stringify(listStatements)).not.toContain("debate-uploads");
+      if (id.startsWith("ReadFunctionRole")) {
         expect(listStatements).toEqual([]);
       }
     }

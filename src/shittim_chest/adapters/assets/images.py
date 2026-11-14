@@ -142,7 +142,12 @@ class S3DebateImageStore:
     ) -> DebateImage:
         if self._upload_bucket is None or not key.startswith("debate-uploads/") or ".." in key:
             raise DebateImageFailure("ATTACHMENT_UNAVAILABLE")
-        content = self._load(self._upload_bucket, key, maximum=MAX_IMAGE_BYTES)
+        try:
+            content = self._load(self._upload_bucket, key, maximum=MAX_IMAGE_BYTES)
+        except ClientError as error:
+            if self._object_is_missing(self._upload_bucket, key, error):
+                raise DebateImageFailure("ATTACHMENT_NOT_READY") from None
+            raise
         if len(content) != size_bytes:
             raise DebateImageFailure()
         return self.persist(
@@ -221,6 +226,20 @@ class S3DebateImageStore:
         if not 1 <= len(content) <= maximum or response.get("ContentLength") != len(content):
             raise DebateImageFailure()
         return content
+
+    def _object_is_missing(self, bucket: str, key: str, error: ClientError) -> bool:
+        code = error.response.get("Error", {}).get("Code")
+        if code in {"404", "NoSuchKey", "NotFound"}:
+            return True
+        if code not in {"403", "AccessDenied"}:
+            return False
+        # S3 can hide an absent key behind 403. In a general purpose bucket the
+        # exact key sorts before any longer key sharing its prefix.
+        try:
+            listed = self._client.list_objects_v2(Bucket=bucket, Prefix=key, MaxKeys=1)
+        except ClientError:
+            return False
+        return all(item.get("Key") != key for item in listed.get("Contents", ()))
 
     async def load_original(self, image: DebateImage) -> bytes:
         content = await asyncio.to_thread(
@@ -357,23 +376,9 @@ class S3DebateImageStore:
             try:
                 response = self._client.head_object(Bucket=self._media_bucket, Key=key)
             except ClientError as error:
-                code = error.response.get("Error", {}).get("Code")
-                if code in {"404", "NoSuchKey", "NotFound"}:
+                if self._object_is_missing(self._media_bucket, key, error):
                     continue
-                if code not in {"AccessDenied", "403"}:
-                    raise
-                # HeadObject may hide an absent key behind 403. A listing scoped
-                # to that exact key proves absence without ignoring read denial.
-                # The exact key sorts before any longer key sharing its prefix.
-                try:
-                    listed = self._client.list_objects_v2(
-                        Bucket=self._media_bucket, Prefix=key, MaxKeys=1
-                    )
-                except ClientError:
-                    raise error from None
-                if any(item.get("Key") == key for item in listed.get("Contents", ())):
-                    raise
-                continue
+                raise
             if response.get("Metadata", {}).get("source-sha256") != sha256:
                 raise DebateImageFailure("ATTACHMENT_CONFLICT")
             version = response.get("VersionId")
