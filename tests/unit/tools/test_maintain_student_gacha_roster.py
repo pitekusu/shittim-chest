@@ -13,7 +13,7 @@ from tools import maintain_student_gacha_roster as roster
 def test_resume_merged_pr_without_rest_merge_commit_sha(
     monkeypatch: pytest.MonkeyPatch, oid: str | None
 ) -> None:
-    branch = f"{roster.BRANCH_PREFIX}123456789012-1234567890123456"
+    branch = f"{roster.BRANCH_PREFIX}abcdefabcdef-aabbccddeeffabcd"
 
     def read_pull(endpoint: str) -> dict[str, object]:
         assert endpoint == "pulls/123"
