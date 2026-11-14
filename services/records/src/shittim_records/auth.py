@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from shittim_records.archive import derive_requester_key
+from shittim_records.contracts import GALLERY_CARD_ID_PATTERN
 
 OAUTH_COOKIE_NAME = "__Host-shittim-records-oauth"
 SESSION_COOKIE_NAME = "__Host-shittim-records-session"
@@ -418,10 +419,25 @@ def require_csrf_submission(
 def validate_return_to(value: str | None) -> str:
     """Allow only explicitly owned SPA destinations, never external redirects."""
 
-    if value in (None, "", "/", "/insights", "/admin", "/admin/prompts", "/momotalk", "/memorial"):
+    if value in (
+        None,
+        "",
+        "/",
+        "/insights",
+        "/admin",
+        "/admin/prompts",
+        "/momotalk",
+        "/memorial",
+        "/gallery",
+    ):
         return value if value else "/"
     prefix = "/records/"
     if value.startswith(prefix) and _is_record_id(value.removeprefix(prefix)):
+        return value
+    prefix = "/gallery/"
+    if value.startswith(prefix) and re.fullmatch(
+        GALLERY_CARD_ID_PATTERN, value.removeprefix(prefix)
+    ):
         return value
     raise AuthFailure("return_to_invalid")
 

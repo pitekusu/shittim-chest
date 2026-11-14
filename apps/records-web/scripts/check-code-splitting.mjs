@@ -13,6 +13,7 @@ const expectedRoutes = [
   "AdminPromptsPage",
   "MemorialPage",
   "MomotalkPage",
+  "GalleryPage",
 ];
 const maximumEntryGzipBytes = 113_560;
 const manifest = JSON.parse(

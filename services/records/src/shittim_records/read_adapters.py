@@ -293,15 +293,14 @@ class DynamoRecordsReader:
     def attachment_url(self, image: DebateImage, *, thumbnail: bool = False) -> str:
         key = image.vision_asset_key if thumbnail else image.asset_key
         version = image.vision_asset_version_id if thumbnail else image.asset_version_id
-        params = {
-            "Bucket": self._media_bucket,
-            "Key": key,
-            "ResponseContentType": "image/webp" if thumbnail else image.content_type,
-            "ResponseCacheControl": "private, no-store",
-        }
-        if version:
-            params["VersionId"] = version
-        return self._s3.generate_presigned_url("get_object", Params=params, ExpiresIn=300)
+        return sign_private_image(
+            self._s3,
+            bucket=self._media_bucket,
+            key=key,
+            version=version,
+            content_type="image/webp" if thumbnail else image.content_type,
+            expires_in=300,
+        )
 
     def avatar_url(self, *, asset_key: str) -> str:
         if not asset_key.startswith(("participants/", "requesters/")):
@@ -311,3 +310,23 @@ class DynamoRecordsReader:
             Params={"Bucket": self._media_bucket, "Key": asset_key},
             ExpiresIn=300,
         )
+
+
+def sign_private_image(
+    client: S3Client,
+    *,
+    bucket: str,
+    key: str,
+    version: str | None,
+    content_type: str,
+    expires_in: int,
+) -> str:
+    params = {
+        "Bucket": bucket,
+        "Key": key,
+        "ResponseContentType": content_type,
+        "ResponseCacheControl": "private, no-store",
+    }
+    if version:
+        params["VersionId"] = version
+    return client.generate_presigned_url("get_object", Params=params, ExpiresIn=expires_in)

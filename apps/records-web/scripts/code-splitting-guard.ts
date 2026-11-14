@@ -22,6 +22,15 @@ function htmlEntryFile(chunk: GuardChunk): string | undefined {
 }
 
 const ROUTES = {
+  GalleryPage: {
+    facade: "/src/routes/GalleryPage.tsx",
+    ownedModules: [
+      "/src/generated/gallery-list-response-validator.mjs",
+      "/src/generated/gallery-detail-response-validator.mjs",
+      "/src/generated/gallery-thumbnails-response-validator.mjs",
+      "/src/generated/gallery-original-response-validator.mjs",
+    ],
+  },
   MomotalkPage: {
     facade: "/src/routes/MomotalkPage.tsx",
     ownedModules: [

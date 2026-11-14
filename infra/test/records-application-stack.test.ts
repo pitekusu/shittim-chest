@@ -558,7 +558,7 @@ describe("RecordsApplicationStack", () => {
     template.resourceCountIs("AWS::Lambda::Version", 7);
     template.resourceCountIs("AWS::Lambda::Alias", 7);
     template.resourceCountIs("AWS::ApiGatewayV2::Api", 1);
-    template.resourceCountIs("AWS::ApiGatewayV2::Route", 47);
+    template.resourceCountIs("AWS::ApiGatewayV2::Route", 51);
     template.resourceCountIs("AWS::ApiGatewayV2::Stage", 1);
     template.hasResourceProperties("AWS::ApiGatewayV2::Stage", {
       AutoDeploy: true,
@@ -1446,6 +1446,10 @@ describe("RecordsApplicationStack", () => {
             Pattern:
               '{"eventName":["REMOVE"],"dynamodb":{"Keys":{"PK":{"S":[{"prefix":"AFFECTION#REQUESTER#"}]},"SK":{"S":["PROFILE"]}}}}',
           },
+          {
+            Pattern:
+              '{"eventName":["INSERT"],"dynamodb":{"Keys":{"PK":{"S":[{"prefix":"GACHA#GUILD#"}]},"SK":{"S":[{"prefix":"RESULT#"}]}}}}',
+          },
         ],
       },
       FunctionResponseTypes: ["ReportBatchItemFailures"],
@@ -1453,6 +1457,43 @@ describe("RecordsApplicationStack", () => {
       MaximumRetryAttempts: 3,
       StartingPosition: "TRIM_HORIZON",
     });
+  });
+
+  test("routes gallery reads to Records and confines thumbnail writes to projection workers", () => {
+    const { template } = fixture;
+    const routes = Object.values(template.findResources("AWS::ApiGatewayV2::Route"));
+    const gallery = routes.filter((route) => route.Properties.RouteKey.startsWith("GET /api/v1/gallery"));
+    expect(gallery.map((route) => route.Properties.RouteKey).sort()).toEqual([
+      "GET /api/v1/gallery",
+      "GET /api/v1/gallery/thumbnails",
+      "GET /api/v1/gallery/{cardId}",
+      "GET /api/v1/gallery/{cardId}/original",
+    ]);
+    expect(gallery.every((route) => JSON.stringify(route.Properties.Target) === JSON.stringify(
+      routes.find((route) => route.Properties.RouteKey === "GET /api/v1/records")?.Properties.Target,
+    ))).toBe(true);
+    const policies = Object.entries(template.findResources("AWS::IAM::Policy"));
+    const galleryStatements = (role: string) => policies
+      .filter(([id]) => id.startsWith(role))
+      .flatMap(([, policy]) => policy.Properties.PolicyDocument.Statement as PolicyStatement[])
+      .filter((statement) => /student-gacha\/|GACHA#/.test(JSON.stringify(statement)));
+    const read = galleryStatements("ReadFunctionRole");
+    expect(read.flatMap(actionsOf).sort()).toEqual([
+      "dynamodb:BatchGetItem", "dynamodb:GetItem", "dynamodb:Query", "s3:GetObjectVersion",
+    ]);
+    expect(JSON.stringify(read)).not.toContain("GACHA#OFFER#");
+    for (const role of ["ProjectorFunctionRole", "BackfillFunctionRole"]) {
+      const statements = galleryStatements(role);
+      const writes = statements.filter((statement) => actionsOf(statement).includes("s3:PutObject"));
+      expect(writes).toHaveLength(1);
+      expect(JSON.stringify(writes[0]?.Resource)).toContain("student-gacha/thumbnails/v1/*");
+      expect(JSON.stringify(writes[0]?.Resource)).not.toContain("student-gacha/results/");
+      const offers = statements.find((statement) => JSON.stringify(statement.Condition).includes("GACHA#OFFER#"));
+      expect(offers?.Condition).toHaveProperty(["ForAllValues:StringEquals", "dynamodb:Attributes"], [
+        "PK", "SK", "guild_id", "state", "owner_key",
+      ]);
+    }
+    expect(galleryStatements("OgpFunctionRole")).toEqual([]);
   });
 
   test("keeps source writes and projector scans out of both execution roles", () => {

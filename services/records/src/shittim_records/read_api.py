@@ -180,29 +180,10 @@ class CursorCodec:
         if query.sync_index:
             payload["version"] = 3
             payload["kind"] = "sync-index"
-        encoded = _base64url(_canonical(payload))
-        signature = _base64url(
-            hmac.new(self._key, f"records:cursor:{encoded}".encode(), hashlib.sha256).digest()
-        )
-        return f"{encoded}.{signature}"
+        return self._encode_payload(payload, scope="records:cursor")
 
     def decode(self, *, query: ListQuery, now: datetime) -> tuple[str, DynamoItem]:
-        if not query.cursor or len(query.cursor) > 4096:
-            raise ReadFailure("CURSOR_INVALID", 400)
-        try:
-            encoded, signature = query.cursor.split(".", 1)
-            expected = _base64url(
-                hmac.new(
-                    self._key,
-                    f"records:cursor:{encoded}".encode(),
-                    hashlib.sha256,
-                ).digest()
-            )
-            if not hmac.compare_digest(signature, expected):
-                raise ValueError
-            payload = json.loads(_decode_base64url(encoded))
-        except UnicodeDecodeError, ValueError, json.JSONDecodeError:
-            raise ReadFailure("CURSOR_INVALID", 400) from None
+        payload = self._decode_payload(query.cursor, scope="records:cursor")
         expected_fields = {
             "version",
             "index",
@@ -237,6 +218,45 @@ class CursorCodec:
         except ValueError:
             raise ReadFailure("CURSOR_INVALID", 400) from None
         return expected_index, key
+
+    def encode_position(self, position: str, *, scope: str, now: datetime) -> str:
+        """Sign a position with a server-selected scope kept outside the public payload."""
+        return self._encode_payload(
+            {"position": position, "expires_at": int((_utc(now) + CURSOR_TTL).timestamp())},
+            scope=f"records:position:{scope}",
+        )
+
+    def decode_position(self, cursor: str, *, scope: str, now: datetime) -> str:
+        payload = self._decode_payload(cursor, scope=f"records:position:{scope}")
+        if (
+            set(payload) != {"position", "expires_at"}
+            or not isinstance(payload["position"], str)
+            or type(payload["expires_at"]) is not int
+            or payload["expires_at"] <= int(_utc(now).timestamp())
+        ):
+            raise ReadFailure("CURSOR_INVALID", 400)
+        return payload["position"]
+
+    def _encode_payload(self, payload: dict[str, Any], *, scope: str) -> str:
+        encoded = _base64url(_canonical(payload))
+        return f"{encoded}.{self._signature(encoded, scope=scope)}"
+
+    def _decode_payload(self, cursor: str | None, *, scope: str) -> dict[str, Any]:
+        if not cursor or len(cursor) > 4096:
+            raise ReadFailure("CURSOR_INVALID", 400)
+        try:
+            encoded, signature = cursor.split(".", 1)
+            if not hmac.compare_digest(signature, self._signature(encoded, scope=scope)):
+                raise ValueError
+            payload = json.loads(_decode_base64url(encoded))
+            if not isinstance(payload, dict):
+                raise ValueError
+        except ValueError:
+            raise ReadFailure("CURSOR_INVALID", 400) from None
+        return payload
+
+    def _signature(self, encoded: str, *, scope: str) -> str:
+        return _base64url(hmac.digest(self._key, f"{scope}:{encoded}".encode(), "sha256"))
 
     def encode_filtered(
         self,

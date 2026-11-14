@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, get_args
 
 from shittim_records.contracts import (
+    GALLERY_CARD_ID_PATTERN,
     PUBLIC_REQUEST_MODELS,
     PUBLIC_RESPONSE_MODELS,
     RECORDS_API_SCHEMA_VERSION,
@@ -236,6 +237,53 @@ def _momotalk_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
             }
         }
     return result
+
+
+def _gallery_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
+    card_id = _parameter(
+        "cardId", "path", {"type": "string", "pattern": GALLERY_CARD_ID_PATTERN}, required=True
+    )
+    return {
+        f"/api/v1/gallery{suffix}": {
+            "get": {
+                "operationId": operation,
+                "security": [{"sessionCookie": []}],
+                "description": description,
+                "parameters": parameters,
+                "responses": {"200": _response(schema, description), **error_responses},
+            }
+        }
+        for suffix, operation, schema, description, parameters in (
+            (
+                "",
+                "listGalleryCards",
+                "GalleryListResponse",
+                "投稿済み作品のメタデータを新着順で返す。",
+                [_parameter("cursor", "query", {"type": "string", "maxLength": 256})],
+            ),
+            (
+                "/{cardId}",
+                "getGalleryCard",
+                "GalleryDetailResponse",
+                "作品のメタデータと原本の寸法を返す。",
+                [card_id],
+            ),
+            (
+                "/thumbnails",
+                "getGalleryThumbnails",
+                "GalleryThumbnailsResponse",
+                "カンマ区切りのIDを最大24件受け取り、取得可能なWebPの短命の署名URLを返す。",
+                [_parameter("ids", "query", {"type": "string", "maxLength": 1943}, required=True)],
+            ),
+            (
+                "/{cardId}/original",
+                "getGalleryOriginal",
+                "GalleryOriginalResponse",
+                "PNG原本の短命の署名URLを返す。",
+                [card_id],
+            ),
+        )
+    }
 
 
 def _mobile_auth_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
@@ -487,6 +535,7 @@ def build_openapi() -> dict[str, Any]:
         "paths": {
             **_mobile_debate_paths(error_responses),
             **_momotalk_paths(error_responses),
+            **_gallery_paths(error_responses),
             **_mobile_auth_paths(error_responses),
             "/records/{recordId}": _preview_path(image=False),
             "/og/records/{recordId}/{version}.png": _preview_path(image=True),

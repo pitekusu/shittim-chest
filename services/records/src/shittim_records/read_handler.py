@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 import boto3
 
-from shittim_records.auth_adapters import DynamoAuthStore
+from shittim_records.auth_adapters import DynamoAuthStore, load_oauth_guild
 from shittim_records.http_api import ReadHttpController
 from shittim_records.lambda_support import (
     SDK_CONFIG,
@@ -23,6 +23,7 @@ from shittim_records.read_adapters import DynamoRecordsReader, ReadConfiguration
 from shittim_records.read_api import CursorCodec, RecordsReadService
 
 if TYPE_CHECKING:
+    from shittim_records.gallery_read import GalleryReadService
     from shittim_records.momotalk_read import MomotalkReadService
 
 LOGGER = logging.getLogger(__name__)
@@ -52,8 +53,9 @@ def _read_controller() -> ReadHttpController:
         return _READ_CONTROLLER
 
     dynamodb = boto3.client("dynamodb", config=SDK_CONFIG)
+    ssm = boto3.client("ssm", config=SDK_CONFIG)
     session_key = ReadConfigurationRepository(
-        boto3.client("ssm", config=SDK_CONFIG),
+        ssm,
         environment("SESSION_KEY_PARAMETER_NAME"),
     ).load_session_key()
     s3 = regional_s3_client()
@@ -69,6 +71,18 @@ def _read_controller() -> ReadHttpController:
         session_table_name=session_table,
         media_bucket_name=media_bucket,
     )
+
+    @cache
+    def gallery() -> GalleryReadService:
+        from shittim_records.gallery_read import GalleryReadService
+        from shittim_records.gallery_read_adapters import DynamoGalleryStore
+
+        return GalleryReadService(
+            DynamoGalleryStore(dynamodb, s3, table=statistics_table, bucket=media_bucket),
+            reader,
+            guild_id=load_oauth_guild(ssm, environment("OAUTH_CONFIG_PARAMETER_NAME")),
+            session_key=session_key,
+        )
 
     @cache
     def momotalk() -> MomotalkReadService:
@@ -91,6 +105,7 @@ def _read_controller() -> ReadHttpController:
             cursor_codec=CursorCodec(session_key),
             public_origin=public_origin,
         ),
+        gallery=gallery,
         momotalk=momotalk,
     )
     return _READ_CONTROLLER

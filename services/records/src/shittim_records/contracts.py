@@ -46,6 +46,8 @@ AdminServiceName = Literal[
 
 NonEmptyText = Annotated[str, Field(min_length=1, pattern=r"\S")]
 RecordId = Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{43}$")]
+GALLERY_CARD_ID_PATTERN = r"^[A-Za-z0-9_-]{80}$"
+GalleryCardId = Annotated[str, Field(pattern=GALLERY_CARD_ID_PATTERN)]
 _ALL_PARTICIPANT_SLOTS = frozenset[ParticipantSlot](
     {"participant-a", "participant-b", "participant-c"}
 )
@@ -1245,6 +1247,54 @@ class MomotalkRoomResponse(PublicModel):
     images: list[MomotalkImage] = Field(max_length=2)
 
 
+class GalleryCollector(PublicModel):
+    id: RecordId
+    display_name: NonEmptyText
+
+
+class GalleryCard(PublicModel):
+    card_id: GalleryCardId
+    posted_at: AwareDatetime
+    performer: ParticipantSlot
+    student_name: Annotated[str, Field(min_length=1, max_length=60)]
+    school_name: Annotated[str, Field(min_length=1, max_length=40)]
+    rarity: Annotated[int, Field(ge=0, le=4, strict=True)] | None
+    collector: GalleryCollector | None
+    is_mine: bool
+    thumbnail_ready: bool
+
+
+class GalleryListResponse(PublicModel):
+    schema_version: Literal[1]
+    items: list[GalleryCard] = Field(max_length=100)
+    next_cursor: Annotated[str, Field(min_length=1, max_length=256)] | None
+
+
+class GalleryDetailResponse(PublicModel):
+    schema_version: Literal[1]
+    card: GalleryCard
+    width: Annotated[int, Field(gt=0)]
+    height: Annotated[int, Field(gt=0)]
+
+
+class GalleryImage(PublicModel):
+    url: Annotated[str, Field(min_length=1, max_length=4096, pattern=r"^https://")]
+    expires_at: AwareDatetime
+
+
+class GalleryThumbnail(GalleryImage):
+    card_id: GalleryCardId
+
+
+class GalleryThumbnailsResponse(PublicModel):
+    schema_version: Literal[1]
+    items: list[GalleryThumbnail] = Field(max_length=24)
+
+
+class GalleryOriginalResponse(GalleryImage):
+    schema_version: Literal[1]
+
+
 PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
     DebateControlResponse,
     DebateAttachmentUploadResponse,
@@ -1272,6 +1322,10 @@ PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
     AdminPromptRevisionResponse,
     AdminStatusResponse,
     ErrorResponse,
+    GalleryListResponse,
+    GalleryDetailResponse,
+    GalleryThumbnailsResponse,
+    GalleryOriginalResponse,
 )
 
 PUBLIC_REQUEST_MODELS: tuple[type[BaseModel], ...] = (

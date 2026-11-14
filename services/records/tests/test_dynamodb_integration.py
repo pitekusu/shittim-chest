@@ -12,12 +12,14 @@ from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, cast
+from unittest.mock import Mock
 
 import boto3
 import pytest
 from mypy_boto3_dynamodb.client import DynamoDBClient
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.serializer import (
+    DynamoItem,
     deserialize_affection_profile,
     serialize_affection_profile,
 )
@@ -39,6 +41,7 @@ from shittim_records.auth_adapters import DynamoAuthStore
 from shittim_records.contracts import RecordSearchRequest
 from shittim_records.cost_adapters import DynamoCostLedgerStore
 from shittim_records.costs import ProviderDailyCost, ProviderDailyRate
+from shittim_records.gallery_projection import GalleryProjector
 from shittim_records.inspector_translation_adapters import DynamoInspectorTranslationStore
 from shittim_records.inspector_translations import (
     InspectorJapaneseSummary,
@@ -64,6 +67,32 @@ from shittim_records.ranking_adapters import DynamoRankingSnapshotStore, DynamoR
 from shittim_records.rankings import RankingService
 from shittim_records.read_adapters import DynamoRecordsReader
 from shittim_records.read_api import CursorCodec, RecordsReadService
+
+
+def test_gallery_thumbnail_receipt_replaces_only_the_expected_source_once(
+    dynamodb_client: DynamoDBClient,
+    table_names: tuple[str, str, str],
+) -> None:
+    _, source, statistics = table_names
+    guild = "1" * 17
+    projector = GalleryProjector(
+        dynamodb_client,
+        Mock(),
+        source_table_name=source,
+        statistics_table_name=statistics,
+        media_bucket_name="local-media",
+        guild_id=guild,
+    )
+    key = {"PK": f"GACHA#GALLERY#{guild}", "SK": "RESULT#test"}
+    projection: DynamoItem = {**key, "stored": {"version_id": "version"}}
+    thumbnail: DynamoItem = {"version_id": "derived-version"}
+    assert projector._put_new(projection)
+    assert not projector._put_new(projection)
+    assert not projector._put_thumbnail({**key, "stored": {"version_id": "wrong"}}, thumbnail)
+    assert projector._put_thumbnail(projection, thumbnail)
+    assert not projector._put_thumbnail(projection, {"version_id": "replacement"})
+    result = dynamodb_client.get_item(TableName=statistics, Key=marshal_item(key))
+    assert unmarshal_item(result["Item"]) == {**projection, "thumbnail": thumbnail}
 
 
 def test_search_and_requester_candidates_roundtrip_real_gsi_pagination(

@@ -9,6 +9,7 @@ import {
 import { useLocation } from "react-router-dom";
 
 import { useOptionalRecordsArchive } from "./hooks/useRecordsArchive";
+import { routeScenePath } from "./lib/routePresentation";
 import styles from "./styles/routeMotion.module.css";
 
 export type RouteMotionKind = "archive" | "detail" | "insights" | "admin" | "memorial" | "other";
@@ -109,17 +110,18 @@ function RouteScene({
 
 export function BrandedRouteStage({ children }: PropsWithChildren) {
   const location = useLocation();
+  const scenePath = routeScenePath(location.pathname);
   const archive = useOptionalRecordsArchive();
   const archiveReturnTarget = archive?.returnTarget;
   const clearArchiveReturnTarget = archive?.clearReturnTarget;
   const sceneRef = useRef<HTMLDivElement>(null);
-  const previousPathnameRef = useRef(location.pathname);
+  const previousPathnameRef = useRef(scenePath);
   const hasNavigatedRef = useRef(false);
   const mountedRef = useRef(false);
-  const focusedPathnameRef = useRef(location.pathname);
+  const focusedPathnameRef = useRef(scenePath);
 
-  if (previousPathnameRef.current !== location.pathname) {
-    previousPathnameRef.current = location.pathname;
+  if (previousPathnameRef.current !== scenePath) {
+    previousPathnameRef.current = scenePath;
     hasNavigatedRef.current = true;
   }
 
@@ -129,14 +131,14 @@ export function BrandedRouteStage({ children }: PropsWithChildren) {
       return;
     }
     const previousPathname = focusedPathnameRef.current;
-    focusedPathnameRef.current = location.pathname;
-    if (previousPathname === location.pathname) return;
+    focusedPathnameRef.current = scenePath;
+    if (previousPathname === scenePath) return;
 
     const scene = sceneRef.current;
     if (!scene) return;
 
     const returnTarget =
-      location.pathname === "/" &&
+      scenePath === "/" &&
       archiveReturnTarget != null &&
       previousPathname === `/records/${archiveReturnTarget.recordId}`
         ? archiveReturnTarget
@@ -170,18 +172,18 @@ export function BrandedRouteStage({ children }: PropsWithChildren) {
     });
     observer.observe(scene, { attributes: true, childList: true, subtree: true });
     return () => observer.disconnect();
-  }, [location.pathname, archiveReturnTarget, clearArchiveReturnTarget]);
+  }, [scenePath, archiveReturnTarget, clearArchiveReturnTarget]);
 
   return (
     <div
       className={styles.routeStage}
-      data-route-kind={routeMotionKind(location.pathname)}
+      data-route-kind={routeMotionKind(scenePath)}
       data-route-stage=""
     >
       <RouteScene
-        pathname={location.pathname}
+        pathname={scenePath}
         animate={hasNavigatedRef.current}
-        key={location.pathname}
+        key={scenePath}
         sceneRef={sceneRef}
       >
         {children}

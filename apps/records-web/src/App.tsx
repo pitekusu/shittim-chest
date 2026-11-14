@@ -26,6 +26,7 @@ import { archiveListQuery } from "./lib/archiveListQuery";
 import { LOGIN_TRANSITION_KEY } from "./lib/authTransition";
 import { clearProtectedQueries } from "./lib/protectedQueries";
 import { setPageMetadata } from "./lib/pageMetadata";
+import { routeScenePath } from "./lib/routePresentation";
 import { BrandedRouteStage } from "./RouteMotion";
 import { LoginPage } from "./routes/LoginPage";
 import { NotFoundPage } from "./routes/NotFoundPage";
@@ -39,6 +40,7 @@ const AdminPage = lazy(() => import("./routes/AdminPage"));
 const AdminPromptsPage = lazy(() => import("./routes/AdminPromptsPage"));
 const MemorialPage = lazy(() => import("./routes/MemorialPage"));
 const MomotalkPage = lazy(() => import("./routes/MomotalkPage"));
+const GalleryPage = lazy(() => import("./routes/GalleryPage"));
 const PublicInformationPage = lazy(() => import("./routes/PublicInformationPage"));
 
 function LoadingScreen(): React.JSX.Element {
@@ -82,6 +84,19 @@ function AuthenticatedRoutes({
   const [startupArchiveKey] = useState(() => (location.pathname === "/" ? location.key : null));
   const startupArchive = location.key === startupArchiveKey && location.pathname === "/";
   const { csrfToken } = session;
+  const [gallerySession, setGallerySession] = useState({ csrfToken, scope: 0 });
+  if (gallerySession.csrfToken !== csrfToken) {
+    setGallerySession({ csrfToken, scope: gallerySession.scope + 1 });
+  }
+  useEffect(() => {
+    const filter = {
+      queryKey: ["gallery"],
+      predicate: ({ queryKey }: { queryKey: readonly unknown[] }) =>
+        queryKey[1] !== gallerySession.scope,
+    };
+    void client.cancelQueries(filter);
+    client.removeQueries(filter);
+  }, [client, gallerySession.scope]);
   const prefetchedArchive = useRef(false);
   useEffect(() => {
     if (!startupArchive || prefetchedArchive.current) return;
@@ -119,7 +134,7 @@ function AuthenticatedRoutes({
       onThemeToggle={onThemeToggle}
     >
       <BrandedRouteStage>
-        <RouteChunkBoundary key={location.pathname}>
+        <RouteChunkBoundary key={routeScenePath(location.pathname)}>
           <Suspense fallback={<RouteLoadingFallback />}>
             <Routes>
               <Route
@@ -129,6 +144,10 @@ function AuthenticatedRoutes({
               <Route path="/records/:recordId" element={<RecordDetail />} />
               <Route path="/insights" element={<RankingsPage />} />
               <Route path="/momotalk" element={<MomotalkPage />} />
+              <Route
+                path="/gallery/:cardId?"
+                element={<GalleryPage key={gallerySession.scope} scope={gallerySession.scope} />}
+              />
               <Route
                 path="/memorial"
                 element={<MemorialPage csrfToken={session.csrfToken} requester={session.user} />}

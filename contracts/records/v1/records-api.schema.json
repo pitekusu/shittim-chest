@@ -2312,6 +2312,259 @@
       "title": "FinalProposalView",
       "type": "object"
     },
+    "GalleryCard": {
+      "additionalProperties": false,
+      "properties": {
+        "cardId": {
+          "pattern": "^[A-Za-z0-9_-]{80}$",
+          "title": "Cardid",
+          "type": "string"
+        },
+        "collector": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GalleryCollector"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "isMine": {
+          "title": "Ismine",
+          "type": "boolean"
+        },
+        "performer": {
+          "enum": [
+            "participant-a",
+            "participant-b",
+            "participant-c"
+          ],
+          "title": "Performer",
+          "type": "string"
+        },
+        "postedAt": {
+          "format": "date-time",
+          "title": "Postedat",
+          "type": "string"
+        },
+        "rarity": {
+          "anyOf": [
+            {
+              "maximum": 4,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Rarity"
+        },
+        "schoolName": {
+          "maxLength": 40,
+          "minLength": 1,
+          "title": "Schoolname",
+          "type": "string"
+        },
+        "studentName": {
+          "maxLength": 60,
+          "minLength": 1,
+          "title": "Studentname",
+          "type": "string"
+        },
+        "thumbnailReady": {
+          "title": "Thumbnailready",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cardId",
+        "postedAt",
+        "performer",
+        "studentName",
+        "schoolName",
+        "rarity",
+        "collector",
+        "isMine",
+        "thumbnailReady"
+      ],
+      "title": "GalleryCard",
+      "type": "object"
+    },
+    "GalleryCollector": {
+      "additionalProperties": false,
+      "properties": {
+        "displayName": {
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Displayname",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "displayName"
+      ],
+      "title": "GalleryCollector",
+      "type": "object"
+    },
+    "GalleryDetailResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "card": {
+          "$ref": "#/$defs/GalleryCard"
+        },
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "card",
+        "width",
+        "height"
+      ],
+      "title": "GalleryDetailResponse",
+      "type": "object"
+    },
+    "GalleryListResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/GalleryCard"
+          },
+          "maxItems": 100,
+          "title": "Items",
+          "type": "array"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Nextcursor"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "items",
+        "nextCursor"
+      ],
+      "title": "GalleryListResponse",
+      "type": "object"
+    },
+    "GalleryOriginalResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "expiresAt": {
+          "format": "date-time",
+          "title": "Expiresat",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "url": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "pattern": "^https://",
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "expiresAt",
+        "schemaVersion"
+      ],
+      "title": "GalleryOriginalResponse",
+      "type": "object"
+    },
+    "GalleryThumbnail": {
+      "additionalProperties": false,
+      "properties": {
+        "cardId": {
+          "pattern": "^[A-Za-z0-9_-]{80}$",
+          "title": "Cardid",
+          "type": "string"
+        },
+        "expiresAt": {
+          "format": "date-time",
+          "title": "Expiresat",
+          "type": "string"
+        },
+        "url": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "pattern": "^https://",
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "expiresAt",
+        "cardId"
+      ],
+      "title": "GalleryThumbnail",
+      "type": "object"
+    },
+    "GalleryThumbnailsResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/GalleryThumbnail"
+          },
+          "maxItems": 24,
+          "title": "Items",
+          "type": "array"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "items"
+      ],
+      "title": "GalleryThumbnailsResponse",
+      "type": "object"
+    },
     "ImageAvatarRef": {
       "additionalProperties": false,
       "properties": {
@@ -4877,6 +5130,18 @@
     },
     {
       "$ref": "#/$defs/ErrorResponse"
+    },
+    {
+      "$ref": "#/$defs/GalleryListResponse"
+    },
+    {
+      "$ref": "#/$defs/GalleryDetailResponse"
+    },
+    {
+      "$ref": "#/$defs/GalleryThumbnailsResponse"
+    },
+    {
+      "$ref": "#/$defs/GalleryOriginalResponse"
     }
   ],
   "title": "Shittim Chest Records API v1"

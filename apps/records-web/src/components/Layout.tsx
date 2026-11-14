@@ -28,13 +28,14 @@ function MoonIcon() {
 function NavigationIcon({
   kind,
 }: {
-  readonly kind: "records" | "insights" | "momotalk" | "memorial";
+  readonly kind: "records" | "insights" | "momotalk" | "memorial" | "gallery";
 }) {
   const paths = {
     records: "M5 3h14v18H5zM8 8h8M8 12h8M8 16h5",
     insights: "M4 20h16M7 16V9M12 16V4M17 16v-5",
     momotalk: "M4 4h16v12H9l-5 4zM8 9h8M8 12h5",
     memorial: "M4 4h16v16H4zM4 16l5-5 4 4 3-3 4 4M15 8h.01",
+    gallery: "M7 3h11v14H7zM4 7v14h10M12.5 6v6M9.5 9h6",
   };
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" className={styles.navigationIcon}>
@@ -201,6 +202,13 @@ export function Layout({
               <NavigationIcon kind="memorial" />
               メモリアルロビー
             </NavLink>
+            <NavLink
+              className={({ isActive }) => (isActive ? styles.navActive : styles.navLink)}
+              to="/gallery"
+            >
+              <NavigationIcon kind="gallery" />
+              生徒ガチャ
+            </NavLink>
           </div>
           <section className={styles.systemAccess} aria-labelledby="system-access-label">
             <p className={styles.systemAccessLabel} id="system-access-label" lang="en">
@@ -288,6 +296,14 @@ export function Layout({
         >
           <NavigationIcon kind="memorial" />
           <span>メモリアル</span>
+        </NavLink>
+        <NavLink
+          aria-label="生徒ガチャ"
+          className={({ isActive }) => (isActive ? styles.navActive : styles.navLink)}
+          to="/gallery"
+        >
+          <NavigationIcon kind="gallery" />
+          <span>ガチャ</span>
         </NavLink>
       </nav>
     </div>
