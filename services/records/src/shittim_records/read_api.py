@@ -17,7 +17,6 @@ from shittim_chest.adapters.dynamodb.composite_ballot import decode_composite_ba
 from shittim_chest.adapters.dynamodb.serializer import DynamoItem, deserialize_debate_image
 from shittim_chest.domain.attachments import DebateImage, validate_images
 
-from shittim_records.auth import sign_session_message
 from shittim_records.contracts import (
     AffectionRankingEntry,
     AffectionRankingsResponse,
@@ -257,7 +256,12 @@ class CursorCodec:
         return payload
 
     def _signature(self, encoded: str, *, scope: str) -> str:
-        return _base64url(sign_session_message(self._key, domain=scope, value=encoded))
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.hmac import HMAC
+
+        signature = HMAC(self._key, hashes.SHA256())
+        signature.update(f"records:{scope}:{encoded}".encode())
+        return _base64url(signature.finalize())
 
     def encode_filtered(
         self,

@@ -1187,11 +1187,15 @@ test("record detail identifies the requester and uses affection hearts", async (
     await expect(card.getByText(change.reason)).toBeVisible();
   }
 
-  await expect(affection).toHaveScreenshot("records-detail-affection.png", {
-    animations: "disabled",
-    maxDiffPixels: 30,
-    style: hideNavigation,
-  });
+  const navigationStyle = await page.addStyleTag({ content: hideNavigation });
+  try {
+    await expect(affection).toHaveScreenshot("records-detail-affection.png", {
+      animations: "disabled",
+      maxDiffPixels: 30,
+    });
+  } finally {
+    await navigationStyle.evaluate((style) => style.parentNode?.removeChild(style));
+  }
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
 });

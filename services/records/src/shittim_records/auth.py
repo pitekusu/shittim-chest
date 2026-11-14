@@ -477,11 +477,6 @@ def _digest(key: bytes, domain: str, value: str) -> str:
     return hmac.digest(key, f"records:{domain}:{value}".encode(), "sha256").hex()
 
 
-def sign_session_message(key: bytes, *, domain: str, value: str) -> bytes:
-    """Authenticate a domain-separated message using the Records session key."""
-    return bytes.fromhex(_digest(key, domain, value))
-
-
 def _cookie(name: str, value: str, *, max_age: int, http_only: bool = True) -> str:
     attributes = [f"{name}={value}", "Path=/", f"Max-Age={max_age}", "Secure", "SameSite=Lax"]
     if http_only:

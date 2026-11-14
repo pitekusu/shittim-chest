@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import re
 from datetime import datetime, timedelta
 from typing import Annotated, Literal, Protocol
@@ -12,7 +13,7 @@ from shittim_chest.adapters.assets.student_gacha import RESULT_SIZE
 from shittim_chest.adapters.dynamodb.serializer import DynamoItem
 from shittim_chest.application.student_gacha_models import student_gacha_image_key
 
-from shittim_records.auth import SessionRecord, sign_session_message
+from shittim_records.auth import SessionRecord
 from shittim_records.contracts import (
     GALLERY_CARD_ID_PATTERN,
     GalleryCard,
@@ -120,7 +121,6 @@ class GalleryReadService:
         self._store = store
         self._profiles = profiles
         self._partition = f"GACHA#GALLERY#{guild_id}"
-        self._session_key = session_key
         self._cursor_codec = CursorCodec(session_key)
 
     def list_cards(
@@ -212,7 +212,7 @@ class GalleryReadService:
             )
             collector = (
                 GalleryCollector(
-                    id=_collector_id(self._session_key, self._partition, owner),
+                    id=_collector_id(self._partition, owner),
                     display_name=name,
                 )
                 if owner is not None and name is not None
@@ -265,6 +265,8 @@ def _result_key(card_id: str, *, error_code: str, status: int) -> str:
     raise ReadFailure(error_code, status)
 
 
-def _collector_id(key: bytes, partition: str, owner: str) -> str:
-    digest = sign_session_message(key, domain=f"gallery:collector:{partition}", value=owner)
+def _collector_id(partition: str, owner: str) -> str:
+    # The owner key is already an HMAC of the private identity. Derive a separate,
+    # stable gallery identifier without disclosing that shared internal key.
+    digest = hashlib.sha256(f"records:gallery:collector:{partition}:{owner}".encode()).digest()
     return base64.urlsafe_b64encode(digest).decode().rstrip("=")
