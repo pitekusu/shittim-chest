@@ -4,7 +4,7 @@ import base64
 import hashlib
 import io
 import json
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import boto3
 import pytest
@@ -16,12 +16,16 @@ from botocore.stub import Stubber
 from PIL import Image
 
 from shittim_chest.adapters.assets.student_gacha import (
+    _ASSET_DIGESTS,
     RESULT_SIZE,
+    SCHOOL_LOGOS_KEY,
     StudentGachaMedia,
     _parse_roster,
 )
 from shittim_chest.application.student_gacha_models import (
     GachaGenerationFailure,
+    SchoolBranding,
+    Student,
     normalize_teacher_name,
     student_gacha_image_key,
 )
@@ -85,6 +89,123 @@ async def test_missing_result_is_distinguished_from_access_denied() -> None:
     client.list_objects_v2.return_value = {"Contents": [{"Key": student_gacha_image_key(_DRAW_ID)}]}
     with pytest.raises(GachaGenerationFailure, match="gacha_result_lookup_failed"):
         await media.find(_DRAW_ID)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "student",
+    [
+        Student("コハル\uff08水着\uff09", "トリニティ", rarity=3),
+        Student("ナグサ", "百鬼夜行連合学院", rarity=0),
+        Student("アロナ", "別の所属", rarity=4),
+    ],
+)
+async def test_costume_reference_passes_the_exact_draw_to_the_wiki_resolver(
+    monkeypatch: pytest.MonkeyPatch,
+    student: Student,
+) -> None:
+    load_wiki_costume = AsyncMock(return_value=b"costume WebP")
+    monkeypatch.setattr(
+        "shittim_chest.adapters.assets.student_gacha.load_wiki_costume", load_wiki_costume
+    )
+    client = Mock()
+    media = StudentGachaMedia(client, bucket_name="private-media")
+
+    assert await media.costume_reference(student) == b"costume WebP"
+    load_wiki_costume.assert_awaited_once_with(student)
+    client.get_object.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("student", "participant", "file_format"),
+    [
+        (Student("アロナ", "シッテムの箱", 4), "participant-a", "PNG"),
+        (Student("プラナ", "シッテムの箱", 4), "participant-b", "WEBP"),
+        (Student("安倍晋三", "自民党", 4), "participant-c", "WEBP"),
+        (Student("プラナ", "シッテムの箱"), "participant-b", "WEBP"),
+    ],
+)
+async def test_special_costume_uses_the_matching_private_portrait_as_webp(
+    monkeypatch: pytest.MonkeyPatch, student: Student, participant: str, file_format: str
+) -> None:
+    with io.BytesIO() as output:
+        Image.new("RGB", (16, 24), "lavender").save(output, file_format)
+        portrait = output.getvalue()
+    load_wiki_costume = AsyncMock()
+    monkeypatch.setattr(
+        "shittim_chest.adapters.assets.student_gacha.load_wiki_costume", load_wiki_costume
+    )
+    buffer = io.BytesIO(portrait)
+    client = Mock()
+    client.get_object.return_value = {"ContentLength": len(portrait), "Body": buffer}
+    media = StudentGachaMedia(client, bucket_name="private-media")
+
+    content = await media.costume_reference(student)
+
+    with Image.open(io.BytesIO(content)) as image:
+        assert image.format == "WEBP"
+        assert image.size == (16, 24)
+    client.get_object.assert_called_once_with(
+        Bucket="private-media",
+        Key=f"participants/{participant}/memorial-reference.{file_format.lower()}",
+    )
+    load_wiki_costume.assert_not_awaited()
+    assert buffer.closed
+
+
+@pytest.mark.asyncio
+async def test_invalid_special_costume_has_no_usable_reference() -> None:
+    content = b"not an image"
+    buffer = io.BytesIO(content)
+    client = Mock()
+    client.get_object.return_value = {"ContentLength": len(content), "Body": buffer}
+    media = StudentGachaMedia(client, bucket_name="private-media")
+
+    with pytest.raises(GachaGenerationFailure, match="gacha_costume_reference_invalid"):
+        await media.costume_reference(Student("安倍晋三", "自民党", 4))
+    assert buffer.closed
+
+
+@pytest.mark.asyncio
+async def test_reads_only_the_verified_private_school_logo_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog = b"verified school logo bundle"
+    buffer = io.BytesIO(catalog)
+    branding = SchoolBranding("ゲヘナ学園")
+    lookup = Mock(return_value=branding)
+    monkeypatch.setitem(_ASSET_DIGESTS, SCHOOL_LOGOS_KEY, hashlib.sha256(catalog).hexdigest())
+    monkeypatch.setattr("shittim_chest.adapters.assets.student_gacha.school_branding", lookup)
+    client = Mock()
+    client.get_object.return_value = {"ContentLength": len(catalog), "Body": buffer}
+
+    result = await StudentGachaMedia(client, bucket_name="private-media").school_branding("ゲヘナ")
+
+    assert result == branding
+    client.get_object.assert_called_once_with(
+        Bucket="private-media", Key="student-gacha/assets/blue_archive_school_logos.zip"
+    )
+    lookup.assert_called_once_with(catalog, "ゲヘナ")
+    assert buffer.closed
+
+
+@pytest.mark.asyncio
+async def test_school_logo_bundle_checksum_mismatch_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog = b"different school logo bundle"
+    buffer = io.BytesIO(catalog)
+    lookup = Mock()
+    monkeypatch.setattr("shittim_chest.adapters.assets.student_gacha.school_branding", lookup)
+    client = Mock()
+    client.get_object.return_value = {"ContentLength": len(catalog), "Body": buffer}
+
+    with pytest.raises(GachaGenerationFailure, match="gacha_asset_checksum_mismatch"):
+        await StudentGachaMedia(client, bucket_name="private-media").school_branding("ゲヘナ")
+
+    lookup.assert_not_called()
+    assert buffer.closed
 
 
 def _roster_rows() -> list[dict[str, object]]:

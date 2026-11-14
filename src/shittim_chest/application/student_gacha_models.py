@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from unicodedata import normalize
 
 from shittim_chest.domain import ParticipantSlot
@@ -56,6 +56,15 @@ class GachaPresentation:
             _require_printable(text, limit)
         if sum(line.count(TEACHER_PLACEHOLDER) for line in self.greeting) != 1:
             raise ValueError("invalid_student_gacha_greeting")
+
+
+@dataclass(frozen=True, slots=True)
+class SchoolBranding:
+    name: str
+    logo: bytes | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        _require_printable(self.name, 40)
 
 
 @dataclass(frozen=True, slots=True)

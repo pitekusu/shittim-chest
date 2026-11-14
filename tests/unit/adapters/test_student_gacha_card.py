@@ -5,10 +5,14 @@ from itertools import pairwise
 from unittest.mock import patch
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from shittim_chest.adapters.assets.student_gacha_card import render_card
-from shittim_chest.application.student_gacha_models import GachaPresentation, Student
+from shittim_chest.application.student_gacha_models import (
+    GachaPresentation,
+    SchoolBranding,
+    Student,
+)
 from shittim_chest.domain import ParticipantSlot
 
 _ART_COLOR = (184, 176, 212)
@@ -28,6 +32,7 @@ def _render(
     *,
     student_name: str = "サンプル生徒",
     performer: ParticipantSlot = ParticipantSlot.PARTICIPANT_A,
+    school_branding: SchoolBranding | None = None,
 ) -> bytes:
     presentation = GachaPresentation(
         student=Student(student_name, "サンプル学園", rarity=rarity),
@@ -38,7 +43,7 @@ def _render(
         weapon="SMG",
         greeting=("{teacher}、よろしくね!", "今日は星を観にいこう。", "案内は任せて!"),
     )
-    return render_card(artwork, presentation, "サンプル先生")
+    return render_card(artwork, presentation, "サンプル先生", school_branding=school_branding)
 
 
 @pytest.mark.parametrize(
@@ -73,6 +78,47 @@ def test_card_displays_performer_then_student_and_variant(
     assert labels.count(expected) == 1
     assert "プラナ" not in labels
     assert all(not name.startswith("コスプレ") for name in labels)
+
+
+def test_card_renders_the_supplied_school_name_and_logo(artwork: bytes) -> None:
+    png = BytesIO()
+    logo = Image.new("RGBA", (400, 300))
+    ImageDraw.Draw(logo).rectangle((40, 120, 359, 199), fill="#ff00ea")
+    logo.save(png, "PNG")
+    school = SchoolBranding(name="トリニティ総合学園", logo=png.getvalue())
+
+    with patch("shittim_chest.adapters.assets.student_gacha_card._label") as label:
+        output = _render(artwork, 3, school_branding=school)
+
+    labels = [(call.args[1][0], call.args[2]) for call in label.call_args_list]
+    assert (141, "トリニティ総合学園") in labels
+    assert (63, "サンプル学園") not in labels
+    with Image.open(BytesIO(output)) as card:
+        school_panel = card.crop((1160, 190, 1270, 315))
+        pixels = [
+            (index % school_panel.width, index // school_panel.width)
+            for index, pixel in enumerate(school_panel.get_flattened_data())
+            if pixel == (255, 0, 234)
+        ]
+    xs, ys = zip(*pixels, strict=True)
+    assert 59 <= max(xs) - min(xs) <= 65
+    assert 12 <= max(ys) - min(ys) <= 22
+
+
+@pytest.mark.parametrize(
+    ("branding", "expected_name"),
+    [(None, "サンプル学園"), (SchoolBranding(name="柵川中学", logo=None), "柵川中学")],
+)
+def test_school_name_uses_full_header_when_no_logo_exists(
+    artwork: bytes, branding: SchoolBranding | None, expected_name: str
+) -> None:
+    with patch("shittim_chest.adapters.assets.student_gacha_card._label") as label:
+        output = _render(artwork, 3, school_branding=branding)
+
+    labels = [(call.args[1][0], call.args[2]) for call in label.call_args_list]
+    assert (63, expected_name) in labels
+    with Image.open(BytesIO(output)) as card:
+        assert card.getpixel((1217, 251)) == (252, 253, 255)
 
 
 @pytest.mark.parametrize("rarity", [None, 0, 1, 2, 3])
