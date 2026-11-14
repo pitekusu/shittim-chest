@@ -10,6 +10,9 @@ on:
 permissions: {}
 
 env:
+  NODE_OPTIONS: --use-openssl-ca
+  SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
+  SSL_CERT_DIR: /etc/ssl/certs
   AWS_REGION: ap-northeast-1
   AWS_PAGER: ""
   GH_PROMPT_DISABLED: "1"
