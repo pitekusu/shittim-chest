@@ -46,12 +46,47 @@ _PREVIOUS: list[updater.StudentRow] = [
 def test_refresh_keeps_order_and_applies_rarity_rules() -> None:
     refreshed = updater.update_roster(_PREVIOUS, _PLAYERS, _NPC)
     assert refreshed == [
-        *_PREVIOUS,
+        *[row for row in _PREVIOUS if row["name"] != "キキョウ（水着）"],
         {"name": "アスナ（制服）", "school": "ミレニアムサイエンススクール", "rarity": 0},
         {"name": "イブキ", "school": "ゲヘナ", "rarity": 3},
         {"name": "キリノ", "school": "ヴァルキューレ", "rarity": 1},
     ]
     assert updater.update_roster(refreshed, _PLAYERS, _NPC) == refreshed
+
+
+def test_refresh_excludes_swimsuit_names_across_sources() -> None:
+    players = _PLAYERS.replace("キキョウ<br />（水着）", "別の生徒（水着）").replace(
+        "キキョウ（水着）</td>", "別の生徒（水着）</td>"
+    )
+    npcs = _NPC.replace(
+        "<h2>衣装替え一覧",
+        '<table class="style_table"><tr><td>NPC<br />水着のNPC</td></tr></table>\n<h2>衣装替え一覧',
+    ).replace(
+        "<h2>コメントフォーム",
+        '<table class="style_table"><tr><td>NPC<br />未知の生徒（水着）</td></tr></table>\n'
+        "<h2>コメントフォーム",
+    )
+    previous: list[updater.StudentRow] = [
+        *_PREVIOUS,
+        {"name": "水着の特別枠", "school": "ゲヘナ", "rarity": 4},
+    ]
+    refreshed = updater.update_roster(previous, players, npcs)
+    assert refreshed == updater.update_roster(_PREVIOUS, _PLAYERS, _NPC)
+    assert all("水着" not in row["name"] for row in refreshed)
+
+
+def test_refresh_reports_removals_without_counting_rows_that_shift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    roster = tmp_path / "roster.json"
+    roster.write_bytes(updater._serialize(_PREVIOUS))
+    monkeypatch.setattr(updater.sys, "argv", ["updater", "--roster", str(roster)])
+    monkeypatch.setattr(
+        updater, "_fetch", lambda page: _PLAYERS if page == "キャラクター一覧" else _NPC
+    )
+
+    assert updater.main() == 0
+    assert "追加3件、変更0件、削除1件" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(
