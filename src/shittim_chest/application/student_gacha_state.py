@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from shittim_chest.application.student_gacha_models import (
+        GachaExpression,
         GachaPresentation,
         StoredGachaImage,
         Student,
@@ -46,6 +47,7 @@ class GachaJob:
     teacher_name: str | None = field(default=None, repr=False)
     student: Student | None = None
     performer: ParticipantSlot | None = None
+    expression: GachaExpression | None = None
     presentation: GachaPresentation | None = field(default=None, repr=False)
     paid_started: bool = False
     stored: StoredGachaImage | None = field(default=None, repr=False)

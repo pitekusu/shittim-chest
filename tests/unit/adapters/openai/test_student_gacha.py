@@ -22,6 +22,7 @@ from shittim_chest.adapters.openai.student_gacha import (
 )
 from shittim_chest.application.student_gacha_models import (
     TEACHER_PLACEHOLDER,
+    GachaExpression,
     GachaGenerationFailure,
     GachaPresentation,
     SchoolBranding,
@@ -269,8 +270,19 @@ async def test_render_uses_approved_image_model_and_inserts_name_only_into_png()
 
 
 @pytest.mark.asyncio
-async def test_render_uses_costume_image_for_a_previously_prepared_draw(
+@pytest.mark.parametrize(
+    ("expression", "expression_prompt"),
+    [
+        (None, "Preserve the performer's facial expression from image 1."),
+        (GachaExpression.UNHAPPY, "a visibly displeased expression"),
+        (GachaExpression.NEUTRAL, "a calm, neutral expression"),
+        (GachaExpression.SMILE, "a natural, clearly visible smile"),
+    ],
+)
+async def test_render_uses_costume_image_and_selected_performer_expression(
     monkeypatch: pytest.MonkeyPatch,
+    expression: GachaExpression | None,
+    expression_prompt: str,
 ) -> None:
     client = Mock()
     edit = AsyncMock(return_value=SimpleNamespace(data=[SimpleNamespace(b64_json="YXJ0")]))
@@ -293,6 +305,7 @@ async def test_render_uses_costume_image_for_a_previously_prepared_draw(
         references=(b"layout", b"portrait"),
         costume_reference=_COSTUME,
         school_branding=_SCHOOL_BRANDING,
+        expression=expression,
     )
 
     edit.assert_awaited_once()
@@ -305,6 +318,10 @@ async def test_render_uses_costume_image_for_a_previously_prepared_draw(
     prompt = payload["prompt"]
     assert "Image 3 is the exact outfit variant" in prompt
     assert "head accessories come exclusively from image 1" in prompt
+    assert "gaze direction, eye shape and color" in prompt
+    assert expression_prompt in prompt
+    if expression is not None:
+        assert "Preserve the performer's facial expression from image 1." not in prompt
     assert "以前の説明" not in prompt
     assert _TEACHER not in repr(payload)
     assert _SCHOOL_BRANDING.name not in repr(payload)

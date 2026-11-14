@@ -26,7 +26,12 @@ from shittim_chest.adapters.dynamodb.repository import (
 from shittim_chest.adapters.dynamodb.repository import (
     _require_transaction_size as require_repository_transaction_size,
 )
-from shittim_chest.adapters.dynamodb.serializer import DynamoItem, PersistenceFormatError
+from shittim_chest.adapters.dynamodb.serializer import (
+    LEGACY_AFFECTION_SCHEMA_VERSION,
+    DynamoItem,
+    PersistenceFormatError,
+    serialize_affection_profile,
+)
 from shittim_chest.application import (
     DebateSnapshot,
     DeliveryAbandonReason,
@@ -36,8 +41,16 @@ from shittim_chest.application import (
     OutboxStatus,
     content_sha256,
 )
-from shittim_chest.application.ports import RepositoryConflict
-from shittim_chest.domain import AttemptId, DebateId, DebatePhase, DebateState
+from shittim_chest.application.ports import RepositoryConflict, RepositoryUnavailable
+from shittim_chest.domain import (
+    DEFAULT_AFFECTION_SCORE,
+    AffectionProfile,
+    AttemptId,
+    DebateId,
+    DebatePhase,
+    DebateState,
+    ParticipantSlot,
+)
 
 NOW = datetime(2026, 7, 17, 3, 0, tzinfo=UTC)
 
@@ -56,6 +69,81 @@ def client() -> DynamoDBClient:
         region_name="ap-northeast-1",
         config=Config(signature_version=UNSIGNED),
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["current", "legacy", "absent", "migrated_between_reads"])
+async def test_affection_score_reads_one_performer_from_the_requester_profile(source: str) -> None:
+    sdk = client()
+    identity_key = b"i" * 32
+    requester_id = "private-requester"
+    requester_key = derive_affection_requester_key(identity_key, requester_id)
+    repository = DynamoDbDebateRepository(
+        client=sdk, table_name="test-table", identity_hmac_key=identity_key
+    )
+    profile = AffectionProfile(
+        requester_key=requester_key,
+        requester_username="requester",
+        requester_display_name="Requester",
+        scores=(0, 700, 299),
+        version=1,
+        updated_at=NOW,
+    )
+    current = serialize_affection_profile(profile)
+    legacy: DynamoItem = {
+        "PK": f"AFFECTION#REQUESTER#{requester_id}",
+        "SK": "PROFILE",
+        "record_type": "affection_profile",
+        "schema_version": LEGACY_AFFECTION_SCHEMA_VERSION,
+        "requester_id": requester_id,
+        "requester_username": profile.requester_username,
+        "requester_display_name": profile.requester_display_name,
+        "scores": list(profile.scores),
+        "version": profile.version,
+        "updated_at": NOW.isoformat(),
+    }
+    current_get = {
+        "TableName": "test-table",
+        "Key": marshal_item({"PK": current["PK"], "SK": "PROFILE"}),
+        "ConsistentRead": True,
+    }
+    with Stubber(sdk) as stubber:
+        stubber.add_response(
+            "get_item",
+            {"Item": marshal_item(current)} if source == "current" else {},
+            current_get,
+        )
+        if source != "current":
+            stubber.add_response(
+                "get_item",
+                {"Item": marshal_item(legacy)} if source == "legacy" else {},
+                {
+                    "TableName": "test-table",
+                    "Key": marshal_item({"PK": legacy["PK"], "SK": "PROFILE"}),
+                    "ConsistentRead": True,
+                },
+            )
+        if source in {"absent", "migrated_between_reads"}:
+            stubber.add_response(
+                "get_item",
+                {"Item": marshal_item(current)} if source == "migrated_between_reads" else {},
+                current_get,
+            )
+        score = await repository.get_affection_score(requester_id, ParticipantSlot.PARTICIPANT_B)
+        assert score == (DEFAULT_AFFECTION_SCORE if source == "absent" else 700)
+        stubber.assert_no_pending_responses()
+
+
+@pytest.mark.asyncio
+async def test_affection_score_sdk_failure_is_distinct_from_an_absent_profile() -> None:
+    sdk = client()
+    repository = DynamoDbDebateRepository(
+        client=sdk, table_name="test-table", identity_hmac_key=b"i" * 32
+    )
+    with Stubber(sdk) as stubber:
+        stubber.add_client_error("get_item", "ProvisionedThroughputExceededException")
+        with pytest.raises(RepositoryUnavailable):
+            await repository.get_affection_score("private-requester", ParticipantSlot.PARTICIPANT_A)
 
 
 def leased_snapshot() -> DebateSnapshot:

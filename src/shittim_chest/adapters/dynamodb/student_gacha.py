@@ -25,6 +25,7 @@ from shittim_chest.application.ports import RepositoryConflict, RepositoryUnavai
 from shittim_chest.application.scale_to_zero import RuntimeStatus
 from shittim_chest.application.student_gacha_models import (
     STUDENT_GACHA_RARITIES,
+    GachaExpression,
     GachaPresentation,
     StoredGachaImage,
     Student,
@@ -266,6 +267,7 @@ class DynamoDbStudentGachaRepository:
             offer_id=offer_id,
             student=_student(offer),
             performer=_performer(offer),
+            expression=_expression(offer),
             presentation=_presentation(offer),
             paid_started=paid_started,
             stored=stored,
@@ -385,6 +387,7 @@ class DynamoDbStudentGachaRepository:
             teacher_name=teacher_name,
             student=_student(offer),
             performer=_performer(offer),
+            expression=_expression(offer),
             presentation=_presentation(offer),
             paid_started="stored" in offer,
             stored=_stored(offer),
@@ -468,6 +471,7 @@ class DynamoDbStudentGachaRepository:
                 updated,
                 student=expected.student,
                 performer=expected.performer,
+                expression=expected.expression,
                 presentation=expected.presentation,
                 teacher_name=expected.teacher_name,
                 paid_started=expected.paid_started,
@@ -484,6 +488,7 @@ class DynamoDbStudentGachaRepository:
             (expected.teacher_name != updated.teacher_name and updated.teacher_name is not None)
             or (expected.student is not None and updated.student != expected.student)
             or (expected.performer is not None and updated.performer != expected.performer)
+            or (expected.expression is not None and updated.expression != expected.expression)
             or (expected.presentation is not None and updated.presentation != expected.presentation)
             or (expected.paid_started and not updated.paid_started)
             or (expected.stored is not None and updated.stored != expected.stored)
@@ -596,6 +601,7 @@ class DynamoDbStudentGachaRepository:
                 ):
                     raise ValueError("gacha finish requires a verified result receipt")
                 updated["state"] = "redeemed"
+                updated.pop("expression", None)
                 updated["result_message_id"] = message_id
                 updated["result_channel_id"] = expected.channel_id
                 actions.append(self._gallery_result(expected, offer_id=offer_id, at=at))
@@ -819,6 +825,8 @@ def _serialize_selection(job: GachaJob) -> DynamoItem:
         item["student"] = student
     if job.performer is not None:
         item["performer"] = job.performer.value
+    if job.expression is not None:
+        item["expression"] = job.expression.value
     if job.presentation is not None:
         item["presentation"] = {
             "appearance": job.presentation.appearance,
@@ -885,6 +893,7 @@ def _deserialize_job(job_id: str, item: DynamoItem) -> GachaJob:
         teacher_name=_optional_text(item, "teacher_name"),
         student=_student(item),
         performer=_performer(item),
+        expression=_expression(item),
         presentation=_presentation(item),
         paid_started=_bool(item, "paid_started"),
         stored=_stored(item),
@@ -916,6 +925,14 @@ def _student(item: DynamoItem) -> Student | None:
 def _performer(item: DynamoItem) -> ParticipantSlot | None:
     value = _optional_text(item, "performer")
     return None if value is None else ParticipantSlot(value)
+
+
+def _expression(item: DynamoItem) -> GachaExpression | None:
+    value = _optional_text(item, "expression")
+    try:
+        return None if value is None else GachaExpression(value)
+    except ValueError as error:
+        raise RepositoryConflict("gacha expression is invalid") from error
 
 
 def _presentation(item: DynamoItem) -> GachaPresentation | None:
