@@ -3,7 +3,7 @@
     "id": "GHSA-g3hv-75wg-m249",
     "package": "minimatch",
     "severity": "moderate",
-    "reason": "2026-11-13に所有者がRecordsの起動改善をPR #704で統合するため、既知のminimatchの検出を受容した。CVE-2026-118764は外部から指定されたglobをoptimizationLevel 2以上で処理した場合にCPUとメモリを過剰に消費する。現行CDKに同梱されたminimatch 10.2.6への3呼出は既定の1を使い、WebやDiscordからglobを渡す経路は確認されていない。未修正依存は開発とCIに残る。2026-11-15 00:00 UTC（09:00 JST）に失効する。修正版を同梱したCDKへ更新した時点で削除する。",
-    "expires": "2026-11-15"
+    "reason": "2026-11-15に所有者が生徒ガチャのサービス状態確認をPR #724で統合するため、現行aws-cdk-lib 2.275.0に同梱されたminimatch 10.2.6の検出1件を受容した。CVE-2026-118764ではoptimizationLevel 2以上で外部指定のglobを処理するとCPUとメモリを過剰に消費しうる。同梱CDKの呼び出しは既定のoptimizationLevel 1を使う。未修正依存はCDKを使う開発とCIに残る。2026-11-16 00:00 UTC（09:00 JST）に失効する。修正版を同梱したCDKへ更新した時点で削除する。",
+    "expires": "2026-11-16"
   }
 ]
