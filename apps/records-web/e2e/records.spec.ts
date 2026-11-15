@@ -2977,6 +2977,62 @@ test("service status page presents localized visual status", async ({ page }, te
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
 });
 
+test("service status shows student gacha readiness and unfinished jobs to members", async ({
+  page,
+}) => {
+  const studentGachaMetrics: Readonly<
+    Record<string, readonly { name: string; value: boolean | number | null }[]>
+  > = {
+    ecs: [{ name: "student_gacha_pending", value: 0 }],
+    apigateway: [{ name: "student_gacha_route_registered", value: true }],
+    s3: [
+      { name: "student_gacha_roster_present", value: true },
+      { name: "student_gacha_loading_gif_present", value: true },
+      { name: "student_gacha_layout_present", value: true },
+      { name: "student_gacha_school_logos_present", value: null },
+      { name: "student_gacha_reference_a_present", value: true },
+      { name: "student_gacha_reference_b_present", value: false },
+      { name: "student_gacha_reference_c_present", value: true },
+    ],
+    ssm: [
+      { name: "student_gacha_enabled", value: false },
+      { name: "student_gacha_verification_key_present", value: true },
+    ],
+  };
+  await mockAuthenticatedApi(page);
+  await page.route("**/api/v1/admin/status*", (route) =>
+    route.fulfill({
+      json: {
+        ...adminStatus,
+        sections: adminStatus.sections.map((section) => ({
+          ...section,
+          metrics: [...section.metrics, ...(studentGachaMetrics[section.service] ?? [])],
+        })),
+      },
+    }),
+  );
+
+  await page.goto("/admin");
+
+  const ecs = page.locator("#admin-service-ecs");
+  await expect(ecs.getByText("生徒ガチャの未完了ジョブ", { exact: true }).locator("..")).toHaveText(
+    "生徒ガチャの未完了ジョブ0",
+  );
+  const assets = page.getByRole("region", { name: "生徒ガチャの素材" });
+  await expect(assets).toContainText("生徒名簿登録済み");
+  await expect(assets).toContainText("学校ロゴ未取得");
+  await expect(assets).toContainText("参照肖像B未登録");
+  const api = page.locator("#admin-service-apigateway");
+  await expect(api).toContainText("生徒ガチャのDiscord受付ルート登録済み");
+  await expect(api).toContainText("リクエスト合計32");
+  const settings = page.locator("#admin-service-ssm");
+  await expect(settings).toContainText("生徒ガチャの受付設定無効");
+  await expect(settings).toContainText("生徒ガチャのDiscord署名検証キー登録済み");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+    page.viewportSize()!.width,
+  );
+});
+
 test("service status page contains wide status tables on mobile", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium");
   await page.setViewportSize({ width: 320, height: 844 });

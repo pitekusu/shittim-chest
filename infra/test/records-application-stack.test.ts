@@ -1233,9 +1233,18 @@ describe("RecordsApplicationStack", () => {
     const statusPolicies = Object.values(policies).filter((policy) =>
       JSON.stringify(policy).includes("AdminStatusFunctionRole"),
     );
+    const statusManagedPolicies = Object.entries(
+      template.findResources("AWS::IAM::ManagedPolicy"),
+    ).filter(([, policy]) => JSON.stringify(policy.Properties.Roles)?.includes("AdminStatusFunctionRole"));
 
     expect(statusPolicies).toHaveLength(5);
-    const statusText = JSON.stringify(statusPolicies);
+    expect(statusManagedPolicies).toHaveLength(1);
+    template.hasResource("AWS::Lambda::Function", {
+      Properties: { FunctionName: "shittim-chest-production-records-admin-status" },
+      DependsOn: Match.arrayWith(statusManagedPolicies.map(([id]) => id)),
+    });
+    const allStatusPolicies = [...statusPolicies, ...statusManagedPolicies.map(([, policy]) => policy)];
+    const statusText = JSON.stringify(allStatusPolicies);
 
     for (const action of [
       "acm:DescribeCertificate",
@@ -1300,7 +1309,7 @@ describe("RecordsApplicationStack", () => {
       expect(statusText).toContain(`stack/ShittimChest-Prod-${stackName}/*`);
     }
 
-    const statusStatements = statusPolicies.flatMap(
+    const statusStatements = allStatusPolicies.flatMap(
       (policy) => policy.Properties.PolicyDocument.Statement,
     ) as PolicyStatement[];
     const statusTaskDefinitionRead = statusStatements.find((statement) =>
@@ -1386,8 +1395,7 @@ describe("RecordsApplicationStack", () => {
     const statusControlRead = statusStatements.find(
       (statement) =>
         actionsOf(statement).includes("dynamodb:GetItem") &&
-        statement.Condition !== undefined &&
-        Object.hasOwn(statement.Condition, "ForAllValues:StringEquals"),
+        JSON.stringify(statement.Condition)?.includes("CONTROL#RUNTIME"),
     );
     expect(statusControlRead?.Condition).toEqual({
       "ForAllValues:StringEquals": {
@@ -1399,6 +1407,58 @@ describe("RecordsApplicationStack", () => {
       },
       Null: { "dynamodb:LeadingKeys": "false" },
     });
+    const statusGachaRead = statusStatements.filter((statement) =>
+      JSON.stringify(statement.Condition)?.includes("CONTROL#GACHA"),
+    );
+    expect(statusGachaRead).toEqual([
+      {
+        Action: "dynamodb:GetItem",
+        Effect: "Allow",
+        Resource: statusControlRead?.Resource,
+        Condition: {
+          "ForAllValues:StringEquals": {
+            "dynamodb:LeadingKeys": ["CONTROL#GACHA"],
+            "dynamodb:Attributes": ["PK", "SK", "record_type", "count"],
+          },
+          StringEquals: { "dynamodb:Select": "SPECIFIC_ATTRIBUTES" },
+          Null: { "dynamodb:LeadingKeys": "false", "dynamodb:Attributes": "false" },
+        },
+      },
+    ]);
+    const statusGachaMediaList = statusStatements.filter((statement) =>
+      actionsOf(statement).includes("s3:ListBucket"),
+    );
+    expect(statusGachaMediaList).toEqual([
+      {
+        Action: "s3:ListBucket",
+        Effect: "Allow",
+        Resource: {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              { Ref: "AWS::Partition" },
+              ":s3:::shittim-chest-production-records-media-000000000000",
+            ],
+          ],
+        },
+        Condition: {
+          StringEquals: {
+            "s3:prefix": [
+              "student-gacha/roster/blue_archive_characters_with_npcs.json",
+              "student-gacha/assets/show.gif",
+              "student-gacha/assets/format.jpg",
+              "student-gacha/assets/blue_archive_school_logos.zip",
+              "participants/participant-a/memorial-reference.png",
+              "participants/participant-b/memorial-reference.webp",
+              "participants/participant-c/memorial-reference.webp",
+            ],
+          },
+          NumericLessThanEquals: { "s3:max-keys": 1 },
+        },
+      },
+    ]);
+    expect(statusStatements.flatMap(actionsOf)).not.toContain("s3:GetObject");
     const statusCollectorRead = statusStatements.find(
       (statement) =>
         actionsOf(statement).includes("dynamodb:GetItem") &&
