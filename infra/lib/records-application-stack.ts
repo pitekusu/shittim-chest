@@ -1910,6 +1910,43 @@ export class RecordsApplicationStack extends Stack {
         }),
       ],
     });
+    // The Admin Status role's existing inline policies are close to the IAM size limit.
+    const studentGachaStatusPolicy = new iam.ManagedPolicy(this, "AdminStatusStudentGachaReadPolicy", {
+      roles: [this.adminStatusFunction.role!],
+      statements: [
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"],
+          resources: [sourceTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": {
+              "dynamodb:LeadingKeys": ["CONTROL#GACHA"],
+              "dynamodb:Attributes": ["PK", "SK", "record_type", "count"],
+            },
+            StringEquals: { "dynamodb:Select": "SPECIFIC_ATTRIBUTES" },
+            Null: { "dynamodb:LeadingKeys": "false", "dynamodb:Attributes": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["s3:ListBucket"],
+          resources: [mediaBucket.bucketArn],
+          conditions: {
+            StringEquals: {
+              "s3:prefix": [
+                "student-gacha/roster/blue_archive_characters_with_npcs.json",
+                "student-gacha/assets/show.gif",
+                "student-gacha/assets/format.jpg",
+                GALLERY_SCHOOL_CATALOG_KEY,
+                "participants/participant-a/memorial-reference.png",
+                "participants/participant-b/memorial-reference.webp",
+                "participants/participant-c/memorial-reference.webp",
+              ],
+            },
+            NumericLessThanEquals: { "s3:max-keys": 1 },
+          },
+        }),
+      ],
+    });
+    this.adminStatusFunction.node.addDependency(studentGachaStatusPolicy);
     this.adminStatusFunction.role!.attachInlinePolicy(
       new iam.Policy(this, "AdminStatusStatisticsReadPolicy", {
         statements: [

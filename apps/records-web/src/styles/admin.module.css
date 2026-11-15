@@ -663,12 +663,12 @@
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
 }
 
-.translationCacheStatus {
+.serviceDetail {
   display: grid;
   gap: 8px;
 }
 
-.translationCacheStatus h4 {
+.serviceDetail h4 {
   margin: 0;
   color: var(--records-ink-600);
   font-size: 0.72rem;
