@@ -17,6 +17,7 @@ from shittim_chest.adapters.dynamodb.student_gacha_activity import STUDENT_GACHA
 from shittim_chest.application.ports import RepositoryConflict
 from shittim_chest.application.scale_to_zero import RuntimeState, RuntimeStatus
 from shittim_chest.application.student_gacha_models import (
+    GachaExpression,
     GachaPresentation,
     StoredGachaImage,
     Student,
@@ -233,6 +234,7 @@ async def test_cycle_eligibility_survives_contention_and_cannot_cross_a_reward(
 
     interrupted = await repository.claim_next(claim_owner=RUNTIME_OWNER, at=NOW)
     assert interrupted is not None and interrupted.kind is GachaJobKind.DRAW
+    assert interrupted.expression is None
     await repository.finish(interrupted, at=NOW, park=True)
     assert await repository.resume_parked(offer_id, at=NOW)
     cleanup = await repository.claim_next(claim_owner=RUNTIME_OWNER, at=NOW)
@@ -262,6 +264,7 @@ async def test_cycle_eligibility_survives_contention_and_cannot_cross_a_reward(
             first_job,
             student=student,
             performer=performer,
+            expression=GachaExpression.SMILE,
             presentation=presentation,
             stored=stored,
             paid_started=True,
@@ -274,6 +277,11 @@ async def test_cycle_eligibility_survives_contention_and_cannot_cross_a_reward(
     assert second_job is not None and second_job.stored == stored
     assert second_job.version > first_job.version
     assert second_job.student == student and second_job.presentation == presentation
+    assert second_job.expression is GachaExpression.SMILE
+    with pytest.raises(ValueError, match="cannot replace a saved selection"):
+        await repository.checkpoint(
+            second_job, replace(second_job, expression=GachaExpression.UNHAPPY), at=later
+        )
     assert second_job.teacher_name is None
     with pytest.raises(RepositoryConflict, match="gacha transaction conflict"):
         await repository.finish(first_job, at=NOW, reopen=True)
@@ -296,6 +304,7 @@ async def test_cycle_eligibility_survives_contention_and_cannot_cross_a_reward(
     assert recovered_job.version > second_job.version
     assert recovered_job.paid_started and recovered_job.stored == stored
     assert recovered_job.student == student and recovered_job.presentation == presentation
+    assert recovered_job.expression is GachaExpression.SMILE
     assert recovered_job.after_message_id == "6" and recovered_job.result_after_message_id == "6"
     assert recovered_job.teacher_name is None
     with pytest.raises(RepositoryConflict, match="gacha transaction conflict"):
@@ -309,6 +318,7 @@ async def test_cycle_eligibility_survives_contention_and_cannot_cross_a_reward(
     assert third_job is not None and third_job.paid_started and third_job.stored == stored
     assert third_job.result_after_message_id == "6"
     assert third_job.student == student and third_job.presentation == presentation
+    assert third_job.expression is GachaExpression.SMILE
     third_job = await repository.checkpoint(
         third_job, replace(third_job, result_message_id="8", teacher_name=None), at=later
     )
@@ -322,6 +332,7 @@ async def test_cycle_eligibility_survives_contention_and_cannot_cross_a_reward(
     )
     assert len(gallery["Items"]) == 1
     result = unmarshal_item(gallery["Items"][0])
+    assert "expression" not in result
     assert result["offer_id"] == offer_id and result["performer"] == performer.value
     expected_student: DynamoItem = {"name": student.name, "school": student.school}
     if rarity is not None:

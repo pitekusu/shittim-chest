@@ -273,6 +273,7 @@ def build_production_runtime(config: BootstrapConfig) -> ProductionRuntime:
         gacha_media = StudentGachaMedia(image_client, bucket_name=config.debate_media_bucket)
         student_gacha = StudentGachaWorker(
             store=gacha_repository,
+            affection=repository,
             media=gacha_media,
             generator=OpenAIStudentGacha(
                 client=openai_client,

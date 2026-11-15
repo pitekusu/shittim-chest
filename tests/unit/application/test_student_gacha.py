@@ -8,9 +8,10 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from shittim_chest.application.ports import Clock
+from shittim_chest.application.ports import Clock, RepositoryUnavailable
 from shittim_chest.application.student_gacha import (
     StudentGachaWorker,
+    _Affection,
     _Discord,
     _draw_student,
     _Generator,
@@ -19,17 +20,19 @@ from shittim_chest.application.student_gacha import (
 )
 from shittim_chest.application.student_gacha_discord import GachaDeliveryFailure
 from shittim_chest.application.student_gacha_models import (
+    GachaExpression,
     GachaGenerationFailure,
     GachaPresentation,
     SchoolBranding,
     StoredGachaImage,
     Student,
 )
-from shittim_chest.application.student_gacha_state import GachaJob, GachaJobKind
+from shittim_chest.application.student_gacha_state import GachaJob, GachaJobKind, GachaOffer
 from shittim_chest.domain import ParticipantSlot
 
 NOW = datetime(2026, 11, 14, tzinfo=UTC)
 OFFER = "e" * 32
+REQUESTER = "104"
 STORED = StoredGachaImage(f"student-gacha/results/{OFFER}.png", "v1", "f" * 64)
 
 
@@ -82,12 +85,22 @@ def _job(**changes: object) -> GachaJob:
 
 
 @pytest.fixture
-def worker_fixture() -> tuple[StudentGachaWorker, AsyncMock, AsyncMock, AsyncMock, AsyncMock]:
+def affection() -> AsyncMock:
+    reader = AsyncMock(spec=_Affection)
+    reader.get_affection_score.return_value = 500
+    return reader
+
+
+@pytest.fixture
+def worker_fixture(
+    affection: AsyncMock,
+) -> tuple[StudentGachaWorker, AsyncMock, AsyncMock, AsyncMock, AsyncMock]:
     store, media, generator, discord = (AsyncMock() for _ in range(4))
     clock = Mock()
     clock.now.return_value = NOW
     worker = StudentGachaWorker(
         store=cast(_Store, store),
+        affection=cast(_Affection, affection),
         media=cast(_Media, media),
         generator=cast(_Generator, generator),
         discord=cast(_Discord, discord),
@@ -95,6 +108,7 @@ def worker_fixture() -> tuple[StudentGachaWorker, AsyncMock, AsyncMock, AsyncMoc
         claim_owner="test-runtime",
     )
     store.checkpoint.side_effect = lambda old, new, **kwargs: new
+    store.get_offer.return_value = GachaOffer(OFFER, "100", "101", "102", REQUESTER, live=False)
     media.costume_reference.return_value = b"costume WebP"
     media.school_branding.return_value = SchoolBranding("ゲヘナ学園", b"logo")
     return worker, store, media, generator, discord
@@ -165,6 +179,7 @@ async def test_gallery_notice_failure_keeps_the_confirmed_draw_complete(
 @pytest.mark.asyncio
 async def test_card_preparation_failure_reopens_the_same_draw(
     worker_fixture: tuple[StudentGachaWorker, AsyncMock, AsyncMock, AsyncMock, AsyncMock],
+    affection: AsyncMock,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     worker, store, media, generator, discord = worker_fixture
@@ -181,15 +196,65 @@ async def test_card_preparation_failure_reopens_the_same_draw(
     discord.delete_loading.assert_awaited_once()
     job = store.finish.await_args.args[0]
     assert (job.offer_id, job.student, job.performer) == (OFFER, student, performer)
+    assert job.expression is GachaExpression.NEUTRAL
     assert job.teacher_name is None
     assert store.finish.await_args.kwargs["reopen"] is True
     assert "reason_code=gacha_presentation_unavailable" in caplog.text
     assert "試験先生" not in caplog.text
 
+    # A change to affection between submissions must not change the selected expression.
+    affection.get_affection_score.return_value = 1000
+    store.claim_next.return_value = _job(
+        student=student, performer=performer, expression=job.expression
+    )
+    generator.prepare.side_effect = None
+    discord.send_result.return_value = "105"
+    await worker.process_next()
+
+    affection.get_affection_score.assert_awaited_once_with(REQUESTER, performer)
+    assert generator.render.await_args.kwargs["expression"] is GachaExpression.NEUTRAL
+
 
 @pytest.mark.asyncio
+async def test_affection_read_failure_reopens_without_rendering(
+    worker_fixture: tuple[StudentGachaWorker, AsyncMock, AsyncMock, AsyncMock, AsyncMock],
+    affection: AsyncMock,
+) -> None:
+    worker, store, _, generator, discord = worker_fixture
+    student = Student("コハル", "トリニティ")
+    store.claim_next.return_value = _job(
+        student=student, performer=ParticipantSlot.PARTICIPANT_A, loading_message_id="103"
+    )
+    affection.get_affection_score.side_effect = RepositoryUnavailable()
+
+    await worker.process_next()
+
+    generator.prepare.assert_not_awaited()
+    generator.render.assert_not_awaited()
+    discord.delete_loading.assert_awaited_once()
+    job = store.finish.await_args.args[0]
+    assert job.student == student and job.expression is None
+    assert job.failure_code == "gacha_affection_unavailable"
+    assert store.finish.await_args.kwargs["reopen"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("score", "expression"),
+    [
+        (0, GachaExpression.UNHAPPY),
+        (299, GachaExpression.UNHAPPY),
+        (300, GachaExpression.NEUTRAL),
+        (699, GachaExpression.NEUTRAL),
+        (700, GachaExpression.SMILE),
+        (1000, GachaExpression.SMILE),
+    ],
+)
 async def test_ambiguous_paid_call_uses_saved_state_instead_of_rendering_again(
     worker_fixture: tuple[StudentGachaWorker, AsyncMock, AsyncMock, AsyncMock, AsyncMock],
+    affection: AsyncMock,
+    score: int,
+    expression: GachaExpression,
 ) -> None:
     worker, store, media, generator, discord = worker_fixture
     student = Student("アコ(ドレス)", "ゲヘナ")
@@ -210,6 +275,7 @@ async def test_ambiguous_paid_call_uses_saved_state_instead_of_rendering_again(
     costume = b"costume WebP"
     media.costume_reference.return_value = costume
     generator.prepare.return_value = presentation
+    affection.get_affection_score.return_value = score
     generator.render.side_effect = GachaGenerationFailure("image_unavailable", ambiguous=True)
 
     await worker.process_next()
@@ -220,18 +286,22 @@ async def test_ambiguous_paid_call_uses_saved_state_instead_of_rendering_again(
         student=student, performer=performer, costume_reference=costume
     )
     assert generator.render.await_args.kwargs["costume_reference"] is costume
+    assert generator.render.await_args.kwargs["expression"] is expression
+    affection.get_affection_score.assert_awaited_once_with(REQUESTER, performer)
     assert (
         generator.render.await_args.kwargs["school_branding"] is media.school_branding.return_value
     )
     store.finish.assert_not_awaited()
     pending = store.reschedule.await_args.args[0]
     assert pending.paid_started and pending.presentation == presentation
+    assert pending.expression is expression
 
     store.claim_next.return_value = pending
     media.find.return_value = None
     await worker.process_next()
 
     generator.render.assert_awaited_once()
+    affection.get_affection_score.assert_awaited_once()
     assert store.finish.await_args.kwargs["reopen"] is True
     assert store.finish.await_args.args[0].teacher_name is None
     discord.delete_loading.assert_awaited_once()

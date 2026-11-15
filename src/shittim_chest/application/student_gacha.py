@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from shittim_chest.application.ports import RepositoryConflict, RepositoryUnavailable
 from shittim_chest.application.student_gacha_discord import GachaDeliveryFailure
-from shittim_chest.application.student_gacha_models import GachaGenerationFailure
+from shittim_chest.application.student_gacha_models import GachaExpression, GachaGenerationFailure
 from shittim_chest.domain import PARTICIPANTS
 
 if TYPE_CHECKING:
@@ -64,6 +64,10 @@ class _Media(Protocol):
     async def find(self, draw_id: str) -> StoredGachaImage | None: ...
 
 
+class _Affection(Protocol):
+    async def get_affection_score(self, requester_id: str, participant: ParticipantSlot) -> int: ...
+
+
 class _Generator(Protocol):
     async def prepare(
         self, *, student: Student, performer: ParticipantSlot, costume_reference: bytes
@@ -76,6 +80,7 @@ class _Generator(Protocol):
         references: tuple[bytes, bytes],
         costume_reference: bytes,
         school_branding: SchoolBranding,
+        expression: GachaExpression,
     ) -> bytes: ...
 
 
@@ -151,6 +156,7 @@ class StudentGachaWorker:
         self,
         *,
         store: _Store,
+        affection: _Affection,
         media: _Media,
         generator: _Generator,
         discord: _Discord,
@@ -158,6 +164,7 @@ class StudentGachaWorker:
         claim_owner: str,
     ) -> None:
         self._store = store
+        self._affection = affection
         self._media = media
         self._generator = generator
         self._discord = discord
@@ -333,6 +340,9 @@ class StudentGachaWorker:
                 )
             performer = _required(job.performer)
             student = _required(job.student)
+            if job.expression is None:
+                expression = await self._draw_expression(offer_id, performer)
+                job = await self._checkpoint(job, expression=expression)
             school_branding = await self._media.school_branding(student.school)
             costume_reference = await self._media.costume_reference(student)
             if job.presentation is None:
@@ -348,6 +358,7 @@ class StudentGachaWorker:
                 references=references,
                 costume_reference=costume_reference,
                 school_branding=school_branding,
+                expression=_required(job.expression),
             )
             stored = await self._media.save(offer_id, png)
             return await self._checkpoint(job, stored=stored, teacher_name=None)
@@ -361,6 +372,18 @@ class StudentGachaWorker:
                 # Recovery consults S3 before allowing an explicit retry.
                 return job
             return await self._checkpoint(job, failure_code=error.code, teacher_name=None)
+
+    async def _draw_expression(self, offer_id: str, performer: ParticipantSlot) -> GachaExpression:
+        try:
+            offer = _required(await self._store.get_offer(offer_id))
+            score = await self._affection.get_affection_score(offer.requester_id, performer)
+        except (RepositoryUnavailable, RepositoryConflict) as error:
+            raise GachaGenerationFailure("gacha_affection_unavailable") from error
+        if score < 300:
+            return GachaExpression.UNHAPPY
+        if score < 700:
+            return GachaExpression.NEUTRAL
+        return GachaExpression.SMILE
 
     async def _remove_loading(self, job: GachaJob) -> None:
         if job.loading_message_id is not None:

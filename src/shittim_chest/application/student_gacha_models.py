@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from enum import StrEnum
 from unicodedata import normalize
 
 from shittim_chest.domain import ParticipantSlot
@@ -14,6 +15,12 @@ STUDENT_GACHA_RARITIES = frozenset(range(5))
 _DRAW_ID = re.compile(r"[0-9a-f]{32}")
 _IMAGE_KEY = re.compile(re.escape(STUDENT_GACHA_IMAGE_PREFIX) + r"[0-9a-f]{32}\.png")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+
+
+class GachaExpression(StrEnum):
+    UNHAPPY = "unhappy"
+    NEUTRAL = "neutral"
+    SMILE = "smile"
 
 
 @dataclass(frozen=True, slots=True)
