@@ -340,6 +340,9 @@ internal class BootstrapPresenter private constructor(
       if (openingDebateComposer && id != null && workspace.pendingControl?.requestId != id) {
         // Polling stops when the status screen closes, so its last receipt may be stale.
         if (debateOnline && workspace.receipt?.terminal == false) {
+          // A restored workspace can be visible while its attachment previews still load.
+          model.awaitRestoration()
+          if (backStack.lastOrNull() != DebateCompose || !runtime.isActive(cacheAccountId)) return@LaunchedEffect
           withTimeoutOrNull(3_000) { model.refreshStatus(id) }
         }
         if (backStack.lastOrNull() != DebateCompose || !runtime.isActive(cacheAccountId)) return@LaunchedEffect

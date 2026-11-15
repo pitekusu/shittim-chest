@@ -36,8 +36,9 @@ class ReviewDemoUiTest {
 
   @Test fun reviewerCanBrowseImagesAndCreateResultAfterLeavingProgress() {
     enter()
-    val question = DemoFixtures.records.first().entry.questionPreview
-    compose.onNodeWithText(question).performScrollTo().performClick()
+    val firstCard = "journal-card-${DemoFixtures.records.first().entry.recordId}"
+    compose.waitUntil(10_000) { compose.onAllNodesWithTag(firstCard).fetchSemanticsNodes().isNotEmpty() }
+    compose.onNodeWithTag(firstCard).performScrollTo().performClick()
     compose.waitUntil(10_000) { compose.onAllNodesWithTag("detail-question-open").fetchSemanticsNodes().isNotEmpty() }
     compose.onNodeWithTag("detail-question-open").performClick()
     compose.onNodeWithTag("attachment-0").performClick()
