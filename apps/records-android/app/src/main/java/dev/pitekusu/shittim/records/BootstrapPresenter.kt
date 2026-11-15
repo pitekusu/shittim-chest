@@ -34,6 +34,7 @@ import dev.pitekusu.shittim.records.auth.SessionState
 import dev.zacsweers.metro.Inject
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.lifecycle.viewmodel.initializer
@@ -325,9 +326,33 @@ internal class BootstrapPresenter private constructor(
     var historyMore by remember(cacheAccountId) { mutableStateOf(false) }
     val foregroundLifecycle = LocalLifecycleOwner.current.lifecycle
     val debateRoute = backStack.lastOrNull()
-    LaunchedEffect(cacheAccountId, debate.workspace?.requestId, debateRoute) {
-      val id = debate.workspace?.requestId ?: return@LaunchedEffect
-      if (cacheAccountId != null && runtime.isActive(cacheAccountId) && debateRoute == DebateCompose) {
+    var openingDebateComposer by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(cacheAccountId, debate.workspace != null, debate.workspace?.requestId, debateRoute) {
+      if (backStack.lastOrNull() != DebateCompose) {
+        openingDebateComposer = false
+        return@LaunchedEffect
+      }
+      if (cacheAccountId == null || !runtime.isActive(cacheAccountId)) return@LaunchedEffect
+      val model = debateModel ?: return@LaunchedEffect
+      val workspace = model.state.value.workspace ?: return@LaunchedEffect
+      val id = workspace.requestId
+      // Apply the + intent once after local restoration. Later submissions open their own status.
+      if (openingDebateComposer && id != null && workspace.pendingControl?.requestId != id) {
+        // Polling stops when the status screen closes, so its last receipt may be stale.
+        if (debateOnline && workspace.receipt?.terminal == false) {
+          // A restored workspace can be visible while its attachment previews still load.
+          model.awaitRestoration()
+          if (backStack.lastOrNull() != DebateCompose || !runtime.isActive(cacheAccountId)) return@LaunchedEffect
+          withTimeoutOrNull(3_000) { model.refreshStatus(id) }
+        }
+        if (backStack.lastOrNull() != DebateCompose || !runtime.isActive(cacheAccountId)) return@LaunchedEffect
+        if (model.state.value.workspace?.requestId == id && model.newDraft()) {
+          openingDebateComposer = false
+          return@LaunchedEffect
+        }
+      }
+      openingDebateComposer = false
+      if (id != null) {
         backStack[backStack.lastIndex] = DebateRequestStatus(id)
       }
     }
@@ -617,7 +642,9 @@ internal class BootstrapPresenter private constructor(
       canReadRecords = cacheAccountId != null, listQuery = listQuery, searching = searching,
       requesters = if (cacheAccountId != null) requesters else emptyList(),
       loginCompletion = loginCompletion, backStack = backStack.toList(), recordOwner = cacheAccountId,
-      debate = debate, debateStatus = debateStatus, debateHistory = debateHistory,
+      debate = if (openingDebateComposer && debateRoute == DebateCompose && debate.workspace != null)
+        DebateSubmissionState() else debate,
+      debateStatus = debateStatus, debateHistory = debateHistory,
       debateOnline = debateOnline, debateImages = debateImages, demoEntryId = runtime.demoEntryId,
       publicPageError = publicPageError, insights = insights, momotalk = momotalk) { event ->
       when (event) {
@@ -681,9 +708,10 @@ internal class BootstrapPresenter private constructor(
         is BootstrapScreen.Event.SelectRequester -> listQuery = listQuery.copy(requesterName = event.displayName)
         is BootstrapScreen.Event.SelectOrder -> listQuery = listQuery.copy(order = event.order)
         BootstrapScreen.Event.ClearRecordQuery -> listQuery = RecordListQuery()
-        BootstrapScreen.Event.ComposeDebate -> if (cacheAccountId != null && runtime.isActive(cacheAccountId)) {
+        BootstrapScreen.Event.ComposeDebate -> if (cacheAccountId != null && runtime.isActive(cacheAccountId) &&
+          backStack.lastOrNull() == RecordsList) {
+          openingDebateComposer = true
           debateModel?.restore()
-          backStack.closeRecord()
           backStack.add(DebateCompose)
         }
         is BootstrapScreen.Event.EditDebate -> debateModel?.edit(event.question)

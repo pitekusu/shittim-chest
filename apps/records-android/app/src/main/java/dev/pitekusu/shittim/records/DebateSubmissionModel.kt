@@ -57,6 +57,7 @@ internal class DebateSubmissionModel(
   val history = mutableHistory.asStateFlow()
   private val writes = Mutex()
   private var autosave: Job? = null
+  private var restoration: Job? = null
   private var operation: Job? = null
   private var committed: DebateWorkspace? = null
   private var pendingSave: DebateWorkspace? = null
@@ -80,7 +81,10 @@ internal class DebateSubmissionModel(
       } catch (error: CancellationException) { throw error }
       catch (_: Exception) { if (authorized()) mutable.value = DebateSubmissionState(failure = DebateFailure.STORAGE) }
     }
+    restoration = operation
   }
+
+  suspend fun awaitRestoration() { restoration?.join() }
 
   fun edit(text: String) {
     val current = mutable.value
@@ -582,6 +586,8 @@ internal class DebateSubmissionModel(
 
   fun hide() {
     autosave?.cancel()
+    restoration?.cancel()
+    restoration = null
     operation?.cancel()
     committed = null
     pendingSave = null
