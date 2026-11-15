@@ -50,9 +50,13 @@ internal class RecordPreview(
   val affection: RecordAffection? = null,
   val winnerSlot: String? = null,
   val attachments: List<RecordAttachment> = emptyList(),
+  val parentRecordId: String? = null,
+  val parentQuestionPreview: String? = null,
+  val hasFollowUps: Boolean = false,
 ) {
   fun cachedImages() = RecordPreview(question, decision, winnerName, opinions, voting, victoryMessage,
-    actions, caveats, affection, winnerSlot, attachments.map { it.cached() })
+    actions, caveats, affection, winnerSlot, attachments.map { it.cached() },
+    parentRecordId, parentQuestionPreview, hasFollowUps)
 }
 
 @Serializable
@@ -143,6 +147,9 @@ internal class RecordListEntry(
   val winnerSlot: String? = null,
   val attachmentCount: Int = 0,
   @Transient val attachmentCountKnown: Boolean = true,
+  val parentRecordId: String? = null,
+  val parentQuestionPreview: String? = null,
+  val hasFollowUps: Boolean = false,
 )
 
 @Serializable
@@ -157,6 +164,27 @@ internal class RecordSyncIndex(val schemaVersion: Int, val items: List<RecordSyn
   val nextCursor: String? = null)
 
 internal class RecordListPage(val items: List<RecordListEntry>, val nextCursor: String?)
+
+private const val RECORD_FOLLOW_UP_CONTRACT = "record-followups-v1"
+
+@Serializable
+internal class RecordFollowUpSummary(val recordId: String, val questionPreview: String, val completedAt: String) {
+  override fun toString(): String = "RecordFollowUpSummary(<redacted>)"
+}
+
+@Serializable
+internal class RecordFollowUpsPage(
+  val schemaVersion: Int,
+  val items: List<RecordFollowUpSummary>,
+  val nextCursor: String? = null,
+  val followUpAvailable: Boolean,
+)
+
+internal fun validRecordParent(recordId: String, parentRecordId: String?, parentQuestion: String?): Boolean =
+  (parentRecordId == null || (parentRecordId != recordId && mobileOpaqueValue.matches(parentRecordId))) &&
+    (parentQuestion == null || (parentRecordId != null && parentQuestion.isNotBlank() &&
+      parentQuestion.codePointCount(0, parentQuestion.length) <= 160))
+
 
 private val recordCursorPattern = Regex("[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+")
 internal fun validRecordCursor(value: String): Boolean =
@@ -203,8 +231,9 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
       requested
     }
     val detail: RecordDetail = read("/api/v1/records/$recordId", accessToken,
-      contract = "record-images-v1")
+      contract = RECORD_FOLLOW_UP_CONTRACT)
     if (detail.schemaVersion != 2 || detail.recordId != recordId ||
+      !validRecordParent(recordId, detail.parentRecordId, detail.parentQuestionPreview) ||
       detail.question.isBlank() || detail.finalDecision.decision.isBlank() ||
       detail.result.winner != detail.finalDecision.winner ||
       detail.result.winner !in PARTICIPANTS ||
@@ -234,7 +263,8 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
           RecordOpinion(participant.displayName, initial.summary, initial.proposal,
             final.title, final.proposal, participant.slot)
         }, voting, detail.finalDecision.victoryMessage, detail.finalDecision.actions,
-        detail.finalDecision.caveats, mapAffection(detail), winner.slot, detail.attachments),
+        detail.finalDecision.caveats, mapAffection(detail), winner.slot, detail.attachments,
+        detail.parentRecordId, detail.parentQuestionPreview, detail.hasFollowUps),
       if (detail.requester != null && detail.completedAt != null) {
         try {
           val question = detail.question.replace(Regex("[\\s\\p{Z}]+"), " ").trim()
@@ -242,7 +272,8 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
           RecordListEntry(recordId, question.substring(0, end),
             detail.requester.displayName.also { check(it.isNotBlank()) },
             mapAvatar(detail.requester.avatar), OffsetDateTime.parse(detail.completedAt).toInstant(),
-            winner.displayName, winner.slot, detail.attachments.size)
+            winner.displayName, winner.slot, detail.attachments.size, parentRecordId = detail.parentRecordId,
+            parentQuestionPreview = detail.parentQuestionPreview, hasFollowUps = detail.hasFollowUps)
         } catch (_: Exception) { throw RecordReadException(RecordReadFailure.INVALID_RESPONSE) }
       } else null)
   }
@@ -250,7 +281,7 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
   suspend fun syncIndex(accessToken: String, cursor: String?): RecordSyncIndex {
     if (!mobileOpaqueValue.matches(accessToken)) throw RecordReadException(RecordReadFailure.AUTH_REQUIRED)
     if (cursor != null && !validRecordCursor(cursor)) throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
-    val index: RecordSyncIndex = read("/api/v1/records/sync-index", accessToken, cursor)
+    val index: RecordSyncIndex = read("/api/v1/records/sync-index", accessToken, cursor, RECORD_FOLLOW_UP_CONTRACT)
     if (index.schemaVersion != 1 || index.items.size > 50 ||
       index.items.map { it.recordId }.distinct().size != index.items.size ||
       index.items.any { !mobileOpaqueValue.matches(it.recordId) || !mobileOpaqueValue.matches(it.revision) ||
@@ -259,6 +290,23 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
       throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
     }
     return index
+  }
+
+  suspend fun followUps(accessToken: String, recordId: String, cursor: String?): RecordFollowUpsPage {
+    if (!mobileOpaqueValue.matches(accessToken)) throw RecordReadException(RecordReadFailure.AUTH_REQUIRED)
+    if (!mobileOpaqueValue.matches(recordId) || cursor?.let { !validRecordCursor(it) } == true)
+      throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
+    val page: RecordFollowUpsPage = read("/api/v1/records/$recordId/follow-ups", accessToken, cursor)
+    try {
+      check(page.schemaVersion == 1 && page.items.size <= 12 && page.items.map { it.recordId }.distinct().size == page.items.size)
+      check(page.nextCursor?.let { validRecordCursor(it) && it != cursor } != false)
+      for (item in page.items) {
+        check(item.recordId != recordId && mobileOpaqueValue.matches(item.recordId))
+        check(item.questionPreview.isNotBlank() && item.questionPreview.codePointCount(0, item.questionPreview.length) <= 160)
+        OffsetDateTime.parse(item.completedAt)
+      }
+    } catch (_: Exception) { throw RecordReadException(RecordReadFailure.INVALID_RESPONSE) }
+    return page
   }
 
   private fun mapAvatar(avatar: RecordAvatarRef): RecordAvatar {
@@ -450,7 +498,7 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
       throw RecordReadException(RecordReadFailure.INVALID_RESPONSE)
     }
     val page: RecordListResponse = read("/api/v1/records?limit=12&sort=newest", accessToken, cursor,
-      contract = "record-attachments-v1")
+      contract = RECORD_FOLLOW_UP_CONTRACT)
     if (page.schemaVersion != 1 || page.items.size > 12 ||
       page.items.map { it.recordId }.toSet().size != page.items.size ||
       (page.nextCursor != null && (!validRecordCursor(page.nextCursor) || page.nextCursor == cursor))) {
@@ -459,6 +507,7 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     return try {
       RecordListPage(page.items.map { item ->
         if (item.schemaVersion != 1 || !mobileOpaqueValue.matches(item.recordId) ||
+          !validRecordParent(item.recordId, item.parentRecordId, item.parentQuestionPreview) ||
           item.questionPreview.isBlank() || item.requester.displayName.isBlank() ||
           (item.attachmentCount != null && item.attachmentCount !in 0..3) ||
           item.participants.size != 3 ||
@@ -481,7 +530,9 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
         RecordListEntry(item.recordId, item.questionPreview, item.requester.displayName,
           RecordAvatar(avatarUrl, avatar.fallbackVariant),
           OffsetDateTime.parse(item.completedAt).toInstant(), winner.displayName, winner.slot,
-          attachmentCount = item.attachmentCount ?: 0, attachmentCountKnown = item.attachmentCount != null)
+          attachmentCount = item.attachmentCount ?: 0, attachmentCountKnown = item.attachmentCount != null,
+          parentRecordId = item.parentRecordId, parentQuestionPreview = item.parentQuestionPreview,
+          hasFollowUps = item.hasFollowUps)
       }, page.nextCursor)
     } catch (error: RecordReadException) {
       throw error
@@ -663,6 +714,9 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     val participants: List<RecordParticipant>,
     val result: RecordResult,
     val attachmentCount: Int? = null,
+    val parentRecordId: String? = null,
+    val parentQuestionPreview: String? = null,
+    val hasFollowUps: Boolean = false,
   )
   @Serializable private class RecordRequester(val displayName: String, val avatar: RecordAvatarRef)
   @Serializable private class RecordAvatarRef(
@@ -686,6 +740,9 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     val affection: AffectionRef?,
     val voting: VotingRef? = null,
     val attachments: List<RecordAttachment> = emptyList(),
+    val parentRecordId: String? = null,
+    val parentQuestionPreview: String? = null,
+    val hasFollowUps: Boolean = false,
   )
   @Serializable private class RecordParticipant(val slot: String, val displayName: String)
   @Serializable private class InitialOpinion(val participant: String, val summary: String, val proposal: String)

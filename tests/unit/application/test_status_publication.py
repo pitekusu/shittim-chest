@@ -22,6 +22,7 @@ from shittim_chest.application.scale_to_zero import (
 )
 from shittim_chest.application.status_publication import (
     STATUS_MAX_DELIVERY_ATTEMPTS,
+    DiscordStatusButton,
     DiscordStatusGateway,
     DiscordStatusMessage,
     PublicStatusPublisher,
@@ -329,7 +330,9 @@ class FakeGateway:
         channel_id: str,
         content: str,
         nonce: str,
+        button: DiscordStatusButton | None = None,
     ) -> DiscordStatusMessage:
+        assert button is None
         self.created += 1
         if self.create_error is not None:
             raise self.create_error
@@ -349,7 +352,9 @@ class FakeGateway:
         channel_id: str,
         message_id: str,
         content: str,
+        button: DiscordStatusButton | None = None,
     ) -> DiscordStatusMessage:
+        assert button is None
         del channel_id, message_id
         self.edited += 1
         if self.edit_error is not None:

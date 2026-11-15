@@ -2047,6 +2047,19 @@
             ],
             "title": "Errorcode"
           },
+          "parentRecordId": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9_-]{43}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Parentrecordid"
+          },
           "phase": {
             "anyOf": [
               {
@@ -2155,6 +2168,19 @@
             "maxItems": 3,
             "title": "Attachmentids",
             "type": "array"
+          },
+          "parentRecordId": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9_-]{43}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Parentrecordid"
           },
           "question": {
             "maxLength": 1000,
@@ -4215,6 +4241,18 @@
             "title": "Finalproposals",
             "type": "array"
           },
+          "hasFollowUps": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Hasfollowups"
+          },
           "initialOpinions": {
             "allOf": [
               {
@@ -4291,6 +4329,33 @@
             ],
             "default": null,
             "title": "Ogimageurl"
+          },
+          "parentQuestionPreview": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Parentquestionpreview"
+          },
+          "parentRecordId": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9_-]{43}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Parentrecordid"
           },
           "participants": {
             "allOf": [
@@ -4471,6 +4536,77 @@
         "title": "RecordDetailResponse",
         "type": "object"
       },
+      "RecordFollowUpItem": {
+        "additionalProperties": false,
+        "properties": {
+          "completedAt": {
+            "format": "date-time",
+            "title": "Completedat",
+            "type": "string"
+          },
+          "questionPreview": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Questionpreview",
+            "type": "string"
+          },
+          "recordId": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Recordid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recordId",
+          "questionPreview",
+          "completedAt"
+        ],
+        "title": "RecordFollowUpItem",
+        "type": "object"
+      },
+      "RecordFollowUpsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "followUpAvailable": {
+            "title": "Followupavailable",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RecordFollowUpItem"
+            },
+            "maxItems": 12,
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Nextcursor"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "items",
+          "followUpAvailable"
+        ],
+        "title": "RecordFollowUpsResponse",
+        "type": "object"
+      },
       "RecordListItem": {
         "additionalProperties": false,
         "properties": {
@@ -4485,6 +4621,45 @@
             "format": "date-time",
             "title": "Completedat",
             "type": "string"
+          },
+          "hasFollowUps": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Hasfollowups"
+          },
+          "parentQuestionPreview": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Parentquestionpreview"
+          },
+          "parentRecordId": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9_-]{43}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Parentrecordid"
           },
           "participants": {
             "allOf": [
@@ -9589,7 +9764,8 @@
             "required": false,
             "schema": {
               "enum": [
-                "record-attachments-v1"
+                "record-attachments-v1",
+                "record-followups-v1"
               ],
               "type": "string"
             }
@@ -9850,7 +10026,8 @@
             "required": false,
             "schema": {
               "enum": [
-                "record-attachments-v1"
+                "record-attachments-v1",
+                "record-followups-v1"
               ],
               "type": "string"
             }
@@ -9979,6 +10156,17 @@
         "parameters": [
           {
             "in": "query",
+            "name": "contract",
+            "required": false,
+            "schema": {
+              "enum": [
+                "record-followups-v1"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "cursor",
             "required": false,
             "schema": {
@@ -10101,7 +10289,8 @@
             "schema": {
               "enum": [
                 "affection-reasons-v1",
-                "record-images-v1"
+                "record-images-v1",
+                "record-followups-v1"
               ],
               "type": "string"
             }
@@ -10117,6 +10306,122 @@
               }
             },
             "description": "One completed debate"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Record not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Projection conflict"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "mobileBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/records/{recordId}/follow-ups": {
+      "get": {
+        "operationId": "getRecordFollowUps",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recordId",
+            "required": true,
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordFollowUpsResponse"
+                }
+              }
+            },
+            "description": "Direct completed follow-ups"
           },
           "400": {
             "content": {

@@ -128,6 +128,7 @@ def command_from_ingress(request: IngressRequest) -> IngressDebateCommand:
             question=request.question,
             attachments=request.attachments,
             pending_attachments=request.pending_attachments,
+            follow_up_parent=request.follow_up_parent,
             requester_id=request.requester_id,
             requester_username=request.requester_username,
             requester_display_name=request.requester_display_name,

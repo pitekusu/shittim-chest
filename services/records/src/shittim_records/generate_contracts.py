@@ -635,7 +635,10 @@ def build_openapi() -> dict[str, Any]:
                         _parameter(
                             "contract",
                             "query",
-                            {"type": "string", "enum": ["record-attachments-v1"]},
+                            {
+                                "type": "string",
+                                "enum": ["record-attachments-v1", "record-followups-v1"],
+                            },
                         ),
                         _parameter(
                             "cursor",
@@ -683,7 +686,10 @@ def build_openapi() -> dict[str, Any]:
                         _parameter(
                             "contract",
                             "query",
-                            {"type": "string", "enum": ["record-attachments-v1"]},
+                            {
+                                "type": "string",
+                                "enum": ["record-attachments-v1", "record-followups-v1"],
+                            },
                         ),
                         _parameter(
                             "Origin",
@@ -739,6 +745,9 @@ def build_openapi() -> dict[str, Any]:
                     "security": [{"sessionCookie": []}, {"mobileBearer": []}],
                     "parameters": [
                         _parameter(
+                            "contract", "query", {"type": "string", "enum": ["record-followups-v1"]}
+                        ),
+                        _parameter(
                             "cursor", "query", {"type": "string", "minLength": 1, "maxLength": 4096}
                         ),
                     ],
@@ -767,7 +776,11 @@ def build_openapi() -> dict[str, Any]:
                             "query",
                             {
                                 "type": "string",
-                                "enum": ["affection-reasons-v1", "record-images-v1"],
+                                "enum": [
+                                    "affection-reasons-v1",
+                                    "record-images-v1",
+                                    "record-followups-v1",
+                                ],
                             },
                         ),
                     ],
@@ -777,6 +790,27 @@ def build_openapi() -> dict[str, Any]:
                     ),
                     "responses": {
                         "200": _response("RecordDetailResponse", "One completed debate"),
+                        **error_responses,
+                    },
+                }
+            },
+            "/api/v1/records/{recordId}/follow-ups": {
+                "get": {
+                    "operationId": "getRecordFollowUps",
+                    "security": [{"sessionCookie": []}, {"mobileBearer": []}],
+                    "parameters": [
+                        {
+                            "name": "recordId",
+                            "in": "path",
+                            "required": True,
+                            "schema": {"type": "string", "pattern": "^[A-Za-z0-9_-]{43}$"},
+                        },
+                        _parameter(
+                            "cursor", "query", {"type": "string", "minLength": 1, "maxLength": 4096}
+                        ),
+                    ],
+                    "responses": {
+                        "200": _response("RecordFollowUpsResponse", "Direct completed follow-ups"),
                         **error_responses,
                     },
                 }

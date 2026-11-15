@@ -7,6 +7,7 @@ from dataclasses import replace
 
 import pytest
 from shittim_chest.application.status_publication import (
+    DiscordStatusButton,
     DiscordStatusMessage,
     has_exact_status_publication_marker,
 )
@@ -84,6 +85,7 @@ class FakeGateway:
         self.fail_create = fail_create
         self.find_calls: list[dict[str, object]] = []
         self.create_calls: list[dict[str, object]] = []
+        self.edit_calls: list[dict[str, object]] = []
 
     async def current_bot_user_id(self) -> str:
         return BOT_ID
@@ -110,17 +112,21 @@ class FakeGateway:
     async def fetch_message(self, **_kwargs: object) -> DiscordStatusMessage:
         raise AssertionError("record-link delivery does not fetch by message ID")
 
-    async def edit_message(self, **_kwargs: object) -> DiscordStatusMessage:
-        raise AssertionError("record-link delivery does not edit messages")
+    async def edit_message(self, **kwargs: object) -> DiscordStatusMessage:
+        self.edit_calls.append(kwargs)
+        return replace(self._message(kwargs), nonce=None)
 
     @staticmethod
     def _message(kwargs: dict[str, object]) -> DiscordStatusMessage:
+        button = kwargs.get("button")
+        nonce = kwargs.get("nonce")
         return DiscordStatusMessage(
             message_id=MESSAGE_ID,
             channel_id=str(kwargs["channel_id"]),
             author_id=BOT_ID,
             content=str(kwargs.get("content") or EXPECTED_CONTENT),
-            nonce=str(kwargs["nonce"]),
+            nonce=str(nonce) if nonce is not None else None,
+            buttons=(button,) if isinstance(button, DiscordStatusButton) else (),
         )
 
 
@@ -161,11 +167,17 @@ def receipt(*, attempted: bool = False) -> RecordLinkNotificationReceipt:
     )
 
 
-def service(store: FakeStore, gateway: FakeGateway) -> RecordLinkNotificationService:
+def service(
+    store: FakeStore,
+    gateway: FakeGateway,
+    *,
+    follow_ups_enabled: bool = False,
+) -> RecordLinkNotificationService:
     return RecordLinkNotificationService(
         store=store,
         gateway_factory=FakeGatewayFactory(gateway),
         public_hostname="shittim.pitekusu.dev",
+        follow_ups_enabled=follow_ups_enabled,
     )
 
 
@@ -192,6 +204,7 @@ def test_first_attempt_posts_to_parent_chat_after_marking_attempted() -> None:
             "channel_id": SNAPSHOT.channel_id,
             "content": EXPECTED_CONTENT,
             "nonce": gateway.create_calls[0]["nonce"],
+            "button": None,
         }
     ]
     assert len(str(gateway.create_calls[0]["nonce"])) <= 25
@@ -223,7 +236,7 @@ def test_preview_preparation_precedes_post_and_failure_still_delivers_once(fails
     assert calls == [PROJECTION.record_id]
     assert len(gateway.create_calls) == 1
     assert store.sent == 1
-    assert set(gateway.create_calls[0]) == {"channel_id", "content", "nonce"}
+    assert gateway.create_calls[0]["button"] is None
 
 
 def test_preview_deadline_cancels_preparation_but_still_posts_once(
@@ -253,7 +266,7 @@ def test_preview_deadline_cancels_preparation_but_still_posts_once(
     publish(value)
     assert cancelled == [True]
     assert len(gateway.create_calls) == 1
-    assert set(gateway.create_calls[0]) == {"channel_id", "content", "nonce"}
+    assert gateway.create_calls[0]["button"] is None
     assert store.sent == 1
 
 
@@ -282,6 +295,30 @@ def test_missing_receipt_does_not_post_historical_projection() -> None:
     assert store.sent == 0
     assert gateway.find_calls == []
     assert gateway.create_calls == []
+
+
+def test_enabled_notice_adds_one_button_and_reconciles_an_existing_post() -> None:
+    new_store, new_gateway = FakeStore(receipt()), FakeGateway()
+    publish(service(new_store, new_gateway, follow_ups_enabled=True))
+    button = new_gateway.create_calls[0]["button"]
+    assert isinstance(button, DiscordStatusButton)
+    assert button.label == "更問する"
+    assert new_gateway.edit_calls == []
+    assert new_store.sent == 1
+
+    retry_store = FakeStore(receipt(attempted=True))
+    retry_gateway = FakeGateway(existing=True, legacy=True)
+    publish(service(retry_store, retry_gateway, follow_ups_enabled=True))
+    assert retry_gateway.create_calls == []
+    assert retry_gateway.edit_calls == [
+        {
+            "button": button,
+            "channel_id": SNAPSHOT.channel_id,
+            "content": f"{EXPECTED_CONTENT}\n識別子: {PROJECTION.record_id}",
+            "message_id": MESSAGE_ID,
+        }
+    ]
+    assert retry_store.sent == 1
 
 
 def test_failed_discord_post_keeps_receipt_pending_for_stream_retry() -> None:

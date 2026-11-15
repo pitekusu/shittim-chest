@@ -172,7 +172,7 @@ describe("Records API endpoint validation", () => {
 
     await expect(getRecords({ sort: "newest" })).resolves.toEqual(listResponse());
     expect(fetch).toHaveBeenCalledWith(
-      "/api/v1/records?limit=12&contract=record-attachments-v1&sort=newest",
+      "/api/v1/records?limit=12&contract=record-followups-v1&sort=newest",
       expect.objectContaining({ credentials: "same-origin" }),
     );
   });
@@ -186,7 +186,7 @@ describe("Records API endpoint validation", () => {
       listResponse(),
     );
     expect(fetch).toHaveBeenCalledWith(
-      "/api/v1/records/search?contract=record-attachments-v1",
+      "/api/v1/records/search?contract=record-followups-v1",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ search: "質問", sort: "newest", limit: 12 }),
@@ -287,7 +287,7 @@ describe("Records API endpoint validation", () => {
     );
     await expect(getRecord(RECORD_ID)).resolves.toEqual(recordDetail());
     expect(fetch).toHaveBeenCalledWith(
-      `/api/v1/records/${RECORD_ID}?contract=record-images-v1`,
+      `/api/v1/records/${RECORD_ID}?contract=record-followups-v1`,
       expect.objectContaining({ credentials: "same-origin" }),
     );
   });

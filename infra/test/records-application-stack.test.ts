@@ -75,6 +75,7 @@ describe("RecordsApplicationStack", () => {
   test("isolates native debate admission and exposes only bounded progress metadata", () => {
     const { template } = fixture;
     template.hasParameter("MobileDebateEnabled", { Default: "false", AllowedValues: ["false", "true"] });
+    template.hasParameter("DebateFollowUpsEnabled", { Default: "false", AllowedValues: ["false", "true"] });
     template.hasParameter("MobileDebateChannelId", { Default: "", NoEcho: true });
     template.hasResourceProperties("AWS::Lambda::Function", {
       FunctionName: "shittim-chest-production-records-mobile-debate-api",
@@ -82,6 +83,7 @@ describe("RecordsApplicationStack", () => {
       Architectures: ["arm64"], Timeout: 29, ReservedConcurrentExecutions: 2,
       Environment: { Variables: {
         MOBILE_DEBATE_ENABLED: { Ref: "MobileDebateEnabled" },
+        RECORDS_DEBATE_FOLLOW_UPS_ENABLED: { Ref: "DebateFollowUpsEnabled" },
         MOBILE_DEBATE_CHANNEL_ID: { Ref: "MobileDebateChannelId" },
         SOURCE_TABLE_NAME: { Ref: "SourceDebateTableName" },
         SESSION_TABLE_NAME: "shittim-chest-production-records-sessions",
@@ -90,7 +92,17 @@ describe("RecordsApplicationStack", () => {
     });
     template.hasResourceProperties("AWS::Lambda::Version", {
       FunctionName: { Ref: Match.stringLikeRegexp("^MobileDebateFunction") },
-      Description: { "Fn::Join": ["", ["Native debate admission enabled=", { Ref: "MobileDebateEnabled" }]] },
+      Description: { "Fn::Join": ["", [
+        "Native debate admission enabled=", { Ref: "MobileDebateEnabled" },
+        " follow-ups=", { Ref: "DebateFollowUpsEnabled" },
+      ]] },
+    });
+    template.hasResourceProperties("AWS::Lambda::Version", {
+      FunctionName: { Ref: Match.stringLikeRegexp("^ReadFunction") },
+      Description: { "Fn::Join": ["", [
+        "Read follow-ups enabled=", { Ref: "DebateFollowUpsEnabled" },
+        " mobile=", { Ref: "MobileDebateEnabled" },
+      ]] },
     });
     const routes = Object.values(template.findResources("AWS::ApiGatewayV2::Route"));
     const native = routes.filter(route => route.Properties.RouteKey.includes("/debate-requests"));
@@ -107,7 +119,7 @@ describe("RecordsApplicationStack", () => {
     const own = policies.filter(policy => JSON.stringify(policy.Properties.Roles).includes("MobileDebateFunctionRole"));
     const statements = own.flatMap(policy => policy.Properties.PolicyDocument.Statement) as PolicyStatement[];
     const database = statements.filter(statement => actionsOf(statement).some(action => action.startsWith("dynamodb:")));
-    expect(database).toHaveLength(8);
+    expect(database).toHaveLength(9);
     for (const statement of database.filter(statement => actionsOf(statement).some(action =>
       ["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:ConditionCheckItem"].includes(action)))) {
       if (JSON.stringify(statement.Condition).includes("DEBATE_UPLOAD#")) {
@@ -122,7 +134,7 @@ describe("RecordsApplicationStack", () => {
       expect(JSON.stringify(statement.Condition)).not.toContain("RECORD#");
     }
     const progress = database.filter(statement => JSON.stringify(statement.Condition).includes("dynamodb:Attributes"));
-    expect(progress).toHaveLength(2);
+    expect(progress).toHaveLength(3);
     for (const statement of progress) {
       expect(statement.Action).toBe("dynamodb:GetItem");
       expect(statement.Condition?.Null).toEqual({ "dynamodb:Attributes": "false", "dynamodb:LeadingKeys": "false" });
@@ -137,6 +149,11 @@ describe("RecordsApplicationStack", () => {
         "guild_id", "channel_id", "current_phase", "current_attempt_id", "thread_id",
         "control_panel_message_id", "updated_at",
       ],
+    });
+    const followUpSource = progress.find(statement =>
+      JSON.stringify(statement.Condition).includes("RECORD-SOURCE#*"));
+    expect(followUpSource?.Condition?.["ForAllValues:StringEquals"]).toEqual({
+      "dynamodb:Attributes": ["PK", "SK", "record_id", "debate_id", "attempt_id"],
     });
     const revocation = database.filter(statement => actionsOf(statement).includes("dynamodb:DeleteItem"));
     expect(revocation).toHaveLength(1);
@@ -574,7 +591,7 @@ describe("RecordsApplicationStack", () => {
     template.resourceCountIs("AWS::Lambda::Version", 7);
     template.resourceCountIs("AWS::Lambda::Alias", 7);
     template.resourceCountIs("AWS::ApiGatewayV2::Api", 1);
-    template.resourceCountIs("AWS::ApiGatewayV2::Route", 52);
+    template.resourceCountIs("AWS::ApiGatewayV2::Route", 53);
     template.resourceCountIs("AWS::ApiGatewayV2::Stage", 1);
     template.hasResourceProperties("AWS::ApiGatewayV2::Stage", {
       AutoDeploy: true,
@@ -980,11 +997,14 @@ describe("RecordsApplicationStack", () => {
     template.resourceCountIs("AWS::Lambda::Function", recordsFunctionNames.length);
   });
 
-  test("routes archive search and all requester options through the existing Read integration", () => {
+  test("routes archive search, requester options, and follow-ups through the existing Read integration", () => {
     const { template } = fixture;
     const routes = Object.values(template.findResources("AWS::ApiGatewayV2::Route"));
     const readTarget = routes.find(route => route.Properties.RouteKey === "GET /api/v1/records")!.Properties.Target;
-    for (const routeKey of ["POST /api/v1/records/search", "GET /api/v1/records/requesters"]) {
+    for (const routeKey of [
+      "POST /api/v1/records/search", "GET /api/v1/records/requesters",
+      "GET /api/v1/records/{recordId}/follow-ups",
+    ]) {
       expect(routes.find(route => route.Properties.RouteKey === routeKey)?.Properties.Target)
         .toEqual(readTarget);
     }

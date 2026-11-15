@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from functools import cache
@@ -101,6 +102,10 @@ def _read_controller() -> ReadHttpController:
         session_key=session_key,
         allowed_origin=public_origin,
         records=RecordsReadService(
+            follow_ups_enabled=(
+                os.environ.get("RECORDS_DEBATE_FOLLOW_UPS_ENABLED") == "true"
+                and os.environ.get("MOBILE_DEBATE_ENABLED") == "true"
+            ),
             reader=reader,
             cursor_codec=CursorCodec(session_key),
             public_origin=public_origin,

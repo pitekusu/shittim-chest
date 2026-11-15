@@ -77,6 +77,7 @@ from shittim_chest.adapters.openai.schemas import (
 )
 from shittim_chest.adapters.tls import create_public_tls_context
 from shittim_chest.application.generation_policy import ReasoningMode
+from shittim_chest.application.models import PreviousDebate
 from shittim_chest.domain import (
     DEFAULT_AFFECTION_SCORE,
     MAX_AFFECTION_REASON_LENGTH,
@@ -150,19 +151,27 @@ class OpenAIResponsesService:
         self,
         *,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         positions: tuple[InitialOpinion, ...],
         rotation: int,
         coordination: bool,
         images: tuple[ImageInput, ...] = (),
     ) -> tuple[ParticipantSlot, ...]:
         return await reconsideration.classify(
-            self, question, positions, rotation, coordination, images=images
+            self,
+            question,
+            positions,
+            rotation,
+            coordination,
+            images=images,
+            previous_debate=previous_debate,
         )
 
     async def explore_alternatives(
         self,
         *,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         frame: PreferenceFrame,
         plan: CandidatePlan,
         peers: tuple[InitialOpinion, ...],
@@ -171,13 +180,21 @@ class OpenAIResponsesService:
     ) -> tuple[Candidate, ...]:
         _validate_frame_owner(frame, plan.participant, plan)
         return await reconsideration.explore(
-            self, question, frame, plan, peers, evidence, images=images
+            self,
+            question,
+            frame,
+            plan,
+            peers,
+            evidence,
+            images=images,
+            previous_debate=previous_debate,
         )
 
     async def select_alternative(
         self,
         *,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         frame: PreferenceFrame,
         plan: CandidatePlan,
         peers: tuple[InitialOpinion, ...],
@@ -195,12 +212,14 @@ class OpenAIResponsesService:
             evidence,
             alternatives,
             images=images,
+            previous_debate=previous_debate,
         )
 
     async def revise_initial_opinion(
         self,
         *,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         frame: PreferenceFrame,
         plan: CandidatePlan,
         opinions: tuple[InitialOpinion, ...],
@@ -218,6 +237,7 @@ class OpenAIResponsesService:
             evidence,
             affection_score,
             images=images,
+            previous_debate=previous_debate,
         )
 
     async def score_affection(
@@ -260,6 +280,7 @@ class OpenAIResponsesService:
         *,
         participant: ParticipantSlot,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         images: tuple[ImageInput, ...] = (),
     ) -> PreferenceFrame:
         output = await self._parse_with_token_limit_retry(
@@ -270,7 +291,7 @@ class OpenAIResponsesService:
                 selecting=False,
                 system_prompt=self.system_prompt,
             ),
-            input_text=preferences_input(question),
+            input_text=preferences_input(question, previous_debate=previous_debate),
             settings=self.config.policy.preferences,
             images=images,
         )
@@ -283,6 +304,7 @@ class OpenAIResponsesService:
         *,
         participant: ParticipantSlot,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         evidence: EvidenceBundle,
         preference_frame: PreferenceFrame | None = None,
         images: tuple[ImageInput, ...] = (),
@@ -297,7 +319,9 @@ class OpenAIResponsesService:
                 system_prompt=self.system_prompt,
                 use_frame=preference_frame is not None,
             ),
-            input_text=candidates_input(question, evidence, preference_frame),
+            input_text=candidates_input(
+                question, evidence, preference_frame, previous_debate=previous_debate
+            ),
             settings=self.config.policy.candidates,
             images=images,
         )
@@ -311,6 +335,7 @@ class OpenAIResponsesService:
         *,
         participant: ParticipantSlot,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         evidence: EvidenceBundle,
         affection_score: int = DEFAULT_AFFECTION_SCORE,
         preference_frame: PreferenceFrame | None = None,
@@ -329,7 +354,13 @@ class OpenAIResponsesService:
                 )
                 + affection_response_instructions(affection_score)
             ),
-            input_text=initial_opinion_input(question, evidence, preference_frame, candidate_plan),
+            input_text=initial_opinion_input(
+                question,
+                evidence,
+                preference_frame,
+                candidate_plan,
+                previous_debate=previous_debate,
+            ),
             settings=self.config.initial_opinion,
             images=images,
         )
@@ -340,6 +371,7 @@ class OpenAIResponsesService:
         *,
         participant: ParticipantSlot,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         evidence: EvidenceBundle,
         initial_opinions: tuple[InitialOpinion, ...],
         affection_score: int = DEFAULT_AFFECTION_SCORE,
@@ -366,6 +398,7 @@ class OpenAIResponsesService:
                 preference_frame,
                 candidate_plan,
                 participant=participant,
+                previous_debate=previous_debate,
             ),
             settings=self.config.final_proposal,
             images=images,
@@ -377,6 +410,7 @@ class OpenAIResponsesService:
         *,
         voter: ParticipantSlot,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         evidence: EvidenceBundle,
         candidates: tuple[FinalProposal, ...],
         preference_frame: PreferenceFrame | None = None,
@@ -397,6 +431,7 @@ class OpenAIResponsesService:
                 candidates=candidates,
                 initial_opinions=initial_opinions,
                 images=images,
+                previous_debate=previous_debate,
             )
             return resolve_composite_ballot(ballot, debate_key=debate_key)
         if voting_rules_version != "legacy-v1":
@@ -408,7 +443,9 @@ class OpenAIResponsesService:
                 self.profiles.for_participant(voter).system_prompt,
                 system_prompt=self.system_prompt,
             ),
-            input_text=vote_input(question, evidence, candidates, preference_frame),
+            input_text=vote_input(
+                question, evidence, candidates, preference_frame, previous_debate=previous_debate
+            ),
             settings=self.config.vote,
             images=images,
         )
@@ -425,6 +462,7 @@ class OpenAIResponsesService:
         self,
         *,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         evidence: EvidenceBundle,
         proposals: tuple[FinalProposal, ...],
         voting_result: VotingResult,
@@ -445,7 +483,12 @@ class OpenAIResponsesService:
                 + affection_response_instructions(affection_score)
             ),
             input_text=decision_input(
-                question, evidence, proposals, voting_result, preference_frame
+                question,
+                evidence,
+                proposals,
+                voting_result,
+                preference_frame,
+                previous_debate=previous_debate,
             ),
             settings=self.config.decision,
             images=images,

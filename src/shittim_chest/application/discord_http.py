@@ -6,11 +6,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from shittim_chest.application.discord import PanelAction, PanelCustomId
-from shittim_chest.application.models import PendingDiscordImage
+from shittim_chest.application.models import FollowUpParent, PendingDiscordImage
 from shittim_chest.application.scale_to_zero import IngressKind
 from shittim_chest.domain import AttemptId, DebateId
 
 SHITTIM_COMMAND_NAME = "shittim"
+FOLLOW_UP_CUSTOM_ID_PREFIX = "shittim:f1:"
+FOLLOW_UP_QUESTION_FIELD = "follow_up_question"
 
 
 def _require_text(value: str, *, label: str) -> None:
@@ -154,12 +156,64 @@ class DiscordHttpOperation:
             raise ValueError("component operation does not match its immutable panel binding")
 
 
-type DiscordHttpInput = DiscordHttpPing | DiscordHttpOperation
+@dataclass(frozen=True, slots=True)
+class FollowUpCustomId:
+    """Bind a published component to the completed attempt and its verified Bot."""
+
+    parent: FollowUpParent
+    author_id: str
+
+    def __post_init__(self) -> None:
+        _require_snowflake(self.author_id, label="follow-up message author ID")
+        if str(int(self.author_id)) != self.author_id:
+            raise ValueError("follow-up message author ID is not canonical")
+
+    def encode(self, *, modal: bool = False) -> str:
+        action = "m" if modal else "b"
+        identity = f"{self.parent.debate_id.value.hex}:{self.parent.attempt_id.value.hex}"
+        return f"{FOLLOW_UP_CUSTOM_ID_PREFIX}{action}:{identity}:{self.author_id}"
+
+    @classmethod
+    def parse(cls, value: str, *, modal: bool) -> FollowUpCustomId:
+        if len(value) > 100 or not value.startswith(FOLLOW_UP_CUSTOM_ID_PREFIX):
+            raise ValueError("unsupported follow-up custom ID")
+        _, _, _, debate_id, attempt_id, author_id = value.split(":")
+        binding = cls(
+            FollowUpParent(DebateId.parse(debate_id), AttemptId.parse(attempt_id)),
+            author_id,
+        )
+        if binding.encode(modal=modal) != value:
+            raise ValueError("invalid follow-up custom ID")
+        return binding
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class DiscordFollowUpOperation:
+    """One verified click or submission from a moderator-authored completion notice."""
+
+    interaction_id: str
+    application_id: str
+    guild_id: str
+    channel_id: str
+    channel_type: int | None
+    requester_id: str
+    requester_username: str
+    requester_display_name: str
+    may_post: bool
+    received_at: datetime
+    binding: FollowUpCustomId
+    is_modal: bool
+    question: str | None
+
+
+type DiscordHttpInput = DiscordHttpPing | DiscordHttpOperation | DiscordFollowUpOperation
 
 
 __all__ = (
     "SHITTIM_COMMAND_NAME",
+    "DiscordFollowUpOperation",
     "DiscordHttpInput",
     "DiscordHttpOperation",
     "DiscordHttpPing",
+    "FollowUpCustomId",
 )

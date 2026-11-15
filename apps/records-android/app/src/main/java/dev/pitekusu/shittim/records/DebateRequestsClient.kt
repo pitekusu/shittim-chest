@@ -52,6 +52,7 @@ internal class DebateRequest(
   val attemptToken: String? = null,
   val canCancel: Boolean = false,
   val canRetry: Boolean = false,
+  val parentRecordId: String? = null,
 ) {
   val terminal: Boolean get() = status in setOf("published", "failed", "cancelled")
   fun validate() {
@@ -62,6 +63,8 @@ internal class DebateRequest(
     check(Instant.parse(updatedAt) >= Instant.parse(createdAt))
     check(phase == null || phase.matches(Regex("[A-Za-z_]{1,64}")))
     check(recordId == null || mobileOpaqueValue.matches(recordId))
+    check(parentRecordId == null || (mobileOpaqueValue.matches(parentRecordId) &&
+      parentRecordId != recordId && attachmentIds.isEmpty()))
     check((status == "published") == (recordId != null))
     check(errorCode == null || errorCode.matches(Regex("[A-Z_]{1,64}")))
     check(attemptToken == null || validDebateAttemptToken(attemptToken))
@@ -87,7 +90,7 @@ internal class DebateControlResponse(val operationId: String, val action: String
   }
   override fun toString(): String = "DebateControlResponse(<redacted>)"
 }
-internal enum class DebateFailure { AUTH_REQUIRED, REAUTH_REQUIRED, FORBIDDEN, NOT_FOUND, CONFLICT, QUEUE_FULL, UNAVAILABLE, INVALID_RESPONSE, STORAGE, ATTACHMENT_INVALID, ATTACHMENT_EXPIRED, ATTACHMENT_NOT_READY }
+internal enum class DebateFailure { AUTH_REQUIRED, REAUTH_REQUIRED, FORBIDDEN, NOT_FOUND, CONFLICT, QUEUE_FULL, UNAVAILABLE, INVALID_RESPONSE, STORAGE, ATTACHMENT_INVALID, ATTACHMENT_EXPIRED, ATTACHMENT_NOT_READY, FOLLOW_UP_PARENT_UNAVAILABLE }
 internal class DebateRequestException(val failure: DebateFailure) : Exception("debate_request_${failure.name.lowercase()}")
 
 /** Normal JSON uses Ktor; POST is one-shot so an ambiguous response cannot cause implicit replay. */
@@ -104,11 +107,17 @@ internal class DebateRequestsClient(private val engine: HttpClientEngine = OkHtt
     install(HttpTimeout) { connectTimeoutMillis = 10_000; socketTimeoutMillis = 20_000; requestTimeoutMillis = 20_000 }
   }
 
-  suspend fun submit(token: String, requestId: String, question: String, attachmentIds: List<String> = emptyList()): DebateRequest {
+  suspend fun submit(token: String, requestId: String, question: String,
+    attachmentIds: List<String> = emptyList(), parentRecordId: String? = null): DebateRequest {
     check(validDebateRequestId(requestId) && validDebateQuestion(question))
     check(attachmentIds.size <= MAX_ATTACHMENT_COUNT && attachmentIds.distinct().size == attachmentIds.size && attachmentIds.all(::validDebateRequestId))
-    val result = call<DebateRequest>(token, HttpMethod.Post, "", json.encodeToString(Start(requestId, question, attachmentIds)))
-    if (result.requestId != requestId || result.question != question || result.attachmentIds != attachmentIds) throw DebateRequestException(DebateFailure.INVALID_RESPONSE)
+    check(parentRecordId == null || (mobileOpaqueValue.matches(parentRecordId) && attachmentIds.isEmpty()))
+    val body = if (parentRecordId == null) json.encodeToString(Start(requestId, question, attachmentIds))
+      else json.encodeToString(FollowUpStart(requestId, question, attachmentIds, parentRecordId))
+    val result = call<DebateRequest>(token, HttpMethod.Post, "", body)
+    if (result.requestId != requestId || result.question != question ||
+      result.attachmentIds != attachmentIds || result.parentRecordId != parentRecordId)
+      throw DebateRequestException(DebateFailure.INVALID_RESPONSE)
     try { result.validate() }
     catch (_: Exception) { throw DebateRequestException(DebateFailure.INVALID_RESPONSE) }
     return result
@@ -194,6 +203,8 @@ internal class DebateRequestsClient(private val engine: HttpClientEngine = OkHtt
         val text = bytes.decodeToString(throwOnInvalidSequence = true)
         if (response.status.value !in setOf(200, 201, 202)) {
           val code = json.decodeFromString<ErrorEnvelope>(text).error.code
+          if (code == "FOLLOW_UP_PARENT_UNAVAILABLE")
+            throw DebateRequestException(DebateFailure.FOLLOW_UP_PARENT_UNAVAILABLE)
           throw DebateRequestException(when (response.status.value) {
             401 -> DebateFailure.AUTH_REQUIRED
             403 -> when (code) {
@@ -218,6 +229,8 @@ internal class DebateRequestsClient(private val engine: HttpClientEngine = OkHtt
 
   override fun close() { client.close(); engine.close() }
   @Serializable private class Start(val requestId: String, val question: String, val attachmentIds: List<String> = emptyList())
+  @Serializable private class FollowUpStart(val requestId: String, val question: String,
+    val attachmentIds: List<String>, val parentRecordId: String)
   @Serializable private class Control(val operationId: String, val attemptToken: String)
   @Serializable private class ErrorEnvelope(val error: ErrorBody)
   @Serializable private class ErrorBody(val code: String)

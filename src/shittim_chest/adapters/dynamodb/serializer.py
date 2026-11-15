@@ -29,12 +29,14 @@ from shittim_chest.application.discord import (
 from shittim_chest.application.models import (
     DebateSnapshot,
     DeliveryAbandonReason,
+    FollowUpParent,
     GenerationCheckpoint,
     GenerationStatus,
     LeaseGrant,
     PendingDiscordImage,
     PhaseDeliveryPlan,
     PhaseDeliveryStatus,
+    PreviousDebate,
     ReconsiderationProgress,
     TerminalDeliveryPlan,
 )
@@ -174,6 +176,16 @@ def serialize_snapshot(snapshot: DebateSnapshot) -> tuple[DynamoItem, ...]:
         ]
     _put_optional(debate_meta, "starter_message_id", snapshot.starter_message_id)
     _put_optional(debate_meta, "thread_id", snapshot.thread_id)
+    if snapshot.follow_up_parent is not None:
+        debate_meta["follow_up_parent"] = _serialize_follow_up_parent(snapshot.follow_up_parent)
+    if snapshot.previous_debate is not None:
+        debate_meta["previous_debate"] = {
+            "question": snapshot.previous_debate.question,
+            "decision": snapshot.previous_debate.decision,
+            "actions": list(snapshot.previous_debate.actions),
+            "caveats": list(snapshot.previous_debate.caveats),
+        }
+    _put_optional(debate_meta, "follow_up_parent_thread_id", snapshot.follow_up_parent_thread_id)
     _put_optional(
         debate_meta,
         "control_panel_message_id",
@@ -602,6 +614,9 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
     return DebateSnapshot(
         state=state,
         question=_text(debate_meta, "question"),
+        follow_up_parent=_deserialize_follow_up_parent(debate_meta),
+        previous_debate=_deserialize_previous_debate(debate_meta),
+        follow_up_parent_thread_id=_optional_text(debate_meta, "follow_up_parent_thread_id"),
         attachments=_deserialize_images(debate_meta.get("attachments", [])),
         pending_attachments=_deserialize_pending_images(debate_meta.get("pending_attachments", [])),
         attachment_message_ids=tuple(
@@ -1357,6 +1372,8 @@ def serialize_ingress_request(request: IngressRequest) -> DynamoItem:
         _put_optional(item, field, value)
     if request.attachments:
         item["attachments"] = [serialize_debate_image(image) for image in request.attachments]
+    if request.follow_up_parent is not None:
+        item["follow_up_parent"] = _serialize_follow_up_parent(request.follow_up_parent)
     if request.pending_attachments:
         item["pending_attachments"] = [
             _serialize_pending_image(image, include_url=request.status.counts_toward_queue_limit)
@@ -1398,6 +1415,7 @@ def deserialize_ingress_request(raw_item: Mapping[str, DynamoValue]) -> IngressR
             command_name=_optional_text(item, "command_name"),
             custom_id=_optional_text(item, "custom_id"),
             question=_optional_text(item, "question"),
+            follow_up_parent=_deserialize_follow_up_parent(item),
             attachments=_deserialize_images(item.get("attachments", [])),
             pending_attachments=_deserialize_pending_images(item.get("pending_attachments", [])),
             parent_channel_id=_optional_text(item, "parent_channel_id"),
@@ -2437,6 +2455,36 @@ def _optional_attempt(item: Mapping[str, DynamoValue], field: str) -> AttemptId 
 def _optional_debate(item: Mapping[str, DynamoValue], field: str) -> DebateId | None:
     value = _optional_text(item, field)
     return DebateId.parse(value) if value is not None else None
+
+
+def _serialize_follow_up_parent(parent: FollowUpParent) -> DynamoItem:
+    return {"debate_id": str(parent.debate_id), "attempt_id": str(parent.attempt_id)}
+
+
+def _deserialize_follow_up_parent(item: Mapping[str, DynamoValue]) -> FollowUpParent | None:
+    if "follow_up_parent" not in item:
+        return None
+    value = item["follow_up_parent"]
+    if not isinstance(value, dict) or set(value) != {"debate_id", "attempt_id"}:
+        raise PersistenceFormatError("invalid follow-up reference")
+    return FollowUpParent(
+        debate_id=DebateId.parse(_text(value, "debate_id")),
+        attempt_id=AttemptId.parse(_text(value, "attempt_id")),
+    )
+
+
+def _deserialize_previous_debate(item: Mapping[str, DynamoValue]) -> PreviousDebate | None:
+    if "previous_debate" not in item:
+        return None
+    value = item["previous_debate"]
+    if not isinstance(value, dict) or set(value) != {"question", "decision", "actions", "caveats"}:
+        raise PersistenceFormatError("invalid prior debate context")
+    return PreviousDebate(
+        question=_text(value, "question"),
+        decision=_text(value, "decision"),
+        actions=_string_tuple(value, "actions"),
+        caveats=_string_tuple(value, "caveats"),
+    )
 
 
 def _optional_phase(item: Mapping[str, DynamoValue], field: str) -> DebatePhase | None:

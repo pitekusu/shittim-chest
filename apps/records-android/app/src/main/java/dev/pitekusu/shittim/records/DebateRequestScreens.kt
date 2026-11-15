@@ -72,7 +72,8 @@ internal fun DebateRequestsScreen(state: DebateHistoryState, online: Boolean,
 internal fun DebateRequestStatusScreen(id: String, state: DebateStatusState,
   submission: DebateSubmissionState, online: Boolean, onRetry: () -> Unit,
   onResult: (String) -> Unit, onReauth: () -> Unit, onNew: () -> Unit, modifier: Modifier = Modifier,
-  demo: Boolean = false, onControl: (String) -> Unit = {}, onCheck: () -> Unit = {}, onResend: () -> Unit = {}) {
+  demo: Boolean = false, onControl: (String) -> Unit = {}, onCheck: () -> Unit = {}, onResend: () -> Unit = {},
+  onDiscardUnavailableFollowUp: () -> Unit = {}) {
   val receipt = debateReceipt(id, state, submission)
   var confirmation by remember(id, receipt?.attemptToken) { mutableStateOf<String?>(null) }
   val ownWorkspace = submission.workspace?.takeIf { it.requestId == id }
@@ -92,6 +93,7 @@ internal fun DebateRequestStatusScreen(id: String, state: DebateStatusState,
           DebateFailure.REAUTH_REQUIRED -> R.string.debate_reauth
           DebateFailure.FORBIDDEN -> R.string.debate_forbidden
           DebateFailure.QUEUE_FULL -> R.string.debate_queue_full
+          DebateFailure.FOLLOW_UP_PARENT_UNAVAILABLE -> R.string.record_followup_parent_unavailable
           DebateFailure.STORAGE -> R.string.debate_storage_error
           else -> R.string.debate_unavailable
         }), color = MaterialTheme.colorScheme.error)
@@ -100,7 +102,11 @@ internal fun DebateRequestStatusScreen(id: String, state: DebateStatusState,
       }
       if (ownWorkspace != null && submission.confirmedMissing && receipt == null) {
         Text(stringResource(R.string.debate_not_accepted))
-        Button(onClick = onRetry, enabled = online && !submission.busy && !state.loading &&
+        if (failure == DebateFailure.FOLLOW_UP_PARENT_UNAVAILABLE)
+          TextButton(onClick = onDiscardUnavailableFollowUp, enabled = online && !submission.busy && !state.loading) {
+            Text(stringResource(R.string.record_followup_edit_as_new))
+          }
+        else Button(onClick = onRetry, enabled = online && !submission.busy && !state.loading &&
           failure != DebateFailure.REAUTH_REQUIRED,
           modifier = Modifier.testTag("debate-retry-same-id")) { Text(stringResource(R.string.debate_retry)) }
       } else if (receipt == null && state.failure == DebateFailure.NOT_FOUND) Text(stringResource(R.string.debate_request_missing))

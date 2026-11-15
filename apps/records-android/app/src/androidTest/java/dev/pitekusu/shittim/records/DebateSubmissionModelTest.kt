@@ -92,6 +92,52 @@ class DebateSubmissionModelTest {
     withContext(Dispatchers.Main) { ViewModelStore().apply { put("images", model); clear() } }
   }
 
+  @Test fun followUpDraftPreservesFrozenParentAndQuestionAcrossUnknownResponse() = runBlocking<Unit> {
+    val parent = "p".repeat(43)
+    val otherParent = "e".repeat(43)
+    var saved = DebateWorkspace(draft = "送信前の別の議題")
+    var foundParent = otherParent
+    val post = CompletableDeferred<String>()
+    val model = DebateSubmissionModel({ true }, { saved }, { saved = it },
+      { _, _ -> error("ordinary submit called") },
+      { requestId -> DebateRequest(requestId, "ビーフとポークならどっち？", "queued",
+          createdAt = "2026-10-04T00:00:00Z", updatedAt = "2026-10-04T00:00:00Z", parentRecordId = foundParent) },
+      {}, sendFollowUp = { requestId, question, parentId ->
+        assertEquals(parent, parentId)
+        assertEquals(parent, saved.parentRecordId)
+        assertEquals(requestId, saved.requestId)
+        assertEquals(question, saved.frozenQuestion)
+        post.complete(requestId)
+        throw DebateRequestException(DebateFailure.UNAVAILABLE)
+      })
+    try {
+      withContext(Dispatchers.Main) { model.restore() }
+      await { model.state.value.workspace != null }
+      withContext(Dispatchers.Main) {
+        assertEquals(FollowUpDraft.Conflict, model.prepareFollowUp(parent))
+        assertEquals("送信前の別の議題", model.state.value.workspace?.draft)
+        assertEquals(FollowUpDraft.Ready, model.prepareFollowUp(parent, replaceDraft = true))
+        model.edit("ビーフとポークならどっち？")
+        model.submit()
+      }
+      val frozenId = withTimeout(5000) { post.await() }
+      await { !model.state.value.busy }
+      withContext(Dispatchers.Main) {
+        assertEquals(FollowUpDraft.Blocked, model.prepareFollowUp(otherParent, replaceDraft = true))
+        model.reconcile()
+      }
+      await { model.state.value.failure == DebateFailure.INVALID_RESPONSE }
+      assertNull(saved.receipt)
+      foundParent = parent
+      withContext(Dispatchers.Main) { model.reconcile() }
+      await { model.state.value.workspace?.receipt != null }
+      assertEquals(parent, saved.receipt?.parentRecordId)
+      assertEquals(frozenId, saved.receipt?.requestId)
+    } finally {
+      withContext(Dispatchers.Main) { ViewModelStore().apply { put("follow-up", model); clear() } }
+    }
+  }
+
   @Test fun storageFailurePreventsAnyPost() = runBlocking<Unit> {
     var calls = 0
     val model = DebateSubmissionModel({ true }, { DebateWorkspace(draft = "架空の議題") },

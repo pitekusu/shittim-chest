@@ -40,6 +40,7 @@ from shittim_chest.application import (
     TerminalDeliveryPlan,
     content_sha256,
 )
+from shittim_chest.application.models import FollowUpParent, PreviousDebate
 from shittim_chest.domain import (
     PARTICIPANTS,
     AffectionProfile,
@@ -212,6 +213,35 @@ def test_snapshot_round_trip_preserves_current_attempt_and_vertical_items() -> N
     assert debate_meta["control_panel_message_id"] == "103"
     assert attempt_meta["gsi2pk"] == "RECOVERABLE"
     assert attempt_meta["fencing_token"] == 42
+
+
+def test_follow_up_snapshot_round_trip_preserves_immutable_context() -> None:
+    ordinary = snapshot()
+    parent = FollowUpParent(DebateId.new(), AttemptId.new())
+    context = PreviousDebate("前の質問", "前の結論", ("手順",), ("注意",))
+    source = replace(
+        ordinary,
+        follow_up_parent=parent,
+        previous_debate=context,
+        follow_up_parent_thread_id="106",
+    )
+    items = serialize_snapshot(source)
+    assert deserialize_snapshot(items) == source
+    meta = next(item for item in items if item["record_type"] == "debate_meta")
+    assert meta["follow_up_parent"] == {
+        "debate_id": str(parent.debate_id),
+        "attempt_id": str(parent.attempt_id),
+    }
+    assert meta["previous_debate"] == {
+        "question": context.question,
+        "decision": context.decision,
+        "actions": ["手順"],
+        "caveats": ["注意"],
+    }
+    assert deserialize_snapshot(serialize_snapshot(ordinary)).previous_debate is None
+    del meta["previous_debate"]
+    with pytest.raises(ValueError, match="invalid follow-up context"):
+        deserialize_snapshot(items)
 
 
 def test_legacy_decision_without_victory_message_remains_readable() -> None:

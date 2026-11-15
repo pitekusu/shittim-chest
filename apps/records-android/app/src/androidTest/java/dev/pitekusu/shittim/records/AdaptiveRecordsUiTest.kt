@@ -120,6 +120,48 @@ class AdaptiveRecordsUiTest {
     compose.onNodeWithText("架空の議題：休日に楽しむ散歩と読書").assertDoesNotExist()
   }
 
+  @Test fun linkedRecordOpensNativelyAndBackReturnsToItsSourceAfterResize() {
+    val parentId = entries[0].recordId
+    val childId = entries[1].recordId
+    val stack = NavBackStack<NavKey>(RecordsList, RecordDetail(parentId))
+    val window = mutableStateOf(DpSize(420.dp, 850.dp))
+    val parent = RecordPreview("今夜は何を食べる？", "カレーをすすめます。", "アロナ", hasFollowUps = true)
+    val child = RecordPreview("ビーフとポークならどっち？", "ビーフをすすめます。", "アロナ",
+      parentRecordId = parentId, parentQuestionPreview = parent.question)
+    val children = listOf(RecordFollowUpSummary(childId, child.question, "2026-09-27T00:00:00Z"))
+    compose.activityRule.scenario.onActivity { it.setContent {
+      DeviceConfigurationOverride(DeviceConfigurationOverride.WindowSize(window.value)) {
+        val id = (stack.lastOrNull() as? RecordDetail)?.recordId
+        BootstrapUi(BootstrapScreen.State(ThemeChoice.Dark, session, records = records,
+          selectedRecordId = id, backStack = stack.toList(),
+          record = RecordPreviewState.Ready(if (id == childId) child else parent, saved = true),
+          related = if (id == parentId) RecordRelatedState(items = children, offline = true) else RecordRelatedState(),
+          showFollowUpsFor = parentId, eventSink = { event ->
+            when (event) {
+              is BootstrapScreen.Event.OpenRelatedRecord -> stack.openRelatedRecord(event.targetId)
+              BootstrapScreen.Event.CloseRecord -> stack.removeLastOrNull()
+              else -> Unit
+            }
+          }))
+      }
+    } }
+    val childLink = "detail-child-$childId"
+    compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasTestTag(childLink))
+    compose.onNodeWithTag(childLink).performClick()
+    compose.waitUntil(5_000) { compose.onNodeWithText(child.question).isDisplayed() }
+    compose.runOnIdle {
+      assertEquals(listOf(RecordsList, RecordDetail(parentId), RecordDetail(childId)), stack.toList())
+      window.value = DpSize(1000.dp, 850.dp)
+    }
+    compose.onNodeWithTag("record-detail-content").assertIsDisplayed()
+    compose.runOnIdle { compose.activity.onBackPressedDispatcher.onBackPressed() }
+    compose.waitUntil(5_000) { compose.onNodeWithText(parent.question).isDisplayed() }
+    compose.onNodeWithTag("detail-section-Result").assertIsSelected()
+    compose.onNodeWithTag("record-detail-content").performScrollToNode(hasTestTag(childLink))
+    compose.onNodeWithTag(childLink).assertIsDisplayed()
+    compose.runOnIdle { assertEquals(listOf(RecordsList, RecordDetail(parentId)), stack.toList()) }
+  }
+
   @Test fun largeTextUsesOnePaneAndSystemBackWorksWhileReading() {
     val window = mutableStateOf(DpSize(1000.dp, 700.dp))
     val backStack = NavBackStack<NavKey>(RecordsList, RecordDetail(entries.first().recordId))

@@ -39,12 +39,14 @@ from shittim_chest.application import (
 from shittim_chest.application import service as application_service
 from shittim_chest.application.models import (
     DebateSnapshot,
+    FollowUpParent,
     GenerationCheckpoint,
     GenerationStatus,
     LeaseGrant,
     MetricEvent,
     PhaseDeliveryPlan,
     PhaseDeliveryStatus,
+    PreviousDebate,
 )
 from shittim_chest.application.ports import (
     DebateImageStore,
@@ -58,6 +60,8 @@ from shittim_chest.application.ports import (
 from shittim_chest.domain import (
     PARTICIPANTS,
     AffectionReasonStatus,
+    AttemptId,
+    DebateId,
     DebatePhase,
     DebateState,
     EvidenceBundle,
@@ -1451,6 +1455,110 @@ async def test_accept_operation_is_idempotent_and_bound_to_request(
         await app.accept_debate(replace(request(), requester_username="other-user"))
     with pytest.raises(InvalidApplicationOperation, match="another request"):
         await app.accept_debate(replace(request(), requester_display_name="別名"))
+
+
+@pytest.mark.asyncio
+async def test_follow_up_runs_separately_with_frozen_parent_context_and_retains_it_on_retry(
+    dependencies: Dependencies,
+) -> None:
+    app = make_application(dependencies)
+    evidence, openai, repository = dependencies[4:7]
+    parent = await accept_bound_debate(app)
+    await app.run_debate(parent.debate_id)
+    parent_snapshot = repository.current[parent.debate_id]
+    assert parent_snapshot.state.phase is DebatePhase.COMPLETED
+    # The fake outbox stores short operation IDs without the debate partition key.
+    repository.terminal_operations.clear()
+    evidence.calls.clear()
+    evidence.previous_debates.clear()
+    openai.affection_questions.clear()
+    openai.previous_debates.clear()
+
+    question = "それならビーフとチキン、どちら?"
+    follow_up = replace(
+        request(requester_id="another-member"),
+        question=question,
+        operation_id="follow-up-operation",
+        follow_up_parent=FollowUpParent(parent.debate_id, parent.attempt_id),
+    )
+    child = await app.accept_debate(follow_up)
+    assert await app.accept_debate(follow_up) == child
+    with pytest.raises(InvalidApplicationOperation, match="another request"):
+        await app.accept_debate(replace(follow_up, follow_up_parent=None))
+    assert child.debate_id != parent.debate_id
+    assert child.attempt_id != parent.attempt_id
+    await app.bind_discord_context(BindDiscordContextCommand(child.debate_id, "201", "202", "203"))
+    openai.decision_errors.append(
+        GenerationProviderError("openai_known_failure", "content-free", retryable=True)
+    )
+    await app.run_debate(child.debate_id)
+
+    failed = repository.current[child.debate_id]
+    expected_context = PreviousDebate("What should we eat?", "decision", ("action",))
+    assert failed.state.phase is DebatePhase.FAILED
+    assert failed.previous_debate == expected_context
+    assert failed.follow_up_parent_thread_id == "102"
+    assert failed.affection_assessment is not None
+    assert evidence.calls == [question]
+    assert evidence.previous_debates == [expected_context]
+    assert openai.affection_questions == [question] * 3
+    assert {operation for operation, _ in openai.previous_debates} == {
+        "form_preferences",
+        "select_candidates",
+        "find_overlap_targets",
+        "generate_initial_opinion",
+        "generate_final_proposal",
+        "cast_vote",
+        "generate_decision",
+    }
+    assert all(context == expected_context for _, context in openai.previous_debates)
+    assert repository.current[parent.debate_id] == parent_snapshot
+
+    retried = await app.retry_debate(
+        RetryDebateCommand(child.debate_id, follow_up.requester_id, "retry-child")
+    )
+    await app.run_debate(retried.debate_id)
+    completed_child = repository.current[child.debate_id]
+    assert completed_child.state.phase is DebatePhase.COMPLETED
+    assert completed_child.previous_debate == expected_context
+    assert completed_child.follow_up_parent == follow_up.follow_up_parent
+
+    grandchild = await app.accept_debate(
+        replace(
+            follow_up,
+            question="辛口なら?",
+            operation_id="follow-up-2-operation",
+            follow_up_parent=FollowUpParent(child.debate_id, retried.attempt_id),
+        )
+    )
+    assert repository.current[grandchild.debate_id].previous_debate == PreviousDebate(
+        question, "decision", ("action",)
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ["unknown", "stale", "unfinished", "different_channel"])
+async def test_follow_up_unavailable_parent_creates_no_child(
+    dependencies: Dependencies, reason: str
+) -> None:
+    app = make_application(dependencies)
+    parent = await accept_bound_debate(app)
+    if reason != "unfinished":
+        await app.run_debate(parent.debate_id)
+    follow_up = replace(
+        request(),
+        operation_id="follow-up-operation",
+        channel_id="other" if reason == "different_channel" else "100",
+        follow_up_parent=FollowUpParent(
+            DebateId.new() if reason == "unknown" else parent.debate_id,
+            AttemptId.new() if reason == "stale" else parent.attempt_id,
+        ),
+    )
+
+    with pytest.raises(RequestNotAllowed, match="follow-up parent is unavailable"):
+        await app.accept_debate(follow_up)
+
+    assert set(dependencies[6].current) == {parent.debate_id}
 
 
 @pytest.mark.parametrize("question", ["", " ", "x" * 1001])

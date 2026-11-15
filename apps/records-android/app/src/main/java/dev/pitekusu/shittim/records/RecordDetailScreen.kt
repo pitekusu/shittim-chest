@@ -17,10 +17,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.CircularProgressIndicator
@@ -75,6 +77,15 @@ internal enum class RecordDetailSection(@StringRes val title: Int, @DrawableRes 
   Affection(R.string.detail_affection, R.drawable.ic_detail_heart),
 }
 
+internal class RecordRelatedState(
+  val items: List<RecordFollowUpSummary> = emptyList(),
+  val nextCursor: String? = null,
+  val canStart: Boolean = false,
+  val loading: Boolean = false,
+  val failed: Boolean = false,
+  val offline: Boolean = false,
+)
+
 private data class DetailPage(val section: RecordDetailSection, val person: Int = 0,
   val finalOpinion: Boolean = false)
 
@@ -92,7 +103,8 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
   onEvent: (BootstrapScreen.Event) -> Unit, modifier: Modifier = Modifier,
   resultScrollState: LazyListState = rememberLazyListState(),
   scrollTag: String = "record-detail-content", motionAllowed: Boolean = true,
-  playedSections: Set<String> = emptySet(), onSectionSeen: (String) -> Unit = {}) {
+  playedSections: Set<String> = emptySet(), onSectionSeen: (String) -> Unit = {},
+  related: RecordRelatedState = RecordRelatedState(), showFollowUps: Boolean = false) {
   key(recordId) {
     // The presenter reloads decrypted text after recreation. Attaching a smaller placeholder
     // pager would clamp its saved page (or ask for a now-missing page key) before Ready arrives.
@@ -145,7 +157,17 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
         if (affectionOrder.isEmpty()) add(DetailPage(RecordDetailSection.Affection))
         else affectionOrder.forEach { add(DetailPage(RecordDetailSection.Affection, it)) }
       }
-      val pager = rememberPagerState(pageCount = { pages.size })
+      val resultPage = pages.indexOf(DetailPage(RecordDetailSection.Result))
+      val pager = rememberPagerState(initialPage = if (showFollowUps) resultPage else 0, pageCount = { pages.size })
+      var followUpsFocused by rememberSaveable { mutableStateOf(false) }
+      LaunchedEffect(showFollowUps) {
+        if (!showFollowUps) followUpsFocused = false
+        else if (!followUpsFocused) {
+          pager.scrollToPage(resultPage)
+          resultScrollState.requestScrollToItem(1)
+          followUpsFocused = true
+        }
+      }
       val selected = pages[pager.currentPage.coerceIn(pages.indices)]
       var previousPage by rememberSaveable { mutableIntStateOf(pager.settledPage) }
       // Keep parsed answers in memory outside lazy pages. Re-parsing an empty placeholder on return
@@ -307,6 +329,47 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
                       affectionIndex = entry.person,
                       minimumVisibleTop = { affectionControlsBottom },
                       decisionMarkdown = decisionMarkdown)
+                  }
+                  if (section == RecordDetailSection.Result) {
+                    preview.parentRecordId?.let { parentId ->
+                      item(key = "record-parent") {
+                        TextButton(onClick = { onEvent(BootstrapScreen.Event.OpenRelatedRecord(recordId, parentId)) },
+                          modifier = Modifier.heightIn(min = 48.dp).testTag("detail-parent-record")) {
+                          Text(preview.parentQuestionPreview?.let {
+                            stringResource(R.string.record_followup_parent_question, it)
+                          } ?: stringResource(R.string.record_followup_parent))
+                        }
+                      }
+                    }
+                    if (related.canStart) item(key = "record-start-follow-up") {
+                      Button(onClick = { onEvent(BootstrapScreen.Event.ComposeFollowUp(recordId)) },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("detail-start-follow-up")) {
+                        Text(stringResource(R.string.record_followup_start))
+                      }
+                    }
+                    if (preview.hasFollowUps || related.items.isNotEmpty()) item(key = "record-follow-up-heading") {
+                      Text(stringResource(R.string.record_followup_children),
+                        modifier = Modifier.padding(top = ShittimSpacing.Small).semantics { heading() },
+                        style = MaterialTheme.typography.titleMediumEmphasized)
+                    }
+                    items(related.items, key = { "related-${it.recordId}" }) { child ->
+                      TextButton(onClick = { onEvent(BootstrapScreen.Event.OpenRelatedRecord(recordId, child.recordId)) },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("detail-child-${child.recordId}")) {
+                        Text(child.questionPreview, modifier = Modifier.fillMaxWidth())
+                      }
+                    }
+                    if (related.offline && preview.hasFollowUps) item(key = "record-follow-up-offline") {
+                      Text(stringResource(R.string.record_followup_saved_only), style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (related.loading) item(key = "record-follow-up-loading") {
+                      Text(stringResource(R.string.record_followup_loading), style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (related.failed || related.nextCursor != null) item(key = "record-follow-up-more") {
+                      TextButton(enabled = !related.loading,
+                        onClick = { onEvent(BootstrapScreen.Event.LoadRecordFollowUps(recordId, more = !related.failed)) }) {
+                        Text(stringResource(if (related.failed) R.string.record_followup_retry else R.string.record_followup_more))
+                      }
+                    }
                   }
                 }
               }

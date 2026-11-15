@@ -898,7 +898,7 @@ async function mockAuthenticatedApi(
       json: { schemaVersion: 1, items: [recordDetail.requester], nextCursor: null },
     }),
   );
-  await page.route("**/api/v1/records/search?contract=record-attachments-v1", (route) => {
+  await page.route("**/api/v1/records/search?contract=record-followups-v1", (route) => {
     const body = route.request().postDataJSON() as {
       search: string;
       requester?: string;
@@ -956,7 +956,7 @@ async function mockAuthenticatedApi(
       },
     }),
   );
-  await page.route(`**/api/v1/records/${RECORD_ID}?contract=record-images-v1`, (route) =>
+  await page.route(`**/api/v1/records/${RECORD_ID}?contract=record-followups-v1`, (route) =>
     route.fulfill({ json: recordDetail }),
   );
   await page.route("**/api/v1/insights/rankings", (route) => route.fulfill({ json: rankings }));
@@ -3263,7 +3263,7 @@ test("archive restores its in-memory filters, focus and reading position", async
   await page.route("**/api/v1/records?*", (route) =>
     route.fulfill({ json: { schemaVersion: 1, items, nextCursor: null } }),
   );
-  await page.route("**/api/v1/records/search?contract=record-attachments-v1", (route) =>
+  await page.route("**/api/v1/records/search?contract=record-followups-v1", (route) =>
     route.fulfill({ json: { schemaVersion: 1, items, nextCursor: null } }),
   );
   await page.goto("/");
@@ -3293,6 +3293,113 @@ test("archive restores its in-memory filters, focus and reading position", async
   });
   await page.reload();
   await expect(search).toHaveValue("");
+});
+
+test("follow-up links open related records and restore their originating archive action", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockAuthenticatedApi(page);
+  const childId = "b".repeat(43);
+  const secondId = "s".repeat(43);
+  const parentQuestion = "今日の献立は何にする?";
+  const childQuestion = "ビーフとポークならどちら?";
+  const secondQuestion = "辛さはどれくらいがいい?";
+  const archiveCard = {
+    schemaVersion: 1,
+    completedAt: detail.completedAt,
+    requester: detail.requester,
+    participants: detail.participants,
+    result: detail.result,
+  };
+  await page.route("**/api/v1/records?*", (route) =>
+    route.fulfill({
+      json: {
+        schemaVersion: 1,
+        items: [
+          {
+            ...archiveCard,
+            recordId: childId,
+            questionPreview: childQuestion,
+            parentRecordId: RECORD_ID,
+            parentQuestionPreview: parentQuestion,
+          },
+          {
+            ...archiveCard,
+            recordId: RECORD_ID,
+            questionPreview: parentQuestion,
+            hasFollowUps: true,
+          },
+        ],
+        nextCursor: null,
+      },
+    }),
+  );
+  const followUpsPattern = `**/api/v1/records/${RECORD_ID}/follow-ups*`;
+  await page.route(`**/api/v1/records/${RECORD_ID}?contract=record-followups-v1`, (route) =>
+    route.fulfill({ json: { ...detail, question: parentQuestion, hasFollowUps: true } }),
+  );
+  await page.route(followUpsPattern, (route) => {
+    const cursor = new URL(route.request().url()).searchParams.get("cursor");
+    return route.fulfill({
+      json: {
+        schemaVersion: 1,
+        items: [
+          {
+            recordId: cursor ? secondId : childId,
+            questionPreview: cursor ? secondQuestion : childQuestion,
+            completedAt: detail.completedAt,
+          },
+        ],
+        nextCursor: cursor ? null : "next-page",
+        followUpAvailable: false,
+      },
+    });
+  });
+  await page.route(`**/api/v1/records/${childId}?contract=record-followups-v1`, (route) =>
+    route.fulfill({
+      json: {
+        ...detail,
+        recordId: childId,
+        question: childQuestion,
+        parentRecordId: RECORD_ID,
+        parentQuestionPreview: parentQuestion,
+      },
+    }),
+  );
+  await page.route(`**/api/v1/records/${childId}/follow-ups*`, (route) =>
+    route.fulfill({
+      json: { schemaVersion: 1, items: [], nextCursor: null, followUpAvailable: false },
+    }),
+  );
+
+  await page.goto("/");
+  const origin = page.getByRole("link", { name: /元の議論へ/ });
+  await expect(page.getByText("更問", { exact: true })).toBeVisible();
+  await expect(origin).toContainText(parentQuestion);
+  await origin.click();
+  await expect(page.getByRole("heading", { name: parentQuestion, level: 1 })).toBeFocused();
+  await page.goBack();
+  await expect(origin).toBeFocused();
+
+  const followUpsAction = page.getByRole("link", { name: "更問を見る" });
+  await followUpsAction.click();
+  await expect(page).toHaveURL(new RegExp(`/records/${RECORD_ID}#followups$`));
+  const followUps = page.getByRole("region", { name: "更問", exact: true });
+  await expect(followUps.getByRole("heading", { name: "更問", exact: true })).toBeFocused();
+  const child = followUps.getByRole("link", { name: new RegExp(childQuestion.slice(0, -1)) });
+  await expect(child).toBeVisible();
+  await followUps.getByRole("button", { name: "更問をさらに読み込む" }).click();
+  await expect(
+    followUps.getByRole("link", { name: new RegExp(secondQuestion.slice(0, -1)) }),
+  ).toBeVisible();
+  await expect(child).toBeVisible();
+  await child.click();
+  await expect(page.getByRole("heading", { name: childQuestion, level: 1 })).toBeVisible();
+  await expect(followUps.getByRole("link", { name: /元の議論へ/ })).toContainText(parentQuestion);
+  await page.goBack();
+  await page.goBack();
+  await expect(followUpsAction).toBeFocused();
 });
 
 test("refreshed workspaces fit PC and narrow viewports with the whole shell accessible", async ({
@@ -3592,7 +3699,7 @@ test("record attachments are visible in cards and the question and recover expir
   await expect(dialog).not.toBeVisible();
   await expect(trigger).toBeFocused();
   await page.route(images[2]!.url, (route) => route.fulfill({ status: 403 }));
-  await page.route(`**/api/v1/records/${RECORD_ID}?contract=record-images-v1`, (route) =>
+  await page.route(`**/api/v1/records/${RECORD_ID}?contract=record-followups-v1`, (route) =>
     route.fulfill({
       json: {
         ...detail,
@@ -3626,7 +3733,7 @@ test("archive search reaches a full-question match after empty server segments w
   const finalSegment = new Promise<void>((resolve) => {
     finish = resolve;
   });
-  await page.route("**/api/v1/records/search?contract=record-attachments-v1", async (route) => {
+  await page.route("**/api/v1/records/search?contract=record-followups-v1", async (route) => {
     expect(route.request().method()).toBe("POST");
     expect(route.request().headers()["x-csrf-token"]).toBe("csrf-token");
     const body = route.request().postDataJSON() as { search: string; cursor?: string };
@@ -3699,7 +3806,7 @@ test("archive requester options cover unloaded records and preserve selection th
     });
   });
   const bodies: { requester?: string; sort: string }[] = [];
-  await page.route("**/api/v1/records/search?contract=record-attachments-v1", (route) => {
+  await page.route("**/api/v1/records/search?contract=record-followups-v1", (route) => {
     bodies.push(route.request().postDataJSON() as { requester?: string; sort: string });
     return route.fulfill({ json: { schemaVersion: 1, items: [], nextCursor: null } });
   });

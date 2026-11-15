@@ -307,7 +307,7 @@ describe("App shell", () => {
     mockFixedMedia(false);
     sessionStorage.setItem(LOGIN_TRANSITION_KEY, "pending");
     const requests = mockApi();
-    const listPath = "/api/v1/records?limit=12&contract=record-attachments-v1&sort=newest";
+    const listPath = "/api/v1/records?limit=12&contract=record-followups-v1&sort=newest";
     render(<App />);
 
     expect(await screen.findByLabelText("ログインしました")).toBeVisible();

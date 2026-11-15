@@ -18,10 +18,14 @@ from nacl.signing import VerifyKey
 
 from shittim_chest.application.discord import PanelAction, PanelCustomId
 from shittim_chest.application.discord_http import (
+    FOLLOW_UP_CUSTOM_ID_PREFIX,
+    FOLLOW_UP_QUESTION_FIELD,
     SHITTIM_COMMAND_NAME,
+    DiscordFollowUpOperation,
     DiscordHttpInput,
     DiscordHttpOperation,
     DiscordHttpPing,
+    FollowUpCustomId,
 )
 from shittim_chest.application.ingress import IngressOutcome
 from shittim_chest.application.models import PendingDiscordImage
@@ -55,6 +59,9 @@ _PING = 1
 _CHAT_INPUT_COMMAND = 1
 _STRING_OPTION = 3
 _BUTTON_COMPONENT = 2
+_ACTION_ROW_COMPONENT = 1
+_ADMINISTRATOR_PERMISSION = 1 << 3
+_VIEW_AND_SEND_MESSAGES_PERMISSIONS = (1 << 10) | (1 << 11)
 _MANAGE_MESSAGES_PERMISSION = 1 << 13
 _PUBLIC_KEY_PATTERN = re.compile(r"[0-9a-fA-F]{64}\Z")
 _SIGNATURE_PATTERN = re.compile(r"[0-9a-fA-F]{128}\Z")
@@ -307,7 +314,7 @@ def parse_verified_interaction(
     interaction_type = _integer(payload.get("type"))
     if interaction_type == _PING:
         return DiscordHttpPing(received_at=received_at)
-    if interaction_type not in {_APPLICATION_COMMAND, _MESSAGE_COMPONENT}:
+    if interaction_type not in {_APPLICATION_COMMAND, _MESSAGE_COMPONENT, _MODAL_SUBMIT}:
         raise DiscordHttpPayloadError
 
     interaction_id = _snowflake(payload.get("id"))
@@ -333,6 +340,26 @@ def parse_verified_interaction(
             permissions=permissions,
             received_at=received_at,
         )
+    custom_id = _text(data.get("custom_id"))
+    if custom_id.startswith(FOLLOW_UP_CUSTOM_ID_PREFIX):
+        return _parse_follow_up(
+            data,
+            _mapping(payload.get("message")),
+            interaction_id=interaction_id,
+            application_id=application_id,
+            guild_id=guild_id,
+            channel_id=channel_id,
+            channel_type=channel_type,
+            requester_id=requester_id,
+            username=username,
+            display_name=display_name,
+            permissions=permissions,
+            received_at=received_at,
+            is_modal=interaction_type == _MODAL_SUBMIT,
+            custom_id=custom_id,
+        )
+    if interaction_type == _MODAL_SUBMIT:
+        raise DiscordHttpPayloadError
     return _parse_component(
         payload,
         data,
@@ -348,6 +375,84 @@ def parse_verified_interaction(
         permissions=permissions,
         received_at=received_at,
     )
+
+
+def _parse_follow_up(
+    data: Mapping[str, object],
+    message: Mapping[str, object],
+    *,
+    interaction_id: str,
+    application_id: str,
+    guild_id: str,
+    channel_id: str,
+    channel_type: int | None,
+    requester_id: str,
+    username: str,
+    display_name: str,
+    permissions: int,
+    received_at: datetime,
+    is_modal: bool,
+    custom_id: str,
+) -> DiscordFollowUpOperation:
+    try:
+        binding = FollowUpCustomId.parse(custom_id, modal=is_modal)
+    except ValueError:
+        raise DiscordHttpPayloadError from None
+    _snowflake(message.get("id"))
+    author = _mapping(message.get("author"))
+    # Discord routes the signed interaction to the publishing application. The
+    # component binds the actual Bot user because its ID may differ from the app's.
+    if (
+        _snowflake(message.get("channel_id")) != channel_id
+        or _snowflake(author.get("id")) != binding.author_id
+        or author.get("bot") is not True
+        or message.get("webhook_id") is not None
+        or not _has_follow_up_button(message, binding.encode())
+    ):
+        raise DiscordHttpPayloadError
+    if not is_modal and _integer(data.get("component_type")) != _BUTTON_COMPONENT:
+        raise DiscordHttpPayloadError
+    question = None
+    if is_modal:
+        value = _parse_modal_text(data, field=FOLLOW_UP_QUESTION_FIELD)
+        if value.strip() and len(value) <= 1_000:
+            question = value
+    return DiscordFollowUpOperation(
+        interaction_id=interaction_id,
+        application_id=application_id,
+        guild_id=guild_id,
+        channel_id=channel_id,
+        channel_type=channel_type,
+        requester_id=requester_id,
+        requester_username=username,
+        requester_display_name=display_name,
+        may_post=(
+            bool(permissions & _ADMINISTRATOR_PERMISSION)
+            or permissions & _VIEW_AND_SEND_MESSAGES_PERMISSIONS
+            == _VIEW_AND_SEND_MESSAGES_PERMISSIONS
+        ),
+        received_at=received_at,
+        binding=binding,
+        is_modal=is_modal,
+        question=question,
+    )
+
+
+def _has_follow_up_button(message: Mapping[str, object], custom_id: str) -> bool:
+    count = 0
+    for raw_row in _sequence(message.get("components")):
+        row = _mapping(raw_row)
+        if _integer(row.get("type")) != _ACTION_ROW_COMPONENT:
+            continue
+        for raw_component in _sequence(row.get("components")):
+            component = _mapping(raw_component)
+            if (
+                component.get("custom_id") == custom_id
+                and _integer(component.get("type")) == _BUTTON_COMPONENT
+                and component.get("disabled", False) is False
+            ):
+                count += 1
+    return count == 1
 
 
 def _parse_student_gacha(
@@ -403,6 +508,15 @@ def _parse_student_gacha(
 
 
 def _parse_teacher_name(data: Mapping[str, object]) -> str | None:
+    value = _parse_modal_text(data, field=_STUDENT_GACHA_TEACHER_FIELD)
+    try:
+        return normalize_teacher_name(value)
+    except ValueError:
+        # A legitimate user's input error should receive an ephemeral callback.
+        return None
+
+
+def _parse_modal_text(data: Mapping[str, object], *, field: str) -> str:
     components = _sequence(data.get("components"))
     if len(components) != 1:
         raise DiscordHttpPayloadError
@@ -412,17 +526,42 @@ def _parse_teacher_name(data: Mapping[str, object]) -> str | None:
     text_input = _mapping(label.get("component"))
     if (
         _integer(text_input.get("type")) != _TEXT_INPUT_COMPONENT
-        or text_input.get("custom_id") != _STUDENT_GACHA_TEACHER_FIELD
+        or text_input.get("custom_id") != field
     ):
         raise DiscordHttpPayloadError
     value = text_input.get("value")
     if not isinstance(value, str):
         raise DiscordHttpPayloadError
-    try:
-        return normalize_teacher_name(value)
-    except ValueError:
-        # A legitimate user's input error should receive an ephemeral callback.
-        return None
+    return value
+
+
+def follow_up_modal_response(binding: FollowUpCustomId) -> ApiGatewayV2Response:
+    """Collect the next question without creating a queue item on button click."""
+
+    return _json_response(
+        200,
+        {
+            "type": 9,
+            "data": {
+                "custom_id": binding.encode(modal=True),
+                "title": "更問する",
+                "components": [
+                    {
+                        "type": _LABEL_COMPONENT,
+                        "label": "追加の質問",
+                        "component": {
+                            "type": _TEXT_INPUT_COMPONENT,
+                            "custom_id": FOLLOW_UP_QUESTION_FIELD,
+                            "style": 2,
+                            "required": True,
+                            "min_length": 1,
+                            "max_length": 1_000,
+                        },
+                    },
+                ],
+            },
+        },
+    )
 
 
 def student_gacha_modal_response(offer_id: str) -> ApiGatewayV2Response:
@@ -548,6 +687,7 @@ def ingress_response(outcome: IngressOutcome) -> ApiGatewayV2Response:
         IngressOutcome.QUEUE_FULL: (
             "\u274c 現在20件の依頼が待機しています。\nしばらくしてから再実行してください。"
         ),
+        IngressOutcome.INVALID_FOLLOW_UP_QUESTION: "追加の質問を1〜1,000文字で入力してください。",
         IngressOutcome.NOT_ALLOWED: "この場所または操作では利用できません。",
     }[outcome]
     return _json_response(

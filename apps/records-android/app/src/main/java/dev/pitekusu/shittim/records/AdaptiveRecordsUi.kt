@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -218,7 +220,9 @@ internal fun AdaptiveRecordsUi(
               scrollTag = if (twoPanes) "record-detail-content" else "bootstrap-content",
               motionAllowed = motionAllowed && state.selectedRecordId == route.recordId &&
                 entryLifecycle.isAtLeast(Lifecycle.State.RESUMED), playedSections = playedSections,
-              onSectionSeen = onSectionSeen)
+              onSectionSeen = onSectionSeen,
+              related = if (state.selectedRecordId == route.recordId) state.related else RecordRelatedState(),
+              showFollowUps = state.showFollowUpsFor == route.recordId)
           }
         }
       }
@@ -236,6 +240,7 @@ internal fun AdaptiveRecordsUi(
             onRemoveImage = { state.eventSink(BootstrapScreen.Event.RemoveDebateImage(it)) },
             onDiscardMissing = { state.eventSink(BootstrapScreen.Event.DiscardMissingDebate) },
             demo = state.demoEntryId != null,
+            parent = state.followUpParent,
             modifier = Modifier.widthIn(max = 760.dp).align(Alignment.TopCenter))
         }
       }
@@ -259,6 +264,7 @@ internal fun AdaptiveRecordsUi(
             onControl = { state.eventSink(BootstrapScreen.Event.ControlDebate(route.requestId, it)) },
             onCheck = { state.eventSink(BootstrapScreen.Event.CheckDebateControl(route.requestId)) },
             onResend = { state.eventSink(BootstrapScreen.Event.ResendDebateControl(route.requestId)) },
+            onDiscardUnavailableFollowUp = { state.eventSink(BootstrapScreen.Event.EditUnavailableFollowUp(route.requestId)) },
             demo = state.demoEntryId != null,
             modifier = Modifier.widthIn(max = 760.dp).align(Alignment.TopCenter))
         }
@@ -332,6 +338,18 @@ internal fun AdaptiveRecordsUi(
           })
       }
     }
+    state.followUpDraftConflict?.takeIf { state.canReadRecords && state.selectedRecordId == it }?.let { recordId ->
+      val dismiss = { state.eventSink(BootstrapScreen.Event.DismissFollowUpDraftConflict) }
+      AlertDialog(onDismissRequest = dismiss,
+        title = { Text(stringResource(R.string.record_followup_replace_title)) },
+        text = { Text(stringResource(R.string.record_followup_replace_message)) },
+        dismissButton = { TextButton(onClick = dismiss) { Text(stringResource(R.string.review_demo_cancel)) } },
+        confirmButton = {
+          TextButton(onClick = { state.eventSink(BootstrapScreen.Event.ComposeFollowUp(recordId, replaceDraft = true)) }) {
+            Text(stringResource(R.string.record_followup_replace))
+          }
+        })
+    }
     if (state.canReadRecords && onList) {
       when (queryMode) {
         RecordQueryMode.Filters -> RecordFilterSheet(state.listQuery,
@@ -339,7 +357,8 @@ internal fun AdaptiveRecordsUi(
           onDismiss = { queryMode = RecordQueryMode.Closed }, onEvent = state.eventSink)
         RecordQueryMode.Search -> RecordFullScreenSearch(state.listQuery,
           onDismiss = { queryMode = RecordQueryMode.Closed }, onEvent = { event ->
-            if (event is BootstrapScreen.Event.OpenRecord) {
+            if (event is BootstrapScreen.Event.OpenRecord || event is BootstrapScreen.Event.OpenRecordFollowUps ||
+              (event is BootstrapScreen.Event.OpenRelatedRecord && event.fromList)) {
               // Translate the stable result anchor, not its index: the main list also has a brand/criteria row.
               val anchor = searchScrollState.layoutInfo.visibleItemsInfo.firstOrNull()
               val index = pagingItems?.itemSnapshotList?.items?.indexOfFirst { it.stableKey == anchor?.key } ?: -1

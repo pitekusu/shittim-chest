@@ -7,7 +7,7 @@ from dataclasses import replace
 
 import pytest
 
-from shittim_chest.application.models import GenerationStatus
+from shittim_chest.application.models import GenerationStatus, PreviousDebate
 from shittim_chest.domain import (
     PARTICIPANTS,
     CandidatePlan,
@@ -40,6 +40,7 @@ class BlockedCandidateOpenAI(FakeOpenAI):
         *,
         participant: ParticipantSlot,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         images: tuple[ImageInput, ...] = (),
         evidence: EvidenceBundle,
         preference_frame: PreferenceFrame,
@@ -55,6 +56,7 @@ class BlockedCandidateOpenAI(FakeOpenAI):
         return await super().select_candidates(
             participant=participant,
             question=question,
+            previous_debate=previous_debate,
             images=images,
             evidence=evidence,
             preference_frame=preference_frame,
