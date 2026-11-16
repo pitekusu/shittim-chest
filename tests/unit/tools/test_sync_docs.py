@@ -177,3 +177,11 @@ def test_destination_extra_private_data_is_rejected(
 
     with pytest.raises(SyncError, match="private key"):
         operation(documents, destination)
+
+
+def test_legacy_write_cli_cannot_overwrite_git_canonical_docs(monkeypatch, capsys) -> None:
+    from tools.sync_docs import main
+
+    monkeypatch.setattr("sys.argv", ["sync_docs.py", "--write"])
+    assert main() == 1
+    assert "Import disabled" in capsys.readouterr().err

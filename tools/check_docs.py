@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Validate the public documentation mirror without accessing the private Vault."""
+"""Validate the Git-managed public documentation without accessing the private Vault."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ MARKDOWN_LINK = re.compile(r"\[[^\]\n]*\]\((?:<([^>\n]+)>|([^\s)]+))\)")
 
 
 class DocumentationError(RuntimeError):
-    """Raised when the repository documentation mirror is structurally invalid."""
+    """Raised when the repository documentation is structurally invalid."""
 
 
 def read_markdown(path: Path) -> str:
