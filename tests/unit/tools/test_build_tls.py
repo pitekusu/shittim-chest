@@ -187,10 +187,11 @@ def test_our_inherited_java_store_is_verified_then_replaced_without_duplicate_op
 
     def run(command: list[str], **_: object) -> bytes:
         if command[0].endswith("keytool"):
-            return exported
+            return exported if "-keystore" in command else first + other
         Path(command[-1]).write_bytes(b"invented public CA store")
         return b""
 
+    monkeypatch.setattr(policy, "is_denied", lambda cert: cert == other)
     monkeypatch.setattr(build, "_run", run)
     environment = {"JAVA_HOME": "/invented-jdk", "JAVA_TOOL_OPTIONS": "-Djava.io.tmpdir=/disk/tmp"}
     environment.update(build.configure_java(tmp_path, environment))
@@ -198,8 +199,40 @@ def test_our_inherited_java_store_is_verified_then_replaced_without_duplicate_op
     assert environment["JAVA_TOOL_OPTIONS"].count("-Djavax.net.ssl.trustStore=") == 1
     assert "-Djava.io.tmpdir=/disk/tmp" in environment["JAVA_TOOL_OPTIONS"]
     exported = other
+    monkeypatch.setattr(policy, "is_denied", lambda _: False)
     with pytest.raises(policy.TrustPolicyError, match="tls_build_unsafe_override"):
         build.configure_java(tmp_path, environment)
+
+
+def test_verified_jdk_uses_vendor_store_unless_jsse_has_another_default(
+    tmp_path: Path, certificates: tuple[bytes, bytes, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    public, _, _ = certificates
+    commands: list[list[str]] = []
+
+    def run(command: list[str], **_: object) -> bytes:
+        commands.append(command)
+        return public if "-cacerts" in command else b""
+
+    monkeypatch.setattr(build, "_run", run)
+    jdk = tmp_path / "jdk"
+    environment = {
+        "JAVA_HOME": str(jdk),
+        "JAVA_TOOL_OPTIONS": "-Djava.io.tmpdir=/disk/tmp",
+        "RUNNER_ENVIRONMENT": "github-hosted",
+        "GITHUB_ACTIONS": "true",
+    }
+
+    assert build.configure_java(tmp_path, environment) == {}
+    assert len(commands) == 1 and "-cacerts" in commands[0]
+    assert not (tmp_path / "java-ca.pem").exists()
+
+    override = jdk / "lib/security/jssecacerts"
+    override.parent.mkdir(parents=True)
+    override.touch()
+    values = build.configure_java(tmp_path, environment)
+    assert "trustStore=" in values["JAVA_TOOL_OPTIONS"]
+    assert (tmp_path / "java-ca.pem").read_bytes() == public
 
 
 @pytest.mark.parametrize("unsafe", ("store", "extra-directory", "bad-certificate"))

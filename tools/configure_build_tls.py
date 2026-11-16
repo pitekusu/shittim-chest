@@ -162,15 +162,26 @@ def configure_environment(
 
 
 def configure_java(output: Path, environment: dict[str, str]) -> dict[str, str]:
-    """Filter the selected JDK's existing trust, never union it with another store."""
+    """Use safe vendor trust directly; filter the selected JDK when required."""
+    inherited_selection = environment.get("SHITTIM_BUILD_JAVA_TRUST_STORE")
     environment = _check_overrides(environment)
     java_home = Path(environment["JAVA_HOME"])
     public = _run(
         [str(java_home / "bin/keytool"), "-list", "-rfc", "-cacerts", "-storepass", "changeit"],
         environment=environment,
     )
+    approved = filter_bundle(public)
+    # JSSE prefers jssecacerts over the cacerts that keytool just verified.
+    if (
+        environment.get("RUNNER_ENVIRONMENT") == "github-hosted"
+        and environment.get("GITHUB_ACTIONS") == "true"
+        and not inherited_selection
+        and not (java_home / "lib/security/jssecacerts").exists()
+        and approved == b"".join(pem_certificates(public))
+    ):
+        return {}
     filtered = output / "java-ca.pem"
-    filtered.write_bytes(filter_bundle(public))
+    filtered.write_bytes(approved)
     target = output / "java-ca.p12"
     _run(
         [
