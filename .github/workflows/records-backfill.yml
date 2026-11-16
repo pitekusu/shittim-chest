@@ -60,11 +60,10 @@ jobs:
           [[ "${PAGE_LIMIT}" =~ ^[0-9]+$ ]]
           test "${PAGE_LIMIT}" -ge 1
           test "${PAGE_LIMIT}" -le 100
-      - name: Update and verify system trust before checkout
+      - name: Verify hosted runner trust before checkout
         working-directory: ${{ runner.temp }}
         run: |
-          sudo apt-get update --quiet
-          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          dpkg-query --show --showformat='Hosted CA package: ${Version}\n' ca-certificates
           python3 - <<'PY_TLS'
           import hashlib
           import pathlib
