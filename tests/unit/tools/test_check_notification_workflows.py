@@ -1938,7 +1938,7 @@ def test_runtime_projection_cannot_replace_raw_results_with_success(directory: P
 @pytest.mark.parametrize(
     ("workflow", "old", "new"),
     [
-        ("ci.yml", "version: v0.38.2", "version: latest"),
+        ("ci.yml", "version: v0.39.0", "version: latest"),
         (
             RELEASE_WORKFLOW,
             "image=${{ steps.buildkit-image.outputs.image }}",
@@ -2054,7 +2054,7 @@ def test_repeated_action_version_requires_one_commit_pin(directory: Path) -> Non
 def test_release_requires_the_locked_node_version(directory: Path) -> None:
     _replace(
         directory / RELEASE_WORKFLOW,
-        '          node-version: "24.22.2"',
+        '          node-version: "24.22.3"',
         "          node-version-file: .node-version",
         1,
     )

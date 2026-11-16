@@ -18,7 +18,7 @@ env:
   NODE_OPTIONS: --use-openssl-ca
   SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
   SSL_CERT_DIR: /etc/ssl/certs
-  NODE_VERSION: "24.22.2"
+  NODE_VERSION: "24.22.3"
   PYTHON_VERSION: "3.14.10"
   UV_VERSION: "0.13.7"
 

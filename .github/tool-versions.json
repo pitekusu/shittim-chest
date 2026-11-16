@@ -16,17 +16,17 @@
       "version": "1.7.12"
     },
     "betterleaks": {
-      "archive_name": "betterleaks_1.10.0_linux_x64.tar.gz",
-      "archive_sha256": "9d9ad503cd5d80d18a939352266c3fcca52f10da9b83cd5cfe646989b13940fe",
-      "certificate_identity": "https://github.com/betterleaks/betterleaks/.github/workflows/release.yml@refs/tags/v1.10.0",
+      "archive_name": "betterleaks_1.10.1_linux_x64.tar.gz",
+      "archive_sha256": "c174b42d7aa60caf58c0c3e555c0e4bed01fe6b0d99a412bce777b5af4ce913e",
+      "certificate_identity": "https://github.com/betterleaks/betterleaks/.github/workflows/release.yml@refs/tags/v1.10.1",
       "certificate_oidc_issuer": "https://token.actions.githubusercontent.com",
       "checksums_name": "checksums.txt",
-      "checksums_sha256": "d465c5752b3907183f4143f88fa725077ae23445447e799a812dcd6830828107",
+      "checksums_sha256": "8feef090f9f95bb4a44d8f25a720da99b728605872c8dd1fcd4ea15d1b92f3ce",
       "repository": "betterleaks/betterleaks",
       "signature_bundle_name": "checksums.txt.sigstore.json",
-      "signature_bundle_sha256": "c5f51e6e1d4f8280e4f1c541954b9c9f081c6fa04de1262b991b5ea0c7e074ea",
+      "signature_bundle_sha256": "dc5bf31159ef6ed9d502a6ca3518be25afe0934659eccc528b9dbaf2660330bc",
       "tag_prefix": "v",
-      "version": "1.10.0"
+      "version": "1.10.1"
     },
     "cosign-dhi": {
       "archive_name": "cosign-linux-arm64",
