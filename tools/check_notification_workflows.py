@@ -20,7 +20,7 @@ ANDROID_RELEASE_WORKFLOW = "android-release.yml"
 ROSTER_RELEASE_WORKFLOW = "student-gacha-roster-release.yml"
 ROSTER_PUBLISH_WORKFLOW = "student-gacha-roster-publish.yml"
 WORKFLOW_RUN_NOTIFICATION = "discord-workflow-run.yml"
-PINNED_BUILDX_VERSION = "v0.38.2"
+PINNED_BUILDX_VERSION = "v0.39.0"
 PERMISSIONS_KEY = re.compile(r"(?<![a-zA-Z0-9_-])(?:\"|')?permissions(?:\"|')?\s*:")
 YAML_HEXADECIMAL_ESCAPE = re.compile(r"\\(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|U([0-9a-fA-F]{8}))")
 AWS_OR_DEPLOY_CAPABILITY = re.compile(
@@ -627,7 +627,7 @@ def _validate_release(directory: Path) -> None:
         "group: production-release",
         "cancel-in-progress: false",
         "runs-on: ubuntu-26.04-arm",
-        'node-version: "24.22.2"',
+        'node-version: "24.22.3"',
         'EXPECTED_REPOSITORY_ID: "1302516701"',
         ".use_immutable_subject == true",
         "ACTIONS_ID_TOKEN_REQUEST_URL",
@@ -1625,18 +1625,23 @@ def _validate_ty_sarif(text: str, job_id: str, category: str) -> None:
     if check.strip() != expected_check.strip():
         raise WorkflowPolicyError("ty SARIF must preserve the frozen type check exit status")
     upload = _workflow_step_block(job, "Upload ty results to code scanning")
+    upload, pin_count = re.subn(
+        r"(?m)^(        uses: github/codeql-action/upload-sarif)"
+        r"@[0-9a-f]{40} # v[0-9]+\.[0-9]+\.[0-9]+$",
+        r"\1",
+        upload,
+    )
     expected_upload = (
         "      - name: Upload ty results to code scanning\n"
         "        if: ${{ !cancelled() && (steps.ty.outcome == 'success' || "
         "steps.ty.outcome == 'failure') }}\n"
-        "        uses: github/codeql-action/upload-sarif@"
-        "9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1\n"
+        "        uses: github/codeql-action/upload-sarif\n"
         "        with:\n"
         f"          sarif_file: ${{{{ runner.temp }}}}/{category}.sarif\n"
         "          checkout_path: ${{ github.workspace }}\n"
         f"          category: {category}"
     )
-    if upload.strip() != expected_upload.strip():
+    if pin_count != 1 or upload.strip() != expected_upload.strip():
         raise WorkflowPolicyError("ty SARIF must use the standard upload even after type errors")
 
 
