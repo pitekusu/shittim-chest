@@ -280,15 +280,16 @@ def test_every_checked_out_job_configures_tls_before_later_actions() -> None:
                 continue
             steps = block.split("    steps:\n", 1)[1]
             guard = (
-                "      - name: Update and verify system trust before checkout\n"
+                "      - name: Verify hosted runner trust before checkout\n"
                 "        working-directory: ${{ runner.temp }}\n"
             )
             assert guard in steps, workflow.name
             assert steps.index(guard) < steps.index("uses:"), workflow.name
             checkout = block.index("uses: actions/checkout@")
             before = block[:checkout]
-            assert "name: Update and verify system trust before checkout\n" in before
-            assert "sudo apt-get install --yes --only-upgrade" in before
+            assert "name: Verify hosted runner trust before checkout\n" in before
+            assert "dpkg-query --show --showformat=" in before
+            assert "sudo apt-get" not in before
             assert "refusing checkout" in before
             following = block[checkout:].split("\n      - ", 1)[1]
             if following.startswith("name: Require an explicit CI scope\n"):

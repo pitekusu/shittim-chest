@@ -1735,7 +1735,7 @@ def _validate_ci_path_isolation(directory: Path) -> None:
             raise WorkflowPolicyError(f"CI {job} must verify every required step outcome")
         for name in re.findall(r"(?m)^      - name: (.+)$", block):
             if name in {
-                "Update and verify system trust before checkout",
+                "Verify hosted runner trust before checkout",
                 "Check out the tested commit",
                 "Require an explicit CI scope",
                 "Verify the required work or report it as not applicable",

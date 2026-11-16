@@ -52,11 +52,10 @@ jobs:
           test "${GITHUB_REPOSITORY}" = "${EXPECTED_REPOSITORY}"
           test "${GITHUB_REPOSITORY_ID}" = "${EXPECTED_REPOSITORY_ID}"
           test "${GITHUB_SHA}" = "${GITHUB_WORKFLOW_SHA}"
-      - name: Update and verify system trust before checkout
+      - name: Verify hosted runner trust before checkout
         working-directory: ${{ runner.temp }}
         run: |
-          sudo apt-get update --quiet
-          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          dpkg-query --show --showformat='Hosted CA package: ${Version}\n' ca-certificates
           python3 - <<'PY_TLS'
           import hashlib
           import pathlib
@@ -639,11 +638,10 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - name: Update and verify system trust before checkout
+      - name: Verify hosted runner trust before checkout
         working-directory: ${{ runner.temp }}
         run: |
-          sudo apt-get update --quiet
-          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          dpkg-query --show --showformat='Hosted CA package: ${Version}\n' ca-certificates
           python3 - <<'PY_TLS'
           import hashlib
           import pathlib
