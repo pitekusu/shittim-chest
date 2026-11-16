@@ -122,7 +122,9 @@ internal class RecordsRepository(
         result.listEntry?.let { entry ->
           val savedEntry = RecordListEntry(entry.recordId, entry.questionPreview, entry.requesterName,
             RecordAvatar(entry.requesterAvatar.url, entry.requesterAvatar.fallbackVariant, revision = avatarRevision),
-            entry.completedAt, entry.winnerName, entry.winnerSlot, entry.attachmentCount)
+            entry.completedAt, entry.winnerName, entry.winnerSlot, entry.attachmentCount,
+            parentRecordId = entry.parentRecordId, parentQuestionPreview = entry.parentQuestionPreview,
+            hasFollowUps = entry.hasFollowUps)
           saveListEntry(accountId, savedEntry)
         }
         requireActive(accountId)
@@ -262,7 +264,8 @@ internal class RecordsRepository(
   private fun RecordListEntry.offlineEntry(avatarBytes: ByteArray? = null) =
     RecordListEntry(recordId, questionPreview, requesterName,
       RecordAvatar(null, requesterAvatar.fallbackVariant, avatarBytes),
-      completedAt, winnerName, winnerSlot, attachmentCount, attachmentCountKnown)
+      completedAt, winnerName, winnerSlot, attachmentCount, attachmentCountKnown,
+      parentRecordId, parentQuestionPreview, hasFollowUps)
 
   private suspend fun memoizedListEntries(accountId: String, rows: List<EncryptedRecordRow>): List<RecordListEntry> {
     synchronized(memoLock) { listMemo.keys.retainAll(rows.map { it.recordId }.toSet()) }
@@ -301,6 +304,13 @@ internal class RecordsRepository(
         throw error
       }
     }
+  }
+
+  suspend fun followUps(token: String, accountId: String, recordId: String, cursor: String?): RecordFollowUpsPage {
+    requireActive(accountId)
+    val page = remote.followUps(token, recordId, cursor)
+    requireActive(accountId)
+    return page
   }
 
   suspend fun syncIndex(token: String, accountId: String, cursor: String?): RecordSyncIndex {
@@ -453,7 +463,8 @@ internal class RecordsRepository(
     val result = load(accountId, recordId, CachedRecordPart.DETAIL)?.let { serialized ->
       decode(serialized) {
         json.decodeFromString<CachedDetail>(it).also { cached ->
-          check(cached.schemaVersion == 1)
+          check(cached.schemaVersion == 1 &&
+            validRecordParent(recordId, cached.preview.parentRecordId, cached.preview.parentQuestionPreview))
         }.preview
       }
     }
@@ -550,7 +561,8 @@ internal class RecordsRepository(
   private suspend fun decodeListEntry(accountId: String, recordId: String, bytes: ByteArray): RecordListEntry {
     val cached = decode(bytes) {
       json.decodeFromString<CachedListEntry>(it).also { cached ->
-        check(cached.schemaVersion in 1..2 && cached.entry.recordId == recordId && cached.entry.attachmentCount in 0..3)
+        check(cached.schemaVersion in 1..2 && cached.entry.recordId == recordId && cached.entry.attachmentCount in 0..3 &&
+          validRecordParent(recordId, cached.entry.parentRecordId, cached.entry.parentQuestionPreview))
       }
     }
     if (cached.schemaVersion == 2) return cached.entry
@@ -565,7 +577,9 @@ internal class RecordsRepository(
     val entry = cached.entry
     return RecordListEntry(entry.recordId, entry.questionPreview, entry.requesterName, entry.requesterAvatar,
       entry.completedAt, entry.winnerName, entry.winnerSlot,
-      attachmentCount = count ?: 0, attachmentCountKnown = count != null)
+      attachmentCount = count ?: 0, attachmentCountKnown = count != null,
+      parentRecordId = entry.parentRecordId, parentQuestionPreview = entry.parentQuestionPreview,
+      hasFollowUps = entry.hasFollowUps)
   }
 
   override fun close() {

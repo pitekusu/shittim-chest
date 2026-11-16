@@ -7,6 +7,12 @@ on:
         description: "M1で有効化済みのDebateTable Stream ARN"
         required: true
         type: string
+      debate_follow_ups:
+        description: "Androidの更問受付と新しいDiscord通知へのボタン追加を切り替える"
+        required: true
+        type: choice
+        default: keep
+        options: [keep, enable, disable]
 
 permissions: {}
 
@@ -84,6 +90,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 tools/check_release_ci.py
+      - name: Require Core compatibility before enabling follow-ups
+        if: inputs.debate_follow_ups == 'enable'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run list --workflow release.yml --commit "${GITHUB_SHA}" --branch main \
+            --event workflow_dispatch --status success --json headSha,conclusion \
+            | jq --exit-status --arg sha "${GITHUB_SHA}" 'any(.[]; .headSha == $sha and .conclusion == "success")'
       - name: Install pinned Python and uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
@@ -316,13 +330,14 @@ jobs:
           HOSTED_ZONE_NAME: ${{ vars.RECORDS_HOSTED_ZONE_NAME }}
           PUBLIC_HOSTNAME: ${{ vars.RECORDS_PUBLIC_HOSTNAME }}
           SOURCE_STREAM_ARN: ${{ inputs.source_stream_arn }}
+          DEBATE_FOLLOW_UPS: ${{ inputs.debate_follow_ups }}
           STATEFUL_CHANGE_SET: records-release-${{ github.run_id }}-${{ github.run_attempt }}-stateful
         run: |
           create_plan() {
             local logical_name="$1" stack="$2" change_set="$3" region="$4"
             local execution_role="$5" template_bucket="$6" template_key="$7"
             local stack_status type arn status
-            local mobile_debate_enabled=false
+            local mobile_debate_enabled=false follow_ups_enabled=false
             local -a mobile_debate_parameters=()
             shift 7
             if aws cloudformation describe-stacks --region "${region}" --stack-name "${stack}" \
@@ -363,6 +378,20 @@ jobs:
               else
                 mobile_debate_parameters+=("ParameterKey=MobileDebateEnabled,ParameterValue=false")
               fi
+              case "${DEBATE_FOLLOW_UPS}" in
+                enable) follow_ups_enabled=true ;;
+                disable) follow_ups_enabled=false ;;
+                keep)
+                  if [ "${type}" = UPDATE ]; then
+                    follow_ups_enabled=$(jq --raw-output '
+                      ([.Stacks[0].Parameters[] | select(.ParameterKey == "DebateFollowUpsEnabled") | .ParameterValue] | first) // "false"
+                    ' "${RUNNER_TEMP}/${logical_name}-stack.json")
+                  fi
+                  ;;
+                *) exit 1 ;;
+              esac
+              [[ "${follow_ups_enabled}" =~ ^(false|true)$ ]]
+              mobile_debate_parameters+=("ParameterKey=DebateFollowUpsEnabled,ParameterValue=${follow_ups_enabled}")
               if [ "${type}" = UPDATE ] && jq --exit-status '
                 any(.Stacks[0].Parameters[]; .ParameterKey == "MobileDebateChannelId")
               ' "${RUNNER_TEMP}/${logical_name}-stack.json" >/dev/null; then
@@ -413,6 +442,7 @@ jobs:
                 --expected-parameter "RecordsBundleCodeSha256=${BUNDLE_CODE_SHA256}" \
                 --expected-parameter "LegacyRuntimeConfigVersion=${legacy_runtime_config_version}" \
                 --expected-parameter "MobileDebateEnabled=${mobile_debate_enabled}" \
+                --expected-parameter "DebateFollowUpsEnabled=${follow_ups_enabled}" \
                 --expected-parameter "RecordsPublicHostname=${PUBLIC_HOSTNAME}"
             elif [ "${logical_name}" = edge ]; then
               uv run --project services/records --frozen python \

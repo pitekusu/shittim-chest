@@ -21,6 +21,7 @@ from shittim_chest.application.models import (
     LeaseGrant,
     MetricEvent,
     PendingDiscordImage,
+    PreviousDebate,
     RetryDebateCommand,
 )
 from shittim_chest.application.scale_to_zero import (
@@ -699,7 +700,11 @@ class EvidenceService(Protocol):
     """Prepare one immutable evidence bundle shared by all participants."""
 
     async def prepare_evidence(
-        self, *, question: str, images: tuple[ImageInput, ...] = ()
+        self,
+        *,
+        question: str,
+        previous_debate: PreviousDebate | None = None,
+        images: tuple[ImageInput, ...] = (),
     ) -> EvidenceBundle: ...
 
 
@@ -721,6 +726,7 @@ class OpenAIService(Protocol):
         self,
         *,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         images: tuple[ImageInput, ...] = (),
         positions: tuple[InitialOpinion, ...],
         rotation: int,
@@ -731,6 +737,7 @@ class OpenAIService(Protocol):
         self,
         *,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         images: tuple[ImageInput, ...] = (),
         frame: PreferenceFrame,
         plan: CandidatePlan,
@@ -742,6 +749,7 @@ class OpenAIService(Protocol):
         self,
         *,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         images: tuple[ImageInput, ...] = (),
         frame: PreferenceFrame,
         plan: CandidatePlan,
@@ -754,6 +762,7 @@ class OpenAIService(Protocol):
         self,
         *,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         images: tuple[ImageInput, ...] = (),
         frame: PreferenceFrame,
         plan: CandidatePlan,
@@ -775,6 +784,7 @@ class OpenAIService(Protocol):
         *,
         participant: ParticipantSlot,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         images: tuple[ImageInput, ...] = (),
     ) -> PreferenceFrame: ...
 
@@ -783,6 +793,7 @@ class OpenAIService(Protocol):
         *,
         participant: ParticipantSlot,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         images: tuple[ImageInput, ...] = (),
         evidence: EvidenceBundle,
         preference_frame: PreferenceFrame,
@@ -793,6 +804,7 @@ class OpenAIService(Protocol):
         *,
         participant: ParticipantSlot,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         images: tuple[ImageInput, ...] = (),
         evidence: EvidenceBundle,
         affection_score: int,
@@ -805,6 +817,7 @@ class OpenAIService(Protocol):
         *,
         participant: ParticipantSlot,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         images: tuple[ImageInput, ...] = (),
         evidence: EvidenceBundle,
         initial_opinions: tuple[InitialOpinion, ...],
@@ -818,6 +831,7 @@ class OpenAIService(Protocol):
         *,
         voter: ParticipantSlot,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         images: tuple[ImageInput, ...] = (),
         evidence: EvidenceBundle,
         candidates: tuple[FinalProposal, ...],
@@ -831,6 +845,7 @@ class OpenAIService(Protocol):
         self,
         *,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         images: tuple[ImageInput, ...] = (),
         evidence: EvidenceBundle,
         proposals: tuple[FinalProposal, ...],

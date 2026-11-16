@@ -102,6 +102,7 @@ async def _controller() -> MobileDebateHttpController:
         runtime=runtime,
         channel_id=channel_id,
         enabled=enabled,
+        follow_ups_enabled=os.environ.get("RECORDS_DEBATE_FOLLOW_UPS_ENABLED") == "true",
         session_key=session_key,
         identity_key=identity_key,
         attachments=attachments,

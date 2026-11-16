@@ -16,6 +16,7 @@ from shittim_chest.adapters.discord.rate_limit_evidence import (
 )
 from shittim_chest.application.scale_to_zero import StatusHistoryCheckpoint
 from shittim_chest.application.status_publication import (
+    DiscordStatusButton,
     DiscordStatusMessage,
     StatusDeliveryError,
     StatusDeliveryErrorCode,
@@ -150,8 +151,9 @@ class DiscordRestStatusGateway:
         channel_id: str,
         content: str,
         nonce: str,
+        button: DiscordStatusButton | None = None,
     ) -> DiscordStatusMessage:
-        return await asyncio.to_thread(self._create_message, channel_id, content, nonce)
+        return await asyncio.to_thread(self._create_message, channel_id, content, nonce, button)
 
     async def edit_message(
         self,
@@ -159,8 +161,9 @@ class DiscordRestStatusGateway:
         channel_id: str,
         message_id: str,
         content: str,
+        button: DiscordStatusButton | None = None,
     ) -> DiscordStatusMessage:
-        return await asyncio.to_thread(self._edit_message, channel_id, message_id, content)
+        return await asyncio.to_thread(self._edit_message, channel_id, message_id, content, button)
 
     def _fetch_message(self, channel_id: str, message_id: str) -> DiscordStatusMessage:
         _require_snowflake(channel_id, label="channel ID")
@@ -509,6 +512,7 @@ class DiscordRestStatusGateway:
         channel_id: str,
         content: str,
         nonce: str,
+        button: DiscordStatusButton | None,
     ) -> DiscordStatusMessage:
         _require_snowflake(channel_id, label="channel ID")
         if not content or len(content) > 2_000:
@@ -524,6 +528,7 @@ class DiscordRestStatusGateway:
                 "nonce": nonce,
                 "enforce_nonce": True,
                 "allowed_mentions": {"parse": []},
+                **_button_payload(button),
             },
             write_may_succeed=True,
         )
@@ -537,6 +542,7 @@ class DiscordRestStatusGateway:
         channel_id: str,
         message_id: str,
         content: str,
+        button: DiscordStatusButton | None,
     ) -> DiscordStatusMessage:
         _require_snowflake(channel_id, label="channel ID")
         _require_snowflake(message_id, label="message ID")
@@ -553,6 +559,7 @@ class DiscordRestStatusGateway:
             json={
                 "content": content,
                 "allowed_mentions": {"parse": []},
+                **_button_payload(button),
             },
             message_missing=True,
             write_may_succeed=True,
@@ -839,9 +846,59 @@ def _parse_message(value: object) -> DiscordStatusMessage:
             author_id=author_id,
             content=content,
             nonce=None if nonce is None else str(nonce),
+            buttons=_parse_buttons(value.get("components")),
         )
     except ValueError:
         raise _permanent_error() from None
+
+
+def _button_payload(button: DiscordStatusButton | None) -> dict[str, object]:
+    if button is None:
+        return {}
+    return {
+        "components": [
+            {
+                "type": 1,
+                "components": [
+                    {
+                        "type": 2,
+                        "style": button.style,
+                        "label": button.label,
+                        "custom_id": button.custom_id,
+                        "disabled": button.disabled,
+                    }
+                ],
+            }
+        ]
+    }
+
+
+def _parse_buttons(value: object) -> tuple[DiscordStatusButton, ...]:
+    if not isinstance(value, list):
+        return ()
+    buttons: list[DiscordStatusButton] = []
+    for row in value:
+        if not isinstance(row, Mapping) or row.get("type") != 1:
+            continue
+        components = row.get("components")
+        if not isinstance(components, list):
+            continue
+        for component in components:
+            if not isinstance(component, Mapping) or component.get("type") != 2:
+                continue
+            custom_id = component.get("custom_id")
+            label = component.get("label")
+            style = component.get("style")
+            disabled = component.get("disabled", False)
+            if (
+                isinstance(custom_id, str)
+                and isinstance(label, str)
+                and isinstance(style, int)
+                and not isinstance(style, bool)
+                and isinstance(disabled, bool)
+            ):
+                buttons.append(DiscordStatusButton(custom_id, label, style, disabled))
+    return tuple(buttons)
 
 
 def _history_match(

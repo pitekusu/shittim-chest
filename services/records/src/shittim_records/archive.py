@@ -78,6 +78,8 @@ class ArchiveProjection:
     source_fingerprint: str
     items: tuple[DynamoItem, ...]
     schema_version: int = 1
+    follow_up_source: DynamoItem | None = None
+    follow_up_edge: DynamoItem | None = None
 
 
 def project_completed_debate(
@@ -237,6 +239,17 @@ def project_completed_debate(
         canonical_source["attachments"] = [
             serialize_debate_image(image) for image in snapshot.attachments
         ]
+    parent = snapshot.follow_up_parent
+    relation: DynamoItem = {}
+    if parent is not None:
+        previous = snapshot.previous_debate
+        if previous is None:
+            raise ProjectionRejected("follow-up context is missing")
+        relation = {
+            "parent_record_id": derive_record_key(identity_hmac_key, str(parent.debate_id)),
+            "parent_question_preview": question_preview(previous.question),
+        }
+        canonical_source.update(relation)
     fingerprint = hashlib.sha256(_canonical_json(canonical_source)).hexdigest()
     pk = f"RECORD#{record_id}"
     common: DynamoItem = {
@@ -263,6 +276,7 @@ def project_completed_debate(
         "gsi2sk": f"{completed_at}#{record_id}",
         "gsi3pk": f"REQUESTER#{requester_key}",
         "gsi3sk": f"{completed_at}#{record_id}",
+        **relation,
     }
     if snapshot.attachments:
         meta_item["attachments"] = [serialize_debate_image(image) for image in snapshot.attachments]
@@ -330,7 +344,29 @@ def project_completed_debate(
         source_fingerprint=fingerprint,
         items=tuple(items),
         schema_version=archive_schema_version,
+        follow_up_source={
+            "PK": f"RECORD-SOURCE#{record_id}",
+            "SK": "META",
+            "record_id": record_id,
+            "debate_id": debate_id,
+            "attempt_id": attempt_id,
+        },
+        follow_up_edge=(
+            {
+                "PK": f"RECORD-FOLLOWUPS#{relation['parent_record_id']}",
+                "SK": f"CHILD#{completed_at}#{record_id}",
+                "record_id": record_id,
+                "question_preview": question_preview(snapshot.question),
+                "completed_at": completed_at,
+            }
+            if parent is not None
+            else None
+        ),
     )
+
+
+def question_preview(question: str) -> str:
+    return " ".join(question.split())[:160]
 
 
 def _opaque_key(key: bytes, value: str) -> str:

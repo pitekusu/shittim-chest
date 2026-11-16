@@ -70,6 +70,7 @@ MOBILE_READ_ROUTES = frozenset(
     {
         "GET /api/v1/records",
         "GET /api/v1/records/{recordId}",
+        "GET /api/v1/records/{recordId}/follow-ups",
         "GET /api/v1/records/sync-index",
         "GET /api/v1/insights/rankings",
         "GET /api/v1/insights/affection-rankings",
@@ -242,6 +243,7 @@ class ReadHttpController:
             include_affection_reasons = False
             include_attachments = False
             include_attachment_count = False
+            include_follow_ups = False
             session = None
             raw_token = _read_bearer_token(
                 event.get("headers") or {}, has_cookies=bool(event.get("cookies"))
@@ -281,9 +283,10 @@ class ReadHttpController:
                 if not set(query).issubset({"cursor", "limit", "sort", "winner", "contract"}):
                     raise ReadFailure("REQUEST_INVALID", 400)
                 contract = _optional_single(query, "contract")
-                if contract not in {None, "record-attachments-v1"}:
+                if contract not in {None, "record-attachments-v1", "record-followups-v1"}:
                     raise ReadFailure("REQUEST_INVALID", 400)
-                include_attachment_count = contract == "record-attachments-v1"
+                include_follow_ups = contract == "record-followups-v1"
+                include_attachment_count = contract is not None
                 result = self._records.list_records(
                     query=ListQuery(
                         limit=_limit(_optional_single(query, "limit")),
@@ -292,13 +295,20 @@ class ReadHttpController:
                         cursor=_optional_single(query, "cursor"),
                     ),
                     now=now,
+                    **({"include_follow_ups": True} if include_follow_ups else {}),
                 )
             elif request.route_key == "GET /api/v1/records/sync-index":
                 query = _query(request.raw_query)
-                if not set(query).issubset({"cursor"}):
+                contract = _optional_single(query, "contract")
+                if not set(query).issubset({"cursor", "contract"}) or contract not in {
+                    None,
+                    "record-followups-v1",
+                }:
                     raise ReadFailure("REQUEST_INVALID", 400)
                 result = self._records.get_sync_index(
-                    cursor=_optional_single(query, "cursor"), now=now
+                    cursor=_optional_single(query, "cursor"),
+                    now=now,
+                    **({"include_follow_ups": True} if contract is not None else {}),
                 )
             elif request.route_key == "POST /api/v1/records/search":
                 if session is None:
@@ -316,10 +326,15 @@ class ReadHttpController:
                 if not set(query).issubset({"contract"}) or request.path_parameters:
                     raise ReadFailure("REQUEST_INVALID", 400)
                 contract = _optional_single(query, "contract")
-                if contract not in {None, "record-attachments-v1"}:
+                if contract not in {None, "record-attachments-v1", "record-followups-v1"}:
                     raise ReadFailure("REQUEST_INVALID", 400)
-                include_attachment_count = contract == "record-attachments-v1"
-                result = self._records.search_records(query=_search_body(event, request), now=now)
+                include_follow_ups = contract == "record-followups-v1"
+                include_attachment_count = contract is not None
+                result = self._records.search_records(
+                    query=_search_body(event, request),
+                    now=now,
+                    **({"include_follow_ups": True} if include_follow_ups else {}),
+                )
             elif request.route_key == "GET /api/v1/records/requesters":
                 query = _query(request.raw_query)
                 if not set(query).issubset({"cursor"}) or request.path_parameters:
@@ -327,18 +342,35 @@ class ReadHttpController:
                 result = self._records.list_requesters(
                     cursor=_optional_single(query, "cursor"), now=now
                 )
+            elif request.route_key == "GET /api/v1/records/{recordId}/follow-ups":
+                query = _query(request.raw_query)
+                if not set(query).issubset({"cursor"}):
+                    raise ReadFailure("REQUEST_INVALID", 400)
+                result = self._records.get_follow_ups(
+                    record_id=request.path_parameters.get("recordId", ""),
+                    cursor=_optional_single(query, "cursor"),
+                    now=now,
+                    mobile=raw_token is not None,
+                )
             elif request.route_key == "GET /api/v1/records/{recordId}":
                 query = _query(request.raw_query)
                 if not set(query).issubset({"contract"}):
                     raise ReadFailure("REQUEST_INVALID", 400)
                 contract = _optional_single(query, "contract")
-                if contract not in {None, "affection-reasons-v1", "record-images-v1"}:
+                if contract not in {
+                    None,
+                    "affection-reasons-v1",
+                    "record-images-v1",
+                    "record-followups-v1",
+                }:
                     raise ReadFailure("REQUEST_INVALID", 400)
-                include_affection_reasons = contract in {"affection-reasons-v1", "record-images-v1"}
-                include_attachments = contract == "record-images-v1"
+                include_follow_ups = contract == "record-followups-v1"
+                include_affection_reasons = contract is not None
+                include_attachments = contract in {"record-images-v1", "record-followups-v1"}
                 result = self._records.get_record(
                     record_id=request.path_parameters.get("recordId", ""),
                     now=now,
+                    **({"include_follow_ups": True} if include_follow_ups else {}),
                 )
             elif request.route_key == "GET /api/v1/insights/rankings":
                 if request.raw_query:
@@ -390,6 +422,15 @@ class ReadHttpController:
                 # Existing Web clients reject response fields they did not negotiate.
                 for item in payload["items"]:
                     item.pop("attachmentCount", None)
+            if request.route_key in {
+                "GET /api/v1/records",
+                "POST /api/v1/records/search",
+                "GET /api/v1/records/{recordId}",
+            }:
+                for record_payload in payload.get("items", (payload,)):
+                    for field in ("parentRecordId", "parentQuestionPreview", "hasFollowUps"):
+                        if not include_follow_ups or record_payload.get(field) is None:
+                            record_payload.pop(field, None)
             if request.route_key == "GET /api/v1/records/{recordId}" and not include_attachments:
                 payload.pop("attachments", None)
             if (

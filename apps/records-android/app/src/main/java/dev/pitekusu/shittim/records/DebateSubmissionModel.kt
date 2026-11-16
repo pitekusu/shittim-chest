@@ -1,6 +1,7 @@
 package dev.pitekusu.shittim.records
 
 import android.net.Uri
+import dev.pitekusu.shittim.records.auth.mobileOpaqueValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import java.util.UUID
@@ -12,6 +13,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+
+internal enum class FollowUpDraft { Ready, Conflict, Blocked }
 
 internal class DebateSubmissionState(val workspace: DebateWorkspace? = null,
   val busy: Boolean = false, val saving: Boolean = false, val failure: DebateFailure? = null,
@@ -46,6 +49,7 @@ internal class DebateSubmissionModel(
   private val sendWithImages: (suspend (String, String, List<DraftAttachment>) -> DebateRequest?)? = null,
   private val control: (suspend (String, String, String, String) -> DebateControlResponse)? = null,
   private val findControl: (suspend (String, String) -> DebateControlResponse?)? = null,
+  private val sendFollowUp: (suspend (String, String, String) -> DebateRequest?)? = null,
 ) : ViewModel() {
   private val mutable = MutableStateFlow(DebateSubmissionState())
   val state = mutable.asStateFlow()
@@ -90,7 +94,8 @@ internal class DebateSubmissionModel(
     val current = mutable.value
     val value = current.workspace ?: return
     if (!authorized() || current.busy || value.requestId != null || text.codePointCount(0, text.length) > 1000) return
-    val edited = DebateWorkspace(draft = text, attachments = value.attachments, pendingControl = value.pendingControl)
+    val edited = DebateWorkspace(draft = text, attachments = value.attachments,
+      pendingControl = value.pendingControl, parentRecordId = value.parentRecordId)
     mutable.value = DebateSubmissionState(edited, saving = true)
     autosave?.cancel()
     autosave = viewModelScope.launch {
@@ -103,7 +108,7 @@ internal class DebateSubmissionModel(
     val current = mutable.value
     val workspace = current.workspace ?: return
     val importer = importImage ?: return
-    if (!authorized() || current.busy || workspace.requestId != null || uris.isEmpty()) return
+    if (!authorized() || current.busy || workspace.requestId != null || workspace.parentRecordId != null || uris.isEmpty()) return
     if (workspace.attachments.size + uris.size > MAX_ATTACHMENT_COUNT) {
       mutable.value = DebateSubmissionState(workspace, failure = DebateFailure.ATTACHMENT_INVALID)
       return
@@ -117,7 +122,7 @@ internal class DebateSubmissionModel(
           val added = uris.map { importer(it) }
           check(authorized())
           DebateWorkspace(draft = workspace.draft, attachments = workspace.attachments + added,
-            pendingControl = workspace.pendingControl).also {
+            pendingControl = workspace.pendingControl, parentRecordId = workspace.parentRecordId).also {
             save(it); committed = it
           }
         }
@@ -140,7 +145,7 @@ internal class DebateSubmissionModel(
     if (!authorized() || current.busy || workspace.requestId != null) return
     val edited = DebateWorkspace(draft = workspace.draft,
       attachments = workspace.attachments.filterNot { it.attachmentId == attachmentId },
-      pendingControl = workspace.pendingControl)
+      pendingControl = workspace.pendingControl, parentRecordId = workspace.parentRecordId)
     autosave?.cancel()
     mutable.value = DebateSubmissionState(edited, saving = true)
     autosave = viewModelScope.launch { if (persistEdit(edited)) loadPreviews(edited) }
@@ -167,18 +172,24 @@ internal class DebateSubmissionModel(
   }
 
   /** Expired uploads can be discarded only after a fresh read proves no debate was accepted. */
-  fun discardMissing() {
+  fun discardMissing(returnAsNewDebate: Boolean = false, onDiscarded: () -> Unit = {}) {
     val current = mutable.value
     val workspace = current.workspace ?: return
     val id = workspace.requestId ?: return
-    if (!authorized() || current.busy || !current.confirmedMissing || workspace.receipt != null) return
+    if (!authorized() || current.busy || !current.confirmedMissing || workspace.receipt != null ||
+      (returnAsNewDebate && (workspace.parentRecordId == null || current.failure != DebateFailure.FOLLOW_UP_PARENT_UNAVAILABLE))) return
     mutable.value = DebateSubmissionState(workspace, busy = true)
     operation = viewModelScope.launch {
       try {
         if (find(id) != null) { if (authorized()) mutable.value = DebateSubmissionState(workspace); return@launch }
-        val draft = DebateWorkspace(draft = workspace.draft, pendingControl = workspace.pendingControl)
+        val draft = DebateWorkspace(draft = workspace.draft, pendingControl = workspace.pendingControl,
+          parentRecordId = workspace.parentRecordId.takeUnless { returnAsNewDebate })
         writes.withLock { check(authorized()); save(draft); committed = draft }
-        if (authorized()) { mutable.value = DebateSubmissionState(draft); loadPreviews(draft) }
+        if (authorized()) {
+          mutable.value = DebateSubmissionState(draft)
+          loadPreviews(draft)
+          if (authorized()) onDiscarded()
+        }
       } catch (error: CancellationException) { throw error }
       catch (_: Exception) { if (authorized()) mutable.value = DebateSubmissionState(workspace, failure = DebateFailure.UNAVAILABLE) }
     }
@@ -229,7 +240,8 @@ internal class DebateSubmissionModel(
     val value = current.workspace ?: return
     if (!authorized() || current.busy || !validDebateQuestion(value.draft) || value.requestId != null) return
     transmit(DebateWorkspace(draft = value.draft, requestId = UUID.randomUUID().toString(),
-      frozenQuestion = value.draft, attachments = value.attachments, pendingControl = value.pendingControl))
+      frozenQuestion = value.draft, attachments = value.attachments, pendingControl = value.pendingControl,
+      parentRecordId = value.parentRecordId))
   }
 
   private fun transmit(frozen: DebateWorkspace) {
@@ -245,12 +257,19 @@ internal class DebateSubmissionModel(
         }
         if (!authorized()) return@launch
         mutable.value = DebateSubmissionState(frozen, busy = true)
-        val receipt = (if (sendWithImages != null) sendWithImages.invoke(requireNotNull(frozen.requestId), requireNotNull(frozen.frozenQuestion), frozen.attachments)
-          else send(requireNotNull(frozen.requestId), requireNotNull(frozen.frozenQuestion))) ?: return@launch
-        check(receipt.requestId == frozen.requestId && receipt.question == frozen.frozenQuestion && receipt.attachmentIds == frozen.attachments.map { it.attachmentId })
+        val id = requireNotNull(frozen.requestId)
+        val question = requireNotNull(frozen.frozenQuestion)
+        val parent = frozen.parentRecordId
+        val receipt = when {
+          parent != null -> (sendFollowUp ?: throw DebateRequestException(DebateFailure.UNAVAILABLE))
+            .invoke(id, question, parent)
+          sendWithImages != null -> sendWithImages.invoke(id, question, frozen.attachments)
+          else -> send(id, question)
+        } ?: return@launch
+        if (!frozen.matches(receipt)) throw DebateRequestException(DebateFailure.INVALID_RESPONSE)
         val accepted = DebateWorkspace(draft = frozen.draft, requestId = frozen.requestId,
           frozenQuestion = frozen.frozenQuestion, receipt = receipt, attachments = frozen.attachments,
-          pendingControl = frozen.pendingControl)
+          pendingControl = frozen.pendingControl, parentRecordId = frozen.parentRecordId)
         writes.withLock { save(accepted) }
         committed = accepted
         if (authorized()) mutable.value = DebateSubmissionState(accepted)
@@ -291,10 +310,10 @@ internal class DebateSubmissionModel(
           }
         }
         else {
-          check(receipt.requestId == id && receipt.question == value.frozenQuestion && receipt.attachmentIds == value.attachments.map { it.attachmentId })
+          if (!value.matches(receipt)) throw DebateRequestException(DebateFailure.INVALID_RESPONSE)
           val accepted = DebateWorkspace(draft = value.draft, requestId = id,
             frozenQuestion = value.frozenQuestion, receipt = receipt, attachments = value.attachments,
-            pendingControl = value.pendingControl)
+            pendingControl = value.pendingControl, parentRecordId = value.parentRecordId)
           writes.withLock { save(accepted) }
           committed = accepted
           if (authorized()) mutable.value = DebateSubmissionState(accepted)
@@ -316,6 +335,26 @@ internal class DebateSubmissionModel(
     val value = current.workspace ?: return
     if (authorized() && !current.busy && current.confirmedMissing && value.requestId != null && value.receipt == null)
       lookup(resendIfMissing = true)
+  }
+
+  fun prepareFollowUp(parentRecordId: String, replaceDraft: Boolean = false): FollowUpDraft {
+    val current = mutable.value
+    val value = current.workspace ?: return FollowUpDraft.Blocked
+    if (!authorized() || current.busy || sendFollowUp == null || !mobileOpaqueValue.matches(parentRecordId))
+      return FollowUpDraft.Blocked
+    if (value.requestId != null &&
+      (value.receipt?.terminal != true || value.pendingControl?.requestId == value.requestId))
+      return FollowUpDraft.Blocked
+    if (value.requestId == null) {
+      if (value.parentRecordId == parentRecordId) return FollowUpDraft.Ready
+      if (!replaceDraft && (value.draft.isNotEmpty() || value.attachments.isNotEmpty()))
+        return FollowUpDraft.Conflict
+    }
+    autosave?.cancel()
+    val draft = DebateWorkspace(pendingControl = value.pendingControl, parentRecordId = parentRecordId)
+    mutable.value = DebateSubmissionState(draft, saving = true)
+    autosave = viewModelScope.launch { if (persistEdit(draft)) loadPreviews(draft) }
+    return FollowUpDraft.Ready
   }
 
   fun newDraft(): Boolean {
@@ -442,14 +481,13 @@ internal class DebateSubmissionModel(
     if (!authorized()) return@withLock
     val current = mutable.value.workspace ?: throw DebateRequestException(DebateFailure.STORAGE)
     val ownReceipt = request.takeIf { it.requestId == current.requestId }
-    if (ownReceipt != null && (ownReceipt.question != current.frozenQuestion ||
-        ownReceipt.attachmentIds != current.attachments.map { it.attachmentId }))
+    if (ownReceipt != null && !current.matches(ownReceipt))
       throw DebateRequestException(DebateFailure.INVALID_RESPONSE)
     if (current.pendingControl?.operationId == pending?.operationId &&
       (ownReceipt == null || sameReceipt(current.receipt, ownReceipt))) return@withLock
     val next = DebateWorkspace(draft = current.draft, requestId = current.requestId,
       frozenQuestion = current.frozenQuestion, receipt = ownReceipt ?: current.receipt,
-      attachments = current.attachments, pendingControl = pending)
+      attachments = current.attachments, pendingControl = pending, parentRecordId = current.parentRecordId)
     save(next)
     if (authorized() && mutable.value.workspace === current) {
       committed = next
@@ -479,7 +517,7 @@ internal class DebateSubmissionModel(
 
   private fun sameReceipt(old: DebateRequest?, receipt: DebateRequest): Boolean = old != null &&
     old.updatedAt == receipt.updatedAt && old.status == receipt.status && old.phase == receipt.phase &&
-    old.recordId == receipt.recordId && old.errorCode == receipt.errorCode &&
+    old.recordId == receipt.recordId && old.parentRecordId == receipt.parentRecordId && old.errorCode == receipt.errorCode &&
     old.attemptToken == receipt.attemptToken && old.canCancel == receipt.canCancel && old.canRetry == receipt.canRetry
 
   private suspend fun refreshControlStatus(id: String, pending: DebatePendingControl) {
@@ -527,14 +565,14 @@ internal class DebateSubmissionModel(
         if (receipt == null) mutable.value = DebateSubmissionState(workspace,
           failure = mutable.value.failure, confirmedMissing = true)
         else {
-          if (receipt.requestId != id || receipt.question != workspace.frozenQuestion || receipt.attachmentIds != workspace.attachments.map { it.attachmentId })
+          if (!workspace.matches(receipt))
             throw DebateRequestException(DebateFailure.INVALID_RESPONSE)
           // Unchanged polling must not repeatedly wrap and encrypt the same small snapshot.
           val old = workspace.receipt
           if (!sameReceipt(old, receipt)) {
             val accepted = DebateWorkspace(draft = workspace.draft, requestId = id,
               frozenQuestion = workspace.frozenQuestion, receipt = receipt, attachments = workspace.attachments,
-              pendingControl = workspace.pendingControl)
+              pendingControl = workspace.pendingControl, parentRecordId = workspace.parentRecordId)
             writes.withLock {
               if (!authorized() || mutable.value.workspace !== workspace || mutableStatus.value.requestId != id)
                 return@withLock

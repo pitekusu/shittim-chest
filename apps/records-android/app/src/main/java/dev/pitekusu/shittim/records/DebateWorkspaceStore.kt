@@ -3,6 +3,7 @@ package dev.pitekusu.shittim.records
 import android.content.Context
 import android.net.Uri
 import android.graphics.BitmapFactory
+import dev.pitekusu.shittim.records.auth.mobileOpaqueValue
 import java.util.UUID
 import dev.pitekusu.shittim.records.storage.EncryptedRecordImageStore
 import kotlinx.coroutines.Dispatchers
@@ -24,17 +25,23 @@ import kotlinx.serialization.json.Json
 internal class DebateWorkspace(val schemaVersion: Int = 1, val draft: String = "",
   val requestId: String? = null, val frozenQuestion: String? = null,
   val receipt: DebateRequest? = null, val attachments: List<DraftAttachment> = emptyList(),
-  val pendingControl: DebatePendingControl? = null) {
+  val pendingControl: DebatePendingControl? = null, val parentRecordId: String? = null) {
   fun validate() {
     check(schemaVersion == 1 && draft.codePointCount(0, draft.length) <= 1000)
     check((requestId == null) == (frozenQuestion == null))
     check(requestId == null || validDebateRequestId(requestId))
+    check(parentRecordId == null || (mobileOpaqueValue.matches(parentRecordId) && attachments.isEmpty()))
     check(frozenQuestion == null || validDebateQuestion(frozenQuestion))
     check(attachments.size <= MAX_ATTACHMENT_COUNT && attachments.map { it.attachmentId }.distinct().size == attachments.size)
     attachments.forEach(DraftAttachment::validate)
-    receipt?.let { it.validate(); check(it.requestId == requestId && it.question == frozenQuestion && it.attachmentIds == attachments.map { image -> image.attachmentId }) }
+    receipt?.let { it.validate(); check(matches(it)) }
     pendingControl?.validate()
   }
+  fun matches(receipt: DebateRequest): Boolean =
+    receipt.requestId == requestId && receipt.question == frozenQuestion &&
+      receipt.attachmentIds == attachments.map { it.attachmentId } &&
+      receipt.parentRecordId == parentRecordId
+
   override fun toString(): String = "DebateWorkspace(<redacted>)"
 }
 

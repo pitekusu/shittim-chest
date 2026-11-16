@@ -12,9 +12,10 @@ from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.ingress import DynamoDbIngressRepository
 from shittim_chest.adapters.dynamodb.serializer import SUPPORTED_SCHEMA_VERSIONS
 from shittim_chest.adapters.tls import create_public_tls_context
+from shittim_chest.application.models import FollowUpParent
 from shittim_chest.application.ports import MobileIngressSessionInvalid
 from shittim_chest.application.scale_to_zero import EnqueuedIngress, IngressRequest
-from shittim_chest.domain import AttemptId, DebatePhase
+from shittim_chest.domain import AttemptId, DebateId, DebatePhase
 
 from shittim_records.archive import ARCHIVE_SCHEMA_VERSION, derive_record_key
 from shittim_records.auth import AuthFailure
@@ -41,7 +42,7 @@ class DiscordDebatePermissionGuard:
         self._channel = int(channel_id) if channel_id else 0
         self._application = int(application_id)
 
-    async def check(self, *, requester_id: str) -> None:
+    async def check(self, *, requester_id: str, channel_id: str | None = None) -> None:
         try:
             # Each invocation owns its loop/session. Client.login is REST-only;
             # Client.start/connect would unnecessarily create a second Bot runtime.
@@ -58,7 +59,9 @@ class DiscordDebatePermissionGuard:
                     member = await guild.fetch_member(int(requester_id))
                 except discord.NotFound:
                     raise DebateRequestFailure("GUILD_MEMBERSHIP_REQUIRED", 403) from None
-                channel = await guild.fetch_channel(self._channel)
+                channel = await guild.fetch_channel(
+                    int(channel_id) if channel_id is not None else self._channel
+                )
                 if not isinstance(channel, discord.TextChannel) or channel.guild.id != guild.id:
                     raise DebateRequestFailure("CHANNEL_PERMISSION_REQUIRED", 403)
                 permissions = channel.permissions_for(member)
@@ -228,6 +231,48 @@ class DynamoMobileDebateRepository:
             meta.get("thread_id"),
             meta.get("control_panel_message_id"),
         )
+
+    def follow_up_parent(self, record_id: str) -> tuple[FollowUpParent, str, str] | None:
+        raw = self._client.get_item(
+            TableName=self._archive,
+            Key=marshal_item({"PK": f"RECORD-SOURCE#{record_id}", "SK": "META"}),
+            ConsistentRead=True,
+            ProjectionExpression="PK, SK, record_id, debate_id, attempt_id",
+        ).get("Item")
+        if raw is None:
+            return None
+        pointer = unmarshal_item(raw)
+        try:
+            debate_id, attempt_id = pointer["debate_id"], pointer["attempt_id"]
+            if not isinstance(debate_id, str) or not isinstance(attempt_id, str):
+                raise ValueError
+            parent = FollowUpParent(DebateId.parse(debate_id), AttemptId.parse(attempt_id))
+            if (
+                pointer["record_id"] != record_id
+                or derive_record_key(self._identity_key, str(parent.debate_id)) != record_id
+            ):
+                raise ValueError
+            archive = self._get(self._archive, f"RECORD#{record_id}")
+            if archive is None:
+                return None
+            if (
+                archive.get("record_type") != "archive_meta"
+                or archive.get("record_id") != record_id
+            ):
+                raise ValueError
+            meta = self._get(self._source, f"DEBATE#{parent.debate_id}")
+            if meta is None or meta["current_phase"] != DebatePhase.COMPLETED:
+                return None
+            if str(parent.attempt_id) != meta["current_attempt_id"]:
+                return None
+            if meta["record_type"] != "debate_meta" or meta["debate_id"] != str(parent.debate_id):
+                raise ValueError
+            guild, channel = meta["guild_id"], meta["channel_id"]
+            if not isinstance(guild, str) or not isinstance(channel, str):
+                raise ValueError
+        except KeyError, TypeError, ValueError:
+            raise DebateRequestFailure("DEBATE_REQUESTS_UNAVAILABLE", 503) from None
+        return parent, guild, channel
 
     def _get(self, table: str, pk: str) -> dict[str, Any] | None:
         # META-only projection is mirrored by IAM's allowed attribute boundary.

@@ -11,6 +11,7 @@ import pytest
 from shittim_chest.adapters.discord.status import DiscordRestStatusGateway
 from shittim_chest.application.scale_to_zero import StatusHistoryCheckpoint
 from shittim_chest.application.status_publication import (
+    DiscordStatusButton,
     StatusDeliveryError,
     StatusDeliveryErrorCode,
     StatusHistoryProgress,
@@ -100,6 +101,41 @@ async def test_create_uses_bot_auth_nonce_dedup_and_no_mentions() -> None:
         "enforce_nonce": True,
         "allowed_mentions": {"parse": []},
     }
+
+
+@pytest.mark.asyncio
+async def test_create_and_edit_round_trip_a_record_link_button() -> None:
+    button = DiscordStatusButton("button-id", "更問する")
+    requests: list[httpx.Request] = []
+    components = [
+        {
+            "type": 1,
+            "components": [
+                {
+                    "type": 2,
+                    "style": 1,
+                    "label": "更問する",
+                    "custom_id": "button-id",
+                    "disabled": False,
+                }
+            ],
+        }
+    ]
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert json.loads(request.content)["components"] == components
+        return httpx.Response(200, json={**message(), "components": components}, request=request)
+
+    gateway = gateway_with(respond)
+    created = await gateway.create_message(
+        channel_id=CHANNEL_ID, content=CONTENT, nonce=NONCE, button=button
+    )
+    edited = await gateway.edit_message(
+        channel_id=CHANNEL_ID, message_id=created.message_id, content=CONTENT, button=button
+    )
+    assert created.buttons == edited.buttons == (button,)
+    assert [request.method for request in requests] == ["POST", "PATCH"]
 
 
 @pytest.mark.asyncio

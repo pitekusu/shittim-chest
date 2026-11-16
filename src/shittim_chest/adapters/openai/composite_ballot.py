@@ -10,6 +10,7 @@ from pydantic import Field
 
 from shittim_chest.adapters.openai.prompts import private_participant_instructions, vote_input
 from shittim_chest.adapters.openai.schemas import StrictOutput
+from shittim_chest.application.models import PreviousDebate
 from shittim_chest.domain import (
     PARTICIPANTS,
     EvidenceBundle,
@@ -86,6 +87,7 @@ async def score_composite_ballot(
     *,
     voter: ParticipantSlot,
     question: str,
+    previous_debate: PreviousDebate | None = None,
     evidence: EvidenceBundle,
     candidates: tuple[FinalProposal, ...],
     initial_opinions: tuple[InitialOpinion, ...] = (),
@@ -108,7 +110,9 @@ async def score_composite_ballot(
         candidates[1].participant: "second",
         voter: "voter",
     }
-    payload = json.loads(vote_input(question, evidence, candidates))
+    payload = json.loads(
+        vote_input(question, evidence, candidates, previous_debate=previous_debate)
+    )
     payload["candidates"] = {
         labels[item.participant]: {"title": item.title, "proposal": item.proposal}
         for item in candidates

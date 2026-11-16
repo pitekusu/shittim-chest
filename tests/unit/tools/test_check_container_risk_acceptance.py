@@ -224,6 +224,41 @@ def test_config_digest_preflight_rejects_expired_policy_before_push(tmp_path: Pa
         )
 
 
+@pytest.mark.parametrize(
+    ("digest", "day", "error"),
+    (
+        (ALTERNATE_DIGEST, dt.date(2026, 11, 19), None),
+        (OTHER_DIGEST, dt.date(2026, 11, 19), "does not match"),
+        (ALTERNATE_DIGEST, dt.date(2026, 11, 20), "expired"),
+    ),
+)
+def test_production_risk_binding_rejects_an_unapproved_digest_and_expires_at_utc_midnight(
+    tmp_path: Path, digest: str, day: dt.date, error: str | None
+) -> None:
+    policy = _write_policy(
+        tmp_path / "policy.json",
+        [
+            _acceptance(
+                image_config_digests={"production": [DIGEST, SECOND_DIGEST, ALTERNATE_DIGEST]},
+                approved_on="2026-11-16",
+                expires_on="2026-11-19",
+            )
+        ],
+    )
+    if error is None:
+        assert (
+            validate_config_digest_bindings(
+                policy, image_kind="production", image_config_digest=digest, today=day
+            )
+            == 1
+        )
+    else:
+        with pytest.raises(ValueError, match=error):
+            validate_config_digest_bindings(
+                policy, image_kind="production", image_config_digest=digest, today=day
+            )
+
+
 def test_full_validation_with_empty_acceptances_has_no_static_baseline(tmp_path: Path) -> None:
     policy = _write_policy(tmp_path / "policy.json", [])
 

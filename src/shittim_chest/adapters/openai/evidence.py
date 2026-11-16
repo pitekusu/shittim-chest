@@ -54,8 +54,9 @@ from shittim_chest.adapters.openai.observability import (
     OpenAIUsageRecord,
     OpenAIUsageRecorder,
 )
-from shittim_chest.adapters.openai.prompts import evidence_instructions
+from shittim_chest.adapters.openai.prompts import debate_prompt_input, evidence_instructions
 from shittim_chest.adapters.openai.schemas import EvidenceDigestOutputV2
+from shittim_chest.application.models import PreviousDebate
 from shittim_chest.domain import (
     EvidenceBundle,
     EvidenceItem,
@@ -180,10 +181,14 @@ class OpenAIWebEvidenceService:
     moderator_prompt: str | None = field(default=None, repr=False)
 
     async def prepare_evidence(
-        self, *, question: str, images: tuple[ImageInput, ...] = ()
+        self,
+        *,
+        question: str,
+        previous_debate: PreviousDebate | None = None,
+        images: tuple[ImageInput, ...] = (),
     ) -> EvidenceBundle:
         try:
-            return await self._search(question, images)
+            return await self._search(question, images, previous_debate=previous_debate)
         except asyncio.CancelledError:
             raise
         except OpenAIAdapterError:
@@ -199,6 +204,8 @@ class OpenAIWebEvidenceService:
         self,
         question: str,
         images: tuple[ImageInput, ...] = (),
+        *,
+        previous_debate: PreviousDebate | None = None,
     ) -> EvidenceBundle:
         started = monotonic()
         operation = "evidence_search"
@@ -214,7 +221,7 @@ class OpenAIWebEvidenceService:
                     + (IMAGE_INPUT_RULES if images else ""),
                     input=responses_image_input(
                         json.dumps(
-                            {"question": question},
+                            debate_prompt_input(question, previous_debate),
                             ensure_ascii=False,
                             separators=(",", ":"),
                             sort_keys=True,

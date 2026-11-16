@@ -43,6 +43,7 @@ from shittim_chest.application.ingress_drain import (
 )
 from shittim_chest.application.runtime_instance import RuntimeInstanceState
 from shittim_chest.application.scale_to_zero import StatusHistoryCheckpoint
+from shittim_chest.application.status_publication import DiscordStatusButton
 from shittim_chest.domain import AttemptId, DebateId
 
 NOW = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
@@ -132,6 +133,7 @@ class RecordingStatusGateway:
         channel_id: str,
         content: str,
         nonce: str,
+        button: DiscordStatusButton | None = None,
     ) -> DiscordStatusMessage:
         message = DiscordStatusMessage(
             message_id="501",
@@ -139,6 +141,7 @@ class RecordingStatusGateway:
             author_id=APPLICATION_ID,
             content=content,
             nonce=nonce,
+            buttons=() if button is None else (button,),
         )
         self.messages[message.message_id] = message
         return message
@@ -149,6 +152,7 @@ class RecordingStatusGateway:
         channel_id: str,
         message_id: str,
         content: str,
+        button: DiscordStatusButton | None = None,
     ) -> DiscordStatusMessage:
         previous = await self.fetch_message(channel_id=channel_id, message_id=message_id)
         updated = DiscordStatusMessage(
@@ -157,6 +161,7 @@ class RecordingStatusGateway:
             author_id=previous.author_id,
             content=content,
             nonce=previous.nonce,
+            buttons=previous.buttons if button is None else (button,),
         )
         self.messages[message_id] = updated
         return updated

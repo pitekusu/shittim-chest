@@ -12,6 +12,7 @@ from shittim_chest.application.discord import (
     DiscordRuntimeConfig,
     PanelAction,
 )
+from shittim_chest.application.models import FollowUpParent
 from shittim_chest.application.ports import RepositoryIdentityConflict, RepositoryQueueFull
 from shittim_chest.application.scale_to_zero import (
     EnqueuedIngress,
@@ -21,7 +22,7 @@ from shittim_chest.application.scale_to_zero import (
 )
 from shittim_chest.domain import AttemptId, DebateId, DebatePhase
 
-from shittim_records.archive import derive_requester_key
+from shittim_records.archive import derive_record_key, derive_requester_key
 from shittim_records.auth import AuthFailure, _digest
 from shittim_records.contracts import DebateControlRequest, DebateStartRequest
 from shittim_records.mobile_auth import MOBILE_SESSION_TTL_SECONDS, MobileSessionRecord
@@ -101,6 +102,9 @@ class Requests:
     def progress(self, request):
         return self.phase
 
+    def follow_up_parent(self, record_id):
+        return None
+
 
 class Permissions:
     def __init__(self):
@@ -108,7 +112,7 @@ class Permissions:
         self.fail = None
         self.before_return = lambda: None
 
-    async def check(self, *, requester_id):
+    async def check(self, *, requester_id, channel_id=None):
         self.checked.append(requester_id)
         self.before_return()
         if self.fail:
@@ -641,3 +645,44 @@ def test_concurrent_control_submission_replays_only_identical_binding(
         with pytest.raises(DebateRequestFailure, match="REQUEST_ID_CONFLICT"):
             submit_control(service, receipt)
     assert len(repository.saved) == 2
+
+
+def test_follow_up_uses_verified_channel_and_locks_identity(setup, monkeypatch):
+    service, _sessions, repository, _permissions = setup
+    other_channel = str(10**17 + 7)
+    parent = FollowUpParent(DebateId.new(), AttemptId.new())
+    parent_id = derive_record_key(KEY, str(parent.debate_id))
+    service._runtime = replace(
+        service._runtime, allowed_channel_ids=frozenset({CHANNEL, other_channel})
+    )
+    call = []
+
+    async def checked(*, requester_id, channel_id):
+        call.append((requester_id, channel_id))
+
+    monkeypatch.setattr(service._permissions, "check", checked)
+    monkeypatch.setattr(
+        repository,
+        "follow_up_parent",
+        lambda _record: (parent, GUILD, other_channel),
+        raising=False,
+    )
+    payload = DebateStartRequest(
+        request_id=REQUEST_ID, question="Which kind?", parent_record_id=parent_id
+    )
+    with pytest.raises(DebateRequestFailure, match="DEBATE_START_DISABLED"):
+        asyncio.run(service.start(token=TOKEN, payload=payload))
+    assert not repository.saved and not call
+    service._follow_ups_enabled = True
+    first, created = asyncio.run(service.start(token=TOKEN, payload=payload))
+    assert created and first.parent_record_id == parent_id
+    request = next(iter(repository.requests.values()))
+    assert request.channel_id == other_channel and request.follow_up_parent == parent
+    assert asyncio.run(service.start(token=TOKEN, payload=payload)) == (first, False)
+    with pytest.raises(DebateRequestFailure, match="REQUEST_ID_CONFLICT"):
+        asyncio.run(
+            service.start(
+                token=TOKEN, payload=payload.model_copy(update={"parent_record_id": "p" * 43})
+            )
+        )
+    assert call == [(USER, other_channel)] and len(repository.saved) == 1

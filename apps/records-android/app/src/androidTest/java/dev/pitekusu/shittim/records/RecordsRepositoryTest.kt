@@ -471,7 +471,7 @@ class RecordsRepositoryTest {
         calls += if (id == "sync-index") "index:${cursor ?: "head"}" else id
         if (id == ids[1] && failMiddle) throw IOException("synthetic_failure")
         val body = if (id != "sync-index") {
-          assertEquals("record-images-v1", request.url.parameters["contract"])
+          assertEquals("record-followups-v1", request.url.parameters["contract"])
           detailWithReasons(id)
         } else when (cursor) {
           null -> index(listOf(ids[0]), "middle.signature")
@@ -486,7 +486,7 @@ class RecordsRepositoryTest {
         catch (error: RecordReadException) { assertEquals(RecordReadFailure.UNAVAILABLE, error.failure) }
         assertEquals(listOf("index:head", ids[0], "index:middle.signature", ids[1]), calls)
         val checkpoint = records.syncCheckpoint(accountId)!!
-        assertEquals(2, checkpoint.readContractVersion)
+        assertEquals(3, checkpoint.readContractVersion)
         assertEquals(setOf(ids[0]), checkpoint.committedRevisions.keys)
         if (!wasComplete) {
           assertTrue(ids[1] in checkpoint.pendingAvatars)
@@ -501,7 +501,7 @@ class RecordsRepositoryTest {
         records.synchronize(token, accountId)
         assertEquals(listOf("index:head", ids[1], "index:tail.signature", ids[2]), calls)
         assertTrue(records.syncCheckpoint(accountId)!!.complete)
-        assertEquals(2, records.syncCheckpoint(accountId)!!.readContractVersion)
+        assertEquals(3, records.syncCheckpoint(accountId)!!.readContractVersion)
         for (id in ids) assertEquals("架空の率直な感想",
           records.cachedRecord(accountId, id)!!.affection!!.changes.first().reason)
         calls.clear()
@@ -577,13 +577,52 @@ class RecordsRepositoryTest {
       // Detail already exists, so the restart will enumerate it but must not request it again.
       repository(MockEngine { respond(detail(), headers = headersOf(HttpHeaders.ContentType, "application/json")) })
         .use { it.record(token, accountId, recordId) }
-      records.saveSyncCheckpoint(accountId, RecordSyncCheckpoint(readContractVersion = 2,
+      records.saveSyncCheckpoint(accountId, RecordSyncCheckpoint(readContractVersion = 3,
         cursor = "old.signature", removalCandidates = emptySet(), indexBased = true,
         committedRevisions = mapOf(recordId to "z".repeat(43))))
       try { records.synchronize(token, accountId); fail("a second invalid cursor must stop sync") }
       catch (error: RecordReadException) { assertEquals(RecordReadFailure.CURSOR_INVALID, error.failure) }
       assertEquals(listOf("first", "old.signature", "first", "new.signature"), calls)
       assertEquals("架空の結論", records.cachedRecord(accountId, recordId)?.decision)
+    }
+  }
+
+  @Test fun newContractRefreshesOnlyLinkedRecordsAndSavesTheirLineageOffline() = runBlocking {
+    val child = "c".repeat(43)
+    val parent = "p".repeat(43)
+    val legacyVersion = "z".repeat(43)
+    val currentChildVersion = "f".repeat(43)
+    repository(MockEngine { request ->
+      respond(detail(request.url.encodedPath.substringAfterLast('/')),
+        headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { records ->
+      for (id in listOf(recordId, child)) records.record(token, accountId, id)
+      records.saveSyncCheckpoint(accountId, RecordSyncCheckpoint(readContractVersion = 2,
+        pageLoaded = true, complete = true, indexBased = true, removalCandidates = emptySet(),
+        committedRevisions = mapOf(recordId to legacyVersion, child to legacyVersion)))
+    }
+    val calls = mutableListOf<String>()
+    repository(MockEngine { request ->
+      val id = request.url.encodedPath.substringAfterLast('/')
+      calls += id
+      val response = if (id == "sync-index") {
+        assertEquals("record-followups-v1", request.url.parameters["contract"])
+        index(listOf(recordId, child)).replace(
+          """"recordId":"$child","revision":"$legacyVersion"""",
+          """"recordId":"$child","revision":"$currentChildVersion"""")
+      } else {
+        assertEquals(child, id)
+        detail(child).replaceFirst("{", """{"parentRecordId":"$parent","parentQuestionPreview":"架空の親議題","hasFollowUps":true,""")
+      }
+      respond(response, headers = headersOf(HttpHeaders.ContentType, "application/json"))
+    }).use { records ->
+      records.synchronize(token, accountId)
+      assertEquals(listOf("sync-index", child), calls)
+      assertEquals(parent, records.cachedRecord(accountId, child)?.parentRecordId)
+      val summary = records.cachedRecords(accountId).single { it.recordId == child }
+      assertEquals(parent, summary.parentRecordId)
+      assertEquals("架空の親議題", summary.parentQuestionPreview)
+      assertTrue(summary.hasFollowUps)
     }
   }
 
@@ -724,7 +763,7 @@ class RecordsRepositoryTest {
       respond(avatarDetail("expired"), headers = headersOf(HttpHeaders.ContentType, "application/json"))
     }).use { records ->
       records.record(token, accountId, recordId, avatarRevision)
-      records.saveSyncCheckpoint(accountId, RecordSyncCheckpoint(readContractVersion = 2,
+      records.saveSyncCheckpoint(accountId, RecordSyncCheckpoint(readContractVersion = 3,
         committedRevisions = mapOf(recordId to revision), pendingAvatars = setOf(recordId),
         removalCandidates = emptySet(), indexBased = true))
     }
@@ -1144,7 +1183,7 @@ class RecordsRepositoryTest {
       respond(detailWithAvatar(id, urls[id]), headers = headersOf(HttpHeaders.ContentType, "application/json"))
     }).use { records ->
       for (id in ids) records.record(token, accountId, id, "i".repeat(43))
-      records.saveSyncCheckpoint(accountId, RecordSyncCheckpoint(readContractVersion = 2,
+      records.saveSyncCheckpoint(accountId, RecordSyncCheckpoint(readContractVersion = 3,
         pageLoaded = true, committedRevisions = ids.associateWith { "z".repeat(43) },
         pendingAvatars = urls.keys, removalCandidates = emptySet(), indexBased = true))
     }

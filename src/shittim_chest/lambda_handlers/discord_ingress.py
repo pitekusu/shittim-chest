@@ -26,6 +26,7 @@ from shittim_chest.adapters.discord_http import (
     ApiGatewayV2Response,
     DiscordHttpBoundary,
     DiscordRequestVerifier,
+    follow_up_modal_response,
     ingress_response,
     ingress_unavailable_response,
     student_gacha_response,
@@ -34,10 +35,11 @@ from shittim_chest.adapters.discord_http import (
 from shittim_chest.adapters.dynamodb.debate_lookup import DynamoDbDebateAuthorizationLookup
 from shittim_chest.adapters.dynamodb.ingress import DynamoDbIngressRepository
 from shittim_chest.adapters.dynamodb.student_gacha import DynamoDbStudentGachaRepository
-from shittim_chest.application.discord_http import DiscordHttpOperation
+from shittim_chest.application.discord_http import DiscordFollowUpOperation, DiscordHttpOperation
 from shittim_chest.application.ingress import (
     DiscordIngressApplication,
     IngressAcceptance,
+    IngressOutcome,
 )
 from shittim_chest.application.ports import (
     Clock,
@@ -205,7 +207,10 @@ class DiscordIngressLambda:
             with _measure_stage(timings, "response_build"):
                 return reception.response.as_event()
         operation = reception.interaction
-        if not isinstance(operation, (DiscordHttpOperation, DiscordStudentGachaOperation)):
+        if not isinstance(
+            operation,
+            (DiscordHttpOperation, DiscordFollowUpOperation, DiscordStudentGachaOperation),
+        ):
             raise AssertionError("verified Discord reception has no result")
         try:
             remaining_seconds = self._remaining_seconds(entry_at)
@@ -242,11 +247,22 @@ class DiscordIngressLambda:
 
     def _prepare_accept(
         self,
-        operation: DiscordHttpOperation | DiscordStudentGachaOperation,
+        operation: DiscordHttpOperation | DiscordFollowUpOperation | DiscordStudentGachaOperation,
     ) -> Callable[[], Awaitable[IngressAcceptance | ApiGatewayV2Response]]:
         if isinstance(operation, DiscordHttpOperation):
             application = self._application()
             return lambda: application.accept(operation)
+        if isinstance(operation, DiscordFollowUpOperation):
+            application = self._application()
+
+            async def follow_up() -> IngressAcceptance | ApiGatewayV2Response:
+                if operation.is_modal:
+                    return await application.accept_follow_up(operation)
+                if not await application.can_follow_up(operation):
+                    return IngressAcceptance(IngressOutcome.NOT_ALLOWED)
+                return follow_up_modal_response(operation.binding)
+
+            return follow_up
 
         student_gacha = None if self._student_gacha is None else self._student_gacha()
 

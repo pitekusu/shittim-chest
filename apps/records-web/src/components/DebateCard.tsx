@@ -1,7 +1,8 @@
-import { useEffect, useId, useRef, type CSSProperties } from "react";
+import { useEffect, useId, useRef, type CSSProperties, type MouseEvent } from "react";
 import { Link } from "react-router-dom";
 
 import type { RecordListItem } from "../api/types";
+import type { ArchiveCardAction } from "../hooks/useRecordsArchive";
 import { formatCompletedDateTime } from "../lib/dateTime";
 import commonStyles from "../styles/common.module.css";
 import styles from "../styles/home.module.css";
@@ -293,10 +294,15 @@ export function DebateCard({
   readonly motionTerminal?: boolean;
   readonly appended?: boolean;
   readonly onAppendAnimationEnd?: (recordId: string) => void;
-  readonly onOpen?: (recordId: string) => void;
+  readonly onOpen?: (
+    recordId: string,
+    destinationRecordId: string,
+    action: ArchiveCardAction,
+  ) => void;
 }) {
   const labelId = useId();
   const linkRef = useRef<HTMLAnchorElement>(null);
+  const { parentRecordId } = record;
   const winner = record.participants.find(
     (participant) => participant.slot === record.result.winner,
   );
@@ -317,102 +323,134 @@ export function DebateCard({
     link.addEventListener("animationend", consume);
     return () => link.removeEventListener("animationend", consume);
   }, [appended, onAppendAnimationEnd, record.recordId]);
+  const rememberOrigin = (
+    event: MouseEvent<HTMLAnchorElement>,
+    destinationRecordId: string,
+    action: ArchiveCardAction,
+  ) => {
+    if (
+      !event.defaultPrevented &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.shiftKey &&
+      !event.altKey &&
+      event.button === 0
+    ) {
+      onOpen?.(record.recordId, destinationRecordId, action);
+    }
+  };
   return (
-    <Link
-      className={`${styles.debateCardLink} ${routeStyles.routeMotionItem} ${
-        appended ? routeStyles.routeMotionAppend : ""
-      }`}
-      to={`/records/${record.recordId}`}
-      data-record-id={record.recordId}
-      aria-labelledby={labelId}
-      onClick={(event) => {
-        if (
-          !event.metaKey &&
-          !event.ctrlKey &&
-          !event.shiftKey &&
-          !event.altKey &&
-          event.button === 0
-        ) {
-          onOpen?.(record.recordId);
+    <article className={styles.cardEntry}>
+      <Link
+        className={`${styles.debateCardLink} ${routeStyles.routeMotionItem} ${
+          appended ? routeStyles.routeMotionAppend : ""
+        }`}
+        to={`/records/${record.recordId}`}
+        data-record-id={record.recordId}
+        aria-labelledby={labelId}
+        onClick={(event) => rememberOrigin(event, record.recordId, "record")}
+        data-route-motion-terminal={motionTerminal ? "" : undefined}
+        ref={linkRef}
+        style={
+          motionDelay === undefined
+            ? undefined
+            : ({ "--route-motion-delay": `${motionDelay}ms` } as CSSProperties)
         }
-      }}
-      data-route-motion-terminal={motionTerminal ? "" : undefined}
-      ref={linkRef}
-      style={
-        motionDelay === undefined
-          ? undefined
-          : ({ "--route-motion-delay": `${motionDelay}ms` } as CSSProperties)
-      }
-    >
-      <article id={labelId} className={styles.debateCard}>
-        <CardDecoration recordId={record.recordId} />
-        <div className={styles.cardMeta}>
-          <time dateTime={record.completedAt}>{formatCompletedDateTime(record.completedAt)}</time>
-          <span className={styles.cardBadges}>
-            {record.result.tieBreakApplied && (
-              <span className={styles.tieBadge}>既定ルール決着</span>
-            )}
-            {!!record.attachmentCount && (
-              <span className={styles.attachmentBadge}>
-                <svg
-                  viewBox="0 0 24 24"
-                  width="16"
-                  height="16"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                  focusable="false"
-                >
-                  <rect x="3" y="3" width="18" height="18" rx="3" />
-                  <circle cx="8.5" cy="8.5" r="1.5" />
-                  <path d="m21 15-5-5L5 21" />
-                </svg>
-                <span className={commonStyles.visuallyHidden}>画像</span>
-                {record.attachmentCount}枚
+      >
+        <div id={labelId} className={styles.debateCard}>
+          <CardDecoration recordId={record.recordId} />
+          <div className={styles.cardMeta}>
+            <time dateTime={record.completedAt}>{formatCompletedDateTime(record.completedAt)}</time>
+            <span className={styles.cardBadges}>
+              {record.parentRecordId && <span className={styles.followUpBadge}>更問</span>}
+              {record.result.tieBreakApplied && (
+                <span className={styles.tieBadge}>既定ルール決着</span>
+              )}
+              {!!record.attachmentCount && (
+                <span className={styles.attachmentBadge}>
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="16"
+                    height="16"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                    focusable="false"
+                  >
+                    <rect x="3" y="3" width="18" height="18" rx="3" />
+                    <circle cx="8.5" cy="8.5" r="1.5" />
+                    <path d="m21 15-5-5L5 21" />
+                  </svg>
+                  <span className={commonStyles.visuallyHidden}>画像</span>
+                  {record.attachmentCount}枚
+                </span>
+              )}
+            </span>
+          </div>
+          <h2 className={commonStyles.japaneseText}>{record.questionPreview}</h2>
+          <div className={styles.cardPeople}>
+            <span className={styles.personSummary}>
+              <Avatar avatar={{ ...record.requester.avatar, alt: "" }} />
+              <span>
+                <small>依頼者</small>
+                {record.requester.displayName}
+              </span>
+            </span>
+            {winner && (
+              <span className={styles.personSummary}>
+                <Avatar avatar={{ ...winner.avatar, alt: "" }} />
+                <span>
+                  <small>勝者</small>
+                  {winner.displayName}
+                </span>
               </span>
             )}
+          </div>
+          <span className={styles.cardAction}>
+            記録を読む
+            <svg
+              viewBox="0 0 24 24"
+              width="16"
+              height="16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <path d="M6 18 18 6M6 6h12v12" />
+            </svg>
           </span>
         </div>
-        <h2 className={commonStyles.japaneseText}>{record.questionPreview}</h2>
-        <div className={styles.cardPeople}>
-          <span className={styles.personSummary}>
-            <Avatar avatar={{ ...record.requester.avatar, alt: "" }} />
-            <span>
-              <small>依頼者</small>
-              {record.requester.displayName}
-            </span>
-          </span>
-          {winner && (
-            <span className={styles.personSummary}>
-              <Avatar avatar={{ ...winner.avatar, alt: "" }} />
-              <span>
-                <small>勝者</small>
-                {winner.displayName}
-              </span>
-            </span>
+      </Link>
+      {(record.parentRecordId || record.hasFollowUps) && (
+        <div className={styles.cardRelations}>
+          {parentRecordId && (
+            <Link
+              to={`/records/${parentRecordId}`}
+              data-archive-action="parent"
+              onClick={(event) => rememberOrigin(event, parentRecordId, "parent")}
+            >
+              元の議論へ
+              {record.parentQuestionPreview && <span>{record.parentQuestionPreview}</span>}
+            </Link>
+          )}
+          {record.hasFollowUps && (
+            <Link
+              to={`/records/${record.recordId}#followups`}
+              data-archive-action="follow-ups"
+              onClick={(event) => rememberOrigin(event, record.recordId, "follow-ups")}
+            >
+              更問を見る
+            </Link>
           )}
         </div>
-        <span className={styles.cardAction}>
-          記録を読む
-          <svg
-            viewBox="0 0 24 24"
-            width="16"
-            height="16"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-            focusable="false"
-          >
-            <path d="M6 18 18 6M6 6h12v12" />
-          </svg>
-        </span>
-      </article>
-    </Link>
+      )}
+    </article>
   );
 }

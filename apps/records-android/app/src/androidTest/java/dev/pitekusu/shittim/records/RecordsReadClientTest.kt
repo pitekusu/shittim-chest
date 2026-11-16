@@ -22,6 +22,27 @@ class RecordsReadClientTest {
   private val token = "t".repeat(43)
   private val jsonHeader = headersOf(HttpHeaders.ContentType, "application/json")
 
+  @Test fun followUpPageIsAuthorizedAndRejectsAChildLinkBackToItself() = runBlocking<Unit> {
+    val child = "c".repeat(43)
+    var calls = 0
+    RecordsReadClient(MockEngine { request ->
+      assertEquals("Bearer $token", request.headers[HttpHeaders.Authorization])
+      assertEquals("/api/v1/records/$id/follow-ups", request.url.encodedPath)
+      if (++calls == 2) assertEquals("child.cursor", request.url.parameters["cursor"])
+      val record = if (calls == 1) child else id
+      respond("""{"schemaVersion":1,"items":[{"recordId":"$record","questionPreview":"架空の更問","completedAt":"2026-10-01T04:00:00Z"}],"nextCursor":"other.cursor","followUpAvailable":true}""",
+        headers = jsonHeader)
+    }).use { client ->
+      val page = client.followUps(token, id, null)
+      assertEquals(child, page.items.single().recordId)
+      assertTrue(page.followUpAvailable)
+      try {
+        client.followUps(token, id, "child.cursor")
+        fail("self link accepted")
+      } catch (error: RecordReadException) { assertEquals(RecordReadFailure.INVALID_RESPONSE, error.failure) }
+    }
+  }
+
   @Test fun discordUuid5AttachmentCanBeReadDownloadedAndProjectedForOfflineStorage() = runBlocking {
     val discordId = "11111111-2222-5333-8444-abcdefabcdef"
     val bitmap = Bitmap.createBitmap(24, 16, Bitmap.Config.ARGB_8888)
@@ -39,7 +60,7 @@ class RecordsReadClientTest {
     RecordsReadClient(MockEngine { request ->
       calls++
       if (request.url.host == "shittim.pitekusu.dev") {
-        assertEquals("record-images-v1", request.url.parameters["contract"])
+        assertEquals("record-followups-v1", request.url.parameters["contract"])
         respond(payload, headers = jsonHeader)
       } else {
         assertFalse(request.headers.contains(HttpHeaders.Authorization))
@@ -112,7 +133,7 @@ class RecordsReadClientTest {
       assertTrue(result.preview.actions.isEmpty())
     }
     assertEquals(listOf("/api/v1/records?limit=1&sort=newest",
-      "/api/v1/records/$id?contract=record-images-v1"), paths)
+      "/api/v1/records/$id?contract=record-followups-v1"), paths)
   }
 
   @Test
@@ -215,7 +236,7 @@ class RecordsReadClientTest {
   fun affectionReasonsKeepScoresWhenOnlyFeelingsAreUnavailableAndUseUnicodeLimits() = runBlocking {
     for (reason in listOf("具体的な感想", "😀".repeat(500))) {
       RecordsReadClient(MockEngine { request ->
-        assertEquals("record-images-v1", request.url.parameters["contract"])
+        assertEquals("record-followups-v1", request.url.parameters["contract"])
         respond(detail(id).replace("\"affection\":null",
           "\"affection\":${affectionWithReasons(reason)}"), headers = jsonHeader)
       }).use { client ->
@@ -306,7 +327,7 @@ class RecordsReadClientTest {
     var requests = 0
     RecordsReadClient(MockEngine { request ->
       requests++
-      assertEquals("/api/v1/records?limit=12&sort=newest&contract=record-attachments-v1", request.url.toString()
+      assertEquals("/api/v1/records?limit=12&sort=newest&contract=record-followups-v1", request.url.toString()
         .removePrefix("https://shittim.pitekusu.dev"))
       assertEquals("Bearer $token", request.headers[HttpHeaders.Authorization])
       assertFalse(request.headers.contains(HttpHeaders.Cookie))
@@ -336,8 +357,8 @@ class RecordsReadClientTest {
       assertEquals("next.cursor", client.recentRecords(token).nextCursor)
       assertFailure(RecordReadFailure.CURSOR_INVALID) { client.recentRecords(token, "next.cursor") }
     }
-    assertEquals(listOf("/api/v1/records?limit=12&sort=newest&contract=record-attachments-v1",
-      "/api/v1/records?limit=12&sort=newest&cursor=next.cursor&contract=record-attachments-v1"), paths)
+    assertEquals(listOf("/api/v1/records?limit=12&sort=newest&contract=record-followups-v1",
+      "/api/v1/records?limit=12&sort=newest&cursor=next.cursor&contract=record-followups-v1"), paths)
   }
 
   @Test

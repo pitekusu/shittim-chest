@@ -30,6 +30,7 @@ from shittim_chest.application import (
     IngressRequest,
     IngressStatus,
 )
+from shittim_chest.application.models import FollowUpParent
 from shittim_chest.application.scale_to_zero import (
     IngressSemanticOperationBinding,
     IngressStatusPublication,
@@ -75,6 +76,24 @@ def test_ingress_request_round_trip_has_fifo_and_independent_schema_keys() -> No
     assert item["status_message_state"] == StatusMessageState.STARTING.value
     assert "token" not in item
     assert deserialize_ingress_request(item) == source
+
+
+def test_ingress_follow_up_round_trip_only_persists_the_parent_reference() -> None:
+    parent = FollowUpParent(DebateId.new(), AttemptId.new())
+    source = replace(request(), follow_up_parent=parent)
+
+    item = serialize_ingress_request(source)
+
+    assert item["follow_up_parent"] == {
+        "debate_id": str(parent.debate_id),
+        "attempt_id": str(parent.attempt_id),
+    }
+    assert "previous_debate" not in item
+    assert deserialize_ingress_request(item) == source
+    assert "follow_up_parent" not in serialize_ingress_request(request())
+    item["follow_up_parent"] = {"debate_id": str(parent.debate_id)}
+    with pytest.raises(PersistenceFormatError):
+        deserialize_ingress_request(item)
 
 
 def test_ingress_request_previous_shared_schema_is_upconverted() -> None:

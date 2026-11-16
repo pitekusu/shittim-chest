@@ -235,6 +235,65 @@
   pointer-events: none;
 }
 
+.branchList {
+  display: grid;
+  max-width: 48rem;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 0 0 0 14px;
+  border-inline-start: 2px solid var(--records-line-strong);
+  list-style: none;
+}
+
+.branchChild {
+  margin-inline-start: 14px;
+}
+
+.branchLink,
+.branchNode {
+  display: grid;
+  min-height: 44px;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--records-line);
+  border-radius: 10px;
+  color: var(--records-ink-900);
+  overflow-wrap: anywhere;
+}
+
+.branchNode {
+  border-color: var(--records-line-strong);
+  background: var(--records-reading-surface);
+}
+
+.branchLink {
+  text-underline-offset: 3px;
+  transition: background-color 140ms ease;
+}
+
+.branchLink:is(:focus-visible, :active) {
+  background: var(--records-control-background-soft);
+}
+
+.branchLink > span,
+.branchNode > span,
+.branchList time {
+  color: var(--records-ink-600);
+  font-size: 0.8rem;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .branchLink:hover {
+    background: var(--records-control-background-soft);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .branchLink {
+    transition: none;
+  }
+}
+
 .opinionGrid {
   display: grid;
   grid-template-columns: 1fr;

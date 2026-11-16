@@ -18,6 +18,7 @@ from shittim_chest.application.models import (
     MetricEvent,
     PhaseDeliveryPlan,
     PhaseDeliveryStatus,
+    PreviousDebate,
 )
 from shittim_chest.application.ports import RepositoryConflict
 from shittim_chest.application.scale_to_zero import IngressClaimFence
@@ -116,14 +117,20 @@ class FakeDiscord:
 class FakeEvidence:
     bundle: EvidenceBundle = field(default_factory=EvidenceBundle)
     calls: list[str] = field(default_factory=list)
+    previous_debates: list[PreviousDebate | None] = field(default_factory=list)
     delay: float = 0.0
     error: Exception | None = None
     called: asyncio.Event = field(default_factory=asyncio.Event)
 
     async def prepare_evidence(
-        self, *, question: str, images: tuple[ImageInput, ...] = ()
+        self,
+        *,
+        question: str,
+        previous_debate: PreviousDebate | None = None,
+        images: tuple[ImageInput, ...] = (),
     ) -> EvidenceBundle:
         self.calls.append(question)
+        self.previous_debates.append(previous_debate)
         self.called.set()
         if self.delay:
             await asyncio.sleep(self.delay)
@@ -173,6 +180,7 @@ class FakeOutboxRecovery:
 
 class FakeOpenAI:
     async def find_overlap_targets(self, **kwargs) -> tuple[ParticipantSlot, ...]:
+        self.previous_debates.append(("find_overlap_targets", kwargs.get("previous_debate")))
         return ()
 
     async def explore_alternatives(self, **kwargs) -> tuple[Candidate, ...]:
@@ -190,6 +198,8 @@ class FakeOpenAI:
         self.vote_calls: list[tuple[ParticipantSlot, tuple[ParticipantSlot, ...]]] = []
         self.decision_calls: list[ParticipantSlot] = []
         self.affection_calls: list[ParticipantSlot] = []
+        self.affection_questions: list[str] = []
+        self.previous_debates: list[tuple[str, PreviousDebate | None]] = []
         self.affection_scores: dict[ParticipantSlot, int] = {}
         self.affection_reasons: dict[ParticipantSlot, str | None] = {}
         self.affection_errors: dict[ParticipantSlot, BaseException] = {}
@@ -212,8 +222,14 @@ class FakeOpenAI:
         self.candidate_errors: dict[ParticipantSlot, BaseException] = {}
 
     async def form_preferences(
-        self, *, participant: ParticipantSlot, question: str, images: tuple[ImageInput, ...] = ()
+        self,
+        *,
+        participant: ParticipantSlot,
+        question: str,
+        previous_debate: PreviousDebate | None = None,
+        images: tuple[ImageInput, ...] = (),
     ) -> PreferenceFrame:
+        self.previous_debates.append(("form_preferences", previous_debate))
         self.preference_calls.append(participant)
         if error := self.preference_errors.get(participant):
             raise error
@@ -224,10 +240,12 @@ class FakeOpenAI:
         *,
         participant: ParticipantSlot,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         images: tuple[ImageInput, ...] = (),
         evidence: EvidenceBundle,
         preference_frame: PreferenceFrame,
     ) -> CandidatePlan:
+        self.previous_debates.append(("select_candidates", previous_debate))
         self.candidate_calls.append(participant)
         if error := self.candidate_errors.get(participant):
             raise error
@@ -240,7 +258,7 @@ class FakeOpenAI:
         question: str,
         images: tuple[ImageInput, ...] = (),
     ) -> AffectionQuestionEvaluation:
-        del question
+        self.affection_questions.append(question)
         self.affection_calls.append(participant)
         error = self.affection_errors.get(participant)
         if error is not None:
@@ -255,12 +273,14 @@ class FakeOpenAI:
         *,
         participant: ParticipantSlot,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         images: tuple[ImageInput, ...] = (),
         evidence: EvidenceBundle,
         affection_score: int,
         preference_frame: PreferenceFrame | None = None,
         candidate_plan: CandidatePlan | None = None,
     ) -> InitialOpinion:
+        self.previous_debates.append(("generate_initial_opinion", previous_debate))
         del question
         self.response_affection_scores.append((participant, affection_score))
         self.evidence_calls.append(evidence)
@@ -287,6 +307,7 @@ class FakeOpenAI:
         *,
         participant: ParticipantSlot,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         images: tuple[ImageInput, ...] = (),
         evidence: EvidenceBundle,
         initial_opinions: tuple[InitialOpinion, ...],
@@ -294,6 +315,7 @@ class FakeOpenAI:
         preference_frame: PreferenceFrame | None = None,
         candidate_plan: CandidatePlan | None = None,
     ) -> FinalProposal:
+        self.previous_debates.append(("generate_final_proposal", previous_debate))
         del question, initial_opinions
         self.response_affection_scores.append((participant, affection_score))
         self.evidence_calls.append(evidence)
@@ -312,6 +334,7 @@ class FakeOpenAI:
         *,
         voter: ParticipantSlot,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         images: tuple[ImageInput, ...] = (),
         evidence: EvidenceBundle,
         candidates: tuple[FinalProposal, ...],
@@ -320,6 +343,7 @@ class FakeOpenAI:
         debate_key: str | None = None,
         initial_opinions: tuple[InitialOpinion, ...] = (),
     ) -> Vote | ResolvedVote:
+        self.previous_debates.append(("cast_vote", previous_debate))
         del question
         self.evidence_calls.append(evidence)
         candidate_slots = tuple(candidate.participant for candidate in candidates)
@@ -357,6 +381,7 @@ class FakeOpenAI:
         self,
         *,
         question: str,
+        previous_debate: PreviousDebate | None = None,
         images: tuple[ImageInput, ...] = (),
         evidence: EvidenceBundle,
         proposals: tuple[FinalProposal, ...],
@@ -364,6 +389,7 @@ class FakeOpenAI:
         affection_score: int,
         preference_frame: PreferenceFrame | None = None,
     ) -> FinalDecision:
+        self.previous_debates.append(("generate_decision", previous_debate))
         del question, proposals
         self.response_affection_scores.append((voting_result.winner, affection_score))
         self.evidence_calls.append(evidence)

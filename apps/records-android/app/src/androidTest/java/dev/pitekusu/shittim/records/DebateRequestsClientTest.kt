@@ -36,9 +36,28 @@ class DebateRequestsClientTest {
       val body = content.readFrom().readBuffer().readByteArray().decodeToString()
       assertTrue(body.contains(id))
       assertTrue(body.contains("架空の相談"))
+      assertFalse(body.contains("parentRecordId"))
       respond(receipt(), HttpStatusCode.Accepted, headers)
     }).use { client -> assertEquals("queued", client.submit(token, id, "架空の相談").status) }
     assertEquals(1, calls)
+  }
+
+  @Test fun followUpPostBindsParentAndRejectsMismatchedReceipt() = runBlocking<Unit> {
+    val parent = "p".repeat(43)
+    var calls = 0
+    DebateRequestsClient(MockEngine { request ->
+      val content = request.body as OutgoingContent.ReadChannelContent
+      val body = content.readFrom().readBuffer().readByteArray().decodeToString()
+      assertEquals("""{"requestId":"$id","question":"架空の相談","attachmentIds":[],"parentRecordId":"$parent"}""", body)
+      val receivedParent = if (++calls == 1) parent else "v".repeat(43)
+      respond(receipt().dropLast(1) + ""","parentRecordId":"$receivedParent"}""", HttpStatusCode.Accepted, headers)
+    }).use { client ->
+      assertEquals(parent, client.submit(token, id, "架空の相談", parentRecordId = parent).parentRecordId)
+      try {
+        client.submit(token, id, "架空の相談", parentRecordId = parent)
+        fail("mismatched parent accepted")
+      } catch (error: DebateRequestException) { assertEquals(DebateFailure.INVALID_RESPONSE, error.failure) }
+    }
   }
 
   @Test fun legacyPermissionAndQueueLimitsRemainDifferentFromMissingRequest() = runBlocking {

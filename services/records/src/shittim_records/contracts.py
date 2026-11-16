@@ -213,6 +213,9 @@ class RecordListItem(PublicModel):
     completed_at: AwareDatetime
     question_preview: Annotated[str, Field(min_length=1, max_length=160, pattern=r"\S")]
     attachment_count: Annotated[int, Field(strict=True, ge=0, le=3)] = 0
+    parent_record_id: RecordId | None = None
+    parent_question_preview: Annotated[str, Field(min_length=1, max_length=160)] | None = None
+    has_follow_ups: bool | None = None
     requester: RequesterSummary
     participants: ParticipantCollection
     result: RecordResultSummary
@@ -227,6 +230,19 @@ class RecordListResponse(PublicModel):
     schema_version: Literal[1]
     items: tuple[RecordListItem, ...]
     next_cursor: Annotated[str, Field(min_length=1, max_length=4096)] | None = None
+
+
+class RecordFollowUpItem(PublicModel):
+    record_id: RecordId
+    question_preview: Annotated[str, Field(min_length=1, max_length=160)]
+    completed_at: AwareDatetime
+
+
+class RecordFollowUpsResponse(PublicModel):
+    schema_version: Literal[1]
+    items: Annotated[tuple[RecordFollowUpItem, ...], Field(max_length=12)]
+    next_cursor: Annotated[str, Field(min_length=1, max_length=4096)] | None = None
+    follow_up_available: bool
 
 
 class RecordSearchRequest(PublicModel):
@@ -472,6 +488,9 @@ class RecordDetailResponse(PublicModel):
     affection: AffectionView | None
     attachments: Annotated[tuple[RecordAttachmentImage, ...], Field(max_length=3)] | None = None
     voting: VotingSummary | None = None
+    parent_record_id: RecordId | None = None
+    parent_question_preview: Annotated[str, Field(min_length=1, max_length=160)] | None = None
+    has_follow_ups: bool | None = None
     og_image_url: (
         Annotated[
             str,
@@ -1059,11 +1078,14 @@ class DebateStartRequest(PublicModel):
     request_id: DebateRequestId
     question: Annotated[str, Field(min_length=1, max_length=1000, pattern=r"\S", repr=False)]
     attachment_ids: list[AttachmentId] = Field(default_factory=list, max_length=3)
+    parent_record_id: RecordId | None = None
 
     @model_validator(mode="after")
     def unique_attachments(self) -> DebateStartRequest:
         if len(set(self.attachment_ids)) != len(self.attachment_ids):
             raise ValueError("attachment IDs must be unique")
+        if self.parent_record_id is not None and self.attachment_ids:
+            raise ValueError("follow-ups accept text only")
         return self
 
 
@@ -1126,6 +1148,7 @@ class DebateRequestResponse(PublicModel):
     phase: str | None
     created_at: AwareDatetime
     updated_at: AwareDatetime
+    parent_record_id: RecordId | None = Field(default=None, exclude_if=lambda value: value is None)
     record_id: RecordId | None
     error_code: Literal["DEBATE_REJECTED", "DEBATE_FAILED", "DEBATE_CANCELLED"] | None
     attempt_token: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$", repr=False)
@@ -1320,6 +1343,7 @@ PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
     RecordRequestersResponse,
     RecordSyncIndexResponse,
     RecordDetailResponse,
+    RecordFollowUpsResponse,
     RankingsResponse,
     AffectionRankingsResponse,
     RequesterAffectionRankingsResponse,

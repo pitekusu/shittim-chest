@@ -2046,6 +2046,19 @@
           ],
           "title": "Errorcode"
         },
+        "parentRecordId": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parentrecordid"
+        },
         "phase": {
           "anyOf": [
             {
@@ -2154,6 +2167,19 @@
           "maxItems": 3,
           "title": "Attachmentids",
           "type": "array"
+        },
+        "parentRecordId": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parentrecordid"
         },
         "question": {
           "maxLength": 1000,
@@ -3942,6 +3968,18 @@
           "title": "Finalproposals",
           "type": "array"
         },
+        "hasFollowUps": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hasfollowups"
+        },
         "initialOpinions": {
           "allOf": [
             {
@@ -4018,6 +4056,33 @@
           ],
           "default": null,
           "title": "Ogimageurl"
+        },
+        "parentQuestionPreview": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parentquestionpreview"
+        },
+        "parentRecordId": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parentrecordid"
         },
         "participants": {
           "allOf": [
@@ -4198,6 +4263,77 @@
       "title": "RecordDetailResponse",
       "type": "object"
     },
+    "RecordFollowUpItem": {
+      "additionalProperties": false,
+      "properties": {
+        "completedAt": {
+          "format": "date-time",
+          "title": "Completedat",
+          "type": "string"
+        },
+        "questionPreview": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Questionpreview",
+          "type": "string"
+        },
+        "recordId": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "title": "Recordid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "recordId",
+        "questionPreview",
+        "completedAt"
+      ],
+      "title": "RecordFollowUpItem",
+      "type": "object"
+    },
+    "RecordFollowUpsResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "followUpAvailable": {
+          "title": "Followupavailable",
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/RecordFollowUpItem"
+          },
+          "maxItems": 12,
+          "title": "Items",
+          "type": "array"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nextcursor"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "items",
+        "followUpAvailable"
+      ],
+      "title": "RecordFollowUpsResponse",
+      "type": "object"
+    },
     "RecordListItem": {
       "additionalProperties": false,
       "properties": {
@@ -4212,6 +4348,45 @@
           "format": "date-time",
           "title": "Completedat",
           "type": "string"
+        },
+        "hasFollowUps": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hasfollowups"
+        },
+        "parentQuestionPreview": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parentquestionpreview"
+        },
+        "parentRecordId": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parentrecordid"
         },
         "participants": {
           "allOf": [
@@ -5124,6 +5299,9 @@
     },
     {
       "$ref": "#/$defs/RecordDetailResponse"
+    },
+    {
+      "$ref": "#/$defs/RecordFollowUpsResponse"
     },
     {
       "$ref": "#/$defs/RankingsResponse"

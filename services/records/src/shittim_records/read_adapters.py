@@ -124,6 +124,82 @@ class DynamoRecordsReader:
                 break
         return tuple(items)
 
+    def follow_up_parents(self, record_ids: tuple[str, ...]) -> frozenset[str]:
+        if not record_ids:
+            return frozenset()
+        partitions = {f"RECORD-FOLLOWUPS#{record_id}": record_id for record_id in record_ids}
+        request_items: dict[str, Any] = {
+            self._archive_table: {
+                "Keys": [marshal_item({"PK": pk, "SK": "META"}) for pk in partitions],
+                "ConsistentRead": True,
+            }
+        }
+        found: set[str] = set()
+        for _attempt in range(MAX_BATCH_GET_ATTEMPTS):
+            response = self._client.batch_get_item(RequestItems=request_items)
+            for raw in response.get("Responses", {}).get(self._archive_table, []):
+                item = unmarshal_item(raw)
+                pk = item.get("PK")
+                if not isinstance(pk, str) or pk not in partitions or item.get("SK") != "META":
+                    raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+                found.add(partitions[pk])
+            unprocessed = response.get("UnprocessedKeys", {})
+            if not unprocessed:
+                return frozenset(found)
+            request_items = cast(dict[str, Any], unprocessed)
+        raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+
+    def load_follow_ups(
+        self,
+        record_id: str,
+        *,
+        after: str | None,
+    ) -> tuple[tuple[DynamoItem, ...], str | None]:
+        pk = f"RECORD-FOLLOWUPS#{record_id}"
+        parameters: dict[str, Any] = {
+            "TableName": self._archive_table,
+            "KeyConditionExpression": "PK = :pk AND begins_with(SK, :prefix)",
+            "ExpressionAttributeValues": marshal_item({":pk": pk, ":prefix": "CHILD#"}),
+            "ScanIndexForward": False,
+            "ConsistentRead": True,
+            "Limit": 12,
+        }
+        if after is not None:
+            parameters["ExclusiveStartKey"] = marshal_item({"PK": pk, "SK": after})
+        response = self._client.query(**parameters)
+        rows = tuple(unmarshal_item(item) for item in response.get("Items", []))
+        if any(
+            row.get("PK") != pk
+            or row.get("record_id") == record_id
+            or row.get("SK") != f"CHILD#{row.get('completed_at')}#{row.get('record_id')}"
+            for row in rows
+        ):
+            raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+        raw_key = response.get("LastEvaluatedKey")
+        next_key = unmarshal_item(raw_key).get("SK") if raw_key else None
+        if next_key is not None and (
+            not isinstance(next_key, str) or not next_key.startswith("CHILD#")
+        ):
+            raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+        return rows, next_key
+
+    def load_record_meta(self, record_id: str) -> DynamoItem | None:
+        return self._load_archive_meta(f"RECORD#{record_id}")
+
+    def has_follow_up_source(self, record_id: str) -> bool:
+        item = self._load_archive_meta(f"RECORD-SOURCE#{record_id}")
+        return item is not None and item.get("record_id") == record_id
+
+    def _load_archive_meta(self, pk: str) -> DynamoItem | None:
+        response = self._client.get_item(
+            TableName=self._archive_table,
+            Key=marshal_item({"PK": pk, "SK": "META"}),
+            ProjectionExpression="PK, SK, record_id, schema_version, record_type",
+            ConsistentRead=True,
+        )
+        raw = response.get("Item")
+        return unmarshal_item(raw) if raw is not None else None
+
     def load_ranking_snapshots(self) -> tuple[DynamoItem, ...]:
         response = self._client.transact_get_items(
             TransactItems=[

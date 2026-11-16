@@ -84,6 +84,20 @@ class FakeReader:
     def load_record(self, *, record_id: str) -> tuple[dict[str, Any], ...]:
         return self.items if record_id == self.record_id else ()
 
+    def follow_up_parents(self, record_ids: tuple[str, ...]) -> frozenset[str]:
+        return frozenset()
+
+    def load_record_meta(self, record_id: str) -> dict[str, Any] | None:
+        return self.meta if record_id == self.record_id else None
+
+    def has_follow_up_source(self, record_id: str) -> bool:
+        return False
+
+    def load_follow_ups(
+        self, record_id: str, *, after: str | None
+    ) -> tuple[tuple[dict[str, Any], ...], str | None]:
+        return (), None
+
     def load_ranking_snapshots(self) -> tuple[dict[str, Any], ...]:
         return self.ranking_items
 
@@ -1404,3 +1418,66 @@ def test_requesters_cover_all_pages_preserving_avatars_current_names_and_same_na
     assert "requesterKey" not in first.model_dump_json(by_alias=True)
     with pytest.raises(ReadFailure, match="CURSOR_INVALID"):
         records.search_records(query=RecordSearchRequest(cursor=first.next_cursor), now=NOW)
+
+
+def test_follow_up_navigation_and_selective_sync_revision() -> None:
+    class FollowUpReader(FakeReader):
+        parent_ids: frozenset[str] = frozenset()
+        cursor_after: str | None = None
+
+        def follow_up_parents(self, record_ids):
+            return self.parent_ids.intersection(record_ids)
+
+        def load_record_meta(self, record_id):
+            return self.meta if record_id == self.record_id else None
+
+        def has_follow_up_source(self, record_id):
+            return record_id == self.record_id
+
+        def load_follow_ups(self, record_id, *, after):
+            assert record_id == self.record_id
+            self.cursor_after = after
+            return (
+                (
+                    {
+                        "record_id": "c" * 43,
+                        "question_preview": "チキンカレーは?",
+                        "completed_at": NOW.isoformat(),
+                    },
+                ),
+                None if after else f"CHILD#{NOW.isoformat()}#{'c' * 43}",
+            )
+
+    reader = FollowUpReader()
+    records = RecordsReadService(
+        reader=reader, cursor_codec=CursorCodec(SESSION_KEY), follow_ups_enabled=True
+    )
+    prior = records.get_sync_index(cursor=None, now=NOW).items[0].revision
+    assert (
+        records.get_sync_index(cursor=None, now=NOW, include_follow_ups=True).items[0].revision
+        == prior
+    )
+    reader.parent_ids = frozenset({reader.record_id})
+    assert (
+        records.list_records(query=ListQuery(), now=NOW, include_follow_ups=True)
+        .items[0]
+        .has_follow_ups
+    )
+    assert records.get_record(
+        record_id=reader.record_id, now=NOW, include_follow_ups=True
+    ).has_follow_ups
+    assert (
+        records.get_sync_index(cursor=None, now=NOW, include_follow_ups=True).items[0].revision
+        != prior
+    )
+    assert records.get_sync_index(cursor=None, now=NOW).items[0].revision == prior
+
+    mobile = records.get_follow_ups(record_id=reader.record_id, cursor=None, now=NOW, mobile=True)
+    assert mobile.follow_up_available and mobile.items[0].question_preview == "チキンカレーは?"
+    assert mobile.next_cursor is not None
+    web = records.get_follow_ups(
+        record_id=reader.record_id, cursor=mobile.next_cursor, now=NOW, mobile=False
+    )
+    assert not web.follow_up_available and web.next_cursor is None and reader.cursor_after
+    with pytest.raises(ReadFailure, match="CURSOR_INVALID"):
+        records.get_follow_ups(record_id="x" * 43, cursor=mobile.next_cursor, now=NOW, mobile=True)

@@ -126,13 +126,14 @@ export function BrandedRouteStage({ children }: PropsWithChildren) {
   }
 
   useEffect(() => {
+    const followUpsAnchor = scenePath.startsWith("/records/") && location.hash === "#followups";
     if (!mountedRef.current) {
       mountedRef.current = true;
-      return;
+      if (!followUpsAnchor) return;
     }
     const previousPathname = focusedPathnameRef.current;
     focusedPathnameRef.current = scenePath;
-    if (previousPathname === scenePath) return;
+    if (previousPathname === scenePath && !followUpsAnchor) return;
 
     const scene = sceneRef.current;
     if (!scene) return;
@@ -140,7 +141,7 @@ export function BrandedRouteStage({ children }: PropsWithChildren) {
     const returnTarget =
       scenePath === "/" &&
       archiveReturnTarget != null &&
-      previousPathname === `/records/${archiveReturnTarget.recordId}`
+      previousPathname === `/records/${archiveReturnTarget.destinationRecordId}`
         ? archiveReturnTarget
         : null;
     const focusContent = () => {
@@ -148,16 +149,32 @@ export function BrandedRouteStage({ children }: PropsWithChildren) {
         // Cached cards can move or disappear during a refetch. Restore only after
         // the archive's current retrieval has settled, even when a card is present.
         if (!scene.querySelector("[data-archive-ready]")) return false;
-        const card = scene.querySelector<HTMLAnchorElement>(
+        const primary = scene.querySelector<HTMLAnchorElement>(
           `[data-record-id="${returnTarget.recordId}"]`,
         );
-        if (card) {
+        const action =
+          returnTarget.action === "record"
+            ? primary
+            : (primary
+                ?.closest("article")
+                ?.querySelector<HTMLAnchorElement>(
+                  `[data-archive-action="${returnTarget.action}"]`,
+                ) ?? primary);
+        if (action) {
           window.scrollTo({ top: returnTarget.scrollY, behavior: "instant" });
-          card.focus({ preventScroll: true });
+          action.focus({ preventScroll: true });
           clearArchiveReturnTarget?.();
           return true;
         }
         clearArchiveReturnTarget?.();
+      }
+      if (followUpsAnchor) {
+        const sectionHeading = scene.querySelector<HTMLElement>("#followups");
+        if (sectionHeading) {
+          sectionHeading.scrollIntoView({ behavior: "instant", block: "start" });
+          sectionHeading.focus({ preventScroll: true });
+          return true;
+        }
       }
       const heading = scene.querySelector<HTMLElement>('h1[tabindex="-1"]');
       if (!heading) return false;
@@ -172,7 +189,7 @@ export function BrandedRouteStage({ children }: PropsWithChildren) {
     });
     observer.observe(scene, { attributes: true, childList: true, subtree: true });
     return () => observer.disconnect();
-  }, [scenePath, archiveReturnTarget, clearArchiveReturnTarget]);
+  }, [scenePath, location.hash, archiveReturnTarget, clearArchiveReturnTarget]);
 
   return (
     <div

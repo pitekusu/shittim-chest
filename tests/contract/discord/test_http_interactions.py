@@ -22,6 +22,7 @@ from shittim_chest.adapters.discord_http import (
     DiscordPublicKeyError,
     DiscordRequestVerifier,
     extract_api_gateway_v2_request,
+    follow_up_modal_response,
 )
 from shittim_chest.application import (
     DiscordHttpOperation,
@@ -29,6 +30,12 @@ from shittim_chest.application import (
     PanelAction,
     PanelCustomId,
 )
+from shittim_chest.application.discord_http import (
+    FOLLOW_UP_QUESTION_FIELD,
+    DiscordFollowUpOperation,
+    FollowUpCustomId,
+)
+from shittim_chest.application.models import FollowUpParent
 from shittim_chest.domain import AttemptId, DebateId
 
 NOW = datetime(2026, 7, 26, 5, 0, tzinfo=UTC)
@@ -147,6 +154,69 @@ def test_plain_and_base64_api_gateway_bodies_verify_exactly(
     reception = receive(signing_key, command_payload(), base64_encoded=base64_encoded)
 
     assert isinstance(reception.interaction, DiscordHttpOperation)
+
+
+@pytest.mark.parametrize("question", [None, "それならビーフとポーク、どちら?", " ", "a" * 1001])
+def test_signed_follow_up_binds_modal_to_the_original_completion_button(
+    signing_key: SigningKey, question: str | None
+) -> None:
+    parent = FollowUpParent(DebateId.new(), AttemptId.new())
+    binding = FollowUpCustomId(parent, str((1 << 64) - 1))
+    modal = json.loads(follow_up_modal_response(binding).body)
+    assert modal["type"] == 9
+    assert modal["data"]["components"][0]["component"]["max_length"] == 1000
+    assert len(modal["data"]["custom_id"]) <= 100
+
+    payload = command_payload()
+    member = cast(dict[str, object], payload["member"])
+    member["permissions"] = str((1 << 10) | (1 << 11))
+    message: dict[str, object] = {
+        "id": MESSAGE_ID,
+        "channel_id": CHANNEL_ID,
+        "author": {"id": binding.author_id, "bot": True},
+        "components": [{"type": 1, "components": [{"type": 2, "custom_id": binding.encode()}]}],
+    }
+    payload["message"] = message
+    if question is None:
+        payload["type"] = 3
+        payload["data"] = {"component_type": 2, "custom_id": binding.encode()}
+    else:
+        payload["type"] = 5
+        payload["data"] = {
+            "custom_id": modal["data"]["custom_id"],
+            "components": [
+                {
+                    "type": 18,
+                    "component": {
+                        "type": 4,
+                        "custom_id": FOLLOW_UP_QUESTION_FIELD,
+                        "value": question,
+                    },
+                }
+            ],
+        }
+    reception = receive(signing_key, payload)
+    operation = reception.interaction
+    assert isinstance(operation, DiscordFollowUpOperation)
+    assert operation.binding == binding
+    assert operation.is_modal == (question is not None)
+    assert operation.may_post
+    assert operation.question == (
+        question if question is not None and question.strip() and len(question) <= 1000 else None
+    )
+    assert not hasattr(operation, "token")
+
+    for forged in (
+        {"author": {"id": APPLICATION_ID, "bot": True}},
+        {"author": {"id": binding.author_id, "bot": False}},
+        {"channel_id": PARENT_CHANNEL_ID},
+        {"components": []},
+        {"webhook_id": "123"},
+    ):
+        payload["message"] = {**message, **forged}
+        rejected = receive(signing_key, payload)
+        assert rejected.response is not None
+        assert rejected.response.status_code == 400
 
 
 @pytest.mark.parametrize("base64_encoded", [False, True])

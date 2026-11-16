@@ -13,7 +13,10 @@ from enum import StrEnum
 from typing import Protocol
 
 from shittim_chest.application import DebateSnapshot
+from shittim_chest.application.discord_http import FollowUpCustomId
+from shittim_chest.application.models import FollowUpParent
 from shittim_chest.application.status_publication import (
+    DiscordStatusButton,
     DiscordStatusGateway,
     DiscordStatusMessage,
 )
@@ -93,6 +96,7 @@ class RecordLinkNotificationService:
         gateway_factory: RecordLinkGatewayFactory,
         public_hostname: str,
         preview_preparer: RecordPreviewPreparer | None = None,
+        follow_ups_enabled: bool = False,
     ) -> None:
         if _PUBLIC_HOSTNAME.fullmatch(public_hostname) is None:
             raise ValueError("Records public hostname is invalid")
@@ -100,6 +104,7 @@ class RecordLinkNotificationService:
         self._gateway_factory = gateway_factory
         self._public_hostname = public_hostname
         self._preview_preparer = preview_preparer
+        self._follow_ups_enabled = follow_ups_enabled
 
     def publish(
         self,
@@ -142,6 +147,13 @@ class RecordLinkNotificationService:
 
         gateway = await self._gateway_factory.create(snapshot)
         expected_author = await gateway.current_bot_user_id()
+        button = None
+        if self._follow_ups_enabled:
+            parent = FollowUpParent(snapshot.state.debate_id, snapshot.state.attempt_id)
+            button = DiscordStatusButton(
+                custom_id=FollowUpCustomId(parent, expected_author).encode(),
+                label="更問する",
+            )
         nonce = _notification_nonce(record_id)
         content = record_link_message(self._public_hostname, record_id)
         message = None
@@ -176,6 +188,7 @@ class RecordLinkNotificationService:
                 channel_id=snapshot.channel_id,
                 content=content,
                 nonce=nonce,
+                button=button,
             )
         _validate_message(
             message,
@@ -184,6 +197,24 @@ class RecordLinkNotificationService:
             content=content,
             nonce=nonce,
         )
+        if button is not None and message.buttons != (button,):
+            if message.buttons:
+                raise ValueError("Discord record-link components are inconsistent")
+            edited = await gateway.edit_message(
+                channel_id=snapshot.channel_id,
+                message_id=message.message_id,
+                content=content,
+                button=button,
+            )
+            _validate_message(
+                edited,
+                channel_id=snapshot.channel_id,
+                author_id=expected_author,
+                content=content,
+                nonce=nonce,
+            )
+            if edited.message_id != message.message_id or edited.buttons != (button,):
+                raise ValueError("Discord record-link components did not converge")
         self._store.mark_sent(
             record_id=record_id,
             source_fingerprint=source_fingerprint,

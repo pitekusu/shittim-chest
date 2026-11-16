@@ -1650,6 +1650,7 @@ class DynamoDbDebateRepository:
             raise RepositoryConflict("retry source is not failed")
         if retry.state.retry_of != expected_failed.state.attempt_id:
             raise RepositoryConflict("retry source attempt does not match")
+        _require_same_follow_up(expected_failed, retry)
         if _panel_context_complete(expected_failed) and (
             expected_failed.panel_refresh_required_at is None
             or expected_failed.panel_refreshed_at is None
@@ -4433,6 +4434,16 @@ def _require_same_attempt(expected: DebateSnapshot, updated: DebateSnapshot) -> 
         or expected.state.attempt_id != updated.state.attempt_id
     ):
         raise RepositoryConflict("replace cannot change debate or attempt identity")
+    _require_same_follow_up(expected, updated)
+
+
+def _require_same_follow_up(expected: DebateSnapshot, updated: DebateSnapshot) -> None:
+    if (
+        expected.follow_up_parent != updated.follow_up_parent
+        or expected.previous_debate != updated.previous_debate
+        or expected.follow_up_parent_thread_id != updated.follow_up_parent_thread_id
+    ):
+        raise RepositoryConflict("accepted follow-up context is immutable")
 
 
 def _require_ingress_origin(

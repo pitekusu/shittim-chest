@@ -225,4 +225,21 @@
     <string name="attachment_offline">この画像は端末に保存されていません。オンラインで記録を開くと保存できます。</string>
     <string name="attachment_storage">画像を保存できません。端末の空き容量を確認してください。</string>
     <string name="attachment_unavailable">画像を開けませんでした。本文は引き続き読むことができます。</string>
+    <string name="record_followup_child">更問</string>
+    <string name="record_followup_parent">元の議論を開く</string>
+    <string name="record_followup_parent_question">元の議論：%1$s</string>
+    <string name="record_followup_has_children">更問あり・一覧を見る</string>
+    <string name="record_followup_children">この議論への更問</string>
+    <string name="record_followup_start">更問する</string>
+    <string name="record_followup_saved_only">端末に保存済みの更問だけを表示しています。</string>
+    <string name="record_followup_loading">関連する議論を読み込んでいます。</string>
+    <string name="record_followup_retry">関連する議論を再読み込み</string>
+    <string name="record_followup_more">更問をもっと見る</string>
+    <string name="record_followup_replace_title">未送信の下書きがあります</string>
+    <string name="record_followup_replace_message">この更問を始めると、現在の下書きと添付画像を破棄します。</string>
+    <string name="record_followup_replace">下書きを破棄して更問する</string>
+    <string name="record_followup_parent_context">元の議論と結論</string>
+    <string name="record_followup_question">追加で聞きたいこと</string>
+    <string name="record_followup_parent_unavailable">元の議論を参照できなくなったため、更問を受け付けられませんでした。</string>
+    <string name="record_followup_edit_as_new">質問を新しい議題の下書きに戻す</string>
 </resources>

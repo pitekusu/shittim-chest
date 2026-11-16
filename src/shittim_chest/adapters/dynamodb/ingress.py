@@ -3034,6 +3034,7 @@ def _assert_common_identity(
         incoming.command_name,
         incoming.custom_id,
         incoming.question,
+        incoming.follow_up_parent,
         incoming.attachments,
         tuple(
             (image.attachment_id, image.content_type, image.size_bytes)
@@ -3061,6 +3062,7 @@ def _assert_common_identity(
         persisted.command_name,
         persisted.custom_id,
         persisted.question,
+        persisted.follow_up_parent,
         persisted.attachments,
         tuple(
             (image.attachment_id, image.content_type, image.size_bytes)

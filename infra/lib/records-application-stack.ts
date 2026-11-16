@@ -121,6 +121,10 @@ export class RecordsApplicationStack extends Stack {
       type: "String", default: "false", allowedValues: ["false", "true"],
       description: "Enable new Android submissions only after compatible Core deployment",
     });
+    const debateFollowUpsEnabled = new CfnParameter(this, "DebateFollowUpsEnabled", {
+      type: "String", default: "false", allowedValues: ["false", "true"],
+      description: "Enable follow-up admission and Discord controls after compatible Core deployment",
+    });
     const mobileDebateChannel = new CfnParameter(this, "MobileDebateChannelId", {
       type: "String", default: "", allowedPattern: "^$|^[0-9]{17,20}$",
       description: "One normal text channel from the existing Core allowlist; required when enabled",
@@ -301,6 +305,9 @@ export class RecordsApplicationStack extends Stack {
         moderatorTokenParameterName: MODERATOR_TOKEN_PARAMETER_NAME,
       },
     });
+    this.projectorFunction.addEnvironment(
+      "RECORDS_DEBATE_FOLLOW_UPS_ENABLED", debateFollowUpsEnabled.valueAsString,
+    );
     this.projectorFunction.addEnvironment("MOBILE_PUSH_QUEUE_URL", mobilePushQueue.queueUrl);
     mobilePushQueue.grantSendMessages(this.projectorFunction);
     this.projectorFunction.addToRolePolicy(new iam.PolicyStatement({
@@ -928,6 +935,8 @@ export class RecordsApplicationStack extends Stack {
       timeout: Duration.seconds(10),
       reservedConcurrentExecutions: 4,
       environment: {
+        MOBILE_DEBATE_ENABLED: mobileDebateEnabled.valueAsString,
+        RECORDS_DEBATE_FOLLOW_UPS_ENABLED: debateFollowUpsEnabled.valueAsString,
         RECORDS_PUBLIC_HOSTNAME: recordsPublicHostname.valueAsString,
         ARCHIVE_TABLE_NAME: archiveTable.tableName,
         STATISTICS_TABLE_NAME: statisticsTable.tableName,
@@ -995,11 +1004,32 @@ export class RecordsApplicationStack extends Stack {
         }),
         new iam.PolicyStatement({
           actions: ["dynamodb:Query"],
-          resources: [
-            archiveTable.tableArn,
-            `${archiveTable.tableArn}/index/gsi1`,
-            `${archiveTable.tableArn}/index/gsi2`,
-          ],
+          resources: [`${archiveTable.tableArn}/index/gsi1`, `${archiveTable.tableArn}/index/gsi2`],
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:Query"],
+          resources: [archiveTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["RECORD#*", "RECORD-FOLLOWUPS#*"] },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:BatchGetItem"],
+          resources: [archiveTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["RECORD-FOLLOWUPS#*"] },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"],
+          resources: [archiveTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["RECORD#*", "RECORD-SOURCE#*"] },
+            "ForAllValues:StringEquals": { "dynamodb:Attributes": ["PK", "SK", "record_id", "schema_version", "record_type"] },
+            Null: { "dynamodb:LeadingKeys": "false", "dynamodb:Attributes": "false" },
+          },
         }),
         new iam.PolicyStatement({
           actions: ["ssm:GetParameters"],
@@ -2082,6 +2112,7 @@ export class RecordsApplicationStack extends Stack {
     const readVersion = new lambda.Version(this, "ReadVersion", {
       lambda: this.readFunction,
       codeSha256: bundleCodeSha256.valueAsString,
+      description: `Read follow-ups enabled=${debateFollowUpsEnabled.valueAsString} mobile=${mobileDebateEnabled.valueAsString}`,
     });
     const adminConfigVersion = new lambda.Version(this, "AdminConfigVersion", {
       lambda: this.adminConfigFunction,
@@ -2139,6 +2170,7 @@ export class RecordsApplicationStack extends Stack {
         MODERATOR_TOKEN_PARAMETER_NAME,
         PUBLIC_ORIGIN: `https://${recordsPublicHostname.valueAsString}`,
         MOBILE_DEBATE_ENABLED: mobileDebateEnabled.valueAsString,
+        RECORDS_DEBATE_FOLLOW_UPS_ENABLED: debateFollowUpsEnabled.valueAsString,
         MOBILE_DEBATE_CHANNEL_ID: mobileDebateChannel.valueAsString,
       },
       policyStatements: [
@@ -2190,6 +2222,15 @@ export class RecordsApplicationStack extends Stack {
             "ForAllValues:StringEquals": { "dynamodb:Attributes": ["PK", "SK", "schema_version", "record_type", "record_id", "requester_key", "question"] },
             StringEqualsIfExists: { "dynamodb:Select": "SPECIFIC_ATTRIBUTES" },
             Null: { "dynamodb:Attributes": "false", "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"], resources: [archiveTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["RECORD-SOURCE#*"] },
+            "ForAllValues:StringEquals": { "dynamodb:Attributes": ["PK", "SK", "record_id", "debate_id", "attempt_id"] },
+            StringEqualsIfExists: { "dynamodb:Select": "SPECIFIC_ATTRIBUTES" },
+            Null: { "dynamodb:LeadingKeys": "false", "dynamodb:Attributes": "false" },
           },
         }),
         new iam.PolicyStatement({
@@ -2269,7 +2310,7 @@ export class RecordsApplicationStack extends Stack {
       lambda: this.mobileDebateFunction, codeSha256: bundleCodeSha256.valueAsString,
       // Lambda versions freeze configuration. Flag changes must replace the
       // version and advance live even when the reviewed code bundle is unchanged.
-      description: `Native debate admission enabled=${mobileDebateEnabled.valueAsString}`,
+      description: `Native debate admission enabled=${mobileDebateEnabled.valueAsString} follow-ups=${debateFollowUpsEnabled.valueAsString}`,
     });
     const mobileDebateAlias = new lambda.Alias(this, "MobileDebateLiveAlias", {
       aliasName: "live", version: mobileDebateVersion,
@@ -2387,6 +2428,11 @@ export class RecordsApplicationStack extends Stack {
     });
     api.addRoutes({
       path: "/api/v1/records/{recordId}",
+      methods: [apigatewayv2.HttpMethod.GET],
+      integration: readIntegration,
+    });
+    api.addRoutes({
+      path: "/api/v1/records/{recordId}/follow-ups",
       methods: [apigatewayv2.HttpMethod.GET],
       integration: readIntegration,
     });
@@ -2620,6 +2666,14 @@ export class RecordsApplicationStack extends Stack {
       }),
     );
     if (options.allowScan) {
+      role.addToPrincipalPolicy(new iam.PolicyStatement({
+        actions: ["dynamodb:PutItem"],
+        resources: [options.archiveTable.tableArn],
+        conditions: {
+          "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["RECORD-SOURCE#*"] },
+          Null: { "dynamodb:LeadingKeys": "false" },
+        },
+      }));
       role.addToPrincipalPolicy(
         new iam.PolicyStatement({
           actions: ["dynamodb:GetItem", "dynamodb:PutItem"],

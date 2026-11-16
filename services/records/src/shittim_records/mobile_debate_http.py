@@ -155,7 +155,7 @@ class MobileDebateHttpController:
                 if (
                     not isinstance(data, dict)
                     or not {"requestId", "question"} <= set(data)
-                    or not set(data) <= {"requestId", "question", "attachmentIds"}
+                    or not set(data) <= {"requestId", "question", "attachmentIds", "parentRecordId"}
                 ):
                     raise DebateRequestFailure("REQUEST_INVALID", 400)
                 payload = DebateStartRequest.model_validate(data, strict=True)

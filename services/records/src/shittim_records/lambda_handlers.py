@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -179,7 +180,7 @@ def backfill_handler(event: Mapping[str, Any], context: object) -> dict[str, obj
     if mode not in {"dry-run", "apply"}:
         raise ValueError("backfill mode must be dry-run or apply")
     target = event.get("target", "records")
-    if target not in {"records", "student-gacha"}:
+    if target not in {"records", "student-gacha", "follow-up-sources"}:
         raise ValueError("backfill target is invalid")
     page_limit = event.get("page_limit", 25 if target == "student-gacha" else 100)
     if isinstance(page_limit, bool) or not isinstance(page_limit, int):
@@ -200,7 +201,10 @@ def backfill_handler(event: Mapping[str, Any], context: object) -> dict[str, obj
             **{key: value for key, value in page.items() if key != "next_cursor"},
         )
         return {"target": target, "mode": mode, **page}
-    result = _backfill_service().run_page(
+    service = (
+        _follow_up_backfill_service() if target == "follow-up-sources" else _backfill_service()
+    )
+    result = service.run_page(
         apply=mode == "apply",
         now=datetime.now(UTC),
         page_limit=page_limit,
@@ -431,6 +435,19 @@ def _backfill_service() -> BackfillService:
             ),
         )
     return _BACKFILL
+
+
+def _follow_up_backfill_service() -> BackfillService:
+    dynamodb = boto3.client("dynamodb", config=SDK_CONFIG)
+    source = SourceDebateRepository(dynamodb, _environment("SOURCE_TABLE_NAME"))
+    return BackfillService(
+        source=source,
+        projector=_build_projector(dynamodb, boto3.client("ssm", config=SDK_CONFIG), source=source),
+        statistics=StatisticsRepository(
+            dynamodb, _environment("STATISTICS_TABLE_NAME"), follow_up_sources_only=True
+        ),
+        follow_up_sources_only=True,
+    )
 
 
 def _gallery_projector_service() -> GalleryProjector:
@@ -798,6 +815,7 @@ def _build_projector(
             ),
             public_hostname=_environment("RECORDS_PUBLIC_HOSTNAME"),
             preview_preparer=LambdaPreviewPreparer(_environment("OGP_FUNCTION_NAME")),
+            follow_ups_enabled=os.environ.get("RECORDS_DEBATE_FOLLOW_UPS_ENABLED") == "true",
         )
         if enable_record_link_notifications
         else None
@@ -807,6 +825,7 @@ def _build_projector(
         archive=ArchiveRepository(
             dynamodb,
             _environment("ARCHIVE_TABLE_NAME"),
+            write_follow_up_sources=True,
             notification_table_name=(
                 statistics_table_name if enable_record_link_notifications else None
             ),

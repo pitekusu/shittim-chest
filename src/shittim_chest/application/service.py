@@ -49,6 +49,7 @@ from shittim_chest.application.models import (
     MetricEvent,
     PhaseDeliveryPlan,
     PhaseDeliveryStatus,
+    PreviousDebate,
     RetryDebateCommand,
 )
 from shittim_chest.application.ports import (
@@ -94,8 +95,12 @@ from shittim_chest.domain.composite_voting import COMPOSITE_VOTING_VERSION
 _T = TypeVar("_T")
 
 
-class _FinalProposalImageKwargs(TypedDict, total=False):
+class _ImageArguments(TypedDict, total=False):
     images: tuple[ImageInput, ...]
+
+
+class _DebateGenerationArguments(_ImageArguments, total=False):
+    previous_debate: PreviousDebate
 
 
 type _AttemptExceptionStage = Literal[
@@ -236,24 +241,7 @@ class DebateApplication:
             ingress_claim=replay_claim,
         )
         if existing is not None:
-            if (
-                existing.requester_id != request.requester_id
-                or existing.requester_username != request.requester_username
-                or existing.requester_display_name != request.requester_display_name
-                or existing.guild_id != request.guild_id
-                or existing.channel_id != request.channel_id
-                or existing.question != request.question
-                or tuple(
-                    (image.attachment_id, image.content_type, image.size_bytes)
-                    for image in (*existing.attachments, *existing.pending_attachments)
-                )
-                != tuple(
-                    (image.attachment_id, image.content_type, image.size_bytes)
-                    for image in (*request.attachments, *request.pending_attachments)
-                )
-                or (request.attachments and existing.attachments != request.attachments)
-            ):
-                raise InvalidApplicationOperation("operation ID is bound to another request")
+            _require_matching_acceptance(existing, request)
             existing = await self._reclaim_ingress_replay(existing, ingress_claim=ingress_claim)
             return AcceptedDebate(existing.state.debate_id, existing.state.attempt_id)
 
@@ -262,12 +250,32 @@ class DebateApplication:
         if not await self._discord.request_is_allowed(request):
             raise RequestNotAllowed("the configured Guild/channel policy rejected the request")
 
+        previous_debate = None
+        parent_thread_id = None
+        if request.follow_up_parent is not None:
+            parent = await self._repository.get(request.follow_up_parent.debate_id)
+            if (
+                parent is None
+                or parent.state.debate_id != request.follow_up_parent.debate_id
+                or parent.state.attempt_id != request.follow_up_parent.attempt_id
+                or parent.state.phase is not DebatePhase.COMPLETED
+                or parent.final_decision is None
+                or parent.guild_id != request.guild_id
+                or parent.channel_id != request.channel_id
+            ):
+                raise RequestNotAllowed("follow-up parent is unavailable")
+            previous_debate = PreviousDebate.from_result(parent.question, parent.final_decision)
+            parent_thread_id = parent.thread_id
+
         debate_id = self._ids.new_debate_id()
         attempt_id = self._ids.new_attempt_id()
         now = self._clock.now()
         snapshot = DebateSnapshot(
             state=DebateState.accepted(debate_id, attempt_id, at=now),
             question=request.question,
+            follow_up_parent=request.follow_up_parent,
+            previous_debate=previous_debate,
+            follow_up_parent_thread_id=parent_thread_id,
             attachments=request.attachments,
             pending_attachments=request.pending_attachments,
             requester_id=request.requester_id,
@@ -289,6 +297,7 @@ class DebateApplication:
             lease_owner=self._lease_owner,
             ingress_claim=_claim_for_write(ingress_claim, at=now),
         )
+        _require_matching_acceptance(persisted, request)
         self._metrics.increment(MetricEvent.ACCEPTED, debate_id=persisted.state.debate_id)
         return AcceptedDebate(
             debate_id=persisted.state.debate_id,
@@ -879,7 +888,7 @@ class DebateApplication:
             )
         return snapshot
 
-    async def _image_arguments(self, snapshot: DebateSnapshot) -> dict[str, tuple[ImageInput, ...]]:
+    async def _image_arguments(self, snapshot: DebateSnapshot) -> _ImageArguments:
         if snapshot.pending_attachments:
             raise _ImagePreparationFailed
         if not snapshot.attachments:
@@ -892,6 +901,12 @@ class DebateApplication:
                 snapshot.attachments
             )
         return {"images": self._image_inputs[key]}
+
+    async def _generation_arguments(self, snapshot: DebateSnapshot) -> _DebateGenerationArguments:
+        arguments: _DebateGenerationArguments = {**await self._image_arguments(snapshot)}
+        if snapshot.previous_debate is not None:
+            arguments["previous_debate"] = snapshot.previous_debate
+        return arguments
 
     async def _stage_image_delivery(self, snapshot: DebateSnapshot) -> DebateSnapshot:
         if self._image_outbox is None or snapshot.thread_id is None:
@@ -1019,7 +1034,7 @@ class DebateApplication:
         if evidence is None:
             evidence = await self._within_phase(
                 self._evidence.prepare_evidence(
-                    question=snapshot.question, **await self._image_arguments(snapshot)
+                    question=snapshot.question, **await self._generation_arguments(snapshot)
                 ),
                 snapshot=snapshot,
             )
@@ -1229,7 +1244,7 @@ class DebateApplication:
                     self._openai.form_preferences(
                         participant=participant,
                         question=snapshot.question,
-                        **await self._image_arguments(snapshot),
+                        **await self._generation_arguments(snapshot),
                     ),
                     snapshot=snapshot,
                     participant=participant,
@@ -1242,7 +1257,7 @@ class DebateApplication:
                     self._openai.select_candidates(
                         participant=participant,
                         question=snapshot.question,
-                        **await self._image_arguments(snapshot),
+                        **await self._generation_arguments(snapshot),
                         evidence=self._require_evidence(snapshot),
                         preference_frame=frame,
                     ),
@@ -1819,7 +1834,7 @@ class DebateApplication:
             decision = await self._within_phase(
                 self._openai.generate_decision(
                     question=snapshot.question,
-                    **await self._image_arguments(snapshot),
+                    **await self._generation_arguments(snapshot),
                     evidence=evidence,
                     proposals=snapshot.final_proposals,
                     voting_result=voting_result,
@@ -1973,7 +1988,7 @@ class DebateApplication:
                 self._openai.generate_initial_opinion(
                     participant=participant,
                     question=snapshot.question,
-                    **await self._image_arguments(snapshot),
+                    **await self._generation_arguments(snapshot),
                     evidence=evidence,
                     affection_score=_affection_score(snapshot, participant),
                     preference_frame=snapshot.preference_for(participant),
@@ -2129,7 +2144,7 @@ class DebateApplication:
                     self._openai.generate_final_proposal(
                         participant=participant,
                         question=snapshot.question,
-                        **await self._image_arguments(snapshot),
+                        **await self._generation_arguments(snapshot),
                         evidence=evidence,
                         initial_opinions=snapshot.initial_opinions,
                         affection_score=_affection_score(snapshot, participant),
@@ -2238,7 +2253,7 @@ class DebateApplication:
         images: tuple[ImageInput, ...] = (),
     ) -> tuple[FinalProposal, ...]:
         tasks: dict[ParticipantSlot, asyncio.Task[FinalProposal]] = {}
-        image_kwargs: _FinalProposalImageKwargs = {"images": images} if images else {}
+        image_kwargs: _ImageArguments = {"images": images} if images else {}
         async with asyncio.TaskGroup() as task_group:
             for participant in PARTICIPANTS:
                 tasks[participant] = task_group.create_task(
@@ -2340,7 +2355,7 @@ class DebateApplication:
                 self._openai.cast_vote(
                     voter=participant,
                     question=snapshot.question,
-                    **await self._image_arguments(snapshot),
+                    **await self._generation_arguments(snapshot),
                     evidence=evidence,
                     candidates=candidates,
                     preference_frame=snapshot.preference_for(participant),
@@ -2977,6 +2992,28 @@ class DebateApplication:
     ) -> None:
         if actor_id != snapshot.requester_id and not can_manage_messages:
             raise RequestNotAllowed("only the requester or a moderator may perform this operation")
+
+
+def _require_matching_acceptance(existing: DebateSnapshot, request: AcceptDebateRequest) -> None:
+    if (
+        existing.requester_id != request.requester_id
+        or existing.requester_username != request.requester_username
+        or existing.requester_display_name != request.requester_display_name
+        or existing.guild_id != request.guild_id
+        or existing.channel_id != request.channel_id
+        or existing.question != request.question
+        or existing.follow_up_parent != request.follow_up_parent
+        or tuple(
+            (image.attachment_id, image.content_type, image.size_bytes)
+            for image in (*existing.attachments, *existing.pending_attachments)
+        )
+        != tuple(
+            (image.attachment_id, image.content_type, image.size_bytes)
+            for image in (*request.attachments, *request.pending_attachments)
+        )
+        or (request.attachments and existing.attachments != request.attachments)
+    ):
+        raise InvalidApplicationOperation("operation ID is bound to another request")
 
 
 def _attempt_error_for_handling(error: Exception) -> Exception:
