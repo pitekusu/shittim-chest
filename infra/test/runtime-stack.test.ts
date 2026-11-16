@@ -149,22 +149,10 @@ describe("RuntimeStack", () => {
     // would weaken the VPC baseline solely to change a resource count.
     expect(deploymentProviders).toHaveLength(1);
     expect(functions).toHaveLength(5);
-    const layers = Object.entries(template.findResources("AWS::Lambda::LayerVersion"));
-    expect(layers).toHaveLength(1);
-    const [layerId, layer] = layers[0]!;
-    expect(layer.Properties).toMatchObject({
-      CompatibleArchitectures: ["x86_64"],
-      CompatibleRuntimes: ["nodejs24.x"],
-      LayerName: "shittim-chest-production-cdk-helper-tls",
-      LicenseInfo: "MIT AND MPL-2.0",
-    });
-    expect(deploymentProviders[0]!.Properties).toMatchObject({
-      Environment: {
-        Variables: { NODE_OPTIONS: "--require=/opt/shittim-tls/trust.cjs" },
-      },
-      Layers: [{ Ref: layerId }],
-      Runtime: "nodejs24.x",
-    });
+    template.resourceCountIs("AWS::Lambda::LayerVersion", 0);
+    expect(deploymentProviders[0]!.Properties.Runtime).toBe("nodejs24.x");
+    expect(deploymentProviders[0]!.Properties.Layers).toBeUndefined();
+    expect(deploymentProviders[0]!.Properties.Environment).toBeUndefined();
     expect(
       Object.keys(template.findResources("AWS::Lambda::Function")),
     ).toContain("CustomVpcRestrictDefaultSGCustomResourceProviderHandlerDC833E5E");

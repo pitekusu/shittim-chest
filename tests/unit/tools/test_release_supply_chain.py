@@ -76,28 +76,28 @@ def cdk_assets() -> dict[str, object]:
             }
         )
         if artifact_name == "Runtime":
-            for zip_id in ("a" * 64, "b" * 64):
-                files.append(
-                    {
-                        "stack": stack,
-                        "asset_id": zip_id,
-                        "source_path": f"asset.{zip_id}",
-                        "packaging": "zip",
-                        "region": region,
-                        "bucket": bucket,
-                        "object_key": f"{zip_id}.zip",
-                        "publisher": "current_credentials",
-                        "s3_checksum_sha256": "B" * 43 + "=",
-                    }
-                )
-    return {"schema_version": 1, "manifests": manifests, "files": files}
+            zip_id = "a" * 64
+            files.append(
+                {
+                    "stack": stack,
+                    "asset_id": zip_id,
+                    "source_path": f"asset.{zip_id}",
+                    "packaging": "zip",
+                    "region": region,
+                    "bucket": bucket,
+                    "object_key": f"{zip_id}.zip",
+                    "publisher": "current_credentials",
+                    "s3_checksum_sha256": "B" * 43 + "=",
+                }
+            )
+    return {"schema_version": 2, "manifests": manifests, "files": files}
 
 
 def write_cdk_assembly(
     path: Path,
     *,
     include_runtime_provider: bool = True,
-    include_runtime_tls_layer: bool = True,
+    legacy: bool = False,
 ) -> None:
     path.mkdir()
     for index, (_, artifact_name, region) in enumerate(CDK_STACKS, start=1):
@@ -106,32 +106,35 @@ def write_cdk_assembly(
         template: dict[str, object] = {}
         if artifact_name == "Runtime":
             bucket = f"cdk-hnb659fds-assets-000000000000-{region}"
-            template = {
-                "Resources": {
-                    VPC_PROVIDER_ID: {
-                        "Type": "AWS::Lambda::Function",
-                        "Properties": {
-                            "Code": {"S3Bucket": bucket, "S3Key": "a" * 64 + ".zip"},
-                            "Layers": [{"Ref": TLS_LAYER_ID}],
-                        },
-                        "Metadata": {
-                            "aws:asset:path": "asset." + "a" * 64,
-                            "aws:asset:property": "Code",
-                        },
-                    },
-                    TLS_LAYER_ID: {
-                        "Type": "AWS::Lambda::LayerVersion",
-                        "Properties": {
-                            "LayerName": "shittim-chest-production-cdk-helper-tls",
-                            "Content": {"S3Bucket": bucket, "S3Key": "b" * 64 + ".zip"},
-                        },
-                        "Metadata": {
-                            "aws:asset:path": "asset." + "b" * 64,
-                            "aws:asset:property": "Content",
-                        },
+            provider_properties: dict[str, object] = {
+                "Code": {"S3Bucket": bucket, "S3Key": "a" * 64 + ".zip"},
+                "Handler": "__entrypoint__.handler",
+                "Runtime": "nodejs24.x",
+            }
+            resources = {
+                VPC_PROVIDER_ID: {
+                    "Type": "AWS::Lambda::Function",
+                    "Properties": provider_properties,
+                    "Metadata": {
+                        "aws:asset:path": "asset." + "a" * 64,
+                        "aws:asset:property": "Code",
                     },
                 }
             }
+            if legacy:
+                provider_properties["Layers"] = [{"Ref": TLS_LAYER_ID}]
+                resources[TLS_LAYER_ID] = {
+                    "Type": "AWS::Lambda::LayerVersion",
+                    "Properties": {
+                        "LayerName": "shittim-chest-production-cdk-helper-tls",
+                        "Content": {"S3Bucket": bucket, "S3Key": "b" * 64 + ".zip"},
+                    },
+                    "Metadata": {
+                        "aws:asset:path": "asset." + "b" * 64,
+                        "aws:asset:property": "Content",
+                    },
+                }
+            template = {"Resources": resources}
         (path / template_name).write_text(json.dumps(template) + "\n", encoding="utf-8")
         files: dict[str, object] = {
             template_id: {
@@ -149,13 +152,13 @@ def write_cdk_assembly(
         if artifact_name == "Runtime":
             for zip_id, included in (
                 ("a" * 64, include_runtime_provider),
-                ("b" * 64, include_runtime_tls_layer),
+                ("b" * 64, legacy),
             ):
                 if not included:
                     continue
                 (path / f"asset.{zip_id}").mkdir()
                 files[zip_id] = {
-                    "displayName": "Runtime Provider or TLS Layer",
+                    "displayName": "Runtime CDK ZIP",
                     "source": {"path": f"asset.{zip_id}", "packaging": "zip"},
                     "destinations": {
                         "runtime-destination": {
@@ -194,13 +197,17 @@ def asset_checksums(evidence: dict[str, object], assembly: Path) -> list[dict[st
     return records
 
 
-def test_inventory_covers_every_cdk_file_asset_and_binds_the_assembly(tmp_path: Path) -> None:
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_inventory_covers_every_cdk_file_asset_and_binds_the_assembly(
+    tmp_path: Path, schema_version: int
+) -> None:
     assembly = tmp_path / "cdk.out"
-    write_cdk_assembly(assembly)
+    write_cdk_assembly(assembly, legacy=schema_version == 1)
 
     unpublished = create_cdk_asset_evidence(
         account="000000000000",
         assembly_dir=assembly,
+        schema_version=schema_version,
     )
     result = bind_cdk_asset_checksums(
         unpublished,
@@ -215,24 +222,20 @@ def test_inventory_covers_every_cdk_file_asset_and_binds_the_assembly(tmp_path: 
         account="000000000000",
         assembly_dir=assembly,
     )
-    assert len(cast(list[object], result["files"])) == 6
+    expected_keys = {str(index) * 64 + ".json" for index in range(1, 5)} | {"a" * 64 + ".zip"}
+    if schema_version == 1:
+        expected_keys.add("b" * 64 + ".zip")
+    assert result["schema_version"] == schema_version
     assert {
         cast(dict[str, object], item)["object_key"] for item in cast(list[object], result["files"])
-    } == {
-        "1" * 64 + ".json",
-        "2" * 64 + ".json",
-        "3" * 64 + ".json",
-        "4" * 64 + ".json",
-        "a" * 64 + ".zip",
-        "b" * 64 + ".zip",
-    }
+    } == expected_keys
 
 
 def test_rejects_docker_assets_and_a_missing_runtime_provider(tmp_path: Path) -> None:
     assembly = tmp_path / "cdk.out"
     write_cdk_assembly(assembly, include_runtime_provider=False)
 
-    with pytest.raises(ValueError, match="exactly two ZIP assets"):
+    with pytest.raises(ValueError, match="exactly 1 ZIP"):
         create_cdk_asset_evidence(account="000000000000", assembly_dir=assembly)
 
     runtime_manifest = assembly / "Runtime.assets.json"
@@ -261,7 +264,7 @@ def test_rejects_a_cdk_asset_destination_that_assumes_a_publisher_role(
         create_cdk_asset_evidence(account="000000000000", assembly_dir=assembly)
 
 
-def test_rejects_an_asset_closure_beyond_the_reviewed_six_files(tmp_path: Path) -> None:
+def test_rejects_an_asset_closure_beyond_the_reviewed_five_files(tmp_path: Path) -> None:
     assembly = tmp_path / "cdk.out"
     write_cdk_assembly(assembly)
     extra_id = "c" * 64
@@ -281,15 +284,36 @@ def test_rejects_an_asset_closure_beyond_the_reviewed_six_files(tmp_path: Path) 
     }
     manifest.write_text(json.dumps(payload), encoding="utf-8")
 
-    with pytest.raises(ValueError, match=r"unexpected file|exactly six"):
+    with pytest.raises(ValueError, match="unexpected file"):
         create_cdk_asset_evidence(account="000000000000", assembly_dir=assembly)
 
 
-def test_rejects_a_missing_runtime_tls_layer_asset(tmp_path: Path) -> None:
+def test_rejects_a_legacy_tls_layer_asset_in_a_new_release(tmp_path: Path) -> None:
     assembly = tmp_path / "cdk.out"
-    write_cdk_assembly(assembly, include_runtime_tls_layer=False)
+    write_cdk_assembly(assembly, legacy=True)
 
-    with pytest.raises(ValueError, match="exactly two ZIP assets"):
+    with pytest.raises(ValueError, match="exactly 1 ZIP"):
+        create_cdk_asset_evidence(account="000000000000", assembly_dir=assembly)
+
+
+@pytest.mark.parametrize(
+    ("property_name", "value"),
+    [
+        ("Layers", [{"Ref": TLS_LAYER_ID}]),
+        ("Environment", {"Variables": {"NODE_OPTIONS": "--require=/opt/other.cjs"}}),
+    ],
+)
+def test_new_release_rejects_tls_overrides_on_the_provider(
+    tmp_path: Path, property_name: str, value: object
+) -> None:
+    assembly = tmp_path / "cdk.out"
+    write_cdk_assembly(assembly)
+    template = assembly / "Runtime.template.json"
+    data = json.loads(template.read_text(encoding="utf-8"))
+    data["Resources"][VPC_PROVIDER_ID]["Properties"][property_name] = value
+    template.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"standard Node\.js 24"):
         create_cdk_asset_evidence(account="000000000000", assembly_dir=assembly)
 
 
@@ -330,19 +354,19 @@ def test_rejects_an_unbound_runtime_tls_layer(
     tmp_path: Path, mutate: Callable[[dict[str, object]], None], message: str
 ) -> None:
     assembly = tmp_path / "cdk.out"
-    write_cdk_assembly(assembly)
+    write_cdk_assembly(assembly, legacy=True)
     template = assembly / "Runtime.template.json"
     value = json.loads(template.read_text(encoding="utf-8"))
     mutate(value["Resources"])
     template.write_text(json.dumps(value), encoding="utf-8")
 
     with pytest.raises(ValueError, match=message):
-        create_cdk_asset_evidence(account="000000000000", assembly_dir=assembly)
+        create_cdk_asset_evidence(account="000000000000", assembly_dir=assembly, schema_version=1)
 
 
 def test_rejects_swapped_provider_and_tls_layer_asset_references(tmp_path: Path) -> None:
     assembly = tmp_path / "cdk.out"
-    write_cdk_assembly(assembly)
+    write_cdk_assembly(assembly, legacy=True)
     template = assembly / "Runtime.template.json"
     value = json.loads(template.read_text(encoding="utf-8"))
     resources = value["Resources"]
@@ -352,7 +376,7 @@ def test_rejects_swapped_provider_and_tls_layer_asset_references(tmp_path: Path)
     template.write_text(json.dumps(value), encoding="utf-8")
 
     with pytest.raises(ValueError, match="metadata does not match"):
-        create_cdk_asset_evidence(account="000000000000", assembly_dir=assembly)
+        create_cdk_asset_evidence(account="000000000000", assembly_dir=assembly, schema_version=1)
 
 
 def test_rejects_a_zip_source_that_could_require_a_multipart_checksum(
