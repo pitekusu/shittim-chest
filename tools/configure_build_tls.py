@@ -171,11 +171,12 @@ def configure_java(output: Path, environment: dict[str, str]) -> dict[str, str]:
         environment=environment,
     )
     approved = filter_bundle(public)
-    # JSSE prefers jssecacerts over the cacerts that keytool just verified.
+    # JVM options may change java.home. JSSE also prefers jssecacerts over cacerts.
     if (
         environment.get("RUNNER_ENVIRONMENT") == "github-hosted"
         and environment.get("GITHUB_ACTIONS") == "true"
         and not inherited_selection
+        and not any(environment.get(name) for name in JAVA_OPTIONS)
         and not (java_home / "lib/security/jssecacerts").exists()
         and approved == b"".join(pem_certificates(public))
     ):

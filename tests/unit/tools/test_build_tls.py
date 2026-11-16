@@ -204,8 +204,12 @@ def test_our_inherited_java_store_is_verified_then_replaced_without_duplicate_op
         build.configure_java(tmp_path, environment)
 
 
+@pytest.mark.parametrize("override", ("jssecacerts", *build.JAVA_OPTIONS))
 def test_verified_jdk_uses_vendor_store_unless_jsse_has_another_default(
-    tmp_path: Path, certificates: tuple[bytes, bytes, str], monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    certificates: tuple[bytes, bytes, str],
+    monkeypatch: pytest.MonkeyPatch,
+    override: str,
 ) -> None:
     public, _, _ = certificates
     commands: list[list[str]] = []
@@ -218,7 +222,6 @@ def test_verified_jdk_uses_vendor_store_unless_jsse_has_another_default(
     jdk = tmp_path / "jdk"
     environment = {
         "JAVA_HOME": str(jdk),
-        "JAVA_TOOL_OPTIONS": "-Djava.io.tmpdir=/disk/tmp",
         "RUNNER_ENVIRONMENT": "github-hosted",
         "GITHUB_ACTIONS": "true",
     }
@@ -227,9 +230,12 @@ def test_verified_jdk_uses_vendor_store_unless_jsse_has_another_default(
     assert len(commands) == 1 and "-cacerts" in commands[0]
     assert not (tmp_path / "java-ca.pem").exists()
 
-    override = jdk / "lib/security/jssecacerts"
-    override.parent.mkdir(parents=True)
-    override.touch()
+    if override == "jssecacerts":
+        alternate = jdk / "lib/security/jssecacerts"
+        alternate.parent.mkdir(parents=True)
+        alternate.touch()
+    else:
+        environment[override] = "-Djava.home=/alternate-jdk"
     values = build.configure_java(tmp_path, environment)
     assert "trustStore=" in values["JAVA_TOOL_OPTIONS"]
     assert (tmp_path / "java-ca.pem").read_bytes() == public
