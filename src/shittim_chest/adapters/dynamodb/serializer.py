@@ -92,6 +92,10 @@ type DynamoItem = dict[str, DynamoValue]
 CURRENT_SCHEMA_VERSION = 11
 PREVIOUS_SCHEMA_VERSION = 10
 SUPPORTED_SCHEMA_VERSIONS = frozenset({8, 9, 10, 11})
+LEGACY_COMPLETED_DEBATE_SCHEMA_VERSION = 7
+SUPPORTED_COMPLETED_DEBATE_SCHEMA_VERSIONS = SUPPORTED_SCHEMA_VERSIONS | {
+    LEGACY_COMPLETED_DEBATE_SCHEMA_VERSION
+}
 LEGACY_AFFECTION_SCHEMA_VERSION = 8
 OPAQUE_AFFECTION_SCHEMA_VERSIONS = frozenset({9, 10, 11})
 MAX_ITEM_BYTES = 400 * 1024
@@ -388,7 +392,16 @@ def serialize_snapshot(snapshot: DebateSnapshot) -> tuple[DynamoItem, ...]:
 def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> DebateSnapshot:
     """Validate and rebuild the current attempt from a DynamoDB item collection."""
 
-    items = tuple(migrate_item(item) for item in raw_items)
+    migrated_items: list[DynamoItem] = []
+    has_legacy_schema = False
+    for item in raw_items:
+        version = item.get("schema_version")
+        if type(version) is int and version == LEGACY_COMPLETED_DEBATE_SCHEMA_VERSION:
+            has_legacy_schema = True
+            # v7 predates affection. Its completed snapshot fields need no transformation.
+            item = {**item, "schema_version": CURRENT_SCHEMA_VERSION}
+        migrated_items.append(migrate_item(item))
+    items = tuple(migrated_items)
     debate_meta = _one(items, "debate_meta")
     partition_key = _text(debate_meta, "PK")
     debate_id_text = _text(debate_meta, "debate_id")
@@ -400,6 +413,14 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
             raise PersistenceFormatError("item collection contains multiple debate IDs")
     attempt_id = _text(debate_meta, "current_attempt_id")
     attempt_meta = _one(items, "attempt_meta", attempt_id=attempt_id)
+    if has_legacy_schema and (
+        partition_key != f"DEBATE#{debate_id_text}"
+        or debate_meta.get("SK") != "META"
+        or debate_meta.get("current_phase") != DebatePhase.COMPLETED.value
+        or attempt_meta.get("SK") != f"ATTEMPT#{attempt_id}#META"
+        or attempt_meta.get("phase") != DebatePhase.COMPLETED.value
+    ):
+        raise PersistenceFormatError("schema v7 requires completed debate and attempt metadata")
     debate_id = DebateId.parse(debate_id_text)
     state = DebateState(
         debate_id=debate_id,
