@@ -1,5 +1,9 @@
 import { useQueries, useQueryClient } from "@tanstack/react-query";
-import { defaultRangeExtractor, useWindowVirtualizer } from "@tanstack/react-virtual";
+import {
+  defaultRangeExtractor,
+  useWindowVirtualizer,
+  type VirtualItem,
+} from "@tanstack/react-virtual";
 import {
   useEffect,
   useLayoutEffect,
@@ -20,10 +24,13 @@ import { RecordsApiError } from "../api/http";
 import { useAuthenticationRecovery } from "../hooks/useAuthenticationRecovery";
 import {
   galleryCardName,
+  galleryCollectionName,
+  galleryCollectionSchool,
   galleryDetailQuery,
   galleryImageUrl,
   galleryRarityAriaLabel,
   galleryThumbnailsQuery,
+  type GalleryCollectionEntry,
 } from "../lib/gallery";
 import styles from "../styles/gallery.module.css";
 import { GalleryCollector, GalleryRarity, GallerySchool } from "./GalleryMetadata";
@@ -69,78 +76,153 @@ function GalleryThumbnail({ image }: { readonly image: Thumbnail }) {
   );
 }
 
+type GalleryGridEntry = GalleryCard | GalleryCollectionEntry;
+const hiddenStudentName = "？？？？？";
+
+function entryId(entry: GalleryGridEntry) {
+  return "cards" in entry ? entry.studentId : entry.cardId;
+}
+
+function entryCard(entry: GalleryGridEntry) {
+  return "cards" in entry ? entry.cards[0] : entry;
+}
+
+export interface GalleryGridReturn {
+  readonly id: string;
+  readonly scrollY: number;
+  readonly layout: { readonly width: number; readonly top: number };
+  readonly measurements: VirtualItem[];
+}
+
 function GalleryGridCard({
-  card,
-  schoolLogo,
+  entry,
+  schoolLogos,
   image,
   thumbnailSettled,
   scope,
   search,
+  first,
   onOpen,
+  onOpenGroup,
   onFocus,
   onTab,
 }: {
-  readonly card: GalleryCard;
-  readonly schoolLogo: string | undefined;
+  readonly entry: GalleryGridEntry;
+  readonly schoolLogos: Readonly<Record<string, string>>;
   readonly image: Thumbnail | undefined;
   readonly thumbnailSettled: boolean;
   readonly scope: number;
   readonly search: string;
-  readonly onOpen: (event: MouseEvent<HTMLAnchorElement>, card: GalleryCard) => void;
+  readonly first: boolean;
+  readonly onOpen: (event: MouseEvent<HTMLAnchorElement>) => void;
+  readonly onOpenGroup: ((event: MouseEvent<HTMLAnchorElement>, id: string) => void) | undefined;
   readonly onFocus: () => void;
   readonly onTab: (event: KeyboardEvent<HTMLAnchorElement>) => void;
 }) {
   const queryClient = useQueryClient();
   const hoverTimer = useRef<number | undefined>(undefined);
-  const name = galleryCardName(card);
+  const collection = "cards" in entry ? entry : undefined;
+  const card = entryCard(entry);
+  const name =
+    "cards" in entry ? (galleryCollectionName(entry) ?? hiddenStudentName) : galleryCardName(entry);
+  const school = collection ? galleryCollectionSchool(collection) : card?.schoolName;
+  const rarity = entry.rarity;
+  const copies = collection?.cards.length ?? 0;
+  const opensGroup = copies > 1;
   const stopHover = () => window.clearTimeout(hoverTimer.current);
-  const prefetch = () => void queryClient.prefetchQuery(galleryDetailQuery(scope, card.cardId));
+  const prefetch = () => {
+    if (card && !opensGroup) void queryClient.prefetchQuery(galleryDetailQuery(scope, card.cardId));
+  };
   useEffect(() => () => window.clearTimeout(hoverTimer.current), []);
+
+  const contents = (
+    <>
+      <div className={styles.cardMedia}>
+        {!card ? (
+          <span className={styles.question} aria-hidden="true">
+            ？
+          </span>
+        ) : image ? (
+          <GalleryThumbnail key={card.cardId} image={image} />
+        ) : (
+          <span className={styles.imagePlaceholder}>
+            {card.thumbnailReady && !thumbnailSettled
+              ? "画像を読み込み中"
+              : opensGroup
+                ? "サムネイルを表示できません"
+                : "拡大して画像を見る"}
+          </span>
+        )}
+        {opensGroup && <span className={styles.copyCount}>{copies.toLocaleString("ja-JP")}枚</span>}
+      </div>
+      <div className={styles.cardBody}>
+        <div className={styles.cardTitle}>
+          <strong title={name}>{name}</strong>
+          <span className={styles.rarity}>
+            <GalleryRarity rarity={rarity} />
+          </span>
+        </div>
+        {school && (
+          <span className={styles.school}>
+            <GallerySchool schoolName={school} logo={schoolLogos[school]} />
+          </span>
+        )}
+        {card && (
+          <>
+            <div className={styles.cardFooter}>
+              <GalleryCollector card={card} />
+              <time dateTime={card.postedAt}>{galleryDateText(card.postedAt)}</time>
+            </div>
+            {first && <span className={styles.firstCard}>初回獲得</span>}
+          </>
+        )}
+      </div>
+    </>
+  );
+
+  if (!card)
+    return (
+      <div className={styles.card} data-rarity={rarity} data-unacquired="">
+        {contents}
+      </div>
+    );
+
+  const id = entryId(entry);
+  const params = new URLSearchParams(search);
+  if (opensGroup) params.set("student", id);
   return (
     <Link
-      aria-label={`${name}、${galleryRarityAriaLabel(card.rarity)}を拡大`}
+      aria-label={
+        opensGroup
+          ? `${name}、${galleryRarityAriaLabel(rarity)}、${copies}枚のカードを見る`
+          : `${name}、${galleryRarityAriaLabel(rarity)}を拡大${first ? "、初回獲得" : ""}`
+      }
       className={styles.card}
-      data-rarity={card.rarity ?? "unrecorded"}
-      to={{ pathname: `/gallery/${card.cardId}`, search }}
-      onClick={(event) => onOpen(event, card)}
-      data-gallery-card={card.cardId}
+      data-rarity={rarity ?? "unrecorded"}
+      to={{
+        pathname: opensGroup ? "/gallery" : `/gallery/${card.cardId}`,
+        search: params.toString(),
+      }}
+      state={opensGroup ? { galleryGroupOpened: true } : { galleryOpened: true }}
+      onClick={(event) => {
+        if (opensGroup) onOpenGroup?.(event, id);
+        else onOpen(event);
+      }}
+      data-gallery-card={id}
       onFocus={() => {
         onFocus();
         prefetch();
       }}
       onKeyDown={onTab}
       onMouseEnter={() => {
-        if (!window.matchMedia("(hover: hover) and (pointer: fine)").matches) return;
+        if (opensGroup || !window.matchMedia("(hover: hover) and (pointer: fine)").matches) return;
         if (window.matchMedia("(prefers-reduced-data: reduce)").matches) return;
         stopHover();
         hoverTimer.current = window.setTimeout(prefetch, 130);
       }}
       onMouseLeave={stopHover}
     >
-      <div className={styles.cardMedia}>
-        {image ? (
-          <GalleryThumbnail image={image} />
-        ) : (
-          <span className={styles.imagePlaceholder}>
-            {card.thumbnailReady && !thumbnailSettled ? "画像を読み込み中" : "拡大して画像を見る"}
-          </span>
-        )}
-      </div>
-      <div className={styles.cardBody}>
-        <div className={styles.cardTitle}>
-          <strong title={name}>{name}</strong>
-          <span className={styles.rarity}>
-            <GalleryRarity rarity={card.rarity} />
-          </span>
-        </div>
-        <span className={styles.school}>
-          <GallerySchool schoolName={card.schoolName} logo={schoolLogo} />
-        </span>
-        <div className={styles.cardFooter}>
-          <GalleryCollector card={card} />
-          <time dateTime={card.postedAt}>{galleryDateText(card.postedAt)}</time>
-        </div>
-      </div>
+      {contents}
     </Link>
   );
 }
@@ -153,25 +235,41 @@ function gridColumns(width: number) {
 }
 
 export function GalleryGrid({
-  cards,
+  entries,
   schoolLogos,
   scope,
   search,
+  label,
+  firstCardId,
+  restoreFocus,
+  onRestoreFocus,
   onOpen,
+  onOpenGroup,
 }: {
-  readonly cards: readonly GalleryCard[];
+  readonly entries: readonly GalleryGridEntry[];
   readonly schoolLogos: Readonly<Record<string, string>>;
   readonly scope: number;
   readonly search: string;
-  readonly onOpen: (event: MouseEvent<HTMLAnchorElement>, card: GalleryCard) => void;
+  readonly label: string;
+  readonly firstCardId?: string;
+  readonly restoreFocus?: GalleryGridReturn;
+  readonly onRestoreFocus?: () => void;
+  readonly onOpen: (event: MouseEvent<HTMLAnchorElement>) => void;
+  readonly onOpenGroup?: (
+    event: MouseEvent<HTMLAnchorElement>,
+    position: GalleryGridReturn,
+  ) => void;
 }) {
   const grid = useRef<HTMLUListElement>(null);
-  const pendingFocus = useRef<string>(undefined);
-  const [layout, setLayout] = useState({ width: 0, top: 0 });
-  const [focusedCard, setFocusedCard] = useState<string>();
+  const pendingFocus = useRef<{ id: string; scrollY?: number } | undefined>(restoreFocus);
+  const [layout, setLayout] = useState(restoreFocus?.layout ?? { width: 0, top: 0 });
+  const [focusedCard, setFocusedCard] = useState(restoreFocus?.id);
   const columns = gridColumns(layout.width);
-  const focusedIndex = cards.findIndex((card) => card.cardId === focusedCard);
+  const focusedIndex = entries.findIndex((entry) => entryId(entry) === focusedCard);
   const focusedRow = focusedIndex < 0 ? -1 : Math.floor(focusedIndex / columns);
+  const collection = entries[0] !== undefined && "cards" in entries[0];
+  const firstAcquiredRow = collection ? Math.floor(entries.findIndex(entryCard) / columns) : -1;
+  const lastAcquiredRow = collection ? Math.floor(entries.findLastIndex(entryCard) / columns) : -1;
   useLayoutEffect(() => {
     const element = grid.current;
     if (!element) return;
@@ -194,57 +292,74 @@ export function GalleryGrid({
   }, []);
   // oxlint-disable-next-line react/incompatible-library -- The virtualizer stays inside this un-memoized component.
   const virtual = useWindowVirtualizer({
-    count: Math.ceil(cards.length / columns),
+    count: Math.ceil(entries.length / columns),
     estimateSize: () => Math.max(210, (layout.width / columns) * 0.462 + 120),
+    ...(restoreFocus && {
+      initialOffset: restoreFocus.scrollY,
+      initialMeasurementsCache: restoreFocus.measurements,
+    }),
     scrollMargin: layout.top,
     overscan: 2,
     rangeExtractor: (range) => {
       const rows = defaultRangeExtractor(range);
-      return focusedRow < 0 || rows.includes(focusedRow)
-        ? rows
-        : [...rows, focusedRow].sort((first, second) => first - second);
+      // Keep a keyboard entry point when the visible range contains only locked slots.
+      for (const row of [focusedRow, firstAcquiredRow, lastAcquiredRow]) {
+        if (row >= 0 && !rows.includes(row)) rows.push(row);
+      }
+      return rows.sort((first, second) => first - second);
     },
   });
   const rows = virtual.getVirtualItems();
   useLayoutEffect(() => {
-    const id = pendingFocus.current;
-    const link = id
-      ? grid.current?.querySelector<HTMLAnchorElement>(`[data-gallery-card="${id}"]`)
-      : null;
+    const target = pendingFocus.current;
+    if (!target) return;
+    const link = grid.current?.querySelector<HTMLAnchorElement>(
+      `[data-gallery-card="${target.id}"]`,
+    );
     if (link) {
       pendingFocus.current = undefined;
-      link.focus();
+      if (target.scrollY !== undefined) window.scrollTo(0, target.scrollY);
+      link.focus({ preventScroll: target.scrollY !== undefined });
+      if (target.scrollY !== undefined) onRestoreFocus?.();
     }
   });
   const handleTab = (event: KeyboardEvent<HTMLAnchorElement>, index: number) => {
     if (event.key !== "Tab" || event.altKey || event.ctrlKey || event.metaKey) return;
-    const target = index + (event.shiftKey ? -1 : 1);
-    const card = cards[target];
-    if (!card || grid.current?.querySelector(`[data-gallery-card="${card.cardId}"]`)) return;
+    const direction = event.shiftKey ? -1 : 1;
+    let target = index + direction;
+    let entry = entries[target];
+    while (entry && !entryCard(entry)) {
+      target += direction;
+      entry = entries[target];
+    }
+    if (!entry) return;
+    const id = entryId(entry);
+    if (grid.current?.querySelector(`[data-gallery-card="${id}"]`)) return;
     event.preventDefault();
-    pendingFocus.current = card.cardId;
-    setFocusedCard(card.cardId);
+    pendingFocus.current = { id };
+    setFocusedCard(id);
     virtual.scrollToIndex(Math.floor(target / columns), { align: "auto" });
   };
   const batches = useMemo(() => {
     const result: string[][] = [];
-    for (let index = 0; index < cards.length; index += galleryThumbnailBatchSize) {
+    for (let index = 0; index < entries.length; index += galleryThumbnailBatchSize) {
       result.push(
-        cards
+        entries
           .slice(index, index + galleryThumbnailBatchSize)
-          .filter((card) => card.thumbnailReady)
+          .map(entryCard)
+          .filter((card) => card?.thumbnailReady)
           .map((card) => card.cardId)
           .sort(),
       );
     }
     return result;
-  }, [cards]);
+  }, [entries]);
   const activeBatches = new Set<number>();
   for (const row of rows) {
     const firstCard = row.index * columns;
     activeBatches.add(Math.floor(firstCard / galleryThumbnailBatchSize));
     activeBatches.add(
-      Math.floor(Math.min(firstCard + columns - 1, cards.length - 1) / galleryThumbnailBatchSize),
+      Math.floor(Math.min(firstCard + columns - 1, entries.length - 1) / galleryThumbnailBatchSize),
     );
   }
   const requestedBatches = [...activeBatches]
@@ -282,7 +397,7 @@ export function GalleryGrid({
         </button>
       )}
       <ul
-        aria-label="獲得した生徒カード"
+        aria-label={label}
         className={styles.grid}
         ref={grid}
         style={{ height: virtual.getTotalSize() }}
@@ -299,27 +414,47 @@ export function GalleryGrid({
               transform: `translateY(${row.start - layout.top}px)`,
             }}
           >
-            {cards.slice(row.index * columns, (row.index + 1) * columns).map((card, offset) => (
-              <article
-                aria-posinset={row.index * columns + offset + 1}
-                aria-setsize={cards.length}
-                key={card.cardId}
-                // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- A virtual row groups the native list items.
-                role="listitem"
-              >
-                <GalleryGridCard
-                  card={card}
-                  schoolLogo={schoolLogos[card.schoolName]}
-                  image={thumbnails.get(card.cardId)}
-                  thumbnailSettled={settled.has(card.cardId)}
-                  scope={scope}
-                  search={search}
-                  onOpen={onOpen}
-                  onFocus={() => setFocusedCard(card.cardId)}
-                  onTab={(event) => handleTab(event, row.index * columns + offset)}
-                />
-              </article>
-            ))}
+            {entries.slice(row.index * columns, (row.index + 1) * columns).map((entry, offset) => {
+              const card = entryCard(entry);
+              const id = entryId(entry);
+              return (
+                <article
+                  aria-label={
+                    "cards" in entry && !card
+                      ? `${galleryCollectionName(entry) ?? hiddenStudentName}、${galleryRarityAriaLabel(entry.rarity)}、未入手`
+                      : undefined
+                  }
+                  aria-posinset={row.index * columns + offset + 1}
+                  aria-setsize={entries.length}
+                  key={id}
+                  // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- A virtual row groups the native list items.
+                  role="listitem"
+                >
+                  <GalleryGridCard
+                    entry={entry}
+                    schoolLogos={schoolLogos}
+                    image={card ? thumbnails.get(card.cardId) : undefined}
+                    thumbnailSettled={card ? settled.has(card.cardId) : false}
+                    scope={scope}
+                    search={search}
+                    first={firstCardId !== undefined && firstCardId === card?.cardId}
+                    onOpen={onOpen}
+                    onOpenGroup={
+                      onOpenGroup &&
+                      ((event, id) =>
+                        onOpenGroup(event, {
+                          id,
+                          scrollY: window.scrollY,
+                          layout,
+                          measurements: virtual.takeSnapshot(),
+                        }))
+                    }
+                    onFocus={() => setFocusedCard(id)}
+                    onTab={(event) => handleTab(event, row.index * columns + offset)}
+                  />
+                </article>
+              );
+            })}
           </li>
         ))}
       </ul>

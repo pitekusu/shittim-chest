@@ -11,7 +11,12 @@ from typing import TYPE_CHECKING, Any, cast
 
 from botocore.exceptions import BotoCoreError, ClientError
 from PIL import Image
-from shittim_chest.adapters.assets.student_gacha import _ASSET_DIGESTS, SCHOOL_LOGOS_KEY, _read_body
+from shittim_chest.adapters.assets.student_gacha import (
+    _ASSET_DIGESTS,
+    SCHOOL_LOGOS_KEY,
+    StudentGachaMedia,
+    _read_body,
+)
 from shittim_chest.adapters.assets.student_gacha_schools import (
     _MAX_INDEX_BYTES,
     _ROOT,
@@ -37,6 +42,7 @@ if TYPE_CHECKING:
     from mypy_boto3_dynamodb.type_defs import AttributeValueTypeDef
     from mypy_boto3_s3.client import S3Client
     from shittim_chest.adapters.dynamodb.serializer import DynamoItem
+    from shittim_chest.application.student_gacha_models import Student
 
 
 class DynamoGalleryStore:
@@ -99,6 +105,13 @@ class DynamoGalleryStore:
             content_type="image/webp" if thumbnail else "image/png",
             expires_in=GALLERY_IMAGE_URL_TTL_SECONDS,
         )
+
+    def load_roster(self) -> tuple[Student, ...]:
+        try:
+            # Records handlers are synchronous. Reuse the draw adapter's verified S3 read.
+            return StudentGachaMedia(self._s3, bucket_name=self._bucket)._roster()
+        except GachaGenerationFailure:
+            raise ReadFailure("GALLERY_UNAVAILABLE", 503) from None
 
     def load_school_logos(self) -> dict[str, str]:
         return self._school_logos

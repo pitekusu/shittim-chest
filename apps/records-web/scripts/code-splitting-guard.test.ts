@@ -34,7 +34,8 @@ function canonicalChunks(): GuardChunk[] {
       "generated/memorial-memory-response-validator.mjs",
     ],
     GalleryPage: [
-      "generated/gallery-list-response-validator.mjs",
+      "generated/gallery-collection-list-response-validator.mjs",
+      "generated/gallery-roster-response-validator.mjs",
       "generated/gallery-detail-response-validator.mjs",
       "generated/gallery-thumbnails-response-validator.mjs",
       "generated/gallery-original-response-validator.mjs",

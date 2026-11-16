@@ -10,6 +10,7 @@ from typing import Any, get_args
 
 from shittim_records.contracts import (
     GALLERY_CARD_ID_PATTERN,
+    GALLERY_COLLECTION_CONTRACT,
     PUBLIC_REQUEST_MODELS,
     PUBLIC_RESPONSE_MODELS,
     RECORDS_API_SCHEMA_VERSION,
@@ -246,7 +247,7 @@ def _gallery_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
     avatar_contract = _parameter(
         "contract", "query", {"type": "string", "enum": ["gallery-avatars-v1"]}
     )
-    return {
+    paths: dict[str, Any] = {
         f"/api/v1/gallery{suffix}": {
             "get": {
                 "operationId": operation,
@@ -261,10 +262,18 @@ def _gallery_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
                 "",
                 "listGalleryCards",
                 "GalleryListResponse",
-                "投稿済み作品のメタデータを新着順で返す。gallery-avatars-v1で獲得者のアイコンを含める。",
+                "投稿済み作品のメタデータを新着順で返す。gallery-avatars-v1で獲得者のアイコン、"
+                "gallery-collection-v1でアイコンと図鑑の照合IDを含める。",
                 [
                     _parameter("cursor", "query", {"type": "string", "maxLength": 256}),
-                    avatar_contract,
+                    _parameter(
+                        "contract",
+                        "query",
+                        {
+                            "type": "string",
+                            "enum": ["gallery-avatars-v1", GALLERY_COLLECTION_CONTRACT],
+                        },
+                    ),
                 ],
             ),
             (
@@ -295,8 +304,24 @@ def _gallery_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
                 "登録済みの学校ロゴを正式名に対応付けた小さなWebPとして返す。",
                 [],
             ),
+            (
+                "/roster",
+                "getGalleryRoster",
+                "GalleryRosterResponse",
+                "現行の生徒名簿を返す。星なしと星4の名前と所属は伏せる。",
+                [],
+            ),
         )
     }
+    list_response = paths["/api/v1/gallery"]["get"]["responses"]["200"]
+    content = list_response["content"]["application/json"]
+    content["schema"] = {
+        "oneOf": [
+            content["schema"],
+            {"$ref": "#/components/schemas/GalleryCollectionListResponse"},
+        ]
+    }
+    return paths
 
 
 def _mobile_auth_paths(error_responses: dict[str, Any]) -> dict[str, Any]:

@@ -16,6 +16,27 @@
   letter-spacing: -0.025em;
 }
 
+.backButton {
+  min-block-size: 44px;
+  justify-self: start;
+  margin-block-end: 20px;
+  padding: 0 18px;
+  border: 1px solid var(--records-link);
+  border-radius: var(--records-radius-control);
+  background: var(--records-link);
+  color: var(--records-reading-surface);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.groupTitle {
+  margin: 0 0 12px;
+  color: var(--records-ink-900);
+  font-size: clamp(1.2rem, 3vw, 1.6rem);
+}
+
 .filters {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 146px), 1fr));
@@ -29,6 +50,27 @@
 
 .filters > * {
   min-inline-size: 0;
+}
+
+.searchField {
+  display: grid;
+  gap: 7px;
+  color: var(--records-ink-600);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.searchField input {
+  inline-size: 100%;
+  min-block-size: 46px;
+  padding: 0 12px;
+  border: 1px solid var(--records-line-strong);
+  border-radius: var(--records-radius-control);
+  background: var(--records-control-background);
+  color: var(--records-ink-900);
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 400;
 }
 
 .resultsBar {
@@ -122,13 +164,14 @@
       border-color 120ms ease,
       box-shadow 120ms ease;
   }
-  .card:hover {
+  a.card:hover {
     border-color: var(--gallery-rarity-accent);
     box-shadow: var(--records-shadow);
   }
 }
 
 .cardMedia {
+  position: relative;
   display: grid;
   aspect-ratio: 1792 / 828;
   place-items: center;
@@ -141,6 +184,35 @@
   inline-size: 100%;
   block-size: 100%;
   object-fit: contain;
+}
+
+.question {
+  color: var(--records-ink-600);
+  font-size: clamp(3rem, 10vw, 5rem);
+  font-weight: 800;
+  line-height: 1;
+}
+
+.copyCount {
+  position: absolute;
+  inset: auto 8px 8px auto;
+  padding: 2px 8px;
+  border: 1px solid var(--records-line-strong);
+  border-radius: 999px;
+  background: var(--records-reading-surface);
+  color: var(--records-ink-900);
+  font-size: 0.8rem;
+  font-weight: 750;
+}
+
+.firstCard {
+  justify-self: start;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--records-control-background-soft);
+  color: var(--records-ink-900);
+  font-size: 0.75rem;
+  font-weight: 750;
 }
 
 .imagePlaceholder {

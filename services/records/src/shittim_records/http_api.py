@@ -25,6 +25,7 @@ from shittim_records.auth import (
     require_same_origin,
 )
 from shittim_records.contracts import (
+    GALLERY_COLLECTION_CONTRACT,
     AnonymousSession,
     AuthenticatedSession,
     ErrorBody,
@@ -45,9 +46,11 @@ from shittim_records.read_api import (
 
 if TYPE_CHECKING:
     from shittim_records.contracts import (
+        GalleryCollectionListResponse,
         GalleryDetailResponse,
         GalleryListResponse,
         GalleryOriginalResponse,
+        GalleryRosterResponse,
         GallerySchoolLogosResponse,
         GalleryThumbnailsResponse,
     )
@@ -462,9 +465,11 @@ class ReadHttpController:
         self, request: Request, viewer: SessionRecord, now: datetime
     ) -> (
         GalleryListResponse
+        | GalleryCollectionListResponse
         | GalleryDetailResponse
         | GalleryThumbnailsResponse
         | GalleryOriginalResponse
+        | GalleryRosterResponse
         | GallerySchoolLogosResponse
     ):
         if self._gallery is None:
@@ -472,16 +477,21 @@ class ReadHttpController:
         query = _query(request.raw_query)
         if request.route_key == "GET /api/v1/gallery/school-logos" and not query:
             return self._gallery().get_school_logos()
+        if request.route_key == "GET /api/v1/gallery/roster" and not query:
+            return self._gallery().get_roster()
         if request.route_key == "GET /api/v1/gallery" and set(query) <= {"cursor", "contract"}:
             cursor = _optional_single(query, "cursor")
+            contract = _optional_single(query, "contract")
+            if contract == GALLERY_COLLECTION_CONTRACT:
+                return self._gallery().list_collection_cards(cursor=cursor, viewer=viewer, now=now)
             return self._gallery().list_cards(
-                cursor=cursor, viewer=viewer, now=now, include_avatars=_gallery_avatars(query)
+                cursor=cursor, viewer=viewer, now=now, include_avatars=_gallery_avatars(contract)
             )
         if request.route_key == "GET /api/v1/gallery/{cardId}" and set(query) <= {"contract"}:
             return self._gallery().get_card(
                 card_id=request.path_parameters.get("cardId", ""),
                 viewer=viewer,
-                include_avatars=_gallery_avatars(query),
+                include_avatars=_gallery_avatars(_optional_single(query, "contract")),
             )
         if request.route_key == "GET /api/v1/gallery/thumbnails" and set(query) == {"ids"}:
             ids = _required_single(query, "ids")
@@ -701,8 +711,7 @@ def _optional_single(query: Mapping[str, list[str]], name: str) -> str | None:
     return values[0]
 
 
-def _gallery_avatars(query: Mapping[str, list[str]]) -> bool:
-    contract = _optional_single(query, "contract")
+def _gallery_avatars(contract: str | None) -> bool:
     if contract not in {None, GALLERY_AVATAR_CONTRACT}:
         raise ReadFailure("REQUEST_INVALID", 400)
     return contract is not None

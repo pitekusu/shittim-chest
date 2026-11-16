@@ -46,6 +46,7 @@ AdminServiceName = Literal[
 
 NonEmptyText = Annotated[str, Field(min_length=1, pattern=r"\S")]
 RecordId = Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{43}$")]
+GALLERY_COLLECTION_CONTRACT = "gallery-collection-v1"
 GALLERY_CARD_ID_PATTERN = r"^[A-Za-z0-9_-]{80}$"
 GalleryCardId = Annotated[str, Field(pattern=GALLERY_CARD_ID_PATTERN)]
 _ALL_PARTICIPANT_SLOTS = frozenset[ParticipantSlot](
@@ -1288,10 +1289,33 @@ class GalleryCard(PublicModel):
     thumbnail_ready: bool
 
 
+class GalleryCollectionCard(GalleryCard):
+    student_id: RecordId
+
+
 class GalleryListResponse(PublicModel):
     schema_version: Literal[1]
     items: list[GalleryCard] = Field(max_length=100)
     next_cursor: Annotated[str, Field(min_length=1, max_length=256)] | None
+
+
+class GalleryCollectionListResponse(PublicModel):
+    schema_version: Literal[1]
+    contract: Literal["gallery-collection-v1"]
+    items: list[GalleryCollectionCard] = Field(max_length=100)
+    next_cursor: Annotated[str, Field(min_length=1, max_length=256)] | None
+
+
+class GalleryRosterEntry(PublicModel):
+    student_id: RecordId
+    student_name: Annotated[str, Field(min_length=1, max_length=60)] | None
+    school_name: Annotated[str, Field(min_length=1, max_length=40)] | None
+    rarity: Annotated[int, Field(ge=0, le=4, strict=True)]
+
+
+class GalleryRosterResponse(PublicModel):
+    schema_version: Literal[1]
+    items: list[GalleryRosterEntry] = Field(min_length=1, max_length=2000)
 
 
 class GalleryDetailResponse(PublicModel):
@@ -1362,6 +1386,8 @@ PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
     AdminStatusResponse,
     ErrorResponse,
     GalleryListResponse,
+    GalleryCollectionListResponse,
+    GalleryRosterResponse,
     GalleryDetailResponse,
     GalleryThumbnailsResponse,
     GalleryOriginalResponse,
