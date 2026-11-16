@@ -832,6 +832,17 @@ Critical・修正可能High／Critical・source検出は0件。raw High23組か�
 
 通常PR/`main`では本番イメージの基本検証を行い、訓練用イメージを本番リスク承認の対象へ含めない。
 
+2026-11-17、PR #747の完成ARM64 production config
+`sha256:c8da1fd6b7ed267792133b90d24241aded7f7a9d7e8f3681352712fada31e329`
+について、現行本番と同じHigh 24組のうち署名付きVEXの適用後に同じ10組が残ることを確認した。
+Critical、修正可能なHigh/Critical、ソースのHigh/Criticalはいずれも0組で、TLSは60件すべて通過した。
+Grypeの更新後にCVE-2026-125709のMediumが3パッケージで新たに検出された。
+[同一実行のARM64 SBOM・VEX・TLS・Grype](https://github.com/pitekusu/shittim-chest/actions/runs/43892845317)
+
+所有者は、このconfigに残るHigh 10組を2026-11-20 09:00 JST（同日00:00 UTC）まで受容すると明示承認した。
+`expires_on`にはUTCの最終有効日`2026-11-19`を指定する。4枠の上限に従い、
+稼働中のconfigを含む直近3枠と今回のconfigで対象を構成し、最古のPR #719用の枠を外す。
+
 ## 5. 本番配信
 
 ### 共通の工程

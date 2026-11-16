@@ -73,6 +73,27 @@
   font-weight: 400;
 }
 
+.acquiredFilter {
+  display: flex;
+  grid-column: 1 / -1;
+  min-block-size: 44px;
+  align-items: center;
+  justify-self: start;
+  gap: 8px;
+  color: var(--records-ink-900);
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.acquiredFilter input {
+  inline-size: 18px;
+  block-size: 18px;
+  margin: 0;
+  accent-color: var(--records-link);
+  cursor: inherit;
+}
+
 .resultsBar {
   display: flex;
   min-block-size: 58px;

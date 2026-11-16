@@ -317,6 +317,17 @@ test("filters the full roster and sorts by rarity and first acquisition", async 
   await expect(slots.nth(3)).toHaveAccessibleName("？？？？？、星4つ、未入手");
   await expect(slots.nth(4)).toHaveAccessibleName("？？？？？、星0つ、未入手");
 
+  const acquiredOnly = page.getByRole("checkbox", { name: "獲得済みのみ表示", exact: true });
+  await expect(acquiredOnly).not.toBeChecked();
+  await acquiredOnly.check();
+  await expect(page).toHaveURL((url) => url.searchParams.get("acquired") === "1");
+  await expect(slots).toHaveCount(2);
+  await expect(slots.nth(0)).toContainText(first.studentName);
+  await expect(slots.nth(1)).toContainText(recent.studentName);
+  await acquiredOnly.uncheck();
+  await expect(page).toHaveURL((url) => !url.searchParams.has("acquired"));
+  await expect(slots).toHaveCount(5);
+
   const sort = page.getByRole("combobox", { name: "並べ替え" });
   await sort.click();
   await page.getByRole("option", { name: "初回獲得日が新しい順" }).click();
@@ -347,14 +358,56 @@ test("filters the full roster and sorts by rarity and first acquisition", async 
   await page.getByRole("option", { name: locked.schoolName }).click();
   await expect(slots).toHaveCount(1);
   await expect(slots.first()).toContainText(locked.studentName);
-  await school.click();
-  await page.getByRole("option", { name: "すべて" }).click();
+  await acquiredOnly.check();
+  await expect(page).toHaveURL(
+    (url) =>
+      url.searchParams.get("school") === locked.schoolName &&
+      url.searchParams.get("acquired") === "1",
+  );
+  await expect(slots).toHaveCount(0);
+  await page.getByRole("button", { name: "絞り込みを解除" }).click();
+  await expect(acquiredOnly).not.toBeChecked();
+  await expect(slots).toHaveCount(5);
 
   await page.getByRole("combobox", { name: "レア度" }).click();
   await page.getByRole("option", { name: "星4つ" }).click();
   await expect(slots).toHaveCount(1);
   await expect(slots.first()).toHaveAccessibleName("？？？？？、星4つ、未入手");
   await expect(progress).toHaveText("獲得済み 2 / 5体");
+});
+
+test("commits a Japanese IME search after composition ends", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  await mockGallery(page, 0, {
+    roster: [
+      { studentId: studentId(0), studentName: "プラナ", schoolName: "シッテムの箱", rarity: 1 },
+      { studentId: studentId(1), studentName: "アロナ", schoolName: "シッテムの箱", rarity: 1 },
+    ],
+  });
+  await page.goto("/gallery");
+  const search = page.getByRole("searchbox", { name: "生徒名" });
+  const entries = page.getByRole("list", { name: "生徒図鑑" }).getByRole("listitem");
+  await expect(entries).toHaveCount(2);
+  await search.focus();
+
+  const cdp = await page.context().newCDPSession(page);
+  for (const text of ["ら", "らな", "ラナ"]) {
+    await cdp.send("Input.imeSetComposition", {
+      text,
+      selectionStart: text.length,
+      selectionEnd: text.length,
+    });
+    await expect(search).toHaveValue(text);
+    await expect(page).toHaveURL(/\/gallery$/u);
+    await expect(entries).toHaveCount(2);
+  }
+
+  await cdp.send("Input.insertText", { text: "ラナ" });
+  await expect(search).toHaveValue("ラナ");
+  await expect(search).toBeFocused();
+  await expect(page).toHaveURL((url) => url.searchParams.get("q") === "ラナ");
+  await expect(entries).toHaveCount(1);
+  await expect(entries.first()).toContainText("プラナ");
 });
 
 test("prefetches only metadata and restores focus and scroll after viewing an original", async ({
@@ -623,6 +676,17 @@ test("uses the first acquisition across pages and restores position after browsi
   await expect
     .poll(async () => Math.abs((await page.evaluate(() => window.scrollY)) - beforeScroll))
     .toBeLessThan(3);
+
+  const acquiredOnly = page.getByRole("checkbox", { name: "獲得済みのみ表示" });
+  await acquiredOnly.check();
+  await slot.click();
+  await expect(page).toHaveURL(
+    (url) =>
+      url.searchParams.get("student") === first.studentId &&
+      url.searchParams.get("acquired") === "1",
+  );
+  await page.getByRole("button", { name: "図鑑に戻る" }).click();
+  await expect(acquiredOnly).toBeChecked();
 });
 
 test("opens a legacy card deep link and returns to the filtered collection", async ({
@@ -632,8 +696,10 @@ test("opens a legacy card deep link and returns to the filtered collection", asy
   await page.emulateMedia({ reducedMotion: "reduce" });
   const { cards } = await mockGallery(page, 3);
   await page.goto(`/gallery/${cards[2]!.cardId}?rarity=4`);
-  await expect(page.getByRole("dialog", { name: "アロナ（生徒3）" })).toBeVisible();
+  const dialog = page.getByRole("dialog", { name: "アロナ（生徒3）" });
+  await expect(dialog).toBeVisible();
   await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
   await expect(page).toHaveURL(/\/gallery\?rarity=4$/u);
   await expect(page.getByRole("status")).toHaveText("獲得済み 3 / 3体");
   const cardsInCollection = page.getByRole("list", { name: "生徒図鑑" }).getByRole("link");

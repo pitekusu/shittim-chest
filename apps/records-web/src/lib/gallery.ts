@@ -137,11 +137,13 @@ export function filterGallery(entries: readonly GalleryCollectionEntry[], search
     .filter(Boolean);
   const rarity = search.get("rarity");
   const school = search.get("school");
+  const acquiredOnly = search.get("acquired") === "1";
   const sort = search.get("sort");
   return entries
     .filter((entry) => {
       const name = searchStudentName(galleryCollectionName(entry) ?? "");
       return (
+        (!acquiredOnly || entry.cards.length > 0) &&
         terms.every((term) => name.includes(term)) &&
         (!rarity || String(entry.rarity) === rarity) &&
         (!school || galleryCollectionSchool(entry) === school)
