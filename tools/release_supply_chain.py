@@ -66,6 +66,7 @@ _S3_SINGLE_PART_MAX_BYTES = 5 * 1024 * 1024 - 1
 _ZIP_SOURCE_MAX_BYTES = 1024 * 1024
 _ZIP_SOURCE_MAX_FILES = 1000
 _ZIP_SOURCE_MAX_PATH_BYTES = 512 * 1024
+_CDK_ASSET_SCHEMA = 2
 _VPC_RESTRICTION_PROVIDER = "CustomVpcRestrictDefaultSGCustomResourceProviderHandlerDC833E5E"
 _VPC_RESTRICTION_TLS_LAYER = "shittim-chest-production-cdk-helper-tls"
 
@@ -433,6 +434,7 @@ def create_cdk_asset_evidence(
     account: str,
     assembly_dir: Path,
     require_sources: bool = True,
+    schema_version: int = _CDK_ASSET_SCHEMA,
 ) -> dict[str, object]:
     """Create a complete, canonical inventory from the four CDK asset manifests."""
 
@@ -526,26 +528,28 @@ def create_cdk_asset_evidence(
                 }
             )
     evidence = {
-        "schema_version": 1,
+        "schema_version": schema_version,
         "manifests": manifests,
         "files": files,
     }
     validate_cdk_asset_evidence(evidence, account=account, require_checksums=False)
-    _validate_runtime_tls_asset_closure(
+    _validate_runtime_asset_closure(
         assembly_dir=assembly_dir,
         account=account,
         files=files,
+        legacy=schema_version == 1,
     )
     return evidence
 
 
-def _validate_runtime_tls_asset_closure(
+def _validate_runtime_asset_closure(
     *,
     assembly_dir: Path,
     account: str,
     files: Sequence[Mapping[str, object]],
+    legacy: bool,
 ) -> None:
-    """Bind both Runtime ZIPs to the existing provider and its one CA layer."""
+    """Bind the Runtime ZIP to the provider; allow the former layer in old evidence."""
 
     template = _object(
         json.loads((assembly_dir / "Runtime.template.json").read_bytes()),
@@ -561,14 +565,24 @@ def _validate_runtime_tls_asset_closure(
         for logical_id, value in resources.items()
         if _object(value, "Runtime CDK resource").get("Type") == "AWS::Lambda::LayerVersion"
     ]
-    if len(layers) != 1:
-        raise ValueError("Runtime CDK requires exactly one helper TLS layer")
-    layer_id, layer = layers[0]
-    layer_properties = _object(layer.get("Properties"), "VPC restriction TLS layer properties")
-    if layer_properties.get("LayerName") != _VPC_RESTRICTION_TLS_LAYER or provider_properties.get(
-        "Layers"
-    ) != [{"Ref": layer_id}]:
-        raise ValueError("Runtime CDK TLS layer is not bound to the VPC restriction provider")
+    bindings = [(provider, provider_properties, "Code")]
+    if legacy:
+        if len(layers) != 1:
+            raise ValueError("Runtime CDK requires exactly one helper TLS layer")
+        layer_id, layer = layers[0]
+        layer_properties = _object(layer.get("Properties"), "VPC restriction TLS layer properties")
+        if layer_properties.get("LayerName") != _VPC_RESTRICTION_TLS_LAYER or (
+            provider_properties.get("Layers") != [{"Ref": layer_id}]
+        ):
+            raise ValueError("Runtime CDK TLS layer is not bound to the VPC restriction provider")
+        bindings.append((layer, layer_properties, "Content"))
+    elif (
+        layers
+        or {"Layers", "Environment"} & provider_properties.keys()
+        or provider_properties.get("Runtime") != "nodejs24.x"
+        or provider_properties.get("Handler") != "__entrypoint__.handler"
+    ):
+        raise ValueError("Runtime CDK VPC provider must use the standard Node.js 24 runtime")
 
     runtime_zips = {
         record["object_key"]: record
@@ -576,10 +590,7 @@ def _validate_runtime_tls_asset_closure(
         if record["stack"] == "ShittimChest-Prod-Runtime" and record["packaging"] == "zip"
     }
     referenced_keys: set[str] = set()
-    for resource, properties, property_name in (
-        (provider, provider_properties, "Code"),
-        (layer, layer_properties, "Content"),
-    ):
+    for resource, properties, property_name in bindings:
         location = _object(properties.get(property_name), "Runtime CDK ZIP location")
         if set(location) != {"S3Bucket", "S3Key"} or location.get("S3Bucket") != (
             f"cdk-hnb659fds-assets-{account}-ap-northeast-1"
@@ -588,7 +599,7 @@ def _validate_runtime_tls_asset_closure(
         object_key = _string(location, "S3Key", "Runtime CDK ZIP location")
         record = runtime_zips.get(object_key)
         if record is None or object_key in referenced_keys:
-            raise ValueError("Runtime CDK provider and TLS layer must use distinct reviewed ZIPs")
+            raise ValueError("Runtime CDK resources must use distinct reviewed ZIPs")
         metadata = _object(resource.get("Metadata"), "Runtime CDK ZIP metadata")
         if (
             metadata.get("aws:asset:path") != record["source_path"]
@@ -597,7 +608,7 @@ def _validate_runtime_tls_asset_closure(
             raise ValueError("Runtime CDK ZIP metadata does not match its asset")
         referenced_keys.add(object_key)
     if referenced_keys != set(runtime_zips):
-        raise ValueError("Runtime CDK ZIP assets are not the provider and its TLS layer")
+        raise ValueError("Runtime CDK ZIP assets do not match the provider closure")
 
 
 def validate_cdk_asset_evidence(
@@ -611,7 +622,12 @@ def validate_cdk_asset_evidence(
     if _ACCOUNT_ID.fullmatch(account) is None:
         raise ValueError("CDK asset account is invalid")
     root = _object(value, "CDK asset evidence")
-    if set(root) != {"files", "manifests", "schema_version"} or root.get("schema_version") != 1:
+    schema_version = root.get("schema_version")
+    if (
+        set(root) != {"files", "manifests", "schema_version"}
+        or type(schema_version) is not int
+        or schema_version not in (1, _CDK_ASSET_SCHEMA)
+    ):
         raise ValueError("CDK asset evidence schema is invalid")
     manifests = _object(root.get("manifests"), "CDK asset evidence manifests")
     if tuple(manifests) != _STACKS:
@@ -703,10 +719,11 @@ def validate_cdk_asset_evidence(
             raise ValueError("CDK asset evidence contains an unexpected file")
     if stacks_with_template != set(_STACKS):
         raise ValueError("CDK template asset evidence is incomplete")
-    if runtime_zip_count != 2:
-        raise ValueError("Runtime CDK provider and TLS layer require exactly two ZIP assets")
-    if len(files) != 6:
-        raise ValueError("CDK asset evidence must contain exactly six files")
+    expected_zip_count = 2 if schema_version == 1 else 1
+    if runtime_zip_count != expected_zip_count:
+        raise ValueError(f"Runtime CDK requires exactly {expected_zip_count} ZIP asset(s)")
+    if len(files) != len(_STACKS) + expected_zip_count:
+        raise ValueError("CDK asset evidence contains unexpected files")
 
 
 def bind_cdk_asset_checksums(
@@ -772,12 +789,13 @@ def validate_cdk_asset_evidence_against_assembly(
     """Bind downloaded evidence back to the exact asset manifests."""
 
     validate_cdk_asset_evidence(value, account=account)
+    actual = dict(_object(value, "CDK asset evidence"))
     expected = create_cdk_asset_evidence(
         account=account,
         assembly_dir=assembly_dir,
         require_sources=False,
+        schema_version=1 if actual["schema_version"] == 1 else _CDK_ASSET_SCHEMA,
     )
-    actual = dict(_object(value, "CDK asset evidence"))
     actual_files = []
     for raw_file in _array(actual.get("files"), "CDK asset evidence files"):
         record = dict(_object(raw_file, "CDK asset evidence file"))
