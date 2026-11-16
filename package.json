@@ -9,6 +9,7 @@
   "scripts": {
     "build": "tsc --noEmit",
     "test:infra": "vitest run infra/test --testTimeout=15000",
+    "test:infra:failed": "npm run test:infra -- --last-failed",
     "audit:infra": "npm audit --audit-level=low --json | node infra/check-audit.mjs",
     "cdk": "cdk",
     "cdk:list": "cdk list",
@@ -23,10 +24,10 @@
   },
   "devDependencies": {
     "@types/node": "24.19.2",
-    "aws-cdk": "2.1146.1",
+    "aws-cdk": "2.1148.0",
     "cdk-nag": "3.0.2",
     "tsx": "4.23.15",
     "typescript": "7.0.2",
-    "vitest": "5.0.5"
+    "vitest": "5.1.0"
   }
 }

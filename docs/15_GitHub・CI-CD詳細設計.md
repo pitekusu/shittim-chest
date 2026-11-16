@@ -165,7 +165,7 @@ step outcomeとconclusionを検査し、未実行・失敗・キャンセルやc
 対象外と実行成功は各ジョブのSummaryで区別する。主要3ワークフローの全対象時は20ジョブとなる。
 CodeQLは`.github/workflows/codeql.yml`のadvanced setupでPython、JavaScript/TypeScript、
 GitHub Actions、Java/Kotlinを解析し、`ubuntu-26.04`と`security-extended`を使う。
-CodeQL Action v4.39.1はCLI 2.27.3を同梱する。Java/Kotlinだけ`manual`モードでAndroidをビルドし、既存3言語の`none`モードは維持する。
+解析には完全SHAで固定したCodeQL Actionの既定CLIを使う。Java/Kotlinだけ`manual`モードでAndroidをビルドし、既存3言語の`none`モードは維持する。
 PR、mainへのpush、週次定期実行、手動実行を対象にする。
 2026年10月11日にKotlin 2.4.20のローカルmanual抽出を確認した。C04完了にはPRとマージ後のmainで4言語の解析・upload成功を確認する。
 既存3言語の解析・必須チェックを維持し、Androidの失敗を成功や対象外に置き換えない。
@@ -204,6 +204,16 @@ cacheなし・全pass後の終了値1、名前変更時の0件選択、flagな�
 合成testを撤去した既存334件の全件試験も成功している。
 この端末の限定条件での修正反復の比較であり、CIやアプリの速度改善率ではない。
 [公式の選択・終了値仕様](https://vitest.dev/guide/cli.html#last-failed)に従う。
+
+### IaCの試験と構成をローカルで確認する
+
+直前に失敗した同名のIaC試験を修正している間は、リポジトリrootで
+`npm run test:infra:failed`を実行する。通常の`test:infra`にVitestの`--last-failed`を追加し、
+対象directoryとタイムアウトを共用する。キャッシュがない場合、試験の追加・改名時、
+変更完了前には`npm run test:infra`で全件を実行する。CIの全件試験とReleaseの既存の試験範囲は維持する。
+
+synth済みの構成をブラウザーで調べるときは、対象のcloud assemblyを
+`npm run cdk -- explore --app cdk.out`で開く。
 
 ### ローカルでブラウザー試験の失敗ログに絞る
 
@@ -279,9 +289,10 @@ cache hitでも選択対象のinstrumentation testを実行する。cache miss�
 `setup-vp`の更新時はworkflow参照・検査用の許可SHA・repositoryの選択Action許可を同じ完全SHAへ揃える。選択Action設定は既存許可を維持し、必要な完全SHAだけを追加する。
 Records WebのCIとReleaseは完全SHA固定の`voidzero-dev/setup-vp`でNode・Vite+・pnpmを設定し、
 Action標準のpnpm依存キャッシュと`cache-toolchain: true`を使う。Nodeはworkflowのexact version、Vite+とpnpmはWebの`package.json`のexact versionを選択する。toolchain／package managerのキャッシュはOS・CPU・libc・版・取得設定に対応する完全キーで復元し、Action標準の実行probe・payload／layout検証に失敗した場合は通常のinstallへ戻す。CIとReleaseのキャッシュ保存はmainのみとし、依存は毎回`vp install --frozen-lockfile`で固定する。キャッシュはCA制御・依存署名監査・check／test／buildを省略する根拠にしない。
-ローカルの`pnpm run check`とCI／Releaseの`vp check`には`--deny-warnings`を付け、lint警告も失敗として扱う。
-ローカルの`pnpm run check`は`--continue-on-error`も使い、途中で検査に失敗しても残りの診断を表示する。
-書式・lint・型のいずれかが失敗した場合は非0で終了する。
+ローカルの`pnpm run check`とRecords CI／Releaseの`vp check`には、
+`--deny-warnings --continue-on-error`を指定する。lint警告も失敗として扱い、
+途中で検査に失敗しても残りの診断を表示したうえで非0で終了する。
+ワークフロー検査で両フラグと失敗時の停止を確認する。
 pnpm 12の環境用lock documentは[GitHubの静的依存検出に未対応の報告](https://github.com/dependabot/dependabot-core/issues/15904)があるため、
 `pmOnFail: ignore`でproject依存の単一documentを維持する。pnpm自身によるversion切替・検査は無効になるので、
 ローカルもVite+経由で実行する。CIとRecords Releaseはinstall直前に実行中のpnpmと`packageManager`の完全一致を検査し、
