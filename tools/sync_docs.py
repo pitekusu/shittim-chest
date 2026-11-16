@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Synchronize the canonical Obsidian design notes into repository docs/."""
+"""Compare legacy public notes with Git-managed docs; imports are disabled."""
 
 from __future__ import annotations
 
@@ -74,7 +74,11 @@ class SyncError(RuntimeError):
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     action = parser.add_mutually_exclusive_group(required=True)
-    action.add_argument("--write", action="store_true", help="update docs/ from Obsidian")
+    action.add_argument(
+        "--write",
+        action="store_true",
+        help="retired: docs/ is now canonical; refuses to overwrite",
+    )
     action.add_argument("--check", action="store_true", help="verify an exact mirror")
     parser.add_argument(
         "--source",
@@ -171,6 +175,12 @@ def check_mirror(documents: dict[str, bytes], destination: Path) -> None:
 
 def main() -> int:
     args = parse_args()
+    if args.write:
+        print(
+            "Import disabled: edit Git-managed docs/ directly; use --check for comparison.",
+            file=sys.stderr,
+        )
+        return 1
     try:
         configured_source = args.source or os.environ.get(SOURCE_ENVIRONMENT_VARIABLE)
         if configured_source is None:
@@ -180,12 +190,8 @@ def main() -> int:
         source = Path(configured_source).expanduser().absolute()
         documents = source_documents(source)
         destination = args.destination.expanduser().absolute()
-        if args.write:
-            write_mirror(documents, destination)
-            print(f"mirrored {len(documents)} documents to {destination}")
-        else:
-            check_mirror(documents, destination)
-            print(f"mirror is current: {len(documents)} documents")
+        check_mirror(documents, destination)
+        print(f"legacy source matches Git docs: {len(documents)} documents")
     except SyncError as error:
         print(error, file=sys.stderr)
         return 1

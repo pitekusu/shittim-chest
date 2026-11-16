@@ -120,8 +120,8 @@ Androidアプリと、それを支えるPythonの認証・閲覧APIに適用す�
 
 ## 文書とGitHub・本番
 
-- 仕様・動作・運用を変えたら該当文書も更新する。Obsidianが正本、`docs/`はbyte単位のmirror。
-  mirrorを直接編集せず、`tools/sync_docs.py`の`--write`と`--check`で同期・確認する。正本の指定は`--source "$SHITTIM_DOCS_SOURCE"`。
+- 仕様・動作・運用を変えたらGit管理の正本である`docs/`を直接更新する。
+  Obsidian・Vault・CouchDBとの同期は不要。非公開Vault資料や認証情報を取り込まない。
   文書変更時は`uv run --frozen python -m tools.check_docs`と`uv run --frozen python tools/check_public_surface.py`を実行する。
 - 公開文書にはsecret、private ID、障害相関ID、local絶対pathを含めない。`AGENTS.md`自体はこのrepoで編集する。
 - GitHub write前に`gh auth status`と`gh api user --jq '.login'`を確認する。
