@@ -279,8 +279,17 @@ cache hitでも選択対象のinstrumentation testを実行する。cache miss�
 `setup-vp`の更新時はworkflow参照・検査用の許可SHA・repositoryの選択Action許可を同じ完全SHAへ揃える。選択Action設定は既存許可を維持し、必要な完全SHAだけを追加する。
 Records WebのCIとReleaseは完全SHA固定の`voidzero-dev/setup-vp`でNode・Vite+・pnpmを設定し、
 Action標準のpnpm依存キャッシュと`cache-toolchain: true`を使う。Nodeはworkflowのexact version、Vite+とpnpmはWebの`package.json`のexact versionを選択する。toolchain／package managerのキャッシュはOS・CPU・libc・版・取得設定に対応する完全キーで復元し、Action標準の実行probe・payload／layout検証に失敗した場合は通常のinstallへ戻す。CIとReleaseのキャッシュ保存はmainのみとし、依存は毎回`vp install --frozen-lockfile`で固定する。キャッシュはCA制御・依存署名監査・check／test／buildを省略する根拠にしない。
-ローカルの`pnpm run check`とCI／Releaseの`vp check`には`--deny-warnings`を付け、lint警告も失敗として扱う。
-ローカルの`pnpm run check`は`--continue-on-error`も使い、途中で検査に失敗しても残りの診断を表示する。
+ローカル・Records CI・Records Releaseは`pnpm run check`を使う。`--deny-warnings`でlint警告も失敗として扱い、
+`--continue-on-error`で残りの整形・lint・型診断を表示してから失敗を返す。
+IaCのローカル再確認では`npm run test:infra:failed`で直前の失敗だけを再実行できる。
+直前に失敗がなければ成功で終了する。CIとReleaseからは全件を実行する。
+
+React Compilerは2026年11月16日にランキングの5コンポーネントをアノテーションで選んで計測した。
+Viteの本番ビルド各6回の中央値は、現行0.877秒、Compiler直列1.275秒、Babelワーカー並列1.325秒だった。
+Chromiumの390×844、CPU 4倍スローダウンで、6つの実行環境ごとに各操作を30回試した。スクリプトCPU中央値は
+開閉が2.288→1.718 ms、期間切替が2.274→1.293 msだった。画面が安定するまでの中央値はいずれも約33 msだった。
+ランキングの遅延読み込みJSはgzipで15,023→17,821 bytesとなった。体感に関わる時間の改善を確認できなかったため、
+計測結果だけを記録し、本番構成への導入を保留する。候補のランキングPlaywright試験は9件成功、設定によるskipは1件だった。
 書式・lint・型のいずれかが失敗した場合は非0で終了する。
 pnpm 12の環境用lock documentは[GitHubの静的依存検出に未対応の報告](https://github.com/dependabot/dependabot-core/issues/15904)があるため、
 `pmOnFail: ignore`でproject依存の単一documentを維持する。pnpm自身によるversion切替・検査は無効になるので、
@@ -376,9 +385,9 @@ Web／Discord入力からglobへ渡す経路や既定値を書き換える設定
 - DHI builder／runtimeは同じPython／Debian系列のCA更新済みdigestへ固定する。旧runtimeの`ca-certificates 20250419+dhi2`が対象rootを含んでいたため、修正済みbuilderで`update-ca-certificates --fresh`を実行し、runtimeのanchorと生成済みCA directoryを丸ごと置き換えるoverlayを導入した。古いhashed aliasをmergeで残さず、固定digestと`SOURCE_DATE_EPOCH`で再現可能にする。これはCA設定のoverlayであり、runtimeのdpkg台帳を架空の更新版にしない。2026年10月22日のCA更新済みruntime採用でもoverlayを維持し、撤去は実際に採用するCA集合・拒否動作・完成imageの検証と影響評価を経た別の変更として扱う。
 - [Node 24.22.1](https://github.com/nodejs/node/releases/tag/v24.22.1)の対象公開鍵拒否とroot更新を使い、固定版と`engines`の下限を合わせる。PATHのNode更新だけではrunner内蔵Node、native downloader、Lambdaのmanaged Nodeは更新されない。
 - [Ubuntu公式USN-8944-1](https://ubuntu.com/security/notices/USN-8944-1)の26.04修正版`ca-certificates 20260816ubuntu0.26.04.1`を含む、署名済みAPTからCAを更新する。各jobの最初のネットワークAction実行前に、対象4root表現がbundle／CA directoryに残る場合は停止する。この手順はcheckout前なので、作業directoryを`runner.temp`に明示する。workflowの`NODE_OPTIONS=--use-openssl-ca`で内蔵NodeもこのOS CAを使う。runner自身によるAction archiveの事前取得はjobの先行stepより早く、提供元の更新確認が必要である。
-- checkout直後のlocal composite actionから`tools.configure_build_tls`を使う。使い捨てhosted runnerのみOSの標準CA設定を更新する。子ツールには既存OS bundleから対象root／公開鍵だけを除いたPEMと空のCA directoryを指定し、curl／Git／urllib／AWS CLI／vp／pnpmにも適用する。Go／OpenSSLの追加directory経由を残さない。Docker daemonはCA更新後に再起動し、BuildKitは起動前から同じPEMを選び、実際のdaemon環境とbundleを検査する。
+- checkout直後のlocal composite actionは`tools.configure_build_tls`で、Ubuntuの公式パッケージが管理するOS bundleとPEM／hashed aliasを検査する。対象の証明書・公開鍵が見つかればジョブを停止する。子ツールには対象root／公開鍵を除いたPEMと空のCA directoryを指定し、curl／Git／urllib／AWS CLI／vp／pnpmに適用する。Docker daemonは実際のシステムストアと追加CAを検査した後に再起動する。BuildKitは起動時から同じPEMを選び、実際のdaemon環境とbundleを検査する。
 - pip 26.2.2への更新に加え、pip-auditがensurepipの旧pipを起動する間も安全なbundleだけを選ばせる。[pip公式のCA選択](https://pip.pypa.io/en/stable/topics/https-certificates/)に従い、限定した子環境で`PIP_USE_DEPRECATED=legacy-certs`と`PIP_CERT`／`REQUESTS_CA_BUNDLE`を組み合わせ、古いOSとvendored bundleの混在を避ける。証明書検証を維持し、既存の`--strict --require-hashes`を変更しない。不正hashが失敗することも確認する。
-- Javaは選択したJDKの既存cacertsから対象だけを除いたPKCS12を標準`javax.net.ssl.trustStore`で指定する。別CA集合とのunionや新CA追加は行わない。CIではJDK設定直後、ローカルAndroidでは管理対象ビルドの一時領域に限定し、Gradle Wrapper／Maven／SDK取得に適用する。ホストの恒久的な信頼ストアは変更しない。
+- Hosted CIでは固定JDKのcacertsを検査し、すべての証明書が安全で、JVM起動オプション・JSSEが優先するjssecacerts・既存のストア指定がなければ標準ストアをそのまま使う。ローカルビルドとそれ以外の条件では、選択したJDKのcacertsから対象だけを除いた一時PKCS12を標準`javax.net.ssl.trustStore`で指定する。Gradle Wrapper／Maven／SDK取得に適用する。
 
 対策前の配置済みCore imageのOS CAは対象12チェーンを受理し、アプリとLambda bundleのcertifiは全12本を拒否した。ローカル修正後のHTTPX2同期／非同期とaiohttpは、旧OS bundle／hashed directoryを環境に指定しても対象12本を全て拒否し、正常な公開HTTPSを受理した。CA overlayも抽出した実ARM64 layerを使い、CAfile／CApathの双方で12本の拒否と正常3本の成功を確認する。完成ARM64 imageのbuild・container gate・SBOM／VEX／risk gateは別の検証であり、layer検証の成功で代替しない。ARM64 CIでは完成した同じproduction imageから、OS既定・CApathのみ・アプリcertifi・botocore同梱fallbackの4ストアを標準SSLContextで別々に検証し、対象12ホストの拒否と正常3ホストの受理、合計60判定を要求する。HTTP要求・認証情報は送らず、timeout・DNS・期限切れ・hostname不一致はCA拒否の成功として扱わない。標準のIPv4／IPv6接続切り替えを使い、通信障害だけを最大3回試す。全試行の固定分類を残し、証明書の受理・拒否は再試行せず判定する。実際のPython／OpenSSL・信頼集合のhash・image情報と結果をSBOMと同じartifactへ残す。
 

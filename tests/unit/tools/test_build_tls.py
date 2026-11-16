@@ -126,12 +126,37 @@ def test_additive_or_insecure_overrides_fail_closed(name: str, value: str) -> No
         build._check_overrides({name: value})
 
 
-def test_default_execution_cannot_mutate_the_local_os(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_default_execution_cannot_restart_local_docker(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
-    with pytest.raises(policy.TrustPolicyError, match="tls_system_update_requires_hosted_ubuntu"):
-        build.update_runner_system(tmp_path, docker=True)
+    with pytest.raises(policy.TrustPolicyError, match="tls_runner_requires_hosted_ubuntu"):
+        build.verify_runner_system(docker=True)
+
+
+def test_runner_uses_ubuntu_store_and_rejects_an_affected_alias(
+    tmp_path: Path, certificates: tuple[bytes, bytes, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    denied, safe, _ = certificates
+    system = tmp_path / "etc/ssl/certs"
+    system.mkdir(parents=True)
+    (tmp_path / "etc/os-release").write_text("ID=ubuntu\n")
+    bundle = system / "ca-certificates.crt"
+    bundle.write_bytes(safe)
+    commands: list[list[str]] = []
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("RUNNER_ENVIRONMENT", "github-hosted")
+    monkeypatch.setattr(build, "Path", lambda path: tmp_path / path.lstrip("/"))
+    monkeypatch.setattr(policy, "is_denied", lambda cert: cert == denied)
+    monkeypatch.setattr(build, "_run", lambda command: commands.append(command) or b"")
+
+    build.verify_runner_system(docker=True)
+    assert commands == [["sudo", "-n", "systemctl", "restart", "docker"]]
+    assert bundle.read_bytes() == safe
+
+    commands.clear()
+    (system / "12345678.0").write_bytes(denied)
+    with pytest.raises(policy.TrustPolicyError, match="tls_distrusted_ca_present"):
+        build.verify_runner_system(docker=True)
+    assert commands == []
 
 
 def test_java_discovery_uses_the_existing_pinned_toolchain_without_java_home(
@@ -162,10 +187,11 @@ def test_our_inherited_java_store_is_verified_then_replaced_without_duplicate_op
 
     def run(command: list[str], **_: object) -> bytes:
         if command[0].endswith("keytool"):
-            return exported
+            return exported if "-keystore" in command else first + other
         Path(command[-1]).write_bytes(b"invented public CA store")
         return b""
 
+    monkeypatch.setattr(policy, "is_denied", lambda cert: cert == other)
     monkeypatch.setattr(build, "_run", run)
     environment = {"JAVA_HOME": "/invented-jdk", "JAVA_TOOL_OPTIONS": "-Djava.io.tmpdir=/disk/tmp"}
     environment.update(build.configure_java(tmp_path, environment))
@@ -173,8 +199,46 @@ def test_our_inherited_java_store_is_verified_then_replaced_without_duplicate_op
     assert environment["JAVA_TOOL_OPTIONS"].count("-Djavax.net.ssl.trustStore=") == 1
     assert "-Djava.io.tmpdir=/disk/tmp" in environment["JAVA_TOOL_OPTIONS"]
     exported = other
+    monkeypatch.setattr(policy, "is_denied", lambda _: False)
     with pytest.raises(policy.TrustPolicyError, match="tls_build_unsafe_override"):
         build.configure_java(tmp_path, environment)
+
+
+@pytest.mark.parametrize("override", ("jssecacerts", *build.JAVA_OPTIONS))
+def test_verified_jdk_uses_vendor_store_unless_jsse_has_another_default(
+    tmp_path: Path,
+    certificates: tuple[bytes, bytes, str],
+    monkeypatch: pytest.MonkeyPatch,
+    override: str,
+) -> None:
+    public, _, _ = certificates
+    commands: list[list[str]] = []
+
+    def run(command: list[str], **_: object) -> bytes:
+        commands.append(command)
+        return public if "-cacerts" in command else b""
+
+    monkeypatch.setattr(build, "_run", run)
+    jdk = tmp_path / "jdk"
+    environment = {
+        "JAVA_HOME": str(jdk),
+        "RUNNER_ENVIRONMENT": "github-hosted",
+        "GITHUB_ACTIONS": "true",
+    }
+
+    assert build.configure_java(tmp_path, environment) == {}
+    assert len(commands) == 1 and "-cacerts" in commands[0]
+    assert not (tmp_path / "java-ca.pem").exists()
+
+    if override == "jssecacerts":
+        alternate = jdk / "lib/security/jssecacerts"
+        alternate.parent.mkdir(parents=True)
+        alternate.touch()
+    else:
+        environment[override] = "-Djava.home=/alternate-jdk"
+    values = build.configure_java(tmp_path, environment)
+    assert "trustStore=" in values["JAVA_TOOL_OPTIONS"]
+    assert (tmp_path / "java-ca.pem").read_bytes() == public
 
 
 @pytest.mark.parametrize("unsafe", ("store", "extra-directory", "bad-certificate"))
