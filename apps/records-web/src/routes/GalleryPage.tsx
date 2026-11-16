@@ -127,14 +127,15 @@ function GalleryFilters({
         const selected = filters.get(key);
         const value = options.find((option) => option.value === selected)?.value;
         return (
-          <AvatarSelect
-            key={key}
-            label={label}
-            options={options}
-            value={value ?? (key === "sort" ? "commonest" : allOption.value)}
-            onChange={(next) => onChange(key, next === allOption.value ? "" : next)}
-            animatedChevron
-          />
+          <div key={key} className={key === "sort" ? styles.sortField : undefined}>
+            <AvatarSelect
+              label={label}
+              options={options}
+              value={value ?? (key === "sort" ? "commonest" : allOption.value)}
+              onChange={(next) => onChange(key, next === allOption.value ? "" : next)}
+              animatedChevron
+            />
+          </div>
         );
       })}
       <label className={styles.acquiredFilter}>
