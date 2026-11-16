@@ -283,6 +283,13 @@ Action標準のpnpm依存キャッシュと`cache-toolchain: true`を使う。No
 `--continue-on-error`で残りの整形・lint・型診断を表示してから失敗を返す。
 IaCのローカル再確認では`npm run test:infra:failed`で直前の失敗だけを再実行できる。
 直前に失敗がなければ成功で終了する。CIとReleaseからは全件を実行する。
+
+React Compilerは2026年11月16日にランキングの5コンポーネントをアノテーションで選んで計測した。
+Viteの本番ビルド各6回の中央値は、現行0.877秒、Compiler直列1.275秒、Babelワーカー並列1.325秒だった。
+Chromiumの390×844、CPU 4倍スローダウンで、6つの実行環境ごとに各操作を30回試した。スクリプトCPU中央値は
+開閉が2.288→1.718 ms、期間切替が2.274→1.293 msだった。画面が安定するまでの中央値はいずれも約33 msだった。
+ランキングの遅延読み込みJSはgzipで15,023→17,821 bytesとなった。体感に関わる時間の改善を確認できなかったため、
+計測結果だけを記録し、本番構成への導入を保留する。候補のランキングPlaywright試験は9件成功、設定によるskipは1件だった。
 書式・lint・型のいずれかが失敗した場合は非0で終了する。
 pnpm 12の環境用lock documentは[GitHubの静的依存検出に未対応の報告](https://github.com/dependabot/dependabot-core/issues/15904)があるため、
 `pmOnFail: ignore`でproject依存の単一documentを維持する。pnpm自身によるversion切替・検査は無効になるので、
