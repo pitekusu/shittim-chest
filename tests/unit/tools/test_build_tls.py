@@ -126,12 +126,37 @@ def test_additive_or_insecure_overrides_fail_closed(name: str, value: str) -> No
         build._check_overrides({name: value})
 
 
-def test_default_execution_cannot_mutate_the_local_os(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_default_execution_cannot_restart_local_docker(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
-    with pytest.raises(policy.TrustPolicyError, match="tls_system_update_requires_hosted_ubuntu"):
-        build.update_runner_system(tmp_path, docker=True)
+    with pytest.raises(policy.TrustPolicyError, match="tls_runner_requires_hosted_ubuntu"):
+        build.verify_runner_system(docker=True)
+
+
+def test_runner_uses_ubuntu_store_and_rejects_an_affected_alias(
+    tmp_path: Path, certificates: tuple[bytes, bytes, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    denied, safe, _ = certificates
+    system = tmp_path / "etc/ssl/certs"
+    system.mkdir(parents=True)
+    (tmp_path / "etc/os-release").write_text("ID=ubuntu\n")
+    bundle = system / "ca-certificates.crt"
+    bundle.write_bytes(safe)
+    commands: list[list[str]] = []
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("RUNNER_ENVIRONMENT", "github-hosted")
+    monkeypatch.setattr(build, "Path", lambda path: tmp_path / path.lstrip("/"))
+    monkeypatch.setattr(policy, "is_denied", lambda cert: cert == denied)
+    monkeypatch.setattr(build, "_run", lambda command: commands.append(command) or b"")
+
+    build.verify_runner_system(docker=True)
+    assert commands == [["sudo", "-n", "systemctl", "restart", "docker"]]
+    assert bundle.read_bytes() == safe
+
+    commands.clear()
+    (system / "12345678.0").write_bytes(denied)
+    with pytest.raises(policy.TrustPolicyError, match="tls_distrusted_ca_present"):
+        build.verify_runner_system(docker=True)
+    assert commands == []
 
 
 def test_java_discovery_uses_the_existing_pinned_toolchain_without_java_home(

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -1820,9 +1821,13 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         marker not in dependency_classification for marker in required_dependency_inputs
     ):
         raise WorkflowPolicyError("Records CI must classify dependency signature audit inputs")
+    web_check = _workflow_step_block(records_web, "Check Records web formatting, lint, and types")
+    if "        run: pnpm run check" not in web_check.splitlines() or re.search(
+        r"(?m)^\s*(?:if|continue-on-error):", web_check
+    ):
+        raise WorkflowPolicyError("Records CI must retain the frozen install and web gates")
     required_records_web = (
         "vp install --frozen-lockfile",
-        "pnpm exec vp check --deny-warnings",
         "pnpm exec vp test",
         "pnpm run build",
         "python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low",
@@ -1921,6 +1926,16 @@ def _validate_ci_path_isolation(directory: Path) -> None:
 
 
 def _validate_records_workflows(directory: Path) -> None:
+    web_package = directory.parent.parent / "apps/records-web/package.json"
+    try:
+        check_script = json.loads(web_package.read_text(encoding="utf-8"))["scripts"]["check"]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise WorkflowPolicyError("Records web gates require the shared check script") from error
+    if check_script != "vp check --deny-warnings --continue-on-error":
+        raise WorkflowPolicyError(
+            "Records web gates must report all diagnostics and fail on warnings"
+        )
+
     release_path = directory / RECORDS_RELEASE_WORKFLOW
     backfill_path = directory / RECORDS_BACKFILL_WORKFLOW
     if not release_path.is_file() or not backfill_path.is_file():
@@ -1973,7 +1988,7 @@ def _validate_records_workflows(directory: Path) -> None:
     app_local_web_gates = (
         "          (\n"
         "            cd apps/records-web\n"
-        "            pnpm exec vp check --deny-warnings\n"
+        "            pnpm run check\n"
         "            pnpm exec vp test\n"
         "            pnpm run build\n"
         "            python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low\n"

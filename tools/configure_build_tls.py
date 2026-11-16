@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 """Apply the emSign distrust policy to disposable CI or a scoped local command.
 
-The system mutation is opt-in and restricted to GitHub-hosted Ubuntu runners.
+Docker restarts are opt-in and restricted to GitHub-hosted Ubuntu runners.
 Local runs only write the requested directory and alter the child environment.
 """
 
@@ -20,7 +20,6 @@ from pathlib import Path
 from tools.tls_policy import (
     TrustPolicyError,
     filter_bundle,
-    is_denied,
     pem_certificates,
     require_safe_bundle,
 )
@@ -216,38 +215,23 @@ def discover_java_home(environment: dict[str, str], project: Path) -> Path:
     raise TrustPolicyError("tls_java_home_missing")
 
 
-def update_runner_system(output: Path, *, docker: bool = False) -> None:
-    """Use Ubuntu's standard blocklist/rebuild only on disposable hosted runners."""
+def verify_runner_system(*, docker: bool = False) -> None:
+    """Check the store populated by Ubuntu's CA package before configuring tools."""
     if (
         os.environ.get("GITHUB_ACTIONS") != "true"
         or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted"
         or "ID=ubuntu\n" not in Path("/etc/os-release").read_text()
     ):
-        raise TrustPolicyError("tls_system_update_requires_hosted_ubuntu")
-    config = Path("/etc/ca-certificates.conf")
-    lines = config.read_text().splitlines()
-    for index, line in enumerate(lines):
-        if not line or line.startswith(("#", "!")):
-            continue
-        certificate = Path("/usr/share/ca-certificates") / line
-        if any(is_denied(cert) for cert in pem_certificates(certificate.read_bytes())):
-            lines[index] = "!" + line
-    prepared = output / "ca-certificates.conf"
-    prepared.write_text("\n".join(lines) + "\n")
-    _run(["sudo", "-n", "install", "-m", "644", str(prepared), str(config)])
-    # Locally added roots bypass ca-certificates.conf. Quarantine only a public
-    # certificate that actually matches the incident policy; retain its bytes.
-    disabled = output / "disabled"
-    disabled.mkdir(exist_ok=True)
-    for certificate in Path("/usr/local/share/ca-certificates").rglob("*.crt"):
-        if any(is_denied(cert) for cert in pem_certificates(certificate.read_bytes())):
-            import hashlib
-
-            target = disabled / (hashlib.sha256(str(certificate).encode()).hexdigest() + ".crt")
-            _run(["sudo", "-n", "mv", str(certificate), str(target)])
-    _run(["sudo", "-n", "update-ca-certificates", "--fresh"])
-    require_safe_bundle(Path("/etc/ssl/certs/ca-certificates.crt").read_bytes())
-    for certificate in Path("/etc/ssl/certs").glob("*.pem"):
+        raise TrustPolicyError("tls_runner_requires_hosted_ubuntu")
+    directory = Path("/etc/ssl/certs")
+    require_safe_bundle((directory / "ca-certificates.crt").read_bytes())
+    certificates = {
+        path.resolve()
+        for path in directory.iterdir()
+        if path.is_file()
+        and (path.suffix == ".pem" or re.fullmatch(r"[0-9a-fA-F]{8}\.[0-9]+", path.name))
+    }
+    for certificate in sorted(certificates):
         require_safe_bundle(certificate.read_bytes())
     if docker:
         for certificate in Path("/etc/docker/certs.d").rglob("*.crt"):
@@ -300,7 +284,7 @@ def main() -> int:
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
     if args.runner_system:
-        update_runner_system(args.output, docker=args.docker)
+        verify_runner_system(docker=args.docker)
     values = configure_environment(args.output, args.source)
     environment = dict(os.environ) | values
     if args.java:
