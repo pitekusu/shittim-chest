@@ -2418,6 +2418,136 @@
       "title": "GalleryCard",
       "type": "object"
     },
+    "GalleryCollectionCard": {
+      "additionalProperties": false,
+      "properties": {
+        "cardId": {
+          "pattern": "^[A-Za-z0-9_-]{80}$",
+          "title": "Cardid",
+          "type": "string"
+        },
+        "collector": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GalleryCollector"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "isMine": {
+          "title": "Ismine",
+          "type": "boolean"
+        },
+        "performer": {
+          "enum": [
+            "participant-a",
+            "participant-b",
+            "participant-c"
+          ],
+          "title": "Performer",
+          "type": "string"
+        },
+        "postedAt": {
+          "format": "date-time",
+          "title": "Postedat",
+          "type": "string"
+        },
+        "rarity": {
+          "anyOf": [
+            {
+              "maximum": 4,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Rarity"
+        },
+        "schoolName": {
+          "maxLength": 40,
+          "minLength": 1,
+          "title": "Schoolname",
+          "type": "string"
+        },
+        "studentId": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "title": "Studentid",
+          "type": "string"
+        },
+        "studentName": {
+          "maxLength": 60,
+          "minLength": 1,
+          "title": "Studentname",
+          "type": "string"
+        },
+        "thumbnailReady": {
+          "title": "Thumbnailready",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cardId",
+        "postedAt",
+        "performer",
+        "studentName",
+        "schoolName",
+        "rarity",
+        "collector",
+        "isMine",
+        "thumbnailReady",
+        "studentId"
+      ],
+      "title": "GalleryCollectionCard",
+      "type": "object"
+    },
+    "GalleryCollectionListResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "contract": {
+          "const": "gallery-collection-v1",
+          "title": "Contract",
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/GalleryCollectionCard"
+          },
+          "maxItems": 100,
+          "title": "Items",
+          "type": "array"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Nextcursor"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "contract",
+        "items",
+        "nextCursor"
+      ],
+      "title": "GalleryCollectionListResponse",
+      "type": "object"
+    },
     "GalleryCollector": {
       "additionalProperties": false,
       "properties": {
@@ -2551,6 +2681,81 @@
         "schemaVersion"
       ],
       "title": "GalleryOriginalResponse",
+      "type": "object"
+    },
+    "GalleryRosterEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "rarity": {
+          "maximum": 4,
+          "minimum": 0,
+          "title": "Rarity",
+          "type": "integer"
+        },
+        "schoolName": {
+          "anyOf": [
+            {
+              "maxLength": 40,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Schoolname"
+        },
+        "studentId": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "title": "Studentid",
+          "type": "string"
+        },
+        "studentName": {
+          "anyOf": [
+            {
+              "maxLength": 60,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Studentname"
+        }
+      },
+      "required": [
+        "studentId",
+        "studentName",
+        "schoolName",
+        "rarity"
+      ],
+      "title": "GalleryRosterEntry",
+      "type": "object"
+    },
+    "GalleryRosterResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/GalleryRosterEntry"
+          },
+          "maxItems": 2000,
+          "minItems": 1,
+          "title": "Items",
+          "type": "array"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "items"
+      ],
+      "title": "GalleryRosterResponse",
       "type": "object"
     },
     "GallerySchoolLogosResponse": {
@@ -5356,6 +5561,12 @@
     },
     {
       "$ref": "#/$defs/GalleryListResponse"
+    },
+    {
+      "$ref": "#/$defs/GalleryCollectionListResponse"
+    },
+    {
+      "$ref": "#/$defs/GalleryRosterResponse"
     },
     {
       "$ref": "#/$defs/GalleryDetailResponse"

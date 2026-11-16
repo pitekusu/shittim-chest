@@ -52,6 +52,7 @@ const GALLERY_TABLE_KEY = "GACHA#GALLERY#*";
 const GALLERY_ORIGINAL_PREFIX = "student-gacha/results";
 const GALLERY_THUMBNAIL_PREFIX = "student-gacha/thumbnails/v1";
 const GALLERY_SCHOOL_CATALOG_KEY = "student-gacha/assets/blue_archive_school_logos.zip";
+const GALLERY_ROSTER_KEY = "student-gacha/roster/blue_archive_characters_with_npcs.json";
 
 export class RecordsApplicationStack extends Stack {
   public readonly projectorFunction: lambda.Function;
@@ -962,7 +963,9 @@ export class RecordsApplicationStack extends Stack {
         }),
         new iam.PolicyStatement({
           actions: ["s3:GetObject"],
-          resources: [`${mediaBucket.bucketArn}/${GALLERY_SCHOOL_CATALOG_KEY}`],
+          resources: [GALLERY_SCHOOL_CATALOG_KEY, GALLERY_ROSTER_KEY].map((key) =>
+            `${mediaBucket.bucketArn}/${key}`,
+          ),
         }),
         new iam.PolicyStatement({
           actions: ["dynamodb:GetItem", "dynamodb:Query"],
@@ -2438,6 +2441,7 @@ export class RecordsApplicationStack extends Stack {
     });
     for (const path of [
       "/api/v1/gallery",
+      "/api/v1/gallery/roster",
       "/api/v1/gallery/school-logos",
       "/api/v1/gallery/thumbnails",
       "/api/v1/gallery/{cardId}",

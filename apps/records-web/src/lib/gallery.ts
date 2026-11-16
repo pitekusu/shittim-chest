@@ -6,7 +6,9 @@ import {
   getGalleryOriginal,
   getGalleryThumbnails,
   type GalleryCard,
+  type GalleryCollectionCard,
   type GalleryImageTicket,
+  type GalleryRosterEntry,
 } from "../api/gallery";
 
 export const galleryListQuery = (scope: number) =>
@@ -17,6 +19,41 @@ export const galleryListQuery = (scope: number) =>
     getNextPageParam: ({ nextCursor }, _pages, _currentCursor, cursors) =>
       nextCursor !== null && !cursors.includes(nextCursor) ? nextCursor : undefined,
   });
+
+export interface GalleryCollectionEntry extends GalleryRosterEntry {
+  readonly cards: readonly GalleryCard[];
+  readonly firstAcquisitionOrder: number | null;
+}
+
+export function galleryCollection(
+  roster: readonly GalleryRosterEntry[],
+  newestFirst: readonly GalleryCollectionCard[],
+): GalleryCollectionEntry[] {
+  const cardsByStudent = new Map<string, { cards: GalleryCard[]; firstAcquisitionOrder: number }>();
+  // The API preserves the exact storage order, including sub-millisecond timestamps.
+  for (const card of [...newestFirst].reverse()) {
+    const group = cardsByStudent.get(card.studentId);
+    if (group) group.cards.push(card);
+    else {
+      cardsByStudent.set(card.studentId, {
+        cards: [card],
+        firstAcquisitionOrder: cardsByStudent.size,
+      });
+    }
+  }
+  return roster.map((entry) => ({
+    ...entry,
+    ...(cardsByStudent.get(entry.studentId) ?? { cards: [], firstAcquisitionOrder: null }),
+  }));
+}
+
+export function galleryCollectionName(entry: GalleryCollectionEntry) {
+  return entry.studentName ?? entry.cards[0]?.studentName ?? null;
+}
+
+export function galleryCollectionSchool(entry: GalleryCollectionEntry) {
+  return entry.schoolName ?? entry.cards[0]?.schoolName ?? null;
+}
 
 export function galleryDetailQuery(scope: number, cardId: string) {
   return queryOptions({
@@ -84,58 +121,45 @@ export function galleryCollectorName(card: GalleryCard) {
 }
 
 export const gallerySorts = {
-  newest: "獲得日が新しい順",
-  oldest: "獲得日が古い順",
-  rarest: "レア度が高い順",
   commonest: "レア度が低い順",
-  school: "学校名順",
-  collector: "獲得者名順",
+  rarest: "レア度が高い順",
+  newest: "初回獲得日が新しい順",
+  oldest: "初回獲得日が古い順",
 } as const;
 
-const japanese = new Intl.Collator("ja");
+function searchStudentName(name: string) {
+  return name.normalize("NFKC").trim().toLocaleLowerCase("ja");
+}
 
-export function filterGallery(cards: readonly GalleryCard[], search: URLSearchParams) {
-  const collector = search.get("collector");
-  const performer = search.get("performer");
+export function filterGallery(entries: readonly GalleryCollectionEntry[], search: URLSearchParams) {
+  const terms = searchStudentName(search.get("q") ?? "")
+    .split(/\s+/u)
+    .filter(Boolean);
   const rarity = search.get("rarity");
   const school = search.get("school");
   const sort = search.get("sort");
-  return cards
-    .filter((card) => {
-      const matchesCollector =
-        collector === "mine"
-          ? card.isMine
-          : collector === "unknown"
-            ? card.collector === null && !card.isMine
-            : !collector || card.collector?.id === collector;
+  return entries
+    .filter((entry) => {
+      const name = searchStudentName(galleryCollectionName(entry) ?? "");
       return (
-        matchesCollector &&
-        (!performer || card.performer === performer) &&
-        (!rarity || String(card.rarity ?? "unrecorded") === rarity) &&
-        (!school || card.schoolName === school)
+        terms.every((term) => name.includes(term)) &&
+        (!rarity || String(entry.rarity) === rarity) &&
+        (!school || galleryCollectionSchool(entry) === school)
       );
     })
     .sort((left, right) => {
-      const byDate = Date.parse(right.postedAt) - Date.parse(left.postedAt);
-      const byRarity = (right.rarity ?? 0) - (left.rarity ?? 0);
-      const unknownRarity = Number(left.rarity === null) - Number(right.rarity === null);
-      const bySchool = japanese.compare(left.schoolName, right.schoolName);
-      const byCollector = japanese.compare(
-        left.collector?.displayName ?? "",
-        right.collector?.displayName ?? "",
+      if (sort === "oldest" || sort === "newest") {
+        const leftOrder = left.firstAcquisitionOrder;
+        const rightOrder = right.firstAcquisitionOrder;
+        if (leftOrder === null || rightOrder === null) {
+          return Number(leftOrder === null) - Number(rightOrder === null);
+        }
+        return sort === "oldest" ? leftOrder - rightOrder : rightOrder - leftOrder;
+      }
+      const starlessLast = Number(left.rarity === 0) - Number(right.rarity === 0);
+      return (
+        starlessLast ||
+        (sort === "rarest" ? right.rarity - left.rarity : left.rarity - right.rarity)
       );
-      const primary =
-        sort === "oldest"
-          ? -byDate
-          : sort === "rarest"
-            ? unknownRarity || byRarity
-            : sort === "commonest"
-              ? unknownRarity || -byRarity
-              : sort === "school"
-                ? bySchool
-                : sort === "collector"
-                  ? byCollector
-                  : byDate;
-      return primary || byDate || left.cardId.localeCompare(right.cardId);
     });
 }

@@ -1,5 +1,6 @@
 import detailValidator from "../generated/gallery-detail-response-validator.mjs";
-import listValidator from "../generated/gallery-list-response-validator.mjs";
+import listValidator from "../generated/gallery-collection-list-response-validator.mjs";
+import rosterValidator from "../generated/gallery-roster-response-validator.mjs";
 import originalValidator from "../generated/gallery-original-response-validator.mjs";
 import schoolLogosValidator from "../generated/gallery-school-logos-response-validator.mjs";
 import thumbnailsValidator from "../generated/gallery-thumbnails-response-validator.mjs";
@@ -10,6 +11,7 @@ export const galleryCardIdPattern = /^[A-Za-z0-9_-]{80}$/u;
 export const galleryThumbnailBatchSize = 24;
 const galleryEndpoint = "/api/v1/gallery";
 const avatarContract = "gallery-avatars-v1";
+const collectionContract = "gallery-collection-v1";
 
 export interface GalleryCard {
   readonly cardId: string;
@@ -27,9 +29,26 @@ export interface GalleryCard {
   readonly thumbnailReady: boolean;
 }
 
+export interface GalleryCollectionCard extends GalleryCard {
+  readonly studentId: string;
+}
+
+export interface GalleryRosterEntry {
+  readonly studentId: string;
+  readonly studentName: string | null;
+  readonly schoolName: string | null;
+  readonly rarity: NonNullable<GalleryCard["rarity"]>;
+}
+
+interface GalleryRosterResponse {
+  readonly schemaVersion: 1;
+  readonly items: readonly GalleryRosterEntry[];
+}
+
 interface GalleryListResponse {
   readonly schemaVersion: 1;
-  readonly items: readonly GalleryCard[];
+  readonly contract: typeof collectionContract;
+  readonly items: readonly GalleryCollectionCard[];
   readonly nextCursor: string | null;
 }
 
@@ -60,11 +79,19 @@ interface GallerySchoolLogosResponse {
 }
 
 export function getGalleryList(cursor: string | null, signal: AbortSignal) {
-  const search = new URLSearchParams({ contract: avatarContract });
+  const search = new URLSearchParams({ contract: collectionContract });
   if (cursor !== null) search.set("cursor", cursor);
   return requestJson(
     `${galleryEndpoint}?${search}`,
     (value): value is GalleryListResponse => listValidator(value),
+    { signal },
+  );
+}
+
+export function getGalleryRoster(signal: AbortSignal) {
+  return requestJson(
+    `${galleryEndpoint}/roster`,
+    (value): value is GalleryRosterResponse => rosterValidator(value),
     { signal },
   );
 }

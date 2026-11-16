@@ -9,18 +9,24 @@ from typing import Annotated, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from shittim_chest.adapters.assets.student_gacha import RESULT_SIZE
+from shittim_chest.adapters.assets.student_gacha_schools import _SCHOOL_ALIASES
 from shittim_chest.adapters.dynamodb.serializer import DynamoItem
-from shittim_chest.application.student_gacha_models import student_gacha_image_key
+from shittim_chest.application.student_gacha_models import Student, student_gacha_image_key
 
 from shittim_records.auth import SessionRecord
 from shittim_records.contracts import (
     GALLERY_CARD_ID_PATTERN,
+    GALLERY_COLLECTION_CONTRACT,
     AvatarRef,
     GalleryCard,
+    GalleryCollectionCard,
+    GalleryCollectionListResponse,
     GalleryCollector,
     GalleryDetailResponse,
     GalleryListResponse,
     GalleryOriginalResponse,
+    GalleryRosterEntry,
+    GalleryRosterResponse,
     GallerySchoolLogosResponse,
     GalleryThumbnail,
     GalleryThumbnailsResponse,
@@ -114,6 +120,8 @@ class GalleryStore(Protocol):
 
     def load_school_logos(self) -> dict[str, str]: ...
 
+    def load_roster(self) -> tuple[Student, ...]: ...
+
 
 class GalleryProfiles(Protocol):
     def load_profiles(self, *, requester_keys: tuple[str, ...]) -> dict[str, RequesterProfile]: ...
@@ -145,6 +153,48 @@ class GalleryReadService:
             schema_version=1,
             items=self._summaries(rows, viewer, include_avatars=include_avatars),
             next_cursor=None if next_key is None else self._encode_cursor(next_key, now),
+        )
+
+    def list_collection_cards(
+        self, *, cursor: str | None, viewer: SessionRecord, now: datetime
+    ) -> GalleryCollectionListResponse:
+        page = self.list_cards(cursor=cursor, viewer=viewer, now=now, include_avatars=True)
+        return GalleryCollectionListResponse(
+            schema_version=1,
+            contract=GALLERY_COLLECTION_CONTRACT,
+            items=[
+                GalleryCollectionCard(
+                    **card.model_dump(), student_id=self._student_id(card.student_name)
+                )
+                for card in page.items
+            ],
+            next_cursor=page.next_cursor,
+        )
+
+    def get_roster(self) -> GalleryRosterResponse:
+        items: list[GalleryRosterEntry] = []
+        for student in self._store.load_roster():
+            if student.rarity is None:
+                raise ReadFailure("GALLERY_UNAVAILABLE", 503)
+            secret = student.rarity in {0, 4}
+            school_name = None if secret else _SCHOOL_ALIASES.get(student.school, student.school)
+            items.append(
+                GalleryRosterEntry(
+                    student_id=self._student_id(student.name),
+                    student_name=None if secret else student.name,
+                    school_name=school_name,
+                    rarity=student.rarity,
+                )
+            )
+        # Opaque ordering keeps locked slots from exposing names through roster positions.
+        items.sort(
+            key=lambda item: (item.student_name is None, item.student_name or item.student_id)
+        )
+        return GalleryRosterResponse(schema_version=1, items=items)
+
+    def _student_id(self, name: str) -> str:
+        return self._cursor_codec.sign_message(
+            domain=f"gallery:student:{self._partition}", value=name
         )
 
     def get_card(
