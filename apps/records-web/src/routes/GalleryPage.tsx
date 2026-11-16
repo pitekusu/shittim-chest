@@ -37,7 +37,7 @@ import styles from "../styles/gallery.module.css";
 const GalleryViewer = lazy(() => import("../components/GalleryViewer"));
 const emptySchoolLogos: Readonly<Record<string, string>> = {};
 const emptyEntries: readonly GalleryCollectionEntry[] = [];
-const filterKeys = ["q", "school", "rarity"] as const;
+const filterKeys = ["q", "school", "rarity", "acquired"] as const;
 
 function isPlainClick(event: MouseEvent<HTMLAnchorElement>) {
   return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
@@ -67,6 +67,26 @@ function GalleryFilters({
   readonly filters: URLSearchParams;
   readonly onChange: (key: string, value: string) => void;
 }) {
+  const nameQuery = filters.get("q") ?? "";
+  const [nameInput, setNameInput] = useState({ query: nameQuery, value: nameQuery });
+  const composingName = useRef(false);
+  if (nameInput.query !== nameQuery) {
+    setNameInput({ query: nameQuery, value: nameQuery });
+  }
+  const changeName = (value: string) => {
+    setNameInput({ query: nameQuery, value });
+    // Replacing the URL during composition interrupts the IME's input session.
+    if (!composingName.current && value !== nameQuery) onChange("q", value);
+  };
+  const acquiredQuery = filters.get("acquired") === "1";
+  const [acquiredInput, setAcquiredInput] = useState({
+    query: acquiredQuery,
+    checked: acquiredQuery,
+  });
+  if (acquiredInput.query !== acquiredQuery) {
+    setAcquiredInput({ query: acquiredQuery, checked: acquiredQuery });
+  }
+
   const schools = new Set<string>();
   for (const entry of entries) {
     const name = galleryCollectionSchool(entry);
@@ -91,8 +111,15 @@ function GalleryFilters({
         生徒名
         <input
           type="search"
-          value={filters.get("q") ?? ""}
-          onChange={(event) => onChange("q", event.target.value)}
+          value={nameInput.value}
+          onChange={(event) => changeName(event.currentTarget.value)}
+          onCompositionStart={() => {
+            composingName.current = true;
+          }}
+          onCompositionEnd={(event) => {
+            composingName.current = false;
+            changeName(event.currentTarget.value);
+          }}
           placeholder="生徒名を入力"
         />
       </label>
@@ -110,6 +137,18 @@ function GalleryFilters({
           />
         );
       })}
+      <label className={styles.acquiredFilter}>
+        <input
+          type="checkbox"
+          checked={acquiredInput.checked}
+          onChange={(event) => {
+            const { checked } = event.currentTarget;
+            setAcquiredInput({ query: acquiredQuery, checked });
+            onChange("acquired", checked ? "1" : "");
+          }}
+        />
+        獲得済みのみ表示
+      </label>
     </fieldset>
   );
 }

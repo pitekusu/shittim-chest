@@ -32,7 +32,7 @@ from shittim_chest.application.student_gacha_discord import GachaDeliveryFailure
 
 _LOADING_TEXT = "⏳ 生徒を募集しています!"
 _GALLERY_NOTICE = (
-    "過去の募集結果は[ギャラリー](https://shittim.pitekusu.dev/gallery)で見れますよ\uff01"
+    "過去の募集結果は[生徒図鑑](https://shittim.pitekusu.dev/gallery)で見れますよ\uff01"
 )
 _LOADING_FILENAME = re.compile(r"show-[A-Za-z0-9_-]{22}\.gif\Z")
 _HISTORY_LIMIT = 500
