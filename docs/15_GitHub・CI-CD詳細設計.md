@@ -843,6 +843,23 @@ Grypeの更新後にCVE-2026-125709のMediumが3パッケージで新たに検�
 `expires_on`にはUTCの最終有効日`2026-11-19`を指定する。4枠の上限に従い、
 稼働中のconfigを含む直近3枠と今回のconfigで対象を構成し、最古のPR #719用の枠を外す。
 
+2026-11-17、PR #749の完成ARM64 production config
+`sha256:f3ed7f3fbfac2e8865eb866239749962b8225a17da959ee4e97293fe91d598b7`
+では、GrypeのHigh 36組のうち署名付きDHI VEXの適用後に22組が残った。
+従来と同じ10組に加え、OpenSSLのCVE-2026-88823／95691／95692／107496が
+`libssl3t64`、`openssl`、`openssl-provider-legacy`の各`3.5.7-1~deb13u3+dhi0`でHighとなった。
+Critical、修正可能なHigh/Critical、ソースのHigh/Criticalは0組で、TLSは60件すべて通過した。
+[同一実行の完成ARM64 SBOM・VEX・TLS・Grype](https://github.com/pitekusu/shittim-chest/actions/runs/44052362770)
+
+OpenSSLはこの4件をLowと評価している。Dockerの署名付きパッケージ索引から取得して検証した
+`+dhi1`には修正がある。CIと同一のGrype版・DBでSBOM上の版だけを差し替えた検証では、
+12組ともDebian由来の修正版未検出が続いた。今回の完成イメージには`+dhi0`が含まれる。
+[OpenSSLの告知](https://openssl-library.org/news/secadv/20261110.txt)・[Dockerの署名付きパッケージ索引](https://dhi.io/deb/debian/main/dists/trixie/InRelease)
+
+所有者は今回のconfigに限り、残る22組を2026-11-20 09:00 JSTまで受容し、必須CI通過後の
+マージと本番配信を明示承認した。`expires_on`はUTCの最終有効日`2026-11-19`とする。
+既存の10組では最古のPR #720用configを入れ替え、追加12組の対象は今回のconfigだけに限定する。
+
 ## 5. 本番配信
 
 ### 共通の工程
