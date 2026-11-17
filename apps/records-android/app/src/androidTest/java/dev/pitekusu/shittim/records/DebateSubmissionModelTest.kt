@@ -1,5 +1,6 @@
 package dev.pitekusu.shittim.records
 
+import android.net.Uri
 import androidx.lifecycle.ViewModelStore
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.Dispatchers
@@ -92,21 +93,27 @@ class DebateSubmissionModelTest {
     withContext(Dispatchers.Main) { ViewModelStore().apply { put("images", model); clear() } }
   }
 
-  @Test fun followUpDraftPreservesFrozenParentAndQuestionAcrossUnknownResponse() = runBlocking<Unit> {
+  @Test fun followUpDraftPreservesFrozenParentQuestionAndImageAcrossUnknownResponse() = runBlocking<Unit> {
     val parent = "p".repeat(43)
     val otherParent = "e".repeat(43)
+    val image = DraftAttachment("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "image/png", 2, "a".repeat(64), 1, 2)
+    val imageUri = Uri.parse("content://test/follow-up-image")
     var saved = DebateWorkspace(draft = "送信前の別の議題")
     var foundParent = otherParent
     val post = CompletableDeferred<String>()
-    val model = DebateSubmissionModel({ true }, { saved }, { saved = it },
+    val model = DebateSubmissionModel({ true }, { saved }, { it.validate(); saved = it },
       { _, _ -> error("ordinary submit called") },
       { requestId -> DebateRequest(requestId, "ビーフとポークならどっち？", "queued",
-          createdAt = "2026-10-04T00:00:00Z", updatedAt = "2026-10-04T00:00:00Z", parentRecordId = foundParent) },
-      {}, sendFollowUp = { requestId, question, parentId ->
+          createdAt = "2026-10-04T00:00:00Z", updatedAt = "2026-10-04T00:00:00Z",
+          attachmentIds = listOf(image.attachmentId), parentRecordId = foundParent) },
+      {}, importImage = { assertEquals(imageUri, it); image },
+      sendFollowUp = { requestId, question, attachments, parentId ->
         assertEquals(parent, parentId)
         assertEquals(parent, saved.parentRecordId)
         assertEquals(requestId, saved.requestId)
         assertEquals(question, saved.frozenQuestion)
+        assertEquals(listOf(image), attachments)
+        assertEquals(attachments, saved.attachments)
         post.complete(requestId)
         throw DebateRequestException(DebateFailure.UNAVAILABLE)
       })
@@ -118,8 +125,10 @@ class DebateSubmissionModelTest {
         assertEquals("送信前の別の議題", model.state.value.workspace?.draft)
         assertEquals(FollowUpDraft.Ready, model.prepareFollowUp(parent, replaceDraft = true))
         model.edit("ビーフとポークならどっち？")
-        model.submit()
+        model.addImages(listOf(imageUri))
       }
+      await { model.state.value.workspace?.attachments == listOf(image) && !model.state.value.busy }
+      withContext(Dispatchers.Main) { model.submit() }
       val frozenId = withTimeout(5000) { post.await() }
       await { !model.state.value.busy }
       withContext(Dispatchers.Main) {
@@ -132,6 +141,7 @@ class DebateSubmissionModelTest {
       withContext(Dispatchers.Main) { model.reconcile() }
       await { model.state.value.workspace?.receipt != null }
       assertEquals(parent, saved.receipt?.parentRecordId)
+      assertEquals(listOf(image.attachmentId), saved.receipt?.attachmentIds)
       assertEquals(frozenId, saved.receipt?.requestId)
     } finally {
       withContext(Dispatchers.Main) { ViewModelStore().apply { put("follow-up", model); clear() } }

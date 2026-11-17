@@ -7085,6 +7085,18 @@
       "post": {
         "description": "本人の依頼のみ。Cookie混在拒否・private, no-store。討論の途中本文や内部識別子を返さず、Archive公開後だけrecordIdを返す。",
         "operationId": "reserveDebateAttachment",
+        "parameters": [
+          {
+            "description": "更問の元の議事録ID。指定時は元のチャンネルへの投稿権限を確認する。",
+            "in": "query",
+            "name": "parentRecordId",
+            "required": false,
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -7197,6 +7209,16 @@
               "format": "uuid",
               "type": "string"
             }
+          },
+          {
+            "description": "更問の元の議事録ID。指定時は元のチャンネルへの投稿権限を確認する。",
+            "in": "query",
+            "name": "parentRecordId",
+            "required": false,
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -7299,6 +7321,16 @@
             "required": true,
             "schema": {
               "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "更問の元の議事録ID。指定時は元のチャンネルへの投稿権限を確認する。",
+            "in": "query",
+            "name": "parentRecordId",
+            "required": false,
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{43}$",
               "type": "string"
             }
           }
@@ -7416,6 +7448,18 @@
               "maxLength": 1024,
               "type": "string"
             }
+          },
+          {
+            "description": "更問の添付IDを返す。省略時は更問のattachmentIdsを空配列で返す。",
+            "in": "header",
+            "name": "X-Records-Contract",
+            "required": false,
+            "schema": {
+              "enum": [
+                "debate-follow-up-images-v1"
+              ],
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -7507,7 +7551,7 @@
         ]
       },
       "post": {
-        "description": "本人の依頼のみ。Cookie混在拒否・private, no-store。討論の途中本文や内部識別子を返さず、Archive公開後だけrecordIdを返す。",
+        "description": "本人の依頼のみ。Cookie混在拒否・private, no-store。討論の途中本文や内部識別子を返さず、Archive公開後だけrecordIdを返す。parentRecordIdを指定すると元の討論への更問になる。通常の討論と更問に本人の準備済み画像をattachmentIdsで最大3枚指定できる。",
         "operationId": "startMobileDebate",
         "requestBody": {
           "content": {
@@ -7621,6 +7665,18 @@
               "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
               "type": "string"
             }
+          },
+          {
+            "description": "更問の添付IDを返す。省略時は更問のattachmentIdsを空配列で返す。",
+            "in": "header",
+            "name": "X-Records-Contract",
+            "required": false,
+            "schema": {
+              "enum": [
+                "debate-follow-up-images-v1"
+              ],
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -7723,6 +7779,18 @@
             "required": true,
             "schema": {
               "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "更問の添付IDを返す。省略時は更問のattachmentIdsを空配列で返す。",
+            "in": "header",
+            "name": "X-Records-Contract",
+            "required": false,
+            "schema": {
+              "enum": [
+                "debate-follow-up-images-v1"
+              ],
               "type": "string"
             }
           }
@@ -7848,6 +7916,18 @@
               "format": "uuid",
               "type": "string"
             }
+          },
+          {
+            "description": "更問の添付IDを返す。省略時は更問のattachmentIdsを空配列で返す。",
+            "in": "header",
+            "name": "X-Records-Contract",
+            "required": false,
+            "schema": {
+              "enum": [
+                "debate-follow-up-images-v1"
+              ],
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -7950,6 +8030,18 @@
             "required": true,
             "schema": {
               "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "更問の添付IDを返す。省略時は更問のattachmentIdsを空配列で返す。",
+            "in": "header",
+            "name": "X-Records-Contract",
+            "required": false,
+            "schema": {
+              "enum": [
+                "debate-follow-up-images-v1"
+              ],
               "type": "string"
             }
           }

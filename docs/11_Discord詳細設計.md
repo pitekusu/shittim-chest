@@ -93,6 +93,7 @@ sequenceDiagram
 
 機能の有効化後は、メインチャンネルの「Webで議論結果を見る」通知に「更問する」を表示する。
 元のチャンネルを閲覧・投稿できるメンバーが追加質問を入力し、同じチャンネルに新しい公開スレッドを作る。
+更問のフォームでは、質問とともに任意で画像を最大3枚添付できる。画像の制限と取り込みは通常の討論と共通とする。
 新しい討論の操作パネルから元のスレッドへ戻れる。Androidから更問した場合も同じ配置とする。
 
 署名の検証後、通知の作者、ボタンとフォームの親討論・試行、サーバー、チャンネル、メンバー権限を照合する。
@@ -289,6 +290,8 @@ Outboxは「送る内容と順序」を永続化した送信待ち記録であ�
 
 `/shittim`は必須の質問と任意の`image1`〜`image3`を受け付ける。JPEG・PNG・静止WebPを1枚10MiB・4,000万画素まで扱う。署名検証後に添付メタ情報を耐久保存し、初回応答を返してから取得・検証する。Discordの署名付きCDN URLを恒久参照にせず、管理下の画像へ置き換えた順にURLを消去する。
 
+更問のフォームはDiscordのFile Uploadを使う。署名を検証してから、選択された画像IDを`data.resolved.attachments`と照合し、選択順で通常の画像取り込みへ渡す。
+
 画像は順序を保持し、途中失敗・中断後は取込済み画像を再利用する。全画像の準備とスレッドへの公開が完了する前に課金生成を始めない。画像内の文章も未信頼データとして扱い、取得失敗を文章だけの討論へ黙って切り替えない。
 
 Android開始を含め、司会が原画像を1枚ずつ既存Outboxで投稿する。対象スレッドの添付権限を確認し、nonce・作者・本文・添付の照合と保存済みreceiptで応答不明や討論再試行の二重投稿を防ぐ。画像本文・元ファイル名・署名付きURLをログへ残さない。
@@ -308,6 +311,7 @@ Android開始でも入力画像の形式検証を省略しない。
 | 2026-08-14 | Interactions | [受付と応答](https://docs.discord.com/developers/interactions/receiving-and-responding) | 署名、PING、初回応答 |
 | 2026-08-14 | Application Commands | [コマンド](https://docs.discord.com/developers/interactions/application-commands) | サーバー内コマンド、入力制約 |
 | 2026-10-14 | Attachment Object | [添付構造](https://docs.discord.com/developers/resources/message#attachment-object-attachment-structure) | 応答MIMEの省略と画像配送の照合境界 |
+| 2026-11-17 | File Upload | [フォームのファイル添付](https://docs.discord.com/developers/components/reference#file-upload) | 更問フォームの任意添付と選択IDの照合 |
 | 2026-10-14 | Image Pipeline | [画像形式・処理](https://discord.com/blog/modern-image-formats-at-discord-supporting-webp-and-avif) | 送信元の厳密な検証と、Discord処理後の添付サイズを分離 |
 | 2026-08-14 | Message Resource | [メッセージ](https://docs.discord.com/developers/resources/message) | 本文、nonce、メンション抑止 |
 | 2026-08-14 | Rate Limits | [レート制限](https://docs.discord.com/developers/topics/rate-limits) | Retry-Afterと有限の再試行 |

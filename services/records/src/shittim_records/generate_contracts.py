@@ -8,13 +8,18 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, get_args
 
+from pydantic import TypeAdapter
+
 from shittim_records.contracts import (
+    DEBATE_CONTRACT_HEADER,
+    DEBATE_FOLLOW_UP_IMAGES_CONTRACT,
     GALLERY_CARD_ID_PATTERN,
     GALLERY_COLLECTION_CONTRACT,
     PUBLIC_REQUEST_MODELS,
     PUBLIC_RESPONSE_MODELS,
     RECORDS_API_SCHEMA_VERSION,
     ParticipantSlot,
+    RecordId,
 )
 from shittim_records.mobile_auth import MOBILE_WIRE_MODELS, build_mobile_auth_schema
 
@@ -420,13 +425,25 @@ def _mobile_debate_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
     request_parameter = _parameter(
         "requestId", "path", {"type": "string", "format": "uuid"}, required=True
     )
+    response_contract_parameter = {
+        **_parameter(
+            DEBATE_CONTRACT_HEADER,
+            "header",
+            {"type": "string", "enum": [DEBATE_FOLLOW_UP_IMAGES_CONTRACT]},
+        ),
+        "description": "更問の添付IDを返す。省略時は更問のattachmentIdsを空配列で返す。",
+    }
+    upload_parent_parameter = {
+        **_parameter("parentRecordId", "query", TypeAdapter(RecordId).json_schema()),
+        "description": "更問の元の議事録ID。指定時は元のチャンネルへの投稿権限を確認する。",
+    }
     return {
         **{
             f"/api/v1/debate-requests/{{requestId}}/{action}": {
                 "post": {
                     **common,
                     "operationId": f"{action}MobileDebate",
-                    "parameters": [request_parameter],
+                    "parameters": [request_parameter, response_contract_parameter],
                     "requestBody": _request_body("DebateControlRequest"),
                     "responses": {
                         "202": _response("DebateControlResponse", "Durable control receipt"),
@@ -445,6 +462,7 @@ def _mobile_debate_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
                     _parameter(
                         "operationId", "path", {"type": "string", "format": "uuid"}, required=True
                     ),
+                    response_contract_parameter,
                 ],
                 "responses": {
                     "200": _response("DebateControlResponse", "Own control receipt and progress"),
@@ -456,6 +474,7 @@ def _mobile_debate_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
             "post": {
                 **common,
                 "operationId": "reserveDebateAttachment",
+                "parameters": [upload_parent_parameter],
                 "requestBody": _request_body("DebateAttachmentUploadRequest"),
                 "responses": {
                     "200": _response(
@@ -472,7 +491,8 @@ def _mobile_debate_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
                 "parameters": [
                     _parameter(
                         "attachmentId", "path", {"type": "string", "format": "uuid"}, required=True
-                    )
+                    ),
+                    upload_parent_parameter,
                 ],
                 "responses": {
                     "200": _response("DebateAttachmentStatusResponse", "Owner-bound upload status"),
@@ -487,7 +507,8 @@ def _mobile_debate_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
                 "parameters": [
                     _parameter(
                         "attachmentId", "path", {"type": "string", "format": "uuid"}, required=True
-                    )
+                    ),
+                    upload_parent_parameter,
                 ],
                 "responses": {
                     "200": _response(
@@ -501,6 +522,9 @@ def _mobile_debate_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
             "post": {
                 **common,
                 "operationId": "startMobileDebate",
+                "description": common["description"]
+                + "parentRecordIdを指定すると元の討論への更問になる。"
+                "通常の討論と更問に本人の準備済み画像をattachmentIdsで最大3枚指定できる。",
                 "requestBody": _request_body("DebateStartRequest"),
                 "responses": {
                     "202": _response("DebateRequestResponse", "Durably accepted or replayed"),
@@ -517,6 +541,7 @@ def _mobile_debate_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
                         {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
                     ),
                     _parameter("cursor", "query", {"type": "string", "maxLength": 1024}),
+                    response_contract_parameter,
                 ],
                 "responses": {
                     "200": _response("DebateRequestsResponse", "Own requests"),
@@ -540,7 +565,8 @@ def _mobile_debate_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
                             ),
                         },
                         required=True,
-                    )
+                    ),
+                    response_contract_parameter,
                 ],
                 "responses": {
                     "200": _response("DebateRequestResponse", "Own progress"),

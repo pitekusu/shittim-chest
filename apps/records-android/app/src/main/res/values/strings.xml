@@ -209,7 +209,7 @@
     <string name="notification_disable">通知をオフにする</string>
     <string name="attachment_add">画像を添付</string>
     <string name="attachment_remove">削除</string>
-    <string name="attachment_limits">JPEG・PNG・WebP、1枚10 MiBまで、最大3枚。議題を入力して送信してください。</string>
+    <string name="attachment_limits">JPEG・PNG・WebP、1枚10 MiBまで、最大3枚。</string>
     <string name="attachment_invalid">画像を添付できません。形式・サイズ・枚数を確認してください。</string>
     <string name="attachment_expired">画像の受付期限が切れました。受付状況を確認し、未送信の下書きを作り直してください。</string>
     <string name="attachment_discard_unsent">未送信の画像を削除して下書きに戻る</string>
@@ -242,4 +242,5 @@
     <string name="record_followup_question">追加で聞きたいこと</string>
     <string name="record_followup_parent_unavailable">元の議論を参照できなくなったため、更問を受け付けられませんでした。</string>
     <string name="record_followup_edit_as_new">質問を新しい議題の下書きに戻す</string>
+    <string name="record_followup_discard_images_and_edit_as_new">画像を削除し、質問を新しい議題の下書きに戻す</string>
 </resources>

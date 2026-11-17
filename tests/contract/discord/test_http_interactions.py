@@ -156,34 +156,29 @@ def test_plain_and_base64_api_gateway_bodies_verify_exactly(
     assert isinstance(reception.interaction, DiscordHttpOperation)
 
 
-@pytest.mark.parametrize("question", [None, "それならビーフとポーク、どちら?", " ", "a" * 1001])
-def test_signed_follow_up_binds_modal_to_the_original_completion_button(
-    signing_key: SigningKey, question: str | None
-) -> None:
+@pytest.fixture
+def follow_up_binding() -> FollowUpCustomId:
     parent = FollowUpParent(DebateId.new(), AttemptId.new())
-    binding = FollowUpCustomId(parent, str((1 << 64) - 1))
-    modal = json.loads(follow_up_modal_response(binding).body)
-    assert modal["type"] == 9
-    assert modal["data"]["components"][0]["component"]["max_length"] == 1000
-    assert len(modal["data"]["custom_id"]) <= 100
+    return FollowUpCustomId(parent, str((1 << 64) - 1))
 
+
+def follow_up_payload(binding: FollowUpCustomId, question: str | None) -> dict[str, object]:
     payload = command_payload()
     member = cast(dict[str, object], payload["member"])
     member["permissions"] = str((1 << 10) | (1 << 11))
-    message: dict[str, object] = {
+    payload["message"] = {
         "id": MESSAGE_ID,
         "channel_id": CHANNEL_ID,
         "author": {"id": binding.author_id, "bot": True},
         "components": [{"type": 1, "components": [{"type": 2, "custom_id": binding.encode()}]}],
     }
-    payload["message"] = message
     if question is None:
         payload["type"] = 3
         payload["data"] = {"component_type": 2, "custom_id": binding.encode()}
     else:
         payload["type"] = 5
         payload["data"] = {
-            "custom_id": modal["data"]["custom_id"],
+            "custom_id": binding.encode(modal=True),
             "components": [
                 {
                     "type": 18,
@@ -195,20 +190,36 @@ def test_signed_follow_up_binds_modal_to_the_original_completion_button(
                 }
             ],
         }
+    return payload
+
+
+@pytest.mark.parametrize("question", [None, "それならビーフとポーク、どちら?", " ", "a" * 1001])
+def test_signed_follow_up_binds_modal_to_the_original_completion_button(
+    signing_key: SigningKey, follow_up_binding: FollowUpCustomId, question: str | None
+) -> None:
+    modal = json.loads(follow_up_modal_response(follow_up_binding).body)
+    assert modal["type"] == 9
+    assert modal["data"]["components"][0]["component"]["max_length"] == 1000
+    assert modal["data"]["custom_id"] == follow_up_binding.encode(modal=True)
+    assert len(modal["data"]["custom_id"]) <= 100
+
+    payload = follow_up_payload(follow_up_binding, question)
     reception = receive(signing_key, payload)
     operation = reception.interaction
     assert isinstance(operation, DiscordFollowUpOperation)
-    assert operation.binding == binding
+    assert operation.binding == follow_up_binding
     assert operation.is_modal == (question is not None)
     assert operation.may_post
     assert operation.question == (
         question if question is not None and question.strip() and len(question) <= 1000 else None
     )
     assert not hasattr(operation, "token")
+    assert operation.pending_attachments == ()
 
+    message = cast(dict[str, object], payload["message"])
     for forged in (
         {"author": {"id": APPLICATION_ID, "bot": True}},
-        {"author": {"id": binding.author_id, "bot": False}},
+        {"author": {"id": follow_up_binding.author_id, "bot": False}},
         {"channel_id": PARENT_CHANNEL_ID},
         {"components": []},
         {"webhook_id": "123"},
@@ -217,6 +228,91 @@ def test_signed_follow_up_binds_modal_to_the_original_completion_button(
         rejected = receive(signing_key, payload)
         assert rejected.response is not None
         assert rejected.response.status_code == 400
+
+
+def follow_up_image_payload(binding: FollowUpCustomId, image_ids: list[str]) -> dict[str, object]:
+    modal = json.loads(follow_up_modal_response(binding).body)
+    upload_label = modal["data"]["components"][1]
+    upload = upload_label["component"]
+    payload = follow_up_payload(binding, "それならビーフとポーク、どちら?")
+    data = cast(dict[str, object], payload["data"])
+    components = cast(list[object], data["components"])
+    components.append(
+        {
+            "type": 18,
+            "component": {
+                "type": 19,
+                "custom_id": upload["custom_id"],
+                "values": image_ids,
+            },
+        }
+    )
+    if image_ids:
+        data["resolved"] = {
+            "attachments": {
+                image_id: discord_image_attachment(image_id) for image_id in reversed(image_ids)
+            }
+        }
+    return payload
+
+
+@pytest.mark.parametrize("image_ids", [[], ["301", "302", "303"]])
+def test_signed_follow_up_resolves_optional_images_in_selection_order(
+    signing_key: SigningKey, follow_up_binding: FollowUpCustomId, image_ids: list[str]
+) -> None:
+    modal = json.loads(follow_up_modal_response(follow_up_binding).body)
+    upload_label = modal["data"]["components"][1]
+    assert upload_label["type"] == 18
+    upload = upload_label["component"]
+    assert upload["type"] == 19
+    assert upload["required"] is False
+    assert upload["min_values"] == 0
+    assert upload["max_values"] == 3
+
+    reception = receive(signing_key, follow_up_image_payload(follow_up_binding, image_ids))
+
+    operation = reception.interaction
+    assert isinstance(operation, DiscordFollowUpOperation)
+    assert operation.pending_attachments is not None
+    assert [image.discord_attachment_id for image in operation.pending_attachments] == image_ids
+    assert "private-signature" not in repr(operation.pending_attachments)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"url": "https://example.invalid/sample.png"},
+        {"content_type": "image/gif"},
+        {"size": 10 * 1024 * 1024 + 1},
+    ],
+)
+def test_signed_follow_up_rejects_unusable_resolved_image(
+    signing_key: SigningKey, follow_up_binding: FollowUpCustomId, change: dict[str, object]
+) -> None:
+    payload = follow_up_image_payload(follow_up_binding, ["301"])
+    data = cast(dict[str, object], payload["data"])
+    resolved = cast(dict[str, object], data["resolved"])
+    attachments = cast(dict[str, dict[str, object]], resolved["attachments"])
+    attachments["301"].update(change)
+
+    reception = receive(signing_key, payload)
+
+    if "url" in change:
+        assert reception.response is not None
+        assert reception.response.status_code == 400
+    else:
+        assert isinstance(reception.interaction, DiscordFollowUpOperation)
+        assert reception.interaction.pending_attachments is None
+
+
+@pytest.mark.parametrize("image_ids", [["301", "301"], ["301", "302", "303", "304"]])
+def test_signed_follow_up_rejects_invalid_image_selection(
+    signing_key: SigningKey, follow_up_binding: FollowUpCustomId, image_ids: list[str]
+) -> None:
+    reception = receive(signing_key, follow_up_image_payload(follow_up_binding, image_ids))
+
+    assert reception.response is not None
+    assert reception.response.status_code == 400
 
 
 @pytest.mark.parametrize("base64_encoded", [False, True])
@@ -543,19 +639,19 @@ def image_command_payload() -> dict[str, object]:
         {"name": "image1", "type": 11, "value": attachment},
         {"name": "question", "type": 3, "value": "この写真について相談したい"},
     ]
-    data["resolved"] = {
-        "attachments": {
-            attachment: {
-                "id": attachment,
-                "content_type": "image/png",
-                "size": 100,
-                "url": f"https://cdn.discordapp.com/ephemeral-attachments/101/{attachment}/private.png?ex=ffff&hm=private-signature",
-                "width": 10,
-                "height": 10,
-            }
-        }
-    }
+    data["resolved"] = {"attachments": {attachment: discord_image_attachment(attachment)}}
     return payload
+
+
+def discord_image_attachment(attachment: str) -> dict[str, object]:
+    return {
+        "id": attachment,
+        "content_type": "image/png",
+        "size": 100,
+        "url": f"https://cdn.discordapp.com/ephemeral-attachments/101/{attachment}/private.png?ex=ffff&hm=private-signature",
+        "width": 10,
+        "height": 10,
+    }
 
 
 def test_signed_image_command_resolves_stable_identity_without_leaking_url(

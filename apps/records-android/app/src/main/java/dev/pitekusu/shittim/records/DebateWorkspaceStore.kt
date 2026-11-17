@@ -30,7 +30,7 @@ internal class DebateWorkspace(val schemaVersion: Int = 1, val draft: String = "
     check(schemaVersion == 1 && draft.codePointCount(0, draft.length) <= 1000)
     check((requestId == null) == (frozenQuestion == null))
     check(requestId == null || validDebateRequestId(requestId))
-    check(parentRecordId == null || (mobileOpaqueValue.matches(parentRecordId) && attachments.isEmpty()))
+    check(parentRecordId == null || mobileOpaqueValue.matches(parentRecordId))
     check(frozenQuestion == null || validDebateQuestion(frozenQuestion))
     check(attachments.size <= MAX_ATTACHMENT_COUNT && attachments.map { it.attachmentId }.distinct().size == attachments.size)
     attachments.forEach(DraftAttachment::validate)
