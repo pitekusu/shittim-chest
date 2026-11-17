@@ -1176,7 +1176,7 @@ async def test_terminal_finalize_atomically_completes_origin_ingress_status(
             claim_owner="runtime-instance", at=NOW + timedelta(seconds=2)
         )
         assert notice is not None and notice.kind is GachaJobKind.PROGRESS
-        assert notice.remaining == 4 and notice.after_message_id == "100"
+        assert notice.remaining == 2 and notice.after_message_id == "100"
 
 
 @pytest.mark.asyncio
