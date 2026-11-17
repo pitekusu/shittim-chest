@@ -41,6 +41,7 @@ class DebateAttachmentsClientTest {
       assertEquals("GET", network.method.value)
       assertTrue(network.url.encodedPath.endsWith(imageId))
       assertEquals("Bearer $token", network.headers[HttpHeaders.Authorization])
+      assertNull(network.url.parameters["parentRecordId"])
       respond(status(draft), HttpStatusCode.OK, headers)
     }).use { it.prepare(token, request, listOf(draft)) { error("ready image must not read draft bytes") } }
     assertEquals(1, calls)
@@ -61,13 +62,15 @@ class DebateAttachmentsClientTest {
     assertEquals(listOf("GET", "POST"), methods)
   }
 
-  @Test fun originalPostUsesSignedFieldsAndS3GetsNoAppCredentials() = runBlocking {
+  @Test fun followUpUsesParentOnRecordsCallsAndS3GetsNoAppCredentials() = runBlocking {
     val bytes = source()
     val draft = image(bytes)
+    val parent = "p".repeat(43)
     val checksum = Base64.getEncoder().encodeToString(draft.sha256.chunked(2).map { it.toInt(16).toByte() }.toByteArray())
     var calls = 0
     DebateAttachmentsClient(MockEngine { network ->
       calls++
+      assertEquals(if (calls == 3) null else parent, network.url.parameters["parentRecordId"])
       when (calls) {
         1 -> respond("""{"error":{"code":"ATTACHMENT_NOT_FOUND"}}""", HttpStatusCode.NotFound, headers)
         2 -> respond("""{"schemaVersion":1,"attachmentId":"$imageId","method":"POST",
@@ -86,7 +89,7 @@ class DebateAttachmentsClientTest {
         4 -> respond(status(draft), HttpStatusCode.OK, headers)
         else -> error("unexpected automatic replay")
       }
-    }).use { it.prepare(token, request, listOf(draft)) { bytes.copyOf() } }
+    }).use { it.prepare(token, request, listOf(draft), parent) { bytes.copyOf() } }
     assertEquals(4, calls)
   }
 

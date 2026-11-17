@@ -860,6 +860,15 @@ OpenSSLはこの4件をLowと評価している。Dockerの署名付きパッケ
 マージと本番配信を明示承認した。`expires_on`はUTCの最終有効日`2026-11-19`とする。
 既存の10組では最古のPR #720用configを入れ替え、追加12組の対象は今回のconfigだけに限定する。
 
+2026-11-17、PR #750の完成ARM64 production config
+`sha256:d26ef2004599ed0be2c31e93a513b92f7d5c4f3b755b28edece0e2f8d42d0c07`
+では、署名付きDHI VEX適用後のHigh 22組が現行本番と同じCVE・パッケージ・版だった。
+Critical、修正可能なHigh/Critical、ソースのHigh/Criticalは0組で、TLSは60件すべて通過した。
+[同一実行の完成ARM64 SBOM・VEX・TLS・Grype](https://github.com/pitekusu/shittim-chest/actions/runs/44099220055)
+
+所有者はこのconfigの22組を2026-11-20 09:00 JSTまで受容し、必須CIとCodeQLの成功後のマージ、本番配信、Playクローズドテスト配布を明示承認した。
+`expires_on`は`2026-11-19`とし、既存の10組では4枠の上限に従って最古のPR #723用configを今回のconfigへ入れ替える。
+
 ## 5. 本番配信
 
 ### 共通の工程

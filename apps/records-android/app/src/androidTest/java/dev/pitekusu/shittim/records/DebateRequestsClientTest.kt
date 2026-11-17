@@ -32,6 +32,7 @@ class DebateRequestsClientTest {
       assertEquals("Bearer $token", request.headers[HttpHeaders.Authorization])
       assertFalse(request.headers.contains(HttpHeaders.Cookie))
       assertEquals("no-store", request.headers[HttpHeaders.CacheControl])
+      assertEquals("debate-follow-up-images-v1", request.headers["X-Records-Contract"])
       val content = request.body as OutgoingContent.ReadChannelContent
       val body = content.readFrom().readBuffer().readByteArray().decodeToString()
       assertTrue(body.contains(id))
@@ -42,28 +43,38 @@ class DebateRequestsClientTest {
     assertEquals(1, calls)
   }
 
-  @Test fun followUpPostBindsParentAndRejectsMismatchedReceipt() = runBlocking<Unit> {
+  @Test fun followUpPostBindsParentAndOrderedImagesAndRejectsMismatchedReceipt() = runBlocking<Unit> {
     val parent = "p".repeat(43)
+    val first = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    val second = "bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    val attachments = listOf(first, second)
     var calls = 0
     DebateRequestsClient(MockEngine { request ->
       val content = request.body as OutgoingContent.ReadChannelContent
       val body = content.readFrom().readBuffer().readByteArray().decodeToString()
-      assertEquals("""{"requestId":"$id","question":"架空の相談","attachmentIds":[],"parentRecordId":"$parent"}""", body)
-      val receivedParent = if (++calls == 1) parent else "v".repeat(43)
-      respond(receipt().dropLast(1) + ""","parentRecordId":"$receivedParent"}""", HttpStatusCode.Accepted, headers)
+      assertEquals("""{"requestId":"$id","question":"架空の相談","attachmentIds":["$first","$second"],"parentRecordId":"$parent"}""", body)
+      val receivedParent = if (++calls == 2) "v".repeat(43) else parent
+      val receivedImages = if (calls == 3) """["$second","$first"]""" else """["$first","$second"]"""
+      respond(receipt().dropLast(1) + ""","attachmentIds":$receivedImages,"parentRecordId":"$receivedParent"}""",
+        HttpStatusCode.Accepted, headers)
     }).use { client ->
-      assertEquals(parent, client.submit(token, id, "架空の相談", parentRecordId = parent).parentRecordId)
-      try {
-        client.submit(token, id, "架空の相談", parentRecordId = parent)
-        fail("mismatched parent accepted")
-      } catch (error: DebateRequestException) { assertEquals(DebateFailure.INVALID_RESPONSE, error.failure) }
+      val accepted = client.submit(token, id, "架空の相談", attachments, parent)
+      assertEquals(parent, accepted.parentRecordId)
+      assertEquals(attachments, accepted.attachmentIds)
+      repeat(2) {
+        try {
+          client.submit(token, id, "架空の相談", attachments, parent)
+          fail("mismatched receipt accepted")
+        } catch (error: DebateRequestException) { assertEquals(DebateFailure.INVALID_RESPONSE, error.failure) }
+      }
     }
   }
 
-  @Test fun legacyPermissionAndQueueLimitsRemainDifferentFromMissingRequest() = runBlocking {
+  @Test fun submissionFailuresRemainDifferentFromMissingRequest() = runBlocking {
     val responses = listOf(
       HttpStatusCode.Forbidden to "DEBATE_START_REAUTH_REQUIRED",
       HttpStatusCode.TooManyRequests to "DEBATE_QUEUE_FULL",
+      HttpStatusCode.Conflict to "ATTACHMENT_NOT_READY",
       HttpStatusCode.NotFound to "DEBATE_REQUEST_NOT_FOUND")
     var calls = 0
     DebateRequestsClient(MockEngine {
@@ -74,9 +85,11 @@ class DebateRequestsClientTest {
       catch (error: DebateRequestException) { assertEquals(DebateFailure.REAUTH_REQUIRED, error.failure) }
       try { client.submit(token, id, "架空の相談"); fail("queue ignored") }
       catch (error: DebateRequestException) { assertEquals(DebateFailure.QUEUE_FULL, error.failure) }
+      try { client.submit(token, id, "架空の相談"); fail("unready attachment accepted") }
+      catch (error: DebateRequestException) { assertEquals(DebateFailure.ATTACHMENT_NOT_READY, error.failure) }
       assertNull(client.find(token, id))
     }
-    assertEquals(3, calls)
+    assertEquals(4, calls)
   }
 
   @Test fun malformedOrMismatchedResponsesAreNotTrustedAndUnicodeLimitCountsCodepoints() = runBlocking {

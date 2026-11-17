@@ -46,6 +46,7 @@ class IngressOutcome(StrEnum):
     TERMINAL_FAILED = "terminal_failed"
     QUEUE_FULL = "queue_full"
     INVALID_FOLLOW_UP_QUESTION = "invalid_follow_up_question"
+    INVALID_FOLLOW_UP_ATTACHMENTS = "invalid_follow_up_attachments"
     NOT_ALLOWED = "not_allowed"
 
 
@@ -135,11 +136,14 @@ class DiscordIngressApplication:
             return IngressAcceptance(IngressOutcome.NOT_ALLOWED)
         if operation.question is None:
             return IngressAcceptance(IngressOutcome.INVALID_FOLLOW_UP_QUESTION)
+        if operation.pending_attachments is None:
+            return IngressAcceptance(IngressOutcome.INVALID_FOLLOW_UP_ATTACHMENTS)
         request = IngressRequest.new_debate(
             interaction_id=operation.interaction_id,
             operation_id=operation.interaction_id,
             application_id=operation.application_id,
             question=operation.question,
+            pending_attachments=operation.pending_attachments,
             requester_id=operation.requester_id,
             requester_username=operation.requester_username,
             requester_display_name=operation.requester_display_name,

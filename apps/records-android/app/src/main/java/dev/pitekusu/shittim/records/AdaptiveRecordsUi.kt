@@ -265,6 +265,7 @@ internal fun AdaptiveRecordsUi(
             onCheck = { state.eventSink(BootstrapScreen.Event.CheckDebateControl(route.requestId)) },
             onResend = { state.eventSink(BootstrapScreen.Event.ResendDebateControl(route.requestId)) },
             onDiscardUnavailableFollowUp = { state.eventSink(BootstrapScreen.Event.EditUnavailableFollowUp(route.requestId)) },
+            onDiscardMissing = { state.eventSink(BootstrapScreen.Event.DiscardMissingDebate) },
             demo = state.demoEntryId != null,
             modifier = Modifier.widthIn(max = 760.dp).align(Alignment.TopCenter))
         }

@@ -241,12 +241,28 @@ class MobileDebateService:
                 )
             raise
 
-    async def authenticate_upload(self, token: str | None) -> MobileSessionRecord:
+    def _submission_target(self, parent_record_id: str | None) -> tuple[FollowUpParent | None, str]:
+        if parent_record_id is None:
+            if self._channel_id not in self._runtime.allowed_channel_ids:
+                raise DebateRequestFailure("DEBATE_START_DISABLED", 503)
+            return None, self._channel_id
+        if not self._follow_ups_enabled:
+            raise DebateRequestFailure("DEBATE_START_DISABLED", 503)
+        source = self._repository.follow_up_parent(parent_record_id)
+        if source is None or source[1] != self._runtime.guild_id:
+            raise DebateRequestFailure("FOLLOW_UP_PARENT_UNAVAILABLE", 404)
+        parent, _, channel_id = source
+        return parent, channel_id
+
+    async def authenticate_upload(
+        self, token: str | None, *, parent_record_id: str | None = None
+    ) -> MobileSessionRecord:
         session = self._authenticate(token)
-        if not self._enabled or self._channel_id not in self._runtime.allowed_channel_ids:
+        if not self._enabled:
             raise DebateRequestFailure("DEBATE_START_DISABLED", 503)
         requester_id, _ = self._verify_discord_identity(session)
-        await self._check_permission(token, requester_id, self._channel_id)
+        _, channel_id = self._submission_target(parent_record_id)
+        await self._check_permission(token, requester_id, channel_id)
         self._still_authorized(token, session)
         return session
 
@@ -285,17 +301,7 @@ class MobileDebateService:
         if not self._enabled:
             raise DebateRequestFailure("DEBATE_START_DISABLED", 503)
         requester_id, requester_username = self._verify_discord_identity(session)
-        channel_id = self._channel_id
-        parent = None
-        if payload.parent_record_id is not None:
-            if not self._follow_ups_enabled:
-                raise DebateRequestFailure("DEBATE_START_DISABLED", 503)
-            source = self._repository.follow_up_parent(payload.parent_record_id)
-            if source is None or source[1] != self._runtime.guild_id:
-                raise DebateRequestFailure("FOLLOW_UP_PARENT_UNAVAILABLE", 404)
-            parent, _, channel_id = source
-        elif channel_id not in self._runtime.allowed_channel_ids:
-            raise DebateRequestFailure("DEBATE_START_DISABLED", 503)
+        parent, channel_id = self._submission_target(payload.parent_record_id)
         await self._check_permission(token, requester_id, channel_id)
         self._still_authorized(token, session)
         now = self._clock()

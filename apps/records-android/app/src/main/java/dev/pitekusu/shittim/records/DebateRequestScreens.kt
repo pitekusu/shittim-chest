@@ -73,7 +73,7 @@ internal fun DebateRequestStatusScreen(id: String, state: DebateStatusState,
   submission: DebateSubmissionState, online: Boolean, onRetry: () -> Unit,
   onResult: (String) -> Unit, onReauth: () -> Unit, onNew: () -> Unit, modifier: Modifier = Modifier,
   demo: Boolean = false, onControl: (String) -> Unit = {}, onCheck: () -> Unit = {}, onResend: () -> Unit = {},
-  onDiscardUnavailableFollowUp: () -> Unit = {}) {
+  onDiscardUnavailableFollowUp: () -> Unit = {}, onDiscardMissing: () -> Unit = {}) {
   val receipt = debateReceipt(id, state, submission)
   var confirmation by remember(id, receipt?.attemptToken) { mutableStateOf<String?>(null) }
   val ownWorkspace = submission.workspace?.takeIf { it.requestId == id }
@@ -95,6 +95,8 @@ internal fun DebateRequestStatusScreen(id: String, state: DebateStatusState,
           DebateFailure.QUEUE_FULL -> R.string.debate_queue_full
           DebateFailure.FOLLOW_UP_PARENT_UNAVAILABLE -> R.string.record_followup_parent_unavailable
           DebateFailure.STORAGE -> R.string.debate_storage_error
+          DebateFailure.ATTACHMENT_INVALID -> R.string.attachment_invalid
+          DebateFailure.ATTACHMENT_EXPIRED -> R.string.attachment_expired
           else -> R.string.debate_unavailable
         }), color = MaterialTheme.colorScheme.error)
         if (failure == DebateFailure.REAUTH_REQUIRED) Button(onClick = onReauth,
@@ -102,13 +104,19 @@ internal fun DebateRequestStatusScreen(id: String, state: DebateStatusState,
       }
       if (ownWorkspace != null && submission.confirmedMissing && receipt == null) {
         Text(stringResource(R.string.debate_not_accepted))
-        if (failure == DebateFailure.FOLLOW_UP_PARENT_UNAVAILABLE)
-          TextButton(onClick = onDiscardUnavailableFollowUp, enabled = online && !submission.busy && !state.loading) {
-            Text(stringResource(R.string.record_followup_edit_as_new))
+        val canEdit = online && !submission.busy && !state.loading
+        if (failure == DebateFailure.FOLLOW_UP_PARENT_UNAVAILABLE) {
+          TextButton(onClick = onDiscardUnavailableFollowUp, enabled = canEdit) {
+            Text(stringResource(if (ownWorkspace.attachments.isEmpty()) R.string.record_followup_edit_as_new
+              else R.string.record_followup_discard_images_and_edit_as_new))
           }
-        else Button(onClick = onRetry, enabled = online && !submission.busy && !state.loading &&
-          failure != DebateFailure.REAUTH_REQUIRED,
-          modifier = Modifier.testTag("debate-retry-same-id")) { Text(stringResource(R.string.debate_retry)) }
+        } else {
+          Button(onClick = onRetry, enabled = canEdit && failure != DebateFailure.REAUTH_REQUIRED,
+            modifier = Modifier.testTag("debate-retry-same-id")) { Text(stringResource(R.string.debate_retry)) }
+          if (ownWorkspace.attachments.isNotEmpty()) TextButton(onClick = onDiscardMissing, enabled = canEdit) {
+            Text(stringResource(R.string.attachment_discard_unsent))
+          }
+        }
       } else if (receipt == null && state.failure == DebateFailure.NOT_FOUND) Text(stringResource(R.string.debate_request_missing))
       if (receipt?.status == "published") receipt.recordId?.let { recordId ->
         Button(onClick = { onResult(recordId) }, modifier = Modifier.testTag("debate-open-result")) {

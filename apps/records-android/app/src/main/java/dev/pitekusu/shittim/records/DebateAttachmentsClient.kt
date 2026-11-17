@@ -9,6 +9,7 @@ import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.header
+import io.ktor.client.request.parameter
 import io.ktor.client.request.prepareRequest
 import io.ktor.client.request.setBody
 import io.ktor.client.request.forms.MultiPartFormDataContent
@@ -67,19 +68,22 @@ internal class DebateAttachmentsClient(private val engine: HttpClientEngine = Ok
     install(HttpTimeout) { connectTimeoutMillis = 10_000; socketTimeoutMillis = 30_000; requestTimeoutMillis = 90_000 }
   }
 
-  suspend fun prepare(token: String, requestId: String, images: List<DraftAttachment>,
+  suspend fun prepare(token: String, requestId: String, images: List<DraftAttachment>, parentRecordId: String? = null,
     load: suspend (DraftAttachment) -> ByteArray) = try {
     check(images.size <= MAX_ATTACHMENT_COUNT && images.map { it.attachmentId }.distinct().size == images.size)
+    check(parentRecordId == null || mobileOpaqueValue.matches(parentRecordId))
     for (draft in images) {
       draft.validate()
       val path = "/${draft.attachmentId}"
-      val previous = try { call<AttachmentUploadStatus>(token, HttpMethod.Get, path).also { it.validate(requestId, draft) } }
+      val previous = try {
+        call<AttachmentUploadStatus>(token, HttpMethod.Get, path, parentRecordId).also { it.validate(requestId, draft) }
+      }
       catch (error: DebateRequestException) { if (error.failure == DebateFailure.NOT_FOUND) null else throw error }
       if (previous?.status in setOf("ready", "consumed")) continue
       if (previous?.status == "expired") throw DebateRequestException(DebateFailure.ATTACHMENT_EXPIRED)
       if (previous != null) {
         try {
-          val completed = call<AttachmentUploadStatus>(token, HttpMethod.Post, "$path/complete")
+          val completed = call<AttachmentUploadStatus>(token, HttpMethod.Post, "$path/complete", parentRecordId)
           completed.validate(requestId, draft)
           if (completed.status in setOf("ready", "consumed")) continue
           throw DebateRequestException(DebateFailure.UNAVAILABLE)
@@ -89,7 +93,7 @@ internal class DebateAttachmentsClient(private val engine: HttpClientEngine = Ok
           if (previous.status == "promoting") throw DebateRequestException(DebateFailure.UNAVAILABLE)
         }
       }
-      val ticket = call<AttachmentUploadTicket>(token, HttpMethod.Post, "",
+      val ticket = call<AttachmentUploadTicket>(token, HttpMethod.Post, "", parentRecordId,
         json.encodeToString(UploadRequest(requestId, draft.attachmentId, draft.contentType, draft.sizeBytes, draft.sha256)))
       ticket.validate(draft)
       val bytes = load(draft)
@@ -110,7 +114,7 @@ internal class DebateAttachmentsClient(private val engine: HttpClientEngine = Ok
       catch (error: DebateRequestException) { throw error }
       catch (_: Exception) { throw DebateRequestException(DebateFailure.UNAVAILABLE) }
       finally { bytes.fill(0) }
-      call<AttachmentUploadStatus>(token, HttpMethod.Post, "$path/complete").also {
+      call<AttachmentUploadStatus>(token, HttpMethod.Post, "$path/complete", parentRecordId).also {
         it.validate(requestId, draft)
         check(it.status in setOf("ready", "consumed"))
       }
@@ -121,10 +125,11 @@ internal class DebateAttachmentsClient(private val engine: HttpClientEngine = Ok
   catch (_: Exception) { throw DebateRequestException(DebateFailure.INVALID_RESPONSE) }
 
   private suspend inline fun <reified T> call(token: String, method: HttpMethod, path: String,
-    body: String? = null): T = try {
+    parentRecordId: String?, body: String? = null): T = try {
     check(mobileOpaqueValue.matches(token))
     client.prepareRequest("$RECORDS_ORIGIN/api/v1/debate-attachments/uploads$path") {
       this.method = method; bearerAuth(token); header(HttpHeaders.CacheControl, "no-store")
+      parameter("parentRecordId", parentRecordId)
       if (body != null) { contentType(ContentType.Application.Json); setBody(body) }
     }.execute { response ->
       check(response.contentType()?.withoutParameters() == ContentType.Application.Json)
@@ -140,6 +145,7 @@ internal class DebateAttachmentsClient(private val engine: HttpClientEngine = Ok
           code == "ATTACHMENT_EXPIRED" -> DebateFailure.ATTACHMENT_EXPIRED
           code == "ATTACHMENT_NOT_READY" -> DebateFailure.ATTACHMENT_NOT_READY
           code == "ATTACHMENT_INVALID" -> DebateFailure.ATTACHMENT_INVALID
+          code == "FOLLOW_UP_PARENT_UNAVAILABLE" -> DebateFailure.FOLLOW_UP_PARENT_UNAVAILABLE
           response.status.value == 403 -> DebateFailure.FORBIDDEN
           response.status.value == 409 -> DebateFailure.CONFLICT
           else -> DebateFailure.UNAVAILABLE

@@ -1071,6 +1071,8 @@ DebateRequestId = Annotated[
 DebateRequestStatus = Literal[
     "accepted", "queued", "starting", "running", "publishing", "published", "failed", "cancelled"
 ]
+DEBATE_CONTRACT_HEADER = "X-Records-Contract"
+DEBATE_FOLLOW_UP_IMAGES_CONTRACT = "debate-follow-up-images-v1"
 
 
 class DebateStartRequest(PublicModel):
@@ -1085,8 +1087,6 @@ class DebateStartRequest(PublicModel):
     def unique_attachments(self) -> DebateStartRequest:
         if len(set(self.attachment_ids)) != len(self.attachment_ids):
             raise ValueError("attachment IDs must be unique")
-        if self.parent_record_id is not None and self.attachment_ids:
-            raise ValueError("follow-ups accept text only")
         return self
 
 

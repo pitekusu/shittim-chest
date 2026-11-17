@@ -276,7 +276,7 @@ internal class BootstrapPresenter private constructor(
             parentRecordId: String? = null): DebateRequest = session?.withAuthorizedToken { token ->
             if (!hasValidatedDebateNetwork(context)) throw DebateRequestException(DebateFailure.UNAVAILABLE)
             if (!runtime.isActive(owner)) throw DebateRequestException(DebateFailure.AUTH_REQUIRED)
-            uploads.prepare(token, id, images) { store.value.image(owner, it) }
+            uploads.prepare(token, id, images, parentRecordId) { store.value.image(owner, it) }
             if (!runtime.isActive(owner)) throw DebateRequestException(DebateFailure.AUTH_REQUIRED)
             client.submit(token, id, question, images.map { it.attachmentId }, parentRecordId)
           } ?: throw DebateRequestException(DebateFailure.AUTH_REQUIRED)
@@ -304,7 +304,7 @@ internal class BootstrapPresenter private constructor(
             importImage = { store.value.importImage(owner, it) },
             readImage = { store.value.image(owner, it) },
             sendWithImages = { id, question, images -> sendWithAttachments(id, question, images) },
-            sendFollowUp = { id, question, parent -> sendWithAttachments(id, question, emptyList(), parent) },
+            sendFollowUp = ::sendWithAttachments,
             control = { id, action, operationId, attemptToken -> session?.withAuthorizedToken { token ->
               if (!hasValidatedDebateNetwork(context)) throw DebateRequestException(DebateFailure.UNAVAILABLE)
               if (!runtime.isActive(owner)) throw DebateRequestException(DebateFailure.AUTH_REQUIRED)
@@ -850,7 +850,15 @@ internal class BootstrapPresenter private constructor(
         is BootstrapScreen.Event.EditDebate -> debateModel?.edit(event.question)
         is BootstrapScreen.Event.AddDebateImages -> if (backStack.lastOrNull() == DebateCompose) debateModel?.addImages(event.uris)
         is BootstrapScreen.Event.RemoveDebateImage -> if (backStack.lastOrNull() == DebateCompose) debateModel?.removeImage(event.attachmentId)
-        BootstrapScreen.Event.DiscardMissingDebate -> if (debateOnline && cacheAccountId?.let(runtime::isActive) == true) debateModel?.discardMissing()
+        BootstrapScreen.Event.DiscardMissingDebate -> if (debateOnline && cacheAccountId?.let(runtime::isActive) == true) {
+          val route = backStack.lastOrNull()
+          if (route == DebateCompose || (route is DebateRequestStatus && route.requestId == debate.workspace?.requestId)) {
+            debateModel?.discardMissing {
+              if (route is DebateRequestStatus && backStack.lastOrNull() == route)
+                backStack[backStack.lastIndex] = DebateCompose
+            }
+          }
+        }
         is BootstrapScreen.Event.EditUnavailableFollowUp -> if (
           debateOnline && cacheAccountId?.let(runtime::isActive) == true &&
           (backStack.lastOrNull() as? DebateRequestStatus)?.requestId == event.requestId &&
