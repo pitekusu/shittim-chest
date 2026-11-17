@@ -38,7 +38,9 @@ if TYPE_CHECKING:
     from mypy_boto3_dynamodb.client import DynamoDBClient
     from mypy_boto3_dynamodb.type_defs import TransactWriteItemTypeDef
 
-_GACHA_THRESHOLD = 5
+_GACHA_INTERVAL = 3
+# Persisted counts use the original five-debate scale.
+_GACHA_COUNT_LIMIT = 5
 _CLAIM_TIME = timedelta(minutes=6)
 _RETRY_DELAY = timedelta(seconds=15)
 _WARNING_INTERVAL = timedelta(minutes=1)
@@ -124,24 +126,24 @@ class DynamoDbStudentGachaRepository:
         ):
             return (self._delete(_eligible_key(debate_id)),)
         count = 0 if owner is None else _number(owner, "count")
-        if count >= _GACHA_THRESHOLD:
-            raise RepositoryConflict("gacha progress exceeds threshold")
-        count += 1
-        offer_id = _id("offer", debate_id) if count == _GACHA_THRESHOLD else None
+        if count >= _GACHA_COUNT_LIMIT:
+            raise RepositoryConflict("gacha progress exceeds count limit")
+        remaining = min(_GACHA_COUNT_LIMIT - count, _GACHA_INTERVAL) - 1
+        offer_id = _id("offer", debate_id) if remaining == 0 else None
         job = GachaJob(
             job_id=_id("progress", debate_id),
             kind=GachaJobKind.PROGRESS if offer_id is None else GachaJobKind.OFFER,
             guild_id=guild_id,
             channel_id=channel_id,
             after_message_id=_text(eligible, "status_message_id"),
-            remaining=_GACHA_THRESHOLD - count if offer_id is None else None,
+            remaining=remaining if offer_id is None else None,
             offer_id=offer_id,
             created_at=at,
             next_available_at=at,
         )
         updated: DynamoItem = {
             **_owner_key(owner_key),
-            "count": count if offer_id is None else 0,
+            "count": _GACHA_COUNT_LIMIT - remaining if offer_id is None else 0,
             "generation": generation if offer_id is None else generation + 1,
         }
         offer_actions: tuple[TransactWriteItemTypeDef, ...] = ()
