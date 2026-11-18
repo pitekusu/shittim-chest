@@ -50,25 +50,25 @@
       "version": "1.29.0"
     },
     "syft": {
-      "archive_name": "syft_1.57.1_linux_arm64.tar.gz",
-      "archive_sha256": "aa3d3e07344f590bcce8d31043b752daa76c8a56c2aa34ceeee63c6168152582",
+      "archive_name": "syft_1.57.2_linux_arm64.tar.gz",
+      "archive_sha256": "8efe605309c98798e1ee0cffdcf8c05ca26819b4cd44c0b03650f1e963e9bdb6",
       "repository": "anchore/syft",
       "tag_prefix": "v",
-      "version": "1.57.1"
+      "version": "1.57.2"
     },
     "grype": {
-      "archive_name": "grype_0.121.3_linux_amd64.tar.gz",
-      "archive_sha256": "e9da18cc1429e786722e32161288103600efffd8e483c90761f90485bd1bec85",
+      "archive_name": "grype_0.122.0_linux_amd64.tar.gz",
+      "archive_sha256": "e697e6f7224637df87e267e4318cc027feae99a8e1b80280241d32b9ee5d4920",
       "repository": "anchore/grype",
       "tag_prefix": "v",
-      "version": "0.121.3"
+      "version": "0.122.0"
     },
     "grype-arm64": {
-      "archive_name": "grype_0.121.3_linux_arm64.tar.gz",
-      "archive_sha256": "b7815598d48da78bfd16f5b98ef28e1bb09c03d34fc8c3e350f99b6ccb3c7cba",
+      "archive_name": "grype_0.122.0_linux_arm64.tar.gz",
+      "archive_sha256": "7ebb44a7e69f8ca2491040e140a802117b2bf3ca8360d3856b3e0b9fe79962c4",
       "repository": "anchore/grype",
       "tag_prefix": "v",
-      "version": "0.121.3"
+      "version": "0.122.0"
     }
   },
   "sources": {
@@ -119,7 +119,15 @@
       "repository": "voidzero-dev/vite-plus",
       "tag_prefix": "v",
       "files": {
-        "apps/records-web/package.json": "(?:\"vite-plus\": \"|npm:@voidzero-dev/vite-plus-core@)([0-9.]+)",
+        "apps/records-web/package.json": "\"vite-plus\": \"([0-9.]+)"
+      }
+    },
+    "vite-plus-core": {
+      "repository": "voidzero-dev/vite-plus",
+      "tag_prefix": "",
+      "npm_package": "@voidzero-dev/vite-plus-core",
+      "files": {
+        "apps/records-web/package.json": "npm:@voidzero-dev/vite-plus-core@([0-9.]+)",
         "apps/records-web/pnpm-workspace.yaml": "npm:@voidzero-dev/vite-plus-core@([0-9.]+)"
       }
     },
