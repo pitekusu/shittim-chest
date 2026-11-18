@@ -341,7 +341,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Audit Records web dependencies
-        run: python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low
+        run: python3 ../../tools/run_npm_audit.py -- pnpm run audit
 
   records-infra:
     name: records-infra

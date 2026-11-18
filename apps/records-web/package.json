@@ -13,7 +13,7 @@
     "test:failed": "vp test run --last-failed",
     "test:e2e": "playwright test",
     "build": "node scripts/check-fonts.mjs && vp build && node scripts/check-code-splitting.mjs && node scripts/check-public-page-html.mjs",
-    "audit": "pnpm audit --audit-level=low",
+    "audit": "pnpm audit --audit-level=low --json | node ../../infra/check-audit.mjs npm-audit-exceptions.json",
     "verify": "pnpm run check && pnpm run test && pnpm run build && pnpm run test:e2e && pnpm run audit"
   },
   "dependencies": {

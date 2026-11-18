@@ -328,6 +328,11 @@ GitHub OIDCからGoogle WIFとサービスアカウントへ委譲し、短寿�
 ### npm監査サービスの障害
 
 `npm audit`/`pnpm audit`は通常どおり必須である。
+Coreの`npm run audit:infra`とWebの`pnpm run audit`は、各監査の完全なJSONを
+共用の`infra/check-audit.mjs`へ渡し、package・advisory・severityが一致する未失効の受容だけを適用する。
+受容ファイルはinfraとWebで分け、別projectの受容を流用しない。pnpm形式の読取を共用gateへ追加し、
+期限切れ・未知の検出・不正な応答・未使用の例外は従来どおり拒否する。
+CIとRecords Releaseは、このpackage scriptを既存のnpm障害確認ラッパー経由で実行する。
 npm公式Statuspageで「Security Auditコンポーネントの劣化」と「同コンポーネントに紐づく進行中インシデント」を
 同時に確認できた実行だけ、Node系の外部監査を省略し、警告を残す。
 公式情報の取得失敗・不正な形式・インシデント不明は拒否し、監査で検出された脆弱性や通常の非0終了を省略理由にしない。
@@ -547,7 +552,26 @@ CLIと版番号が分かれたcoreエイリアス／overrideは8.3.8000とし、
 
 既存mainのlockにも含まれるpicomatch 4.0.7は、
 [GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)の対象で、
-11月18日の確認時点では修正版が公開されていない。依存監査を成功扱いにせず、リスク受容を追加しない。
+11月18日の確認時点では修正版が公開されていない。同日、所有者が開発・CI用の本件Highを
+2026年11月20日09:00 JSTまで受容し、CI成功後のPR #752マージを明示承認した。
+infraとWebの受容記録は`expires: 2026-11-20`とし、同日00:00 UTCから拒否する。
+Vite+ coreのNode用vendor copyにも同版が残り、正式修正や非影響の証明とは扱わない。
+
+同じ承認で、今回の実測ARM64 production config
+`sha256:d61d02a8c0c0f8f0c8616c64bf53ed25a9885be72ec1c00c3383f9c4fe18e2c4`に残るHigh 28組を
+同期限まで受容する。既存22組のCVE・package・版は前回と一致し、新規6組は
+CVE-2026-107493／CVE-2026-124709それぞれの`libssl3t64`・`openssl`・`openssl-provider-legacy`
+（全て`3.5.7-1~deb13u3+dhi0`）に限定する。Critical、sourceの検出、修正可能High/Criticalは0、
+ARM64 TLSは60/60成功を確認した。
+[同一実行のSBOM・署名VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44314277139/artifacts/14431173930)と
+[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44314277139/artifacts/14432471438)を照合した。
+
+[OpenSSL公式](https://openssl-library.org/news/secadv/20261117.txt)は新規2件をLowと評価し、
+3.5系列では3.5.10を修正版とする。前者は非NULLの既存X509_INFO stackへのPEM追加に失敗した後の再利用・解放、
+後者はQUICサーバーでの拒否stream作成・resetの反復が成立条件だが、到達不能とは扱わずGrype Highを維持する。
+新規6組はこのconfigだけに限定し、containerの`expires_on`はUTC最終有効日`2026-11-19`とする。
+4枠の上限がある既存10組では最古のconfigを今回のconfigと入れ替え、現行mainのconfigは保持する。
+本番配信の承認は今回追加していない。
 
 ### 2026年11月5日の固定ツール更新
 
