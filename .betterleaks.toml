@@ -14,6 +14,13 @@ regexes = ['''^\s*AWS_SIGNER_NOTATION_KEY_SHA256:\s+[0-9a-f]{64}\s*$''']
 paths = ['''^\.github/workflows/release\.yml$''']
 
 [[rules.allowlists]]
+description = "Amazon ECR Credential Helper v0.13.0 public ARM64 checksum"
+condition = "AND"
+regexTarget = "line"
+regexes = ['''^\s*ECR_CREDENTIAL_HELPER_SHA256:\s+f0669e1666c6e1c70f9484df2cbd01c89b82f687f63dc55c50b05e8d20ebd2e1\s*$''']
+paths = ['''^\.github/workflows/release\.yml$''']
+
+[[rules.allowlists]]
 description = "Exact Docker DHI public signing-key commit and public-file checksum"
 condition = "AND"
 regexTarget = "line"
