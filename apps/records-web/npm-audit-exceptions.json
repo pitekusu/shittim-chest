@@ -1,9 +1,1 @@
-[
-  {
-    "id": "GHSA-fc5q-39xc-vjpf",
-    "package": "picomatch",
-    "severity": "high",
-    "reason": "2026-11-18に所有者が、修正版未公開を確認したうえで、PR #752の必須CIと統合を進めるため、開発・CI用Vitest 5.1.1とVite+ 1.7.0の依存、およびcore 8.3.8000のNode側Vite／tsdownへ同梱されるpicomatch 4.0.7のGHSA-fc5q-39xc-vjpf（CVE-2026-112366、high）を期限付きで明示受容した。外部指定の単一分岐を反復するextglobによりNode.jsのevent loopを長時間占有しうる。現行の呼び出しはリポジトリ設定とCLIのglobを使い、製品の利用者入力からの到達経路は確認していない。未修正依存は開発・CIへ残り、製品のbrowser bundleへの組込みは確認していない。標準pnpm auditはcore内の同梱copyを個別に列挙しない。2026-11-20 00:00 UTC（09:00 JST）に失効し、修正版へ更新した時点で削除する。",
-    "expires": "2026-11-20"
-  }
-]
+[]
