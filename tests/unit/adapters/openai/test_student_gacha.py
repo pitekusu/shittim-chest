@@ -316,7 +316,7 @@ async def test_render_uses_costume_image_and_selected_performer_expression(
     monkeypatch.setattr("shittim_chest.adapters.openai.student_gacha.render_card", render_card)
     monkeypatch.setattr("shittim_chest.adapters.openai.student_gacha.choice", pose_choice)
     presentation = GachaPresentation(
-        _STUDENT,
+        replace(_STUDENT, rarity=1),
         performer,
         "以前の説明",
         "戦略研究会",
@@ -345,6 +345,10 @@ async def test_render_uses_costume_image_and_selected_performer_expression(
     prompt = payload["prompt"]
     assert "Image 3 is the exact outfit variant" in prompt
     assert "gaze direction, eye shape and color" in prompt
+    assert "Use a wide shot" in prompt
+    assert "at about x=42%" in prompt
+    assert "vivid rainbow prism reflections" in prompt
+    assert "Backdrop palette: luminous light sky blue" in prompt
     assert "Do not reproduce its person, face,\nhair, halo, headwear, accessories" in prompt
     original_head = "Keep the performer's hair color and style, halo and head accessories"
     cosplay_head = "Use image 3 as the only source for the cosplay wig, halo and head"
