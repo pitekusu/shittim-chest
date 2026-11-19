@@ -138,11 +138,12 @@ contrast between the costume's light and dark details. Use the backdrop palette 
 Apply that palette to the background only. Leave the rightmost third clear and the lower left
 visually quiet for UI to be drawn later. Draw exactly one performer.
 No weapons, lettering, UI panels or watermarks."""
-_IMAGE_OUTFIT = """Image 3 is the exact outfit variant. Match its garment silhouette, neckline,
-construction, layers, trims, placement and scale of patterns, and distinctive below-the-head
-accessories and non-weapon props. The performer's face and eyes come exclusively from image 1.
+_IMAGE_OUTFIT = """Image 3 is the exact outfit variant and the sole wardrobe reference. Replace
+the entire outfit below the neck with the clothes from image 3, including its collar, sleeves,
+garment layers, trims, patterns, recognizable colors, and distinctive below-the-head accessories
+and non-weapon props. The performer's face and eyes come exclusively from image 1.
 Follow the head-reference rules below for hair, halo and head accessories. Keep the outfit's
-recognizable colors, pattern placement and layering. Confine any insignia to the clothing.
+silhouette, construction, and pattern placement. Confine any insignia to the clothing.
 For a non-human target, translate its visible colors, shapes and design motifs into the costume."""
 _IMAGE_ORIGINAL_HEAD = """Keep the performer's hair color and style, halo and head accessories
 exactly as shown in image 1. Do not copy hair, a halo or head accessories from images 2 or 3.
@@ -156,6 +157,7 @@ If image 3 has no halo, do not add one. If it has no head accessories, do not ad
 Do not borrow a halo or head accessories from image 1 or image 2."""
 _IMAGE_MOTION = """Make a seamless looping animation. Keep the camera, framing, face identity,
 outfit and head accessories consistent in every frame. Keep the specified facial expression.
+Keep the costume from image 3 visible in every frame, including its neckline and outer layers.
 Keep every frame subtly distinct with natural movement and a soft play of light in the backdrop.
 Return smoothly to the starting pose. Keep motion out of the reserved dialogue and dossier areas.
 Do not use camera moves, cuts, flashes or abrupt changes."""

@@ -344,6 +344,8 @@ async def test_render_uses_costume_image_and_selected_performer_expression(
     ]
     prompt = payload["prompt"]
     assert "Image 3 is the exact outfit variant" in prompt
+    assert "the sole wardrobe reference" in prompt
+    assert "Keep the costume from image 3 visible in every frame" in prompt
     assert "gaze direction, eye shape and color" in prompt
     assert "Use a wide shot" in prompt
     assert "at about x=42%" in prompt
