@@ -22,7 +22,7 @@ from shittim_chest.adapters.assets.student_gacha_schools import (
     school_branding,
 )
 from shittim_chest.application.student_gacha_models import (
-    GACHA_APNG_FRAME_DURATIONS,
+    GACHA_LEGACY_APNG_FRAME_DURATIONS,
     STUDENT_GACHA_RARITIES,
     GachaGenerationFailure,
     GachaImageFormat,
@@ -315,22 +315,27 @@ def _unique_roster_row(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return row
 
 
-def validate_gacha_result(content: bytes, *, image_format: GachaImageFormat) -> None:
+def validate_gacha_result(content: bytes, *, image_format: GachaImageFormat) -> tuple[int, ...]:
+    """Validate a stored result and return its frame timings, if animated."""
     if not 1 <= len(content) <= RESULT_MAX_BYTES:
         raise GachaGenerationFailure("gacha_result_invalid")
     if image_format is GachaImageFormat.GIF and not content.endswith(b";"):
         raise GachaGenerationFailure("gacha_media_invalid")
-    _require_image(
+    durations = image_format.frame_durations
+    allowed_durations = (durations,) if durations else ()
+    if image_format is GachaImageFormat.APNG:
+        allowed_durations += (GACHA_LEGACY_APNG_FRAME_DURATIONS,)
+    return _require_image(
         content,
         expected_format=image_format.pillow_format,
         expected_size=image_format.size,
-        frame_durations=image_format.frame_durations,
+        allowed_durations=allowed_durations,
     )
 
 
 def encode_gacha_discord_webp(apng: bytes) -> bytes:
     """Preserve the saved frames in a Discord-compatible animated attachment."""
-    validate_gacha_result(apng, image_format=GachaImageFormat.APNG)
+    durations = validate_gacha_result(apng, image_format=GachaImageFormat.APNG)
     try:
         with Image.open(io.BytesIO(apng), formats=["PNG"]) as artwork, io.BytesIO() as output:
             first, *remaining = (frame.copy() for frame in ImageSequence.Iterator(artwork))
@@ -339,7 +344,7 @@ def encode_gacha_discord_webp(apng: bytes) -> bytes:
                 format="WEBP",
                 save_all=True,
                 append_images=remaining,
-                duration=GACHA_APNG_FRAME_DURATIONS,
+                duration=durations,
                 loop=0,
                 lossless=True,
             )
@@ -352,7 +357,7 @@ def encode_gacha_discord_webp(apng: bytes) -> bytes:
         result,
         expected_format="WEBP",
         expected_size=GachaImageFormat.APNG.size,
-        frame_durations=GACHA_APNG_FRAME_DURATIONS,
+        allowed_durations=(durations,),
     )
     return result
 
@@ -362,8 +367,8 @@ def _require_image(
     *,
     expected_format: str,
     expected_size: tuple[int, int] | None = None,
-    frame_durations: tuple[int, ...] = (),
-) -> None:
+    allowed_durations: tuple[tuple[int, ...], ...] = (),
+) -> tuple[int, ...]:
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
@@ -374,12 +379,12 @@ def _require_image(
                     or (expected_size is not None and image.size != expected_size)
                 ):
                     raise GachaGenerationFailure("gacha_media_invalid")
-                if frame_durations:
-                    _require_animation_frames(image, frame_durations)
-                else:
-                    if getattr(image, "n_frames", 1) != 1:
-                        raise GachaGenerationFailure("gacha_media_invalid")
-                    image.load()
+                if allowed_durations:
+                    return _require_animation_frames(image, allowed_durations)
+                if getattr(image, "n_frames", 1) != 1:
+                    raise GachaGenerationFailure("gacha_media_invalid")
+                image.load()
+                return ()
     except (
         Image.DecompressionBombError,
         Image.DecompressionBombWarning,
@@ -393,7 +398,9 @@ def _require_image(
         raise GachaGenerationFailure("gacha_media_invalid") from None
 
 
-def _require_animation_frames(image: Image.Image, durations: tuple[int, ...]) -> None:
+def _require_animation_frames(
+    image: Image.Image, allowed_durations: tuple[tuple[int, ...], ...]
+) -> tuple[int, ...]:
     # Inspect at most one frame beyond the expected animation.
     if image.info.get("loop") != 0 or (
         image.format == "PNG"
@@ -401,15 +408,19 @@ def _require_animation_frames(image: Image.Image, durations: tuple[int, ...]) ->
     ):
         raise GachaGenerationFailure("gacha_media_invalid")
     size = image.size
-    for index, duration in enumerate(durations):
+    frame_count = len(allowed_durations[0])
+    matching = allowed_durations
+    for index in range(frame_count):
         image.seek(index)
         if image.size != size:
             raise GachaGenerationFailure("gacha_media_invalid")
         image.load()
-        if image.info.get("duration") != duration:
+        duration = image.info.get("duration")
+        matching = tuple(durations for durations in matching if durations[index] == duration)
+        if not matching:
             raise GachaGenerationFailure("gacha_media_invalid")
     try:
-        image.seek(len(durations))
+        image.seek(frame_count)
     except EOFError:
-        return
+        return matching[0]
     raise GachaGenerationFailure("gacha_media_invalid")

@@ -38,6 +38,7 @@ from shittim_chest.application.student_gacha_discord import (
 )
 from shittim_chest.application.student_gacha_models import (
     GACHA_APNG_FRAME_DURATIONS,
+    GACHA_LEGACY_APNG_FRAME_DURATIONS,
     GachaImageFormat,
 )
 from shittim_chest.application.student_gacha_state import GachaOffer
@@ -407,12 +408,21 @@ async def test_result_attachment_keeps_its_saved_format_when_reconciling(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("frame_delays", "loop_duration"),
+    (
+        pytest.param(GACHA_LEGACY_APNG_FRAME_DURATIONS, 1500, id="legacy-1500ms"),
+        pytest.param(GACHA_APNG_FRAME_DURATIONS, 1800, id="current-1800ms"),
+    ),
+)
 async def test_apng_result_sends_lossless_webp_and_reconciles_by_saved_image(
     monkeypatch: pytest.MonkeyPatch,
+    frame_delays: tuple[int, ...],
+    loop_duration: int,
 ) -> None:
     frames = [
         Image.new("RGB", GachaImageFormat.APNG.size, (13 * index, 161, 203))
-        for index in range(len(GACHA_APNG_FRAME_DURATIONS))
+        for index in range(len(frame_delays))
     ]
     with io.BytesIO() as output:
         frames[0].save(
@@ -420,7 +430,7 @@ async def test_apng_result_sends_lossless_webp_and_reconciles_by_saved_image(
             format="PNG",
             save_all=True,
             append_images=frames[1:],
-            duration=GACHA_APNG_FRAME_DURATIONS,
+            duration=frame_delays,
             loop=0,
         )
         apng = output.getvalue()
@@ -475,8 +485,8 @@ async def test_apng_result_sends_lossless_webp_and_reconciles_by_saved_image(
             actual = animation.convert("RGB")
             durations.append(animation.info["duration"])
             assert ImageChops.difference(actual, expected).getbbox() is None
-        assert tuple(durations) == GACHA_APNG_FRAME_DURATIONS
-        assert sum(durations) == 1500
+        assert tuple(durations) == frame_delays
+        assert sum(durations) == loop_duration
 
     # A later encoder can produce different compressed bytes for the same saved pixels.
     monkeypatch.setattr(delivery, "encode_gacha_discord_webp", lambda _content: b"different WebP")
