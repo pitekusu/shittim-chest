@@ -93,9 +93,10 @@ export function galleryImageUrl(ticket: GalleryImageTicket | undefined): string 
   return ticket && Date.parse(ticket.expiresAt) > Date.now() ? ticket.url : undefined;
 }
 
-export function isGalleryGif(url: string) {
+export function isGalleryAnimation(url: string) {
   try {
-    return new URL(url, window.location.origin).pathname.endsWith(".gif");
+    const pathname = new URL(url, window.location.origin).pathname;
+    return pathname.endsWith(".gif") || pathname.endsWith(".apng");
   } catch {
     return false;
   }

@@ -13,7 +13,7 @@ from struct import error as StructError
 from typing import TYPE_CHECKING, Final
 
 from botocore.exceptions import BotoCoreError, ClientError, FlexibleChecksumError
-from PIL import Image
+from PIL import Image, ImageSequence
 
 from shittim_chest.adapters.assets.images import DebateImageFailure, validate_image
 from shittim_chest.adapters.assets.student_gacha_costumes import load_wiki_costume
@@ -22,7 +22,7 @@ from shittim_chest.adapters.assets.student_gacha_schools import (
     school_branding,
 )
 from shittim_chest.application.student_gacha_models import (
-    GACHA_GIF_FRAME_DURATIONS,
+    GACHA_APNG_FRAME_DURATIONS,
     STUDENT_GACHA_RARITIES,
     GachaGenerationFailure,
     GachaImageFormat,
@@ -95,8 +95,8 @@ class StudentGachaMedia:
     async def school_branding(self, school: str) -> SchoolBranding:
         return await asyncio.to_thread(self._school_branding, school)
 
-    async def save(self, draw_id: str, gif: bytes) -> StoredGachaImage:
-        return await asyncio.to_thread(self._save, draw_id, gif)
+    async def save(self, draw_id: str, apng: bytes) -> StoredGachaImage:
+        return await asyncio.to_thread(self._save, draw_id, apng)
 
     async def load(self, stored: StoredGachaImage) -> bytes:
         return await asyncio.to_thread(self._load, stored)
@@ -162,17 +162,23 @@ class StudentGachaMedia:
         except BotoCoreError, ClientError:
             raise GachaGenerationFailure("gacha_media_unavailable") from None
 
-    def _save(self, draw_id: str, gif: bytes) -> StoredGachaImage:
-        image_format = GachaImageFormat.GIF
+    def _save(self, draw_id: str, apng: bytes) -> StoredGachaImage:
+        image_format = GachaImageFormat.APNG
         key = student_gacha_image_key(draw_id, image_format)
-        validate_gacha_result(gif, image_format=image_format)
-        digest = hashlib.sha256(gif).digest()
+        validate_gacha_result(apng, image_format=image_format)
+        if any(
+            self._head_result(draw_id, legacy_format) is not None
+            for legacy_format in GachaImageFormat
+            if legacy_format is not image_format
+        ):
+            raise GachaGenerationFailure("gacha_result_conflict", ambiguous=True)
+        digest = hashlib.sha256(apng).digest()
         checksum = base64.b64encode(digest).decode("ascii")
         try:
             response = self._client.put_object(
                 Bucket=self._bucket,
                 Key=key,
-                Body=gif,
+                Body=apng,
                 IfNoneMatch="*",
                 ContentType=image_format.content_type,
                 CacheControl="private, no-store",
@@ -211,11 +217,14 @@ class StudentGachaMedia:
         return content
 
     def _find(self, draw_id: str) -> StoredGachaImage | None:
-        gif = self._head_result(draw_id, GachaImageFormat.GIF)
-        png = self._head_result(draw_id, GachaImageFormat.PNG)
-        if gif is not None and png is not None:
-            raise GachaGenerationFailure("gacha_result_conflict", ambiguous=True)
-        return gif or png
+        receipt = None
+        for image_format in GachaImageFormat:
+            current = self._head_result(draw_id, image_format)
+            if current is not None:
+                if receipt is not None:
+                    raise GachaGenerationFailure("gacha_result_conflict", ambiguous=True)
+                receipt = current
+        return receipt
 
     def _head_result(self, draw_id: str, image_format: GachaImageFormat) -> StoredGachaImage | None:
         key = student_gacha_image_key(draw_id, image_format)
@@ -313,10 +322,39 @@ def validate_gacha_result(content: bytes, *, image_format: GachaImageFormat) -> 
         raise GachaGenerationFailure("gacha_media_invalid")
     _require_image(
         content,
-        expected_format=image_format.value.upper(),
+        expected_format=image_format.pillow_format,
         expected_size=image_format.size,
-        frame_durations=GACHA_GIF_FRAME_DURATIONS if image_format is GachaImageFormat.GIF else (),
+        frame_durations=image_format.frame_durations,
     )
+
+
+def encode_gacha_discord_webp(apng: bytes) -> bytes:
+    """Preserve the saved frames in a Discord-compatible animated attachment."""
+    validate_gacha_result(apng, image_format=GachaImageFormat.APNG)
+    try:
+        with Image.open(io.BytesIO(apng), formats=["PNG"]) as artwork, io.BytesIO() as output:
+            first, *remaining = (frame.copy() for frame in ImageSequence.Iterator(artwork))
+            first.save(
+                output,
+                format="WEBP",
+                save_all=True,
+                append_images=remaining,
+                duration=GACHA_APNG_FRAME_DURATIONS,
+                loop=0,
+                lossless=True,
+            )
+            result = output.getvalue()
+    except EOFError, OSError, ValueError:
+        raise GachaGenerationFailure("gacha_discord_image_invalid") from None
+    if not 1 <= len(result) <= RESULT_MAX_BYTES:
+        raise GachaGenerationFailure("gacha_discord_image_invalid")
+    _require_image(
+        result,
+        expected_format="WEBP",
+        expected_size=GachaImageFormat.APNG.size,
+        frame_durations=GACHA_APNG_FRAME_DURATIONS,
+    )
+    return result
 
 
 def _require_image(
@@ -337,7 +375,7 @@ def _require_image(
                 ):
                     raise GachaGenerationFailure("gacha_media_invalid")
                 if frame_durations:
-                    _require_gif_frames(image, frame_durations)
+                    _require_animation_frames(image, frame_durations)
                 else:
                     if getattr(image, "n_frames", 1) != 1:
                         raise GachaGenerationFailure("gacha_media_invalid")
@@ -355,16 +393,21 @@ def _require_image(
         raise GachaGenerationFailure("gacha_media_invalid") from None
 
 
-def _require_gif_frames(image: Image.Image, durations: tuple[int, ...]) -> None:
+def _require_animation_frames(image: Image.Image, durations: tuple[int, ...]) -> None:
     # Inspect at most one frame beyond the expected animation.
-    if image.info.get("loop") != 0:
+    if image.info.get("loop") != 0 or (
+        image.format == "PNG"
+        and (image.info.get("default_image") or image.mode not in {"RGB", "RGBA"})
+    ):
         raise GachaGenerationFailure("gacha_media_invalid")
     size = image.size
     for index, duration in enumerate(durations):
         image.seek(index)
-        if image.size != size or image.info.get("duration") != duration:
+        if image.size != size:
             raise GachaGenerationFailure("gacha_media_invalid")
         image.load()
+        if image.info.get("duration") != duration:
+            raise GachaGenerationFailure("gacha_media_invalid")
     try:
         image.seek(len(durations))
     except EOFError:

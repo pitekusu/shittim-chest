@@ -10,10 +10,11 @@ import re
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, TypedDict
+from typing import TypedDict
 
 import discord
 
+from shittim_chest.adapters.assets.student_gacha import encode_gacha_discord_webp
 from shittim_chest.adapters.discord.errors import (
     DiscordAdapterError,
     DiscordDeliveryConflict,
@@ -29,9 +30,7 @@ from shittim_chest.adapters.discord_http import (
 )
 from shittim_chest.application.discord import DiscordBotSlot, DiscordRuntimeConfig
 from shittim_chest.application.student_gacha_discord import GachaDeliveryFailure
-
-if TYPE_CHECKING:
-    from shittim_chest.application.student_gacha_models import GachaImageFormat
+from shittim_chest.application.student_gacha_models import GachaGenerationFailure, GachaImageFormat
 
 _LOADING_TEXT = "⏳ 生徒を募集しています!"
 _GALLERY_NOTICE = (
@@ -165,7 +164,17 @@ class DiscordStudentGacha:
         image_format: GachaImageFormat,
     ) -> str:
         delivery_id = f"{publication_id}:result"
+        # The saved source identifies the publication across encoder upgrades and retries.
         digest_prefix = hashlib.sha256(content).hexdigest()[:16]
+        extension = image_format.value
+        content_type = image_format.content_type
+        if image_format is GachaImageFormat.APNG:
+            try:
+                content = await asyncio.to_thread(encode_gacha_discord_webp, content)
+            except GachaGenerationFailure:
+                raise GachaDeliveryFailure(retryable=False) from None
+            extension = "webp"
+            content_type = "image/webp"
         return await self._send(
             guild_id,
             channel_id,
@@ -173,8 +182,8 @@ class DiscordStudentGacha:
             after_message_id,
             _Publication(
                 "✨ 生徒募集の結果です!",
-                f"student-{_nonce(delivery_id)}-{digest_prefix}.{image_format.value}",
-                image_format.content_type,
+                f"student-{_nonce(delivery_id)}-{digest_prefix}.{extension}",
+                content_type,
                 content,
             ),
         )

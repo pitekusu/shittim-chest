@@ -19,8 +19,8 @@ from shittim_chest.adapters.assets.student_gacha import (
     validate_gacha_result,
 )
 from shittim_chest.application.student_gacha_models import (
-    GACHA_GIF_FRAME_COUNT,
-    GACHA_GIF_FRAME_DURATIONS,
+    GACHA_APNG_FRAME_COUNT,
+    GACHA_APNG_FRAME_DURATIONS,
     GACHA_GIF_SIZE,
     TEACHER_PLACEHOLDER,
     GachaGenerationFailure,
@@ -101,7 +101,7 @@ def render_card(
     *,
     school_branding: SchoolBranding | None = None,
 ) -> bytes:
-    """Compose the animated card locally, with the panels held still across frames."""
+    """Compose the APNG card locally and freeze both panels across the animation."""
     art_frames = _read_art_frames(art)
     try:
         panels = _card_panels(presentation, teacher, school_branding)
@@ -116,12 +116,20 @@ def render_card(
             .resize(GACHA_GIF_SIZE, Image.Resampling.LANCZOS)
             .point(lambda alpha: 255 if alpha else 0, mode="1")
         )
-        for colors in (256, 128):
-            result = _encode_gif(frames, panel_mask, colors)
-            if 1 <= len(result) <= RESULT_MAX_BYTES:
-                break
-        else:
-            raise GachaGenerationFailure("gacha_result_invalid")
+        first = frames[0]
+        for frame in frames[1:]:
+            frame.paste(first, mask=panel_mask)
+        with io.BytesIO() as output:
+            first.save(
+                output,
+                format="PNG",
+                save_all=True,
+                append_images=frames[1:],
+                duration=GACHA_APNG_FRAME_DURATIONS,
+                loop=0,
+                optimize=True,
+            )
+            result = output.getvalue()
     except (
         Image.DecompressionBombError,
         Image.DecompressionBombWarning,
@@ -130,8 +138,8 @@ def render_card(
     ):
         raise GachaGenerationFailure("gacha_card_render_failed") from None
     try:
-        # Pillow can coalesce adjacent frames when their quantized pixels are identical.
-        validate_gacha_result(result, image_format=GachaImageFormat.GIF)
+        # Pillow can coalesce adjacent frames that become identical after composition.
+        validate_gacha_result(result, image_format=GachaImageFormat.APNG)
     except GachaGenerationFailure:
         raise GachaGenerationFailure("gacha_card_render_failed") from None
     return result
@@ -145,13 +153,13 @@ def _read_art_frames(art: bytes) -> list[Image.Image]:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with io.BytesIO(art) as buffer, Image.open(buffer, formats=["GIF"]) as source:
-                for index in range(GACHA_GIF_FRAME_COUNT):
+                for index in range(GACHA_APNG_FRAME_COUNT):
                     source.seek(index)
                     if source.size != GIF_ART_SIZE:
                         raise GachaGenerationFailure("gacha_image_invalid")
                     frames.append(source.convert("RGBA"))
                 try:
-                    source.seek(GACHA_GIF_FRAME_COUNT)
+                    source.seek(GACHA_APNG_FRAME_COUNT)
                 except EOFError:
                     return frames
     except (
@@ -189,47 +197,6 @@ def _compose_frame(art: Image.Image, rarity: int | None, panels: Image.Image) ->
         canvas.alpha_composite(tinted)
     canvas.alpha_composite(panels)
     return canvas
-
-
-def _encode_gif(frames: list[Image.Image], panel_mask: Image.Image, colors: int) -> bytes:
-    # Sample the whole loop into one palette, with all panels anchored to the first frame.
-    first = frames[0]
-    sample_width, sample_height = (edge // 4 for edge in GACHA_GIF_SIZE)
-    sample_size = (sample_width, sample_height)
-    samples = Image.new("RGB", (sample_width, sample_height * len(frames)))
-    sample_mask = panel_mask.resize(sample_size, Image.Resampling.NEAREST)
-    first_sample = first.resize(sample_size, Image.Resampling.NEAREST)
-    for index, frame in enumerate(frames):
-        sample = frame.resize(sample_size, Image.Resampling.NEAREST)
-        sample.paste(first_sample, mask=sample_mask)
-        samples.paste(sample, (0, index * sample_height))
-    palette = samples.quantize(colors=colors)
-    palette_colors = palette.getpalette()
-    if palette_colors is None:
-        raise ValueError("GIF palette unavailable")
-
-    fixed_panel = first.quantize(palette=palette, dither=Image.Dither.NONE)
-    indexed: list[Image.Image] = []
-    for frame in frames:
-        # Freeze the translucent edges before diffusion so panel changes cannot bleed into the art.
-        frozen = frame.copy()
-        frozen.paste(first, mask=panel_mask)
-        dithered = frozen.quantize(palette=palette, dither=Image.Dither.FLOYDSTEINBERG)
-        dithered.paste(fixed_panel, mask=panel_mask)
-        indexed.append(dithered)
-
-    with io.BytesIO() as output:
-        indexed[0].save(
-            output,
-            format="GIF",
-            save_all=True,
-            append_images=indexed[1:],
-            duration=GACHA_GIF_FRAME_DURATIONS,
-            loop=0,
-            optimize=False,
-            palette=bytes(palette_colors),
-        )
-        return output.getvalue()
 
 
 @cache

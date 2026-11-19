@@ -10,8 +10,8 @@ from PIL import Image, ImageChops, ImageDraw
 from shittim_chest.adapters.assets import student_gacha_card
 from shittim_chest.adapters.assets.student_gacha_card import GIF_ART_SIZE, render_card
 from shittim_chest.application.student_gacha_models import (
-    GACHA_GIF_FRAME_COUNT,
-    GACHA_GIF_FRAME_DURATIONS,
+    GACHA_APNG_FRAME_COUNT,
+    GACHA_APNG_FRAME_DURATIONS,
     GACHA_GIF_SIZE,
     GachaGenerationFailure,
     GachaPresentation,
@@ -62,7 +62,7 @@ def _render(
 def _gif(
     *,
     size: tuple[int, int] = GIF_ART_SIZE,
-    frame_count: int = GACHA_GIF_FRAME_COUNT,
+    frame_count: int = GACHA_APNG_FRAME_COUNT,
     panel_motion_only: bool = False,
 ) -> bytes:
     frames = []
@@ -94,15 +94,18 @@ def test_animated_card_freezes_both_panels_while_the_art_moves() -> None:
     result = render_card(_gif(), presentation, teacher, school_branding=school)
 
     with Image.open(BytesIO(result)) as card:
-        assert (card.format, card.size, getattr(card, "n_frames", 1)) == ("GIF", GACHA_GIF_SIZE, 12)
+        assert (card.format, card.size, getattr(card, "n_frames", 1)) == ("PNG", GACHA_GIF_SIZE, 12)
+        assert card.mode == "RGB"
         assert card.info["loop"] == 0
         assert len(result) <= student_gacha_card.RESULT_MAX_BYTES
 
         artwork_colors = set()
+        durations = []
         with card.convert("RGB") as first:
-            for index, duration in enumerate(GACHA_GIF_FRAME_DURATIONS):
+            assert first.getcolors(maxcolors=256) is None
+            for index in range(GACHA_APNG_FRAME_COUNT):
                 card.seek(index)
-                assert card.info["duration"] == duration
+                durations.append(card.info["duration"])
                 with card.convert("RGB") as frame:
                     difference = ImageChops.difference(first, frame)
                     assert all(
@@ -110,6 +113,8 @@ def test_animated_card_freezes_both_panels_while_the_art_moves() -> None:
                         for band in difference.split()
                     )
                     artwork_colors.add(frame.getpixel((525, 200)))
+        assert tuple(durations) == GACHA_APNG_FRAME_DURATIONS
+        assert sum(durations) == 1500
         assert len(artwork_colors) == 12
 
 
@@ -137,27 +142,6 @@ def test_card_rejects_truncated_input() -> None:
 def test_card_rejects_animation_that_becomes_still_after_composition() -> None:
     with pytest.raises(GachaGenerationFailure, match="gacha_card_render_failed"):
         render_card(_gif(panel_motion_only=True), _presentation(3), "サンプル先生")
-
-
-def test_gif_reencodes_with_a_smaller_palette_when_needed(monkeypatch: pytest.MonkeyPatch) -> None:
-    encode = student_gacha_card._encode_gif
-    palette_sizes = []
-
-    def encode_with_oversize_first_result(
-        frames: list[Image.Image], panel_mask: Image.Image, colors: int
-    ) -> bytes:
-        palette_sizes.append(colors)
-        if colors == 256:
-            return bytes(student_gacha_card.RESULT_MAX_BYTES + 1)
-        return encode(frames, panel_mask, colors)
-
-    monkeypatch.setattr(student_gacha_card, "_encode_gif", encode_with_oversize_first_result)
-    result = render_card(_gif(), _presentation(3), "サンプル先生")
-
-    assert palette_sizes == [256, 128]
-    with Image.open(BytesIO(result)) as card:
-        assert getattr(card, "n_frames", 1) == 12
-        assert len(card.getpalette() or []) <= 128 * 3
 
 
 @pytest.mark.parametrize(

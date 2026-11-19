@@ -23,7 +23,7 @@ from shittim_chest.adapters.assets.student_gacha import (
     _parse_roster,
 )
 from shittim_chest.application.student_gacha_models import (
-    GACHA_GIF_FRAME_COUNT,
+    GACHA_APNG_FRAME_DURATIONS,
     GACHA_GIF_FRAME_DURATIONS,
     GachaGenerationFailure,
     GachaImageFormat,
@@ -37,19 +37,29 @@ from shittim_chest.application.student_gacha_models import (
 _DRAW_ID = "0" * 32
 
 
-def _gif() -> bytes:
+def _animation(
+    image_format: GachaImageFormat,
+    *,
+    durations: tuple[int, ...] | None = None,
+    loop: int = 0,
+    default_image: bool = False,
+) -> bytes:
+    if durations is None:
+        durations = image_format.frame_durations
     frames = [
-        Image.new("RGB", GachaImageFormat.GIF.size, (20 * frame, 54, 88))
-        for frame in range(GACHA_GIF_FRAME_COUNT)
+        Image.new("RGB", image_format.size, (18 * frame, 54, 88))
+        for frame in range(len(durations) + default_image)
     ]
+    options = {"default_image": True} if default_image else {}
     with io.BytesIO() as output:
         frames[0].save(
             output,
-            "GIF",
+            image_format.pillow_format,
             save_all=True,
             append_images=frames[1:],
-            duration=GACHA_GIF_FRAME_DURATIONS,
-            loop=0,
+            duration=durations,
+            loop=loop,
+            **options,
         )
         return output.getvalue()
 
@@ -72,72 +82,108 @@ def _missing_object() -> ClientError:
 
 @pytest.mark.asyncio
 async def test_save_reconciles_lost_put_response_and_loads_verified_version() -> None:
-    gif = _gif()
-    checksum = base64.b64encode(hashlib.sha256(gif).digest()).decode("ascii")
+    apng = _animation(GachaImageFormat.APNG)
+    checksum = base64.b64encode(hashlib.sha256(apng).digest()).decode("ascii")
     client = Mock()
     client.put_object.side_effect = ClientError(
         {"Error": {"Code": "PreconditionFailed"}}, "PutObject"
     )
-    gif_metadata = {
-        "ContentType": "image/gif",
-        "ContentLength": len(gif),
+    apng_metadata = {
+        "ContentType": "image/apng",
+        "ContentLength": len(apng),
         "ChecksumSHA256": checksum,
         "VersionId": "original-version",
     }
-    client.head_object.side_effect = [gif_metadata, _missing_object()]
-    client.get_object.return_value = {**gif_metadata, "Body": io.BytesIO(gif)}
+    client.head_object.side_effect = [*(_missing_object() for _ in range(4)), apng_metadata]
+    client.get_object.return_value = {**apng_metadata, "Body": io.BytesIO(apng)}
     media = StudentGachaMedia(client, bucket_name="private-media")
 
-    stored = await media.save(_DRAW_ID, gif)
+    stored = await media.save(_DRAW_ID, apng)
 
-    assert stored.sha256 == hashlib.sha256(gif).hexdigest()
-    assert stored.key == student_gacha_image_key(_DRAW_ID, GachaImageFormat.GIF)
+    assert stored.sha256 == hashlib.sha256(apng).hexdigest()
+    assert stored.key == student_gacha_image_key(_DRAW_ID, GachaImageFormat.APNG)
+    assert client.put_object.call_args.kwargs["Body"] == apng
     assert client.put_object.call_args.kwargs["IfNoneMatch"] == "*"
     assert client.put_object.call_args.kwargs["ChecksumSHA256"] == checksum
-    assert client.put_object.call_args.kwargs["ContentType"] == "image/gif"
-    assert await media.load(stored) == gif
+    assert client.put_object.call_args.kwargs["ContentType"] == "image/apng"
+    assert await media.load(stored) == apng
     assert client.get_object.call_args.kwargs["VersionId"] == "original-version"
 
 
 @pytest.mark.asyncio
-async def test_finds_legacy_png_and_parks_two_formats_as_a_conflict() -> None:
-    with io.BytesIO() as output:
-        Image.new("RGB", RESULT_SIZE, "lavender").save(output, "PNG")
-        png = output.getvalue()
-    png_metadata = {
-        "ContentLength": len(png),
-        "ContentType": "image/png",
-        "ChecksumSHA256": base64.b64encode(hashlib.sha256(png).digest()).decode("ascii"),
+@pytest.mark.parametrize("legacy_format", (GachaImageFormat.PNG, GachaImageFormat.GIF))
+async def test_finds_legacy_result_without_overwriting_it_with_apng(
+    legacy_format: GachaImageFormat,
+) -> None:
+    if legacy_format is GachaImageFormat.PNG:
+        with io.BytesIO() as output:
+            Image.new("RGB", RESULT_SIZE, "lavender").save(output, "PNG")
+            legacy_bytes = output.getvalue()
+    else:
+        legacy_bytes = _animation(legacy_format)
+    legacy_key = student_gacha_image_key(_DRAW_ID, legacy_format)
+    legacy_digest = hashlib.sha256(legacy_bytes)
+    legacy_metadata = {
+        "ContentLength": len(legacy_bytes),
+        "ContentType": legacy_format.content_type,
+        "ChecksumSHA256": base64.b64encode(legacy_digest.digest()).decode("ascii"),
         "VersionId": "old-version",
     }
+    objects = {legacy_key: legacy_metadata}
+
+    def head_object(*, Key: str, **_kwargs: object) -> dict[str, str | int]:
+        if Key in objects:
+            return objects[Key]
+        raise _missing_object()
+
     client = Mock()
-    client.head_object.side_effect = [_missing_object(), png_metadata]
-    client.get_object.return_value = {**png_metadata, "Body": io.BytesIO(png)}
+    client.head_object.side_effect = head_object
+    client.get_object.return_value = {**legacy_metadata, "Body": io.BytesIO(legacy_bytes)}
     media = StudentGachaMedia(client, bucket_name="private-media")
 
     stored = await media.find(_DRAW_ID)
+    assert stored == StoredGachaImage(legacy_key, "old-version", legacy_digest.hexdigest())
     assert stored is not None
-    assert stored == StoredGachaImage(
-        student_gacha_image_key(_DRAW_ID), "old-version", hashlib.sha256(png).hexdigest()
-    )
-    assert await media.load(stored) == png
+    assert await media.load(stored) == legacy_bytes
 
-    client.head_object.side_effect = [{**png_metadata, "ContentType": "image/gif"}, png_metadata]
+    apng = _animation(GachaImageFormat.APNG)
+    with pytest.raises(GachaGenerationFailure, match="gacha_result_conflict") as failure:
+        await media.save(_DRAW_ID, apng)
+    assert failure.value.ambiguous
+    client.put_object.assert_not_called()
+
+    objects[student_gacha_image_key(_DRAW_ID, GachaImageFormat.APNG)] = {
+        "ContentLength": len(apng),
+        "ContentType": "image/apng",
+        "ChecksumSHA256": base64.b64encode(hashlib.sha256(apng).digest()).decode("ascii"),
+        "VersionId": "conflicting-version",
+    }
     with pytest.raises(GachaGenerationFailure, match="gacha_result_conflict") as failure:
         await media.find(_DRAW_ID)
     assert failure.value.ambiguous
 
 
 @pytest.mark.asyncio
-async def test_rejects_static_gif_before_saving() -> None:
-    with io.BytesIO() as output:
-        Image.new("RGB", GachaImageFormat.GIF.size, "lavender").save(output, "GIF", loop=0)
-        gif = output.getvalue()
+@pytest.mark.parametrize(
+    ("durations", "loop", "default_image"),
+    (
+        ((170,), 0, False),
+        (GACHA_GIF_FRAME_DURATIONS, 0, False),
+        (GACHA_APNG_FRAME_DURATIONS, 1, False),
+        (GACHA_APNG_FRAME_DURATIONS[:-1], 0, True),
+    ),
+)
+async def test_rejects_invalid_apng_before_saving(
+    durations: tuple[int, ...], loop: int, default_image: bool
+) -> None:
+    apng = _animation(
+        GachaImageFormat.APNG, durations=durations, loop=loop, default_image=default_image
+    )
     client = Mock()
     media = StudentGachaMedia(client, bucket_name="private-media")
 
     with pytest.raises(GachaGenerationFailure, match="gacha_media_invalid"):
-        await media.save(_DRAW_ID, gif)
+        await media.save(_DRAW_ID, apng)
     client.put_object.assert_not_called()
 
 
@@ -167,7 +213,7 @@ async def test_missing_result_is_distinguished_from_access_denied() -> None:
             Prefix=student_gacha_image_key(_DRAW_ID, image_format),
             MaxKeys=1,
         )
-        for image_format in (GachaImageFormat.GIF, GachaImageFormat.PNG)
+        for image_format in GachaImageFormat
     ]
 
     client.list_objects_v2.return_value = {"Contents": [{"Key": student_gacha_image_key(_DRAW_ID)}]}

@@ -427,6 +427,7 @@ def test_school_logos_require_browser_auth_and_return_only_validated_catalog_ico
     [
         (GachaImageFormat.PNG, 1792, 828, "image/png"),
         (GachaImageFormat.GIF, 1024, 473, "image/gif"),
+        (GachaImageFormat.APNG, 1024, 473, "image/apng"),
     ],
 )
 def test_gallery_signs_only_requested_ready_thumbnails_or_explicit_original(

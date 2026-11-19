@@ -60,7 +60,7 @@ class _Media(Protocol):
     async def references(self, performer: ParticipantSlot) -> tuple[bytes, bytes]: ...
     async def costume_reference(self, student: Student) -> bytes: ...
     async def school_branding(self, school: str) -> SchoolBranding: ...
-    async def save(self, draw_id: str, gif: bytes) -> StoredGachaImage: ...
+    async def save(self, draw_id: str, apng: bytes) -> StoredGachaImage: ...
     async def load(self, stored: StoredGachaImage) -> bytes: ...
     async def find(self, draw_id: str) -> StoredGachaImage | None: ...
 
@@ -354,7 +354,7 @@ class StudentGachaWorker:
                 job = await self._checkpoint(job, presentation=presentation)
             references = await self._media.references(performer)
             job = await self._checkpoint(job, paid_started=True)
-            gif = await self._generator.render(
+            apng = await self._generator.render(
                 _required(job.presentation),
                 teacher_name=_required(job.teacher_name),
                 references=references,
@@ -362,7 +362,7 @@ class StudentGachaWorker:
                 school_branding=school_branding,
                 expression=_required(job.expression),
             )
-            stored = await self._media.save(offer_id, gif)
+            stored = await self._media.save(offer_id, apng)
             return await self._checkpoint(job, stored=stored, teacher_name=None)
         except GachaGenerationFailure as error:
             _LOGGER.warning(

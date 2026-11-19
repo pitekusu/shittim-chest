@@ -13,10 +13,11 @@ STUDENT_GACHA_IMAGE_PREFIX = "student-gacha/results/"
 TEACHER_PLACEHOLDER = "{teacher}"
 STUDENT_GACHA_RARITIES = frozenset(range(5))
 GACHA_GIF_FRAME_DURATIONS = (170, 160, 170) * 4
-GACHA_GIF_FRAME_COUNT = len(GACHA_GIF_FRAME_DURATIONS)
+GACHA_APNG_FRAME_DURATIONS = (125,) * 12
+GACHA_APNG_FRAME_COUNT = len(GACHA_APNG_FRAME_DURATIONS)
 GACHA_GIF_SIZE = (1024, 473)
 _DRAW_ID = re.compile(r"[0-9a-f]{32}")
-_IMAGE_KEY = re.compile(re.escape(STUDENT_GACHA_IMAGE_PREFIX) + r"[0-9a-f]{32}\.(?:png|gif)")
+_IMAGE_KEY = re.compile(re.escape(STUDENT_GACHA_IMAGE_PREFIX) + r"[0-9a-f]{32}\.(?:png|gif|apng)")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
@@ -29,14 +30,31 @@ class GachaExpression(StrEnum):
 class GachaImageFormat(StrEnum):
     PNG = "png"
     GIF = "gif"
+    APNG = "apng"
 
     @property
     def content_type(self) -> str:
         return f"image/{self.value}"
 
     @property
+    def pillow_format(self) -> str:
+        return "GIF" if self is GachaImageFormat.GIF else "PNG"
+
+    @property
+    def is_animated(self) -> bool:
+        return self is not GachaImageFormat.PNG
+
+    @property
+    def frame_durations(self) -> tuple[int, ...]:
+        if self is GachaImageFormat.GIF:
+            return GACHA_GIF_FRAME_DURATIONS
+        if self is GachaImageFormat.APNG:
+            return GACHA_APNG_FRAME_DURATIONS
+        return ()
+
+    @property
     def size(self) -> tuple[int, int]:
-        return GACHA_GIF_SIZE if self is GachaImageFormat.GIF else (1792, 828)
+        return GACHA_GIF_SIZE if self.is_animated else (1792, 828)
 
 
 @dataclass(frozen=True, slots=True)

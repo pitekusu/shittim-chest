@@ -17,7 +17,7 @@ from shittim_chest.adapters.openai.config import ParticipantProfile, Participant
 from shittim_chest.adapters.openai.limiter import OpenAIRequestLimiter
 from shittim_chest.adapters.openai.student_gacha import OpenAIStudentGacha, _CardBrief
 from shittim_chest.application.student_gacha_models import (
-    GACHA_GIF_FRAME_DURATIONS,
+    GACHA_APNG_FRAME_DURATIONS,
     GACHA_GIF_SIZE,
     TEACHER_PLACEHOLDER,
     GachaExpression,
@@ -217,7 +217,7 @@ async def test_provider_error_diagnostic_logs_only_allowlisted_fields(
 
 
 @pytest.mark.asyncio
-async def test_render_requests_a_sunburst_gif_and_inserts_the_name_locally() -> None:
+async def test_render_requests_sunburst_gif_and_composes_the_apng_locally() -> None:
     picture = io.BytesIO()
     frames = [Image.new("RGB", (1024, 480), (190, 183, 214 - 10 * index)) for index in range(12)]
     frames[0].save(picture, "GIF", save_all=True, append_images=frames[1:], duration=170)
@@ -247,7 +247,7 @@ async def test_render_requests_a_sunburst_gif_and_inserts_the_name_locally() -> 
     assert payload["quality"] == "max"
     assert payload["output_format"] == "gif"
     assert payload["frame_count"] == 12
-    assert payload["frame_duration_ms"] == 170
+    assert payload["frame_duration_ms"] == 130
     assert payload["n"] == 1
     assert payload["image"] == [
         ("performer.webp", b"portrait", "image/webp"),
@@ -265,12 +265,12 @@ async def test_render_requests_a_sunburst_gif_and_inserts_the_name_locally() -> 
     client.with_options.assert_called_once_with(max_retries=0)
     with Image.open(io.BytesIO(result)) as image:
         assert (image.format, image.size, getattr(image, "n_frames", 1)) == (
-            "GIF",
+            "PNG",
             GACHA_GIF_SIZE,
             12,
         )
         assert image.info["loop"] == 0
-        for index, delay in enumerate(GACHA_GIF_FRAME_DURATIONS):
+        for index, delay in enumerate(GACHA_APNG_FRAME_DURATIONS):
             image.seek(index)
             assert image.info["duration"] == delay
 
@@ -316,7 +316,7 @@ async def test_render_uses_costume_image_and_selected_performer_expression(
     monkeypatch.setattr("shittim_chest.adapters.openai.student_gacha.render_card", render_card)
     monkeypatch.setattr("shittim_chest.adapters.openai.student_gacha.choice", pose_choice)
     presentation = GachaPresentation(
-        _STUDENT,
+        replace(_STUDENT, rarity=1),
         performer,
         "以前の説明",
         "戦略研究会",
@@ -344,7 +344,15 @@ async def test_render_uses_costume_image_and_selected_performer_expression(
     ]
     prompt = payload["prompt"]
     assert "Image 3 is the exact outfit variant" in prompt
+    assert "the sole wardrobe reference" in prompt
+    assert "Keep the costume from image 3 visible in every frame" in prompt
     assert "gaze direction, eye shape and color" in prompt
+    assert "Show the performer from the top of the head through the upper thighs" in prompt
+    assert "about 18% of the canvas width" in prompt
+    assert "beyond the top edge" in prompt
+    assert "at about x=42%" in prompt
+    assert "vivid rainbow prism reflections" in prompt
+    assert "Backdrop palette: luminous light sky blue" in prompt
     assert "Do not reproduce its person, face,\nhair, halo, headwear, accessories" in prompt
     original_head = "Keep the performer's hair color and style, halo and head accessories"
     cosplay_head = "Use image 3 as the only source for the cosplay wig, halo and head"

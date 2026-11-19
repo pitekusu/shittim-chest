@@ -12,10 +12,16 @@ const thumbnailPath = fileURLToPath(
 const originalPath = fileURLToPath(
   new URL("../public/assets/shittim-chest-archive-og-5e706f31f069.png", import.meta.url),
 );
-const animatedGif = Buffer.from(
-  "R0lGODlhCAAEAIEAAPXLmQAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQAFAAAACwAAAAACAAEAAAIDAABCBxIsKDBgwQDAgAh+QQBFAABACwAAAAACAAEAIFvue8AAAAAAAAAAAAIDAABCBxIsKDBgwQDAgA7",
-  "base64",
-);
+const animatedImages = {
+  gif: Buffer.from(
+    "R0lGODlhCAAEAIEAAPXLmQAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQAFAAAACwAAAAACAAEAAAIDAABCBxIsKDBgwQDAgAh+QQBFAABACwAAAAACAAEAIFvue8AAAAAAAAAAAAIDAABCBxIsKDBgwQDAgA7",
+    "base64",
+  ),
+  apng: Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAIAAAA8r+mnAAAACGFjVEwAAAACAAAAAPONk3AAAAAaZmNUTAAAAAAAAAAIAAAABAAAAAAAAAAAABEAZAAAlRJiLgAAABRJREFUeJxj/Hp6JgM2wIRVlCwJAOhiAmFFaNVGAAAAGmZjVEwAAAABAAAACAAAAAQAAAAAAAAAAAAEABkAAPpIawsAAAAYZmRBVAAAAAJ4nGNszqtmwAaYsIqSJQEAjVQBdH0SMnoAAAAASUVORK5CYII=",
+    "base64",
+  ),
+};
 const schoolLogo = `data:image/webp;base64,${readFileSync(new URL("../scripts/og-image-assets/participant-c.webp", import.meta.url)).toString("base64")}`;
 const privateCache = { "cache-control": "private, no-store" };
 const csp = [
@@ -81,20 +87,22 @@ async function mockGallery(
     readonly waitForSecondPage?: Promise<void>;
     readonly expireFirstOriginal?: boolean;
     readonly animatedCards?: readonly string[];
-    readonly waitForGif?: Promise<void>;
-    readonly waitForGifTicket?: Promise<void>;
+    readonly animationFormat?: keyof typeof animatedImages;
+    readonly waitForAnimation?: Promise<void>;
+    readonly waitForAnimationTicket?: Promise<void>;
     readonly cards?: () => readonly GalleryCollectionCard[];
     readonly roster?: readonly GalleryRosterEntry[];
   } = {},
 ) {
   const cards = Array.from({ length: count }, (_, index) => cardFixture(index, count));
   const currentCards = () => options.cards?.() ?? cards;
+  const animationFormat = options.animationFormat ?? "gif";
   const requests = {
     pages: [] as number[],
     details: [] as string[],
     originals: [] as string[],
     png: [] as string[],
-    gif: [] as string[],
+    animations: [] as string[],
     thumbnails: [] as string[],
   };
   const tickets = new Map<string, number>();
@@ -169,8 +177,8 @@ async function mockGallery(
           requests.originals.push(id);
           const ticket = (tickets.get(id) ?? 0) + 1;
           tickets.set(id, ticket);
-          const format = options.animatedCards?.includes(id) ? "gif" : "png";
-          if (format === "gif") await options.waitForGifTicket;
+          const format = options.animatedCards?.includes(id) ? animationFormat : "png";
+          if (format !== "png") await options.waitForAnimationTicket;
           await route.fulfill({
             headers: privateCache,
             json: {
@@ -199,10 +207,14 @@ async function mockGallery(
   );
   await page.route(`${media}/originals/**`, async (route) => {
     const url = new URL(route.request().url());
-    if (url.pathname.endsWith(".gif")) {
-      requests.gif.push(`${url.pathname}${url.search}`);
-      await options.waitForGif;
-      return route.fulfill({ body: animatedGif, contentType: "image/gif", headers: privateCache });
+    if (url.pathname.endsWith(`.${animationFormat}`)) {
+      requests.animations.push(`${url.pathname}${url.search}`);
+      await options.waitForAnimation;
+      return route.fulfill({
+        body: animatedImages[animationFormat],
+        contentType: `image/${animationFormat}`,
+        headers: privateCache,
+      });
     }
     requests.png.push(`${url.pathname}${url.search}`);
     if (options.expireFirstOriginal && url.searchParams.get("ticket") === "1") {
@@ -473,48 +485,51 @@ test("leaves PNG media unloaded on hover and restores focus and scroll after vie
     .toBeLessThan(3);
 });
 
-test("previews only the hovered GIF and keeps its thumbnail until the animation loads", async ({
-  page,
-}, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop-chromium");
-  const first = cardFixture(0, 3);
-  const waitingGif = deferred();
-  const { requests } = await mockGallery(page, 3, {
-    animatedCards: [first.cardId, cardFixture(1, 3).cardId],
-    waitForGif: waitingGif.promise,
-  });
-  await page.goto("/gallery");
-  const card = page.getByRole("link", { name: "生徒1、星1つを拡大" });
-  const thumbnail = card.locator('img[src*="/thumbnails/"]');
-  const animation = card.locator('img[src*=".gif?"]');
-  const gifRequest = `/originals/${first.cardId}.gif?ticket=1`;
-  try {
-    await card.focus();
-    await expect.poll(() => requests.details).toContain(first.cardId);
-    expect(requests.originals).toEqual([]);
-    await card.hover();
-    await expect.poll(() => requests.gif).toEqual([gifRequest]);
+for (const animationFormat of ["gif", "apng"] as const) {
+  test(`previews only the hovered ${animationFormat} and keeps its thumbnail until the animation loads`, async ({
+    page,
+  }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop-chromium");
+    const first = cardFixture(0, 3);
+    const waitingAnimation = deferred();
+    const { requests } = await mockGallery(page, 3, {
+      animatedCards: [first.cardId, cardFixture(1, 3).cardId],
+      animationFormat,
+      waitForAnimation: waitingAnimation.promise,
+    });
+    await page.goto("/gallery");
+    const card = page.getByRole("link", { name: "生徒1、星1つを拡大" });
+    const thumbnail = card.locator('img[src*="/thumbnails/"]');
+    const animation = card.locator(`img[src*=".${animationFormat}?"]`);
+    const animationRequest = `/originals/${first.cardId}.${animationFormat}?ticket=1`;
+    try {
+      await card.focus();
+      await expect.poll(() => requests.details).toContain(first.cardId);
+      expect(requests.originals).toEqual([]);
+      await card.hover();
+      await expect.poll(() => requests.animations).toEqual([animationRequest]);
+      await expect(thumbnail).toBeVisible();
+      await expect(animation).toHaveCSS("opacity", "0");
+    } finally {
+      waitingAnimation.release();
+    }
+    await expect(animation).toHaveCSS("opacity", "1");
+    await page.mouse.move(0, 0);
+    await expect(animation).toHaveCount(0);
     await expect(thumbnail).toBeVisible();
-    await expect(animation).toHaveCSS("opacity", "0");
-  } finally {
-    waitingGif.release();
-  }
-  await expect(animation).toHaveCSS("opacity", "1");
-  await page.mouse.move(0, 0);
-  await expect(animation).toHaveCount(0);
-  await expect(thumbnail).toBeVisible();
-  await card.hover();
-  await expect(animation).toHaveCSS("opacity", "1");
-  await card.click();
-  const dialog = page.getByRole("dialog", { name: "アロナ（生徒1）" });
-  await expect(dialog.getByRole("img", { name: "アロナ（生徒1）" })).toHaveAttribute(
-    "src",
-    `${media}${gifRequest}`,
-  );
-  await expect(animation).toHaveCount(0);
-  await expect(dialog.getByRole("button", { name: "アニメーションを一時停止" })).toBeVisible();
-  expect(requests.originals).toEqual([first.cardId]);
-});
+    await card.hover();
+    await expect(animation).toHaveCSS("opacity", "1");
+    await card.click();
+    const dialog = page.getByRole("dialog", { name: "アロナ（生徒1）" });
+    await expect(dialog.getByRole("img", { name: "アロナ（生徒1）" })).toHaveAttribute(
+      "src",
+      `${media}${animationRequest}`,
+    );
+    await expect(animation).toHaveCount(0);
+    await expect(dialog.getByRole("button", { name: "アニメーションを一時停止" })).toBeVisible();
+    expect(requests.originals).toEqual([first.cardId]);
+  });
+}
 
 test("drops a late GIF ticket when the pointer leaves its collection cover", async ({
   page,
@@ -527,7 +542,7 @@ test("drops a late GIF ticket when the pointer leaves its collection cover", asy
     cards: () => [newer, cover],
     roster: [rosterEntry(cover)],
     animatedCards: [cover.cardId],
-    waitForGifTicket: waitingTicket.promise,
+    waitForAnimationTicket: waitingTicket.promise,
   });
   await page.goto("/gallery");
   const group = page.getByRole("link", { name: "生徒1、星1つ、2枚のカードを見る" });
@@ -540,7 +555,7 @@ test("drops a late GIF ticket when the pointer leaves its collection cover", asy
   }
   await expect(group.locator('img[src*="/thumbnails/"]')).toBeVisible();
   await expect(group.locator('img[src*=".gif?"]')).toHaveCount(0);
-  expect(requests.gif).toEqual([]);
+  expect(requests.animations).toEqual([]);
 });
 
 test("keeps the thumbnail after GIF failure and skips previews with Save Data", async ({
@@ -572,31 +587,38 @@ test("keeps the thumbnail after GIF failure and skips previews with Save Data", 
   expect(requests.originals).toEqual([first.cardId]);
 });
 
-test("starts a GIF paused with reduced motion and plays only on request", async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  const selected = cardFixture(0, 2);
-  const { requests } = await mockGallery(page, 2, { animatedCards: [selected.cardId] });
-  await page.goto("/gallery");
-  const card = page.getByRole("link", { name: "生徒1、星1つを拡大" });
-  await card.hover();
-  await card.focus();
-  await expect.poll(() => requests.details).toContain(selected.cardId);
-  expect(requests.originals).toEqual([]);
-  await card.click();
-  const dialog = page.getByRole("dialog", { name: "アロナ（生徒1）" });
-  const image = dialog.getByRole("img", { name: "アロナ（生徒1）" });
-  const thumbnailUrl = `${media}/thumbnails/${selected.cardId}.webp`;
-  await expect(image).toHaveAttribute("src", thumbnailUrl);
-  expect(requests.gif).toEqual([]);
-  await dialog.getByRole("button", { name: "アニメーションを再生" }).click();
-  const gifRequest = `/originals/${selected.cardId}.gif?ticket=1`;
-  await expect(image).toHaveAttribute("src", `${media}${gifRequest}`);
-  await expect.poll(() => requests.gif).toEqual([gifRequest]);
-  await dialog.getByRole("button", { name: "アニメーションを一時停止" }).click();
-  await expect(image).toHaveAttribute("src", thumbnailUrl);
-  await expect(dialog.getByRole("button", { name: "アニメーションを再生" })).toBeVisible();
-  expect(requests.originals).toEqual([selected.cardId]);
-});
+for (const animationFormat of ["gif", "apng"] as const) {
+  test(`starts a ${animationFormat} paused with reduced motion and plays only on request`, async ({
+    page,
+  }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    const selected = cardFixture(0, 2);
+    const { requests } = await mockGallery(page, 2, {
+      animatedCards: [selected.cardId],
+      animationFormat,
+    });
+    await page.goto("/gallery");
+    const card = page.getByRole("link", { name: "生徒1、星1つを拡大" });
+    await card.hover();
+    await card.focus();
+    await expect.poll(() => requests.details).toContain(selected.cardId);
+    expect(requests.originals).toEqual([]);
+    await card.click();
+    const dialog = page.getByRole("dialog", { name: "アロナ（生徒1）" });
+    const image = dialog.getByRole("img", { name: "アロナ（生徒1）" });
+    const thumbnailUrl = `${media}/thumbnails/${selected.cardId}.webp`;
+    await expect(image).toHaveAttribute("src", thumbnailUrl);
+    expect(requests.animations).toEqual([]);
+    await dialog.getByRole("button", { name: "アニメーションを再生" }).click();
+    const animationRequest = `/originals/${selected.cardId}.${animationFormat}?ticket=1`;
+    await expect(image).toHaveAttribute("src", `${media}${animationRequest}`);
+    await expect.poll(() => requests.animations).toEqual([animationRequest]);
+    await dialog.getByRole("button", { name: "アニメーションを一時停止" }).click();
+    await expect(image).toHaveAttribute("src", thumbnailUrl);
+    await expect(dialog.getByRole("button", { name: "アニメーションを再生" })).toBeVisible();
+    expect(requests.originals).toEqual([selected.cardId]);
+  });
+}
 
 test("supports dark reduced-motion mobile viewing and refreshes an expired PNG URL", async ({
   page,

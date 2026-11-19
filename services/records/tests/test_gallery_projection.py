@@ -18,8 +18,6 @@ from PIL import Image
 from shittim_chest.adapters.assets.student_gacha import _ASSET_DIGESTS, SCHOOL_LOGOS_KEY
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.application.student_gacha_models import (
-    GACHA_GIF_FRAME_COUNT,
-    GACHA_GIF_FRAME_DURATIONS,
     GachaImageFormat,
     student_gacha_image_key,
 )
@@ -47,17 +45,18 @@ def source(request: pytest.FixtureRequest) -> tuple[DynamoItem, bytes]:
     image_format = getattr(request, "param", GachaImageFormat.PNG)
     with ExitStack() as stack:
         output = stack.enter_context(io.BytesIO())
-        if image_format is GachaImageFormat.GIF:
+        if image_format.is_animated:
+            durations = image_format.frame_durations
             frames = [
                 stack.enter_context(Image.new("RGB", image_format.size, (20 * i, 0, 128)))
-                for i in range(GACHA_GIF_FRAME_COUNT)
+                for i in range(len(durations))
             ]
             frames[0].save(
                 output,
-                format="GIF",
+                format=image_format.pillow_format,
                 save_all=True,
                 append_images=frames[1:],
-                duration=list(GACHA_GIF_FRAME_DURATIONS),
+                duration=list(durations),
                 loop=0,
             )
         else:
