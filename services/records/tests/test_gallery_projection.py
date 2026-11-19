@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
@@ -14,13 +15,14 @@ from zipfile import ZipFile
 import pytest
 from botocore.exceptions import ClientError
 from PIL import Image
-from shittim_chest.adapters.assets.student_gacha import (
-    _ASSET_DIGESTS,
-    RESULT_SIZE,
-    SCHOOL_LOGOS_KEY,
-)
+from shittim_chest.adapters.assets.student_gacha import _ASSET_DIGESTS, SCHOOL_LOGOS_KEY
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
-from shittim_chest.application.student_gacha_models import student_gacha_image_key
+from shittim_chest.application.student_gacha_models import (
+    GACHA_GIF_FRAME_COUNT,
+    GACHA_GIF_FRAME_DURATIONS,
+    GachaImageFormat,
+    student_gacha_image_key,
+)
 
 from shittim_records import lambda_handlers
 from shittim_records.gallery_projection import GalleryProjector
@@ -41,10 +43,27 @@ class ConditionalCheckFailed(ClientError):
 
 
 @pytest.fixture
-def source() -> tuple[DynamoItem, bytes]:
-    with Image.new("RGB", RESULT_SIZE, "navy") as original, io.BytesIO() as output:
-        original.save(output, format="PNG")
-        png = output.getvalue()
+def source(request: pytest.FixtureRequest) -> tuple[DynamoItem, bytes]:
+    image_format = getattr(request, "param", GachaImageFormat.PNG)
+    with ExitStack() as stack:
+        output = stack.enter_context(io.BytesIO())
+        if image_format is GachaImageFormat.GIF:
+            frames = [
+                stack.enter_context(Image.new("RGB", image_format.size, (20 * i, 0, 128)))
+                for i in range(GACHA_GIF_FRAME_COUNT)
+            ]
+            frames[0].save(
+                output,
+                format="GIF",
+                save_all=True,
+                append_images=frames[1:],
+                duration=list(GACHA_GIF_FRAME_DURATIONS),
+                loop=0,
+            )
+        else:
+            original = stack.enter_context(Image.new("RGB", image_format.size, "navy"))
+            original.save(output, format="PNG")
+        content = output.getvalue()
     return {
         "PK": f"GACHA#GUILD#{_GUILD}",
         "SK": _SK,
@@ -53,18 +72,20 @@ def source() -> tuple[DynamoItem, bytes]:
         "performer": "participant-a",
         "student": {"name": "ハルカ", "school": "ゲヘナ", "rarity": 0},
         "stored": {
-            "key": _ORIGINAL_KEY,
+            "key": student_gacha_image_key(_OFFER, image_format),
             "version_id": "original-version",
-            "sha256": hashlib.sha256(png).hexdigest(),
+            "sha256": hashlib.sha256(content).hexdigest(),
         },
-    }, png
+    }, content
 
 
 @pytest.fixture
 def aws(
     source: tuple[DynamoItem, bytes], monkeypatch: pytest.MonkeyPatch
 ) -> tuple[Mock, Mock, dict[str, DynamoItem], dict[str, Any]]:
-    source_row, png = source
+    source_row, content = source
+    original_key = str(cast("DynamoItem", source_row["stored"])["key"])
+    original_format = GachaImageFormat(original_key.rsplit(".", 1)[-1])
     with io.BytesIO() as output:
         with ZipFile(output, "w") as catalog:
             catalog.writestr(
@@ -135,13 +156,13 @@ def aws(
     def get_object(**kwargs: Any) -> dict[str, Any]:
         if kwargs["Key"] == SCHOOL_LOGOS_KEY:
             return {"Body": io.BytesIO(catalog_bytes), "ContentLength": len(catalog_bytes)}
-        assert kwargs["Key"] == _ORIGINAL_KEY
+        assert kwargs["Key"] == original_key
         assert kwargs["VersionId"] == "original-version"
         return {
-            "Body": io.BytesIO(png),
-            "ContentLength": len(png),
+            "Body": io.BytesIO(content),
+            "ContentLength": len(content),
             "VersionId": "original-version",
-            "ContentType": "image/png",
+            "ContentType": original_format.content_type,
         }
 
     def put_object(**kwargs: Any) -> dict[str, str]:
@@ -179,12 +200,13 @@ def _projector(dynamodb: Mock, s3: Mock) -> GalleryProjector:
     )
 
 
+@pytest.mark.parametrize("source", list(GachaImageFormat), indirect=True)
 def test_projector_creates_versioned_webp_and_preserves_original(
     source: tuple[DynamoItem, bytes],
     aws: tuple[Mock, Mock, dict[str, DynamoItem], dict[str, Any]],
 ) -> None:
     dynamodb, s3, table, objects = aws
-    result, png = source
+    result, content = source
     projector = _projector(dynamodb, s3)
     assert projector.project_result(result).created
     row = table[_SK]
@@ -193,7 +215,7 @@ def test_projector_creates_versioned_webp_and_preserves_original(
     assert row["owner_key"] == _OWNER
     assert row["collector_display_name"] == "先生"
     assert row["stored"] == result["stored"]
-    digest = hashlib.sha256(png).hexdigest()
+    digest = hashlib.sha256(content).hexdigest()
     key = f"student-gacha/thumbnails/v1/{_OFFER}/{digest}.webp"
     webp = objects[key]["Body"]
     assert row["thumbnail"] == {
@@ -206,6 +228,11 @@ def test_projector_creates_versioned_webp_and_preserves_original(
     with Image.open(io.BytesIO(webp)) as image:
         assert image.format == "WEBP"
         assert image.size == (768, 355)
+        assert getattr(image, "n_frames", 1) == 1
+        pixel = image.getpixel((384, 177))
+        assert isinstance(pixel, tuple)
+        red, green, blue = pixel
+        assert red < 10 and green < 10 and blue > 120
     assert not projector.project_result(result).created
     assert s3.put_object.call_count == 1
     assert dynamodb.put_item.call_count == 2

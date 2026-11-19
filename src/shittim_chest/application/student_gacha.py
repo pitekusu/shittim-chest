@@ -18,6 +18,7 @@ from shittim_chest.domain import PARTICIPANTS
 if TYPE_CHECKING:
     from shittim_chest.application.ports import Clock
     from shittim_chest.application.student_gacha_models import (
+        GachaImageFormat,
         GachaPresentation,
         SchoolBranding,
         StoredGachaImage,
@@ -59,7 +60,7 @@ class _Media(Protocol):
     async def references(self, performer: ParticipantSlot) -> tuple[bytes, bytes]: ...
     async def costume_reference(self, student: Student) -> bytes: ...
     async def school_branding(self, school: str) -> SchoolBranding: ...
-    async def save(self, draw_id: str, png: bytes) -> StoredGachaImage: ...
+    async def save(self, draw_id: str, gif: bytes) -> StoredGachaImage: ...
     async def load(self, stored: StoredGachaImage) -> bytes: ...
     async def find(self, draw_id: str) -> StoredGachaImage | None: ...
 
@@ -129,6 +130,7 @@ class _Discord(Protocol):
         publication_id: str,
         after_message_id: str | None,
         content: bytes,
+        image_format: GachaImageFormat,
     ) -> str: ...
     async def send_gallery_notice(
         self,
@@ -352,7 +354,7 @@ class StudentGachaWorker:
                 job = await self._checkpoint(job, presentation=presentation)
             references = await self._media.references(performer)
             job = await self._checkpoint(job, paid_started=True)
-            png = await self._generator.render(
+            gif = await self._generator.render(
                 _required(job.presentation),
                 teacher_name=_required(job.teacher_name),
                 references=references,
@@ -360,7 +362,7 @@ class StudentGachaWorker:
                 school_branding=school_branding,
                 expression=_required(job.expression),
             )
-            stored = await self._media.save(offer_id, png)
+            stored = await self._media.save(offer_id, gif)
             return await self._checkpoint(job, stored=stored, teacher_name=None)
         except GachaGenerationFailure as error:
             _LOGGER.warning(
@@ -422,7 +424,8 @@ class StudentGachaWorker:
     async def _publish_result(self, job: GachaJob) -> None:
         offer_id = _required(job.offer_id)
         if job.result_message_id is None:
-            content = await self._media.load(_required(job.stored))
+            stored = _required(job.stored)
+            content = await self._media.load(stored)
             await self._remove_loading(job)
             message_id = await self._discord.send_result(
                 guild_id=job.guild_id,
@@ -430,6 +433,7 @@ class StudentGachaWorker:
                 publication_id=offer_id,
                 after_message_id=job.result_after_message_id or job.after_message_id,
                 content=content,
+                image_format=stored.image_format,
             )
             job = await self._checkpoint(job, result_message_id=message_id)
         result_message_id = _required(job.result_message_id)

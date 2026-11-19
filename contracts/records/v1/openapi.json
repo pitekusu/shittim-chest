@@ -8677,7 +8677,7 @@
     },
     "/api/v1/gallery/{cardId}/original": {
       "get": {
-        "description": "PNG原本の短命の署名URLを返す。",
+        "description": "PNGまたはアニメーションGIF原本の短命の署名URLを返す。",
         "operationId": "getGalleryOriginal",
         "parameters": [
           {
@@ -8699,7 +8699,7 @@
                 }
               }
             },
-            "description": "PNG原本の短命の署名URLを返す。"
+            "description": "PNGまたはアニメーションGIF原本の短命の署名URLを返す。"
           },
           "400": {
             "content": {

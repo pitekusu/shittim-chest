@@ -10,7 +10,7 @@ import re
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 import discord
 
@@ -29,6 +29,9 @@ from shittim_chest.adapters.discord_http import (
 )
 from shittim_chest.application.discord import DiscordBotSlot, DiscordRuntimeConfig
 from shittim_chest.application.student_gacha_discord import GachaDeliveryFailure
+
+if TYPE_CHECKING:
+    from shittim_chest.application.student_gacha_models import GachaImageFormat
 
 _LOADING_TEXT = "⏳ 生徒を募集しています!"
 _GALLERY_NOTICE = (
@@ -159,6 +162,7 @@ class DiscordStudentGacha:
         publication_id: str,
         after_message_id: str | None,
         content: bytes,
+        image_format: GachaImageFormat,
     ) -> str:
         delivery_id = f"{publication_id}:result"
         digest_prefix = hashlib.sha256(content).hexdigest()[:16]
@@ -169,8 +173,8 @@ class DiscordStudentGacha:
             after_message_id,
             _Publication(
                 "✨ 生徒募集の結果です!",
-                f"student-{_nonce(delivery_id)}-{digest_prefix}.png",
-                "image/png",
+                f"student-{_nonce(delivery_id)}-{digest_prefix}.{image_format.value}",
+                image_format.content_type,
                 content,
             ),
         )

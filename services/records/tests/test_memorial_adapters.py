@@ -1208,7 +1208,7 @@ def test_openai_generation_is_stateless_split_and_uses_two_reference_images(
     assert "trusted persona" in developer["content"]
     assert user["role"] == "user"
     image_call = client.image_calls[0]
-    assert image_call["model"] == "gpt-image-2.5-sunburst"
+    assert image_call["model"] == "gpt-image-2.6-sunburst"
     assert image_call["size"] == "1920x1088"
     assert image_call["quality"] == "xhigh"
     assert image_call["n"] == 1

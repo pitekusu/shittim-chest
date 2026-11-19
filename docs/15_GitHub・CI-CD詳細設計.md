@@ -966,6 +966,17 @@ Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは6
 マージ済みのPR #752用configは承認範囲がそのPRのマージまでだったため今回のconfigに入れ替え、
 PR #750・#753・#756用の既存の受容を保持する。
 
+2026-11-19、PR #757の生徒ガチャGIF変更を含む完成ARM64 production config
+`sha256:b20fd4e8378f2450d450d6d175dedf316c12fab26f07b22c8d88f295b639b1cb`をGrype 0.122.1で検査した。
+raw Highは42組、署名付きDHI VEX適用後の未修正High 28組は稼働中のPR #742用configとCVE・パッケージ・版・修正状態が一致した。
+新規High、Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは60/60成功した。
+[完成ARM64 SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44513976545/artifacts/14523394062)と
+[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44513976545/artifacts/14524651581)を照合した。
+
+所有者はこのconfigに限り、同じHigh 28組を2026-11-20 09:00 JST（同日00:00 UTC）まで受容した。
+`expires_on`はUTCの最終有効日`2026-11-19`を維持する。
+4枠を使用していた22組では旧PR #750用configを入れ替え、PR #753・#756・#742用configを保持する。
+
 ## 5. 本番配信
 
 ### 共通の工程

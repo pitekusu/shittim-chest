@@ -1,6 +1,6 @@
 import { Dialog } from "@base-ui/react/dialog";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import Lightbox, { NextIcon, PreviousIcon, type Slide } from "yet-another-react-lightbox";
 import Inline from "yet-another-react-lightbox/plugins/inline";
 import Zoom from "yet-another-react-lightbox/plugins/zoom";
@@ -14,6 +14,9 @@ import {
   galleryDetailQuery,
   galleryImageUrl,
   galleryOriginalQuery,
+  galleryThumbnailsQuery,
+  isGalleryGif,
+  useGalleryReducedMotion,
 } from "../lib/gallery";
 import styles from "../styles/gallery.module.css";
 import { galleryDateText } from "./GalleryGrid";
@@ -26,15 +29,6 @@ declare module "yet-another-react-lightbox" {
 }
 
 const placeholder: Slide = { type: "gallery-placeholder" };
-const reducedMotionQuery = "(prefers-reduced-motion: reduce)";
-function subscribeMotion(callback: () => void) {
-  const media = window.matchMedia(reducedMotionQuery);
-  media.addEventListener("change", callback);
-  return () => media.removeEventListener("change", callback);
-}
-function getReducedMotion() {
-  return window.matchMedia(reducedMotionQuery).matches;
-}
 
 function pointerEdge(stage: HTMLDivElement, x: number, y: number) {
   const stageBounds = stage.getBoundingClientRect();
@@ -56,15 +50,17 @@ function ViewerImageError({
   onFailure,
   pending,
   onRetry,
+  errorMessage,
 }: {
   readonly onFailure: () => void;
   readonly pending: boolean;
   readonly onRetry: () => void;
+  readonly errorMessage: string;
 }) {
   useEffect(onFailure, [onFailure]);
   return (
     <div className={styles.viewerState}>
-      <output>{pending ? "画像を再読み込み中…" : "原寸画像を読み込めませんでした。"}</output>
+      <output>{pending ? "画像を再読み込み中…" : errorMessage}</output>
       {!pending && (
         <button className={styles.viewerButton} type="button" onClick={onRetry}>
           もう一度試す
@@ -90,7 +86,7 @@ function GalleryViewerContent({
   readonly onSelect: (cardId: string) => void;
 }) {
   const queryClient = useQueryClient();
-  const reducedMotion = useSyncExternalStore(subscribeMotion, getReducedMotion);
+  const reducedMotion = useGalleryReducedMotion();
   const validId = galleryCardIdPattern.test(cardId);
   const detail = useQuery({ ...galleryDetailQuery(scope, cardId), enabled: open && validId });
   const original = useQuery({
@@ -111,14 +107,28 @@ function GalleryViewerContent({
   }, [detail.isSuccess, next, open, previous, queryClient, scope]);
 
   const lastFailedCard = useRef<string>(undefined);
+  const lastFailedPoster = useRef<string>(undefined);
   const [displayedImage, setDisplayedImage] = useState<{ cardId: string; url: string }>();
+  const [playback, setPlayback] = useState<{ cardId: string; playing: boolean }>();
   const [hoveredEdge, setHoveredEdge] = useState<ReturnType<typeof pointerEdge>>();
+  if (playback && (!open || playback.cardId !== cardId)) setPlayback(undefined);
   const freshUrl = galleryImageUrl(original.data);
   if (freshUrl && (displayedImage?.cardId !== cardId || displayedImage.url !== freshUrl)) {
     setDisplayedImage({ cardId, url: freshUrl });
   }
   // Keep the decoded image visible as its ticket ages while the viewer stays open.
-  const imageUrl = freshUrl ?? (displayedImage?.cardId === cardId ? displayedImage.url : undefined);
+  const originalUrl =
+    freshUrl ?? (displayedImage?.cardId === cardId ? displayedImage.url : undefined);
+  const animated = originalUrl !== undefined && isGalleryGif(originalUrl);
+  const playing = open && (playback?.cardId === cardId ? playback.playing : !reducedMotion);
+  const showPoster = animated && !playing;
+  const poster = useQuery({
+    ...galleryThumbnailsQuery(scope, [cardId]),
+    enabled: open && showPoster && card?.thumbnailReady === true,
+  });
+  useAuthenticationRecovery(poster.error);
+  const posterUrl = poster.data?.items.find((image) => image.cardId === cardId)?.url;
+  const imageUrl = showPoster ? posterUrl : originalUrl;
   const title = card ? galleryCardName(card) : "生徒カード";
   const width = detail.data?.width;
   const height = detail.data?.height;
@@ -130,10 +140,15 @@ function GalleryViewerContent({
   }, [height, imageUrl, next, previous, title, width]);
   const unavailable =
     !validId || (detail.error instanceof RecordsApiError && detail.error.status === 404);
-  const loadError = detail.isError || original.isError;
+  const posterMissing = showPoster && (!card?.thumbnailReady || (poster.isSuccess && !posterUrl));
+  const loadError =
+    detail.isError || (showPoster ? poster.isError || posterMissing : original.isError);
+  const imageQuery = showPoster ? poster : original;
+  const imageError = showPoster ? "静止画を表示できません。" : "原寸画像を読み込めませんでした。";
+  const imagePending = showPoster ? "静止画を読み込み中…" : "原寸画像を読み込み中…";
   const retry = () => {
     if (detail.isError) void detail.refetch();
-    else void original.refetch();
+    else void imageQuery.refetch({ cancelRefetch: false });
   };
 
   return (
@@ -212,10 +227,8 @@ function GalleryViewerContent({
               slide: ({ slide }) =>
                 slide.type === "gallery-placeholder" ? (
                   <div className={styles.viewerState}>
-                    <output>
-                      {loadError ? "原寸画像を読み込めませんでした。" : "原寸画像を読み込み中…"}
-                    </output>
-                    {loadError && (
+                    <output>{loadError ? imageError : imagePending}</output>
+                    {loadError && !posterMissing && (
                       <button className={styles.viewerButton} type="button" onClick={retry}>
                         もう一度試す
                       </button>
@@ -224,12 +237,14 @@ function GalleryViewerContent({
                 ) : undefined,
               iconError: () => (
                 <ViewerImageError
-                  pending={original.isFetching}
+                  pending={imageQuery.isFetching}
+                  errorMessage={imageError}
                   onRetry={retry}
                   onFailure={() => {
-                    if (!open || lastFailedCard.current === cardId) return;
-                    lastFailedCard.current = cardId;
-                    void original.refetch();
+                    const lastFailure = showPoster ? lastFailedPoster : lastFailedCard;
+                    if (!open || lastFailure.current === cardId) return;
+                    lastFailure.current = cardId;
+                    void imageQuery.refetch({ cancelRefetch: false });
                   }}
                 />
               ),
@@ -269,6 +284,18 @@ function GalleryViewerContent({
             獲得者 <GalleryCollector card={card} />
           </span>
           <time dateTime={card.postedAt}>{galleryDateText(card.postedAt)}</time>
+          {animated && (
+            <button
+              className={styles.viewerButton}
+              type="button"
+              onClick={() => {
+                if (!playing && !freshUrl) void original.refetch({ cancelRefetch: false });
+                setPlayback({ cardId, playing: !playing });
+              }}
+            >
+              {playing ? "アニメーションを一時停止" : "アニメーションを再生"}
+            </button>
+          )}
           {currentIndex >= 0 && (
             <span className={styles.viewerCounter} aria-live="polite">
               {currentIndex + 1} / {cards.length}

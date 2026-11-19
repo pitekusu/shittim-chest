@@ -16,8 +16,8 @@ from PIL import Image
 from shittim_chest.adapters.assets.student_gacha import (
     _ASSET_DIGESTS,
     RESULT_MAX_BYTES,
-    RESULT_SIZE,
     SCHOOL_LOGOS_KEY,
+    validate_gacha_result,
 )
 from shittim_chest.adapters.assets.student_gacha_schools import (
     SCHOOL_CATALOG_MAX_BYTES,
@@ -25,6 +25,8 @@ from shittim_chest.adapters.assets.student_gacha_schools import (
 )
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.application.student_gacha_models import (
+    GachaGenerationFailure,
+    GachaImageFormat,
     StoredGachaImage,
     Student,
     student_gacha_image_key,
@@ -84,7 +86,7 @@ class GalleryProjector:
         if result.get("posted_at") != posted_at or result.get("offer_id") != offer_id:
             raise ValueError("gallery_source_key_invalid")
         stored = _stored_image(_map(result, "stored"))
-        if stored.key != student_gacha_image_key(offer_id):
+        if stored.key != student_gacha_image_key(offer_id, stored.image_format):
             raise ValueError("gallery_source_image_invalid")
         raw_student = _map(result, "student")
         rarity = raw_student.get("rarity")
@@ -119,7 +121,7 @@ class GalleryProjector:
                 if "thumbnail" in current:
                     return ProjectionResult(created=False)
 
-        webp = _render_thumbnail(original)
+        webp = _render_thumbnail(original, stored.image_format)
         if not apply:
             return ProjectionResult(created=False)
         thumbnail = self._store_thumbnail(offer_id, stored.sha256, webp)
@@ -281,10 +283,14 @@ class GalleryProjector:
         content = _read_bounded(response, maximum=RESULT_MAX_BYTES)
         if (
             response.get("VersionId") != stored.version_id
-            or response.get("ContentType") != "image/png"
+            or response.get("ContentType") != stored.image_format.content_type
             or hashlib.sha256(content).hexdigest() != stored.sha256
         ):
             raise ValueError("gallery_source_image_invalid")
+        try:
+            validate_gacha_result(content, image_format=stored.image_format)
+        except GachaGenerationFailure:
+            raise ValueError("gallery_source_image_invalid") from None
         return content
 
     def _store_thumbnail(self, offer_id: str, source_sha256: str, body: bytes) -> DynamoItem:
@@ -364,16 +370,15 @@ def _stored_image(item: DynamoItem) -> StoredGachaImage:
     return StoredGachaImage(_text(item, "key"), _text(item, "version_id"), _text(item, "sha256"))
 
 
-def _render_thumbnail(content: bytes) -> bytes:
-    with Image.open(io.BytesIO(content), formats=["PNG"]) as original:
-        if original.size != RESULT_SIZE or getattr(original, "n_frames", 1) != 1:
-            raise ValueError("gallery_source_dimensions_invalid")
-        with (
-            original.resize(GALLERY_THUMBNAIL_SIZE, Image.Resampling.LANCZOS) as thumbnail,
-            io.BytesIO() as output,
-        ):
-            thumbnail.save(output, format="WEBP", quality=82, method=4)
-            return output.getvalue()
+def _render_thumbnail(content: bytes, image_format: GachaImageFormat) -> bytes:
+    with (
+        Image.open(io.BytesIO(content), formats=[image_format.value.upper()]) as original,
+        original.convert("RGBA") as first_frame,
+        first_frame.resize(GALLERY_THUMBNAIL_SIZE, Image.Resampling.LANCZOS) as thumbnail,
+        io.BytesIO() as output,
+    ):
+        thumbnail.save(output, format="WEBP", quality=82, method=4)
+        return output.getvalue()
 
 
 def _read_bounded(response: GetObjectOutputTypeDef, *, maximum: int) -> bytes:

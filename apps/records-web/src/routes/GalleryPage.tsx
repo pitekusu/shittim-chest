@@ -328,6 +328,7 @@ export default function GalleryPage({ scope }: { readonly scope: number }) {
             schoolLogos={schoolLogos}
             scope={scope}
             search={gridSearch}
+            viewerOpen={cardId !== undefined}
             onOpen={onOpen}
           />
         </>
@@ -342,6 +343,7 @@ export default function GalleryPage({ scope }: { readonly scope: number }) {
             schoolLogos={schoolLogos}
             scope={scope}
             search={gridSearch}
+            viewerOpen={cardId !== undefined}
             restoreFocus={collectionReturn}
             onRestoreFocus={() => setCollectionReturn(undefined)}
             onOpen={onOpen}

@@ -7,6 +7,7 @@ import base64
 import json
 import logging
 from dataclasses import dataclass
+from secrets import choice
 from typing import TYPE_CHECKING, Final
 from unicodedata import normalize
 from uuid import uuid4
@@ -21,7 +22,7 @@ from openai import (
 from pydantic import Field, ValidationError
 
 from shittim_chest.adapters.assets.student_gacha import RESULT_MAX_BYTES
-from shittim_chest.adapters.assets.student_gacha_card import render_card
+from shittim_chest.adapters.assets.student_gacha_card import GIF_ART_SIZE, render_card
 from shittim_chest.adapters.openai.config import ParticipantProfiles
 from shittim_chest.adapters.openai.errors import (
     OpenAIIncompleteResponse,
@@ -34,6 +35,7 @@ from shittim_chest.adapters.openai.schemas import StrictOutput
 from shittim_chest.adapters.openai.service import _extract_parsed, _validation_error
 from shittim_chest.application.generation_policy import PRODUCTION_POLICY
 from shittim_chest.application.student_gacha_models import (
+    GACHA_GIF_FRAME_COUNT,
     TEACHER_PLACEHOLDER,
     GachaExpression,
     GachaGenerationFailure,
@@ -48,9 +50,10 @@ if TYPE_CHECKING:
     from shittim_chest.application.student_gacha_models import SchoolBranding
 
 _LOGGER = logging.getLogger(__name__)
-IMAGE_MODEL: Final = "gpt-image-2.5-sunburst"
+IMAGE_MODEL: Final = "gpt-image-2.6-sunburst"
 _TEXT_TIMEOUT = 40
 _IMAGE_TIMEOUT = 240
+_IMAGE_FRAME_DURATION_MS = 170
 _PROVIDER_CODES = frozenset(
     {
         "content_policy_violation",
@@ -68,9 +71,12 @@ _PROVIDER_CODES = frozenset(
 )
 _PROVIDER_PARAMETERS = frozenset(
     {
+        "frame_count",
+        "frame_duration_ms",
         "image",
         "max_output_tokens",
         "model",
+        "output_format",
         "quality",
         "reasoning.effort",
         "size",
@@ -146,6 +152,21 @@ eye shape or eye color from image 1. If image 3 shows no hairstyle, keep the hai
 Match the halo's shape and color and the headwear and hair ornaments visible in image 3.
 If image 3 has no halo, do not add one. If it has no head accessories, do not add any.
 Do not borrow a halo or head accessories from image 1 or image 2."""
+_IMAGE_MOTION = """Make a seamless looping animation. Keep the camera, framing, face identity,
+outfit and head accessories consistent in every frame. Keep the specified facial expression.
+Keep every frame subtly distinct with natural movement and a soft play of light in the backdrop.
+Return smoothly to the starting pose. Keep motion out of the reserved dialogue and dossier areas.
+Do not use camera moves, cuts, flashes or abrupt changes."""
+_ANIME_MOTION = """Animate with a Live2D-like gentle blink, breathing and subtle motion in the hair
+and costume."""
+_COSPLAY_MOTION = """Give the live-action cosplay a cute, natural motion that suits the costume.
+Preserve the chosen facial expression throughout."""
+_COSPLAY_POSES = (
+    "Vary how the performer balances their body weight, as the costume allows.",
+    "Vary the upper-body orientation slightly, as the costume allows.",
+    "Choose a natural arm placement that showcases the costume within the framing.",
+    "Vary the alignment of the shoulders gently while keeping the costume visible.",
+)
 
 
 class _CardBrief(StrictOutput):
@@ -283,9 +304,11 @@ class OpenAIStudentGacha:
             )
         backdrop = _BACKDROP_BY_RARITY[presentation.student.rarity]
         portrait_type = "png" if presentation.performer is ParticipantSlot.PARTICIPANT_A else "webp"
+        motion = f"{_COSPLAY_MOTION}\n{choice(_COSPLAY_POSES)}" if is_live_action else _ANIME_MOTION
         prompt = (
             f"{_IMAGE_INSTRUCTIONS}\n{_IMAGE_OUTFIT}\n{head}\n{style}\n"
-            f"{_FACIAL_EXPRESSION[expression]}\nBackdrop palette: {backdrop}."
+            f"{_FACIAL_EXPRESSION[expression]}\nBackdrop palette: {backdrop}.\n"
+            f"{_IMAGE_MOTION}\n{motion}"
         )
         try:
             async with self.limiter.slot():
@@ -297,9 +320,11 @@ class OpenAIStudentGacha:
                         ("costume.webp", costume_reference, "image/webp"),
                     ],
                     prompt=prompt,
-                    size="1792x832",
-                    quality="high",
-                    output_format="png",
+                    size=f"{GIF_ART_SIZE[0]}x{GIF_ART_SIZE[1]}",
+                    quality="max",
+                    output_format="gif",
+                    frame_count=GACHA_GIF_FRAME_COUNT,
+                    frame_duration_ms=_IMAGE_FRAME_DURATION_MS,
                     n=1,
                     timeout=_IMAGE_TIMEOUT,
                 )
@@ -317,7 +342,10 @@ class OpenAIStudentGacha:
         if not result.data or len(result.data) != 1:
             raise GachaGenerationFailure("gacha_image_invalid")
         encoded = result.data[0].b64_json
-        if not encoded or len(encoded) > ((RESULT_MAX_BYTES + 2) // 3) * 4:
+        if (
+            not isinstance(encoded, str)
+            or not 1 <= len(encoded) <= ((RESULT_MAX_BYTES + 2) // 3) * 4
+        ):
             raise GachaGenerationFailure("gacha_image_invalid")
         try:
             raw = base64.b64decode(encoded, validate=True)

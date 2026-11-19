@@ -96,13 +96,13 @@ class DynamoGalleryStore:
             request_items = cast(dict[str, Any], pending)
         raise ReadFailure("GALLERY_UNAVAILABLE", 503)
 
-    def sign(self, asset: GalleryAsset, *, thumbnail: bool) -> str:
+    def sign(self, asset: GalleryAsset, *, content_type: str) -> str:
         return sign_private_image(
             self._s3,
             bucket=self._bucket,
             key=asset.key,
             version=asset.version_id,
-            content_type="image/webp" if thumbnail else "image/png",
+            content_type=content_type,
             expires_in=GALLERY_IMAGE_URL_TTL_SECONDS,
         )
 

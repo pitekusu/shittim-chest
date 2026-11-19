@@ -1,4 +1,5 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
+import { useSyncExternalStore } from "react";
 
 import {
   getGalleryDetail,
@@ -90,6 +91,30 @@ export function galleryOriginalQuery(scope: number, cardId: string) {
 
 export function galleryImageUrl(ticket: GalleryImageTicket | undefined): string | undefined {
   return ticket && Date.parse(ticket.expiresAt) > Date.now() ? ticket.url : undefined;
+}
+
+export function isGalleryGif(url: string) {
+  try {
+    return new URL(url, window.location.origin).pathname.endsWith(".gif");
+  } catch {
+    return false;
+  }
+}
+
+const reducedMotionQuery = "(prefers-reduced-motion: reduce)";
+
+export function prefersReducedMotion() {
+  return window.matchMedia(reducedMotionQuery).matches;
+}
+
+function subscribeMotion(callback: () => void) {
+  const media = window.matchMedia(reducedMotionQuery);
+  media.addEventListener("change", callback);
+  return () => media.removeEventListener("change", callback);
+}
+
+export function useGalleryReducedMotion() {
+  return useSyncExternalStore(subscribeMotion, prefersReducedMotion);
 }
 
 export const galleryPerformers = {
