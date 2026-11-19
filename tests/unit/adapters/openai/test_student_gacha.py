@@ -11,7 +11,7 @@ import httpx2
 import pytest
 from openai import APIStatusError, APITimeoutError
 from openai.types.responses import Response
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from shittim_chest.adapters.openai.config import ParticipantProfile, ParticipantProfiles
 from shittim_chest.adapters.openai.limiter import OpenAIRequestLimiter
@@ -28,9 +28,19 @@ from shittim_chest.application.student_gacha_models import (
 )
 from shittim_chest.domain import PARTICIPANTS, ParticipantSlot
 
+
+def _reference_image(image_format: str, color: str = "#303678") -> bytes:
+    with io.BytesIO() as output:
+        Image.new("RGB", (64, 64), color).save(output, format=image_format, lossless=True)
+        return output.getvalue()
+
+
 _STUDENT = Student("アコ\uff08ドレス\uff09", "ゲヘナ", rarity=4)
 _TEACHER = "サンプル先生"
-_COSTUME = b"costume-webp"
+_COSTUME = _reference_image("WEBP")
+_COSTUME_WITH_GREEN = _reference_image("WEBP", "#00FF00")
+_PORTRAIT_PNG = _reference_image("PNG")
+_PORTRAIT_WEBP = _reference_image("WEBP")
 _SCHOOL_BRANDING = SchoolBranding("ゲヘナ学園")
 _PERFORMER = ParticipantSlot.PARTICIPANT_C
 
@@ -219,8 +229,12 @@ async def test_provider_error_diagnostic_logs_only_allowlisted_fields(
 @pytest.mark.asyncio
 async def test_render_requests_sunburst_gif_and_composes_the_apng_locally() -> None:
     picture = io.BytesIO()
-    frames = [Image.new("RGB", (1024, 480), (190, 183, 214 - 10 * index)) for index in range(12)]
-    frames[0].save(picture, "GIF", save_all=True, append_images=frames[1:], duration=170)
+    frames = []
+    for index in range(12):
+        frame = Image.new("RGB", (1024, 480), "#00FF00")
+        ImageDraw.Draw(frame).rectangle((360, 42, 570, 479), fill=(75, 90, 214 - 6 * index))
+        frames.append(frame)
+    frames[0].save(picture, "GIF", save_all=True, append_images=frames[1:], duration=130)
     image_response = SimpleNamespace(
         data=[SimpleNamespace(b64_json=base64.b64encode(picture.getvalue()).decode("ascii"))]
     )
@@ -236,7 +250,7 @@ async def test_render_requests_sunburst_gif_and_composes_the_apng_locally() -> N
     result = await adapter.render(
         presentation,
         teacher_name=_TEACHER,
-        references=(b"layout", b"portrait"),
+        references=(b"layout", _PORTRAIT_WEBP),
         costume_reference=_COSTUME,
         school_branding=_SCHOOL_BRANDING,
     )
@@ -250,14 +264,15 @@ async def test_render_requests_sunburst_gif_and_composes_the_apng_locally() -> N
     assert payload["frame_duration_ms"] == 130
     assert payload["n"] == 1
     assert payload["image"] == [
-        ("performer.webp", b"portrait", "image/webp"),
+        ("performer.webp", _PORTRAIT_WEBP, "image/webp"),
         ("format.jpg", b"layout", "image/jpeg"),
         ("costume.webp", _COSTUME, "image/webp"),
     ]
     assert "Image 3 is the exact outfit variant" in payload["prompt"]
     assert "live-action photography" in payload["prompt"]
-    assert "Backdrop palette: soft pink, lavender and ice-blue" in payload["prompt"]
-    assert "the supplied layout's gentle light" in payload["prompt"]
+    assert "exact solid chroma-key color #00FF00" in payload["prompt"]
+    assert "Keep the same background color in every frame" in payload["prompt"]
+    assert "draw shadows, gradients, reflections, scenery, lights or particles" in payload["prompt"]
     assert "seamless looping animation" in payload["prompt"]
     assert "Keep the specified facial expression." in payload["prompt"]
     assert "Give the live-action cosplay a cute, natural motion" in payload["prompt"]
@@ -277,7 +292,7 @@ async def test_render_requests_sunburst_gif_and_composes_the_apng_locally() -> N
     other = await adapter.render(
         replace(presentation, student=_STUDENT, performer=ParticipantSlot.PARTICIPANT_B),
         teacher_name="別の先生",
-        references=(b"layout", b"portrait"),
+        references=(b"layout", _PORTRAIT_WEBP),
         costume_reference=_COSTUME,
         school_branding=_SCHOOL_BRANDING,
     )
@@ -286,7 +301,7 @@ async def test_render_requests_sunburst_gif_and_composes_the_apng_locally() -> N
     assert "Live2D-like gentle blink, breathing and subtle motion" in prompt
     assert "Plana from image 1" in prompt
     assert "halo, and head accessories exactly as shown" in prompt
-    assert "iridescent rainbow hues, bright prismatic light" in prompt
+    assert "exact solid chroma-key color #00FF00" in prompt
     assert _STUDENT.name not in prompt
     assert other != result
 
@@ -315,6 +330,10 @@ async def test_render_uses_costume_image_and_selected_performer_expression(
     pose_choice = Mock(return_value="Use a composed starting pose for this example.")
     monkeypatch.setattr("shittim_chest.adapters.openai.student_gacha.render_card", render_card)
     monkeypatch.setattr("shittim_chest.adapters.openai.student_gacha.choice", pose_choice)
+    is_arona = performer is ParticipantSlot.PARTICIPANT_A
+    costume_reference = _COSTUME_WITH_GREEN if is_arona else _COSTUME
+    portrait = _PORTRAIT_PNG if is_arona else _PORTRAIT_WEBP
+    key_color = "#FF00FF" if is_arona else "#00FF00"
     presentation = GachaPresentation(
         replace(_STUDENT, rarity=1),
         performer,
@@ -328,19 +347,19 @@ async def test_render_uses_costume_image_and_selected_performer_expression(
     result = await _adapter(client).render(
         presentation,
         teacher_name=_TEACHER,
-        references=(b"layout", b"portrait"),
-        costume_reference=_COSTUME,
+        references=(b"layout", portrait),
+        costume_reference=costume_reference,
         school_branding=_SCHOOL_BRANDING,
         expression=expression,
     )
 
     edit.assert_awaited_once()
     payload = edit.call_args.kwargs
-    portrait_type = "png" if performer is ParticipantSlot.PARTICIPANT_A else "webp"
+    portrait_type = "png" if is_arona else "webp"
     assert payload["image"] == [
-        (f"performer.{portrait_type}", b"portrait", f"image/{portrait_type}"),
+        (f"performer.{portrait_type}", portrait, f"image/{portrait_type}"),
         ("format.jpg", b"layout", "image/jpeg"),
-        ("costume.webp", _COSTUME, "image/webp"),
+        ("costume.webp", costume_reference, "image/webp"),
     ]
     prompt = payload["prompt"]
     assert "Image 3 is the exact outfit variant" in prompt
@@ -351,8 +370,10 @@ async def test_render_uses_costume_image_and_selected_performer_expression(
     assert "about 18% of the canvas width" in prompt
     assert "beyond the top edge" in prompt
     assert "at about x=42%" in prompt
-    assert "vivid rainbow prism reflections" in prompt
-    assert "Backdrop palette: luminous light sky blue" in prompt
+    assert f"exact solid chroma-key color {key_color}" in prompt
+    assert "Keep the same background color in every frame" in prompt
+    assert "Backdrop palette:" not in prompt
+    assert "Ignore its background\nand lighting" in prompt
     assert "Do not reproduce its person, face,\nhair, halo, headwear, accessories" in prompt
     original_head = "Keep the performer's hair color and style, halo and head accessories"
     cosplay_head = "Use image 3 as the only source for the cosplay wig, halo and head"
@@ -379,9 +400,36 @@ async def test_render_uses_costume_image_and_selected_performer_expression(
     assert _TEACHER not in repr(payload)
     assert _SCHOOL_BRANDING.name not in repr(payload)
     render_card.assert_called_once_with(
-        b"art", presentation, _TEACHER, school_branding=_SCHOOL_BRANDING
+        b"art",
+        presentation,
+        _TEACHER,
+        school_branding=_SCHOOL_BRANDING,
+        key_color=key_color,
     )
     assert result == b"card"
+
+
+@pytest.mark.asyncio
+async def test_invalid_chroma_reference_fails_before_paid_image_request() -> None:
+    client = Mock()
+    client.responses.create = AsyncMock(return_value=_response(_card("青いドレス")))
+    edit = AsyncMock()
+    client.with_options.return_value.images.edit = edit
+    adapter = _adapter(client)
+    presentation = await adapter.prepare(
+        student=_STUDENT, performer=_PERFORMER, costume_reference=_COSTUME
+    )
+
+    with pytest.raises(GachaGenerationFailure, match="gacha_chroma_reference_invalid"):
+        await adapter.render(
+            presentation,
+            teacher_name=_TEACHER,
+            references=(b"layout", b"invalid portrait"),
+            costume_reference=_COSTUME,
+            school_branding=_SCHOOL_BRANDING,
+        )
+
+    edit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -401,7 +449,7 @@ async def test_image_timeout_is_ambiguous_and_is_not_retried_by_adapter() -> Non
         await adapter.render(
             presentation,
             teacher_name=_TEACHER,
-            references=(b"layout", b"portrait"),
+            references=(b"layout", _PORTRAIT_WEBP),
             costume_reference=_COSTUME,
             school_branding=_SCHOOL_BRANDING,
         )
