@@ -559,6 +559,8 @@ CLIと版番号が分かれたcoreエイリアス／overrideは8.3.8000とし、
 2026年11月20日09:00 JSTまで受容し、CI成功後のPR #752マージを明示承認した。
 infraとWebの受容記録は`expires: 2026-11-20`とし、同日00:00 UTCから拒否する。
 Vite+ coreのNode用vendor copyにも同版が残り、正式修正や非影響の証明とは扱わない。
+11月19日、GitHubで当該アドバイザリの取り下げを確認した。固定版pnpmとnpmの監査でも
+報告されなくなったため、Webとinfraの未使用の受容記録を削除した。依存の版は維持する。
 
 同じ承認で、今回の実測ARM64 production config
 `sha256:d61d02a8c0c0f8f0c8616c64bf53ed25a9885be72ec1c00c3383f9c4fe18e2c4`に残るHigh 28組を
