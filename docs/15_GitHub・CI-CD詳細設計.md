@@ -954,6 +954,18 @@ Critical、ソースの検出、修正可能なHigh/Criticalは0組だった。
 `expires_on`はUTCの最終有効日`2026-11-19`を維持する。4枠を使用していた22組では、
 最古のPR #749用configを入れ替え、PR #750用configを保持する。
 
+2026-11-19、PR #756を取り込んだPR #742のPython SDK更新で完成ARM64 production config
+`sha256:44adc62b886e31b4ebf367afe07286db6813c9a3791dd40b13ff29389f9b936f`を再計測した。
+署名付きDHI VEX適用後のHigh 28組は既承認記録とCVE・パッケージ・版・修正状態が一致した。
+Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは60/60成功した。
+[完成SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44506659110/artifacts/14518674515)と
+[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44506659110/artifacts/14520420560)を照合した。
+
+所有者はPR #742の実測configに限り、この28組を2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、
+必須CIとCodeQL成功後のマージを承認した。`expires_on`は`2026-11-19`を維持する。
+マージ済みのPR #752用configは承認範囲がそのPRのマージまでだったため今回のconfigに入れ替え、
+PR #750・#753・#756用の既存の受容を保持する。
+
 ## 5. 本番配信
 
 ### 共通の工程
