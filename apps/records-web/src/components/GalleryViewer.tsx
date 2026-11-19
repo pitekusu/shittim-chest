@@ -15,7 +15,7 @@ import {
   galleryImageUrl,
   galleryOriginalQuery,
   galleryThumbnailsQuery,
-  isGalleryGif,
+  isGalleryAnimation,
   useGalleryReducedMotion,
 } from "../lib/gallery";
 import styles from "../styles/gallery.module.css";
@@ -119,7 +119,7 @@ function GalleryViewerContent({
   // Keep the decoded image visible as its ticket ages while the viewer stays open.
   const originalUrl =
     freshUrl ?? (displayedImage?.cardId === cardId ? displayedImage.url : undefined);
-  const animated = originalUrl !== undefined && isGalleryGif(originalUrl);
+  const animated = originalUrl !== undefined && isGalleryAnimation(originalUrl);
   const playing = open && (playback?.cardId === cardId ? playback.playing : !reducedMotion);
   const showPoster = animated && !playing;
   const poster = useQuery({

@@ -372,7 +372,7 @@ def _stored_image(item: DynamoItem) -> StoredGachaImage:
 
 def _render_thumbnail(content: bytes, image_format: GachaImageFormat) -> bytes:
     with (
-        Image.open(io.BytesIO(content), formats=[image_format.value.upper()]) as original,
+        Image.open(io.BytesIO(content), formats=[image_format.pillow_format]) as original,
         original.convert("RGBA") as first_frame,
         first_frame.resize(GALLERY_THUMBNAIL_SIZE, Image.Resampling.LANCZOS) as thumbnail,
         io.BytesIO() as output,

@@ -47,14 +47,14 @@ def source(request: pytest.FixtureRequest) -> tuple[DynamoItem, bytes]:
     image_format = getattr(request, "param", GachaImageFormat.PNG)
     with ExitStack() as stack:
         output = stack.enter_context(io.BytesIO())
-        if image_format is GachaImageFormat.GIF:
+        if image_format.is_animated:
             frames = [
                 stack.enter_context(Image.new("RGB", image_format.size, (20 * i, 0, 128)))
                 for i in range(GACHA_GIF_FRAME_COUNT)
             ]
             frames[0].save(
                 output,
-                format="GIF",
+                format=image_format.pillow_format,
                 save_all=True,
                 append_images=frames[1:],
                 duration=list(GACHA_GIF_FRAME_DURATIONS),

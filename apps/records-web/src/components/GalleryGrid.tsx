@@ -31,7 +31,7 @@ import {
   galleryOriginalQuery,
   galleryRarityAriaLabel,
   galleryThumbnailsQuery,
-  isGalleryGif,
+  isGalleryAnimation,
   prefersReducedMotion,
   useGalleryReducedMotion,
   type GalleryCollectionEntry,
@@ -100,7 +100,7 @@ function GalleryHoverPreview({
   const [loadedUrl, setLoadedUrl] = useState<string>();
   const [failedUrl, setFailedUrl] = useState<string>();
   const url = galleryImageUrl(original.data);
-  if (!url || failedUrl === url || !isGalleryGif(url)) return null;
+  if (!url || failedUrl === url || !isGalleryAnimation(url)) return null;
   return (
     <img
       alt=""

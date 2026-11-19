@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ from unittest.mock import AsyncMock
 import discord
 import pytest
 from nacl.signing import SigningKey
+from PIL import Image, ImageChops
 
 from shittim_chest.adapters.discord import student_gacha as delivery
 from shittim_chest.adapters.discord_http import (
@@ -34,7 +36,10 @@ from shittim_chest.application.student_gacha_discord import (
     GachaDeliveryFailure,
     StudentGachaInteractions,
 )
-from shittim_chest.application.student_gacha_models import GachaImageFormat
+from shittim_chest.application.student_gacha_models import (
+    GACHA_GIF_FRAME_DURATIONS,
+    GachaImageFormat,
+)
 from shittim_chest.application.student_gacha_state import GachaOffer
 from shittim_chest.lambda_handlers.discord_ingress import DiscordIngressLambda
 
@@ -350,7 +355,7 @@ async def test_gallery_notice_links_to_gallery_and_recovers_the_same_reply(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("image_format", list(GachaImageFormat))
+@pytest.mark.parametrize("image_format", (GachaImageFormat.PNG, GachaImageFormat.GIF))
 async def test_result_attachment_keeps_its_saved_format_when_reconciling(
     monkeypatch: pytest.MonkeyPatch, image_format: GachaImageFormat
 ) -> None:
@@ -399,6 +404,81 @@ async def test_result_attachment_keeps_its_saved_format_when_reconciling(
         )
     channel.send.assert_awaited_once()
     assert channel.send.await_args.kwargs["files"][0].filename == filename
+
+
+@pytest.mark.asyncio
+async def test_apng_result_sends_lossless_webp_and_reconciles_by_saved_image(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frames = [
+        Image.new("RGB", GachaImageFormat.APNG.size, (13 * index, 161, 203))
+        for index in range(len(GACHA_GIF_FRAME_DURATIONS))
+    ]
+    with io.BytesIO() as output:
+        frames[0].save(
+            output,
+            format="PNG",
+            save_all=True,
+            append_images=frames[1:],
+            duration=GACHA_GIF_FRAME_DURATIONS,
+            loop=0,
+        )
+        apng = output.getvalue()
+    gateway = delivery.DiscordStudentGacha(
+        clients={DiscordBotSlot.PARTICIPANT_A: cast(discord.Client, object())}, config=_config()
+    )
+    channel = SimpleNamespace(id=102, send=AsyncMock())
+    nonce = delivery._nonce(f"{OFFER_ID}:result")
+    filename = f"student-{nonce}-{hashlib.sha256(apng).hexdigest()[:16]}.webp"
+    captured = b""
+
+    def send(*_args: object, files: list[discord.File], **_kwargs: object) -> object:
+        nonlocal captured
+        captured = files[0].fp.read()
+        assert files[0].filename == filename
+        return message
+
+    async def history(**_kwargs: object) -> AsyncIterator[object]:
+        if captured:
+            yield message
+
+    message = SimpleNamespace(
+        id=120,
+        author=SimpleNamespace(id=202),
+        channel=channel,
+        nonce=None,
+        content="✨ 生徒募集の結果です!",
+        components=[],
+        attachments=[SimpleNamespace(filename=filename, size=1, content_type="image/webp")],
+    )
+    channel.history = history
+    channel.send.side_effect = send
+    monkeypatch.setattr(gateway, "_channel", AsyncMock(return_value=channel))
+
+    async def publish() -> str:
+        return await gateway.send_result(
+            guild_id="101",
+            channel_id="102",
+            publication_id=OFFER_ID,
+            after_message_id="103",
+            content=apng,
+            image_format=GachaImageFormat.APNG,
+        )
+
+    assert await publish() == "120"
+    with Image.open(io.BytesIO(captured), formats=["WEBP"]) as animation:
+        assert animation.info["loop"] == 0
+        assert getattr(animation, "n_frames", 1) == len(frames)
+        for index, expected in enumerate(frames):
+            animation.seek(index)
+            actual = animation.convert("RGB")
+            assert animation.info["duration"] == GACHA_GIF_FRAME_DURATIONS[index]
+            assert ImageChops.difference(actual, expected).getbbox() is None
+
+    # A later encoder can produce different compressed bytes for the same saved pixels.
+    monkeypatch.setattr(delivery, "encode_gacha_discord_webp", lambda _content: b"different WebP")
+    assert await publish() == "120"
+    channel.send.assert_awaited_once()
 
 
 @pytest.mark.asyncio

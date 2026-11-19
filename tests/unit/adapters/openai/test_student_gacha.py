@@ -217,7 +217,7 @@ async def test_provider_error_diagnostic_logs_only_allowlisted_fields(
 
 
 @pytest.mark.asyncio
-async def test_render_requests_a_sunburst_gif_and_inserts_the_name_locally() -> None:
+async def test_render_requests_sunburst_gif_and_composes_the_apng_locally() -> None:
     picture = io.BytesIO()
     frames = [Image.new("RGB", (1024, 480), (190, 183, 214 - 10 * index)) for index in range(12)]
     frames[0].save(picture, "GIF", save_all=True, append_images=frames[1:], duration=170)
@@ -265,7 +265,7 @@ async def test_render_requests_a_sunburst_gif_and_inserts_the_name_locally() -> 
     client.with_options.assert_called_once_with(max_retries=0)
     with Image.open(io.BytesIO(result)) as image:
         assert (image.format, image.size, getattr(image, "n_frames", 1)) == (
-            "GIF",
+            "PNG",
             GACHA_GIF_SIZE,
             12,
         )
