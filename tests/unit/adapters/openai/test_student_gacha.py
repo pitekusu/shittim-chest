@@ -276,6 +276,7 @@ async def test_render_uses_approved_image_model_and_inserts_name_only_into_png()
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("performer", PARTICIPANTS)
 @pytest.mark.parametrize(
     ("expression", "expression_prompt"),
     [
@@ -287,6 +288,7 @@ async def test_render_uses_approved_image_model_and_inserts_name_only_into_png()
 )
 async def test_render_uses_costume_image_and_selected_performer_expression(
     monkeypatch: pytest.MonkeyPatch,
+    performer: ParticipantSlot,
     expression: GachaExpression | None,
     expression_prompt: str,
 ) -> None:
@@ -297,7 +299,7 @@ async def test_render_uses_costume_image_and_selected_performer_expression(
     monkeypatch.setattr("shittim_chest.adapters.openai.student_gacha.render_card", render_card)
     presentation = GachaPresentation(
         _STUDENT,
-        ParticipantSlot.PARTICIPANT_A,
+        performer,
         "以前の説明",
         "戦略研究会",
         "サポーター",
@@ -316,15 +318,29 @@ async def test_render_uses_costume_image_and_selected_performer_expression(
 
     edit.assert_awaited_once()
     payload = edit.call_args.kwargs
+    portrait_type = "png" if performer is ParticipantSlot.PARTICIPANT_A else "webp"
     assert payload["image"] == [
-        ("performer.png", b"portrait", "image/png"),
+        (f"performer.{portrait_type}", b"portrait", f"image/{portrait_type}"),
         ("format.jpg", b"layout", "image/jpeg"),
         ("costume.webp", _COSTUME, "image/webp"),
     ]
     prompt = payload["prompt"]
     assert "Image 3 is the exact outfit variant" in prompt
-    assert "head accessories come exclusively from image 1" in prompt
     assert "gaze direction, eye shape and color" in prompt
+    assert "Do not reproduce its person, face,\nhair, halo, headwear, accessories" in prompt
+    original_head = "Keep the performer's hair color and style, halo and head accessories"
+    cosplay_head = "Use image 3 as the only source for the cosplay wig, halo and head"
+    if performer is ParticipantSlot.PARTICIPANT_C:
+        assert cosplay_head in prompt
+        assert "wig matching the hairstyle and hair color visible in image 3" in prompt
+        assert "If image 3 has no halo, do not add one" in prompt
+        assert "Do not borrow a halo or head accessories from image 1 or image 2" in prompt
+        assert original_head not in prompt
+    else:
+        assert original_head in prompt
+        assert "Do not copy hair, a halo or head accessories from images 2 or 3" in prompt
+        assert "If image 1 has no halo, keep it absent" in prompt
+        assert cosplay_head not in prompt
     assert expression_prompt in prompt
     if expression is not None:
         assert "Preserve the performer's facial expression from image 1." not in prompt
