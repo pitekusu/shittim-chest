@@ -478,13 +478,13 @@ def test_grype_cache_cannot_bypass_freshness_or_write_from_prs(
         ),
         (
             RECORDS_CI_WORKFLOW,
-            "python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low",
-            "pnpm audit --audit-level=low",
+            "python3 ../../tools/run_npm_audit.py -- pnpm run audit",
+            "pnpm run audit",
         ),
         (
             RECORDS_RELEASE_WORKFLOW,
-            "python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low",
-            "pnpm audit --audit-level=low",
+            "python3 ../../tools/run_npm_audit.py -- pnpm run audit",
+            "pnpm run audit",
         ),
     ),
 )
@@ -865,6 +865,17 @@ def test_records_web_gates_require_the_shared_check_flags(directory: Path, flag:
     _replace(package, f" {flag}", "", 1)
 
     with pytest.raises(WorkflowPolicyError, match=r"web gates"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize("script", ["pnpm audit --audit-level=low", "echo audit-disabled"])
+def test_records_web_audit_cannot_bypass_the_dated_gate(directory: Path, script: str) -> None:
+    package = directory.parent.parent / "apps/records-web/package.json"
+    contents = json.loads(package.read_text())
+    contents["scripts"]["audit"] = script
+    package.write_text(json.dumps(contents))
+
+    with pytest.raises(WorkflowPolicyError, match="dated dependency audit gate"):
         validate_notification_workflows(directory)
 
 
