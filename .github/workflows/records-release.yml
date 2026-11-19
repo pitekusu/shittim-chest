@@ -27,7 +27,7 @@ env:
   AWS_REGION: ap-northeast-1
   NODE_VERSION: "24.22.3"
   PYTHON_VERSION: "3.14.10"
-  UV_VERSION: "0.13.7"
+  UV_VERSION: "0.13.9"
 
 jobs:
   plan:
@@ -143,7 +143,7 @@ jobs:
             pnpm run check
             pnpm exec vp test
             pnpm run build
-            python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low
+            python3 ../../tools/run_npm_audit.py -- pnpm run audit
           )
       - name: Build deterministic Records Lambda bundle and SBOM
         id: bundle

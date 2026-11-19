@@ -143,6 +143,9 @@ def _path_scopes(path: str) -> set[str]:
         return {"records_python", "records_contract", "records_web"}
     if path.startswith("apps/records-web/"):
         return {"records_web"}
+    if path == "infra/check-audit.mjs":
+        # Both package managers use this gate; its regression tests live in Core.
+        return {"core_tests", "infra", "records_web", "records_infra"}
     if path.startswith("infra/") or path in INFRA_FILES:
         # records-infra owns only synthesis; the shared infra job owns all tests and audit.
         return {"infra", "records_infra"}

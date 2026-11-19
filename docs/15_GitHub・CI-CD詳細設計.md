@@ -328,6 +328,11 @@ GitHub OIDCからGoogle WIFとサービスアカウントへ委譲し、短寿�
 ### npm監査サービスの障害
 
 `npm audit`/`pnpm audit`は通常どおり必須である。
+Coreの`npm run audit:infra`とWebの`pnpm run audit`は、各監査の完全なJSONを
+共用の`infra/check-audit.mjs`へ渡し、package・advisory・severityが一致する未失効の受容だけを適用する。
+受容ファイルはinfraとWebで分け、別projectの受容を流用しない。pnpm形式の読取を共用gateへ追加し、
+期限切れ・未知の検出・不正な応答・未使用の例外は従来どおり拒否する。
+CIとRecords Releaseは、このpackage scriptを既存のnpm障害確認ラッパー経由で実行する。
 npm公式Statuspageで「Security Auditコンポーネントの劣化」と「同コンポーネントに紐づく進行中インシデント」を
 同時に確認できた実行だけ、Node系の外部監査を省略し、警告を残す。
 公式情報の取得失敗・不正な形式・インシデント不明は拒否し、監査で検出された脆弱性や通常の非0終了を省略理由にしない。
@@ -490,7 +495,7 @@ Dependabotの通常更新には、`cooldown`を省略しても既定で3日の�
 Docker Hubを使う試験・ビルド用イメージには既定の待機期間を適用する。
 
 Vite+の`npm:`エイリアスとpnpmの固定overrideは、Dependabotの通常更新だけでは揃わない。
-Vite+関連は専用グループへ分け、CLI・coreエイリアス・Vitest overrideの不一致を通常CIで拒否する。
+Vite+関連は専用グループへ分け、CLIとcoreエイリアスは公式の対応版へ揃え、coreの直接依存とoverride、Vitest overrideの不一致を通常CIで拒否する。
 Vite+のメジャー更新は公式の移行コマンドを使い、同梱Vitestと上書き設定も同時に更新する。
 Vitest 5への移行では`clearMocks: false`を明示して既存試験の互換動作を保ち、型検査・全Web試験・build・Playwrightを確認する。
 Gradleが配布するWindows用WrapperのCRLFは、該当ファイルだけにGitの`whitespace=cr-at-eol`属性を指定する。
@@ -518,13 +523,55 @@ DependabotのActions更新は`uses:`を扱い、`with.version`、`driver-opts`�
 - 通常CIはネットワークを使わず、固定値の形式と複数箇所の整合を検査する。
 - 定期監視は公式リリースの安定版を、明示したPython/Node/uv/pnpm系列の中で比較する。系列変更を自動採用しない。
   Temurinは採用JDK系列の公式リリース、Android SDK PlatformとBuild ToolsはGoogleの正式配布一覧を確認する。
-  Vite+のcoreエイリアスと固定overrideも実ファイルから読み、互換性のため保留中の更新を通知から漏らさない。
+  Vite+のCLIはGitHub Release、独立した版番号を持つcoreは公式npm registryの安定版を比較する。
+  coreエイリアスと固定overrideも実ファイルから読み、不一致を拒否し、互換性のため保留中の更新を通知から漏らさない。
 - AWS Signerのインストーラーは`latest`配布物・署名・公開鍵のチェックサム差分だけを検出する。
   取得したツールの実行・インストール・署名鍵の自動交換はしない。
 - 結果は実行サマリーと通知Botが管理する単一Issueへ集約する。変化がなければ再投稿しない。
   全項目が確認済みで最新の場合だけIssueを閉じ、一部取得失敗を「最新」にしない。
 - 終了値は最新`0`、更新候補あり`1`、取得/設定不正`2`。
   `main`限定で`contents: read`と`issues: write`を使い、書換え・自動マージ・AWS操作・配信開始はしない。
+
+### 2026年11月18日の固定ツール更新
+
+[Issue #700](https://github.com/pitekusu/shittim-chest/issues/700)の更新候補を反映する。
+Grypeはamd64／ARM64とも0.122.0、Syftは1.57.2、ECR Credential Helperは0.13.0へ更新し、
+Grype／SyftのGitHub asset digestとchecksum署名、ECRの公式S3 checksumを配布物の実体と照合する。
+GrypeのDHI OSV対応やSyftのdpkg重複修正は、既存のSBOM・VEX・risk gateを省略する根拠にしない。
+
+uvは全workflowとDockerの両方を0.13.9へ揃え、Dockerのmanifest digest固定を維持する。
+[0.13.9の公式変更](https://github.com/astral-sh/uv/releases/tag/0.13.9)には別名wheelの拒否と
+同値なplatform markerのlock検査修正が含まれる。CLI更新だけを理由にPython本体・uv_build・両lockを更新しない。
+既存のlockで`lock --check`と`sync --frozen --all-groups`を確認する。
+
+Webはpnpm 12.22.0、Vite+ 1.7.0、Vitest／UI／関連override 5.1.1へ揃える。
+[Vite+ 1.7.0の公式変更](https://github.com/voidzero-dev/vite-plus/releases/tag/v1.7.0)に従い、
+CLIと版番号が分かれたcoreエイリアス／overrideは8.3.8000とし、広すぎるVite peer許可を外す。
+型検査は同梱のtsrsへ切り替わるため、警告拒否を維持したcheck・単体試験・build・Playwrightで確認する。
+依存の公開後待機期間の例外は、今回指定した正確な版だけに限定する。
+
+既存mainのlockにも含まれるpicomatch 4.0.7は、
+[GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)の対象で、
+11月18日の確認時点では修正版が公開されていない。同日、所有者が開発・CI用の本件Highを
+2026年11月20日09:00 JSTまで受容し、CI成功後のPR #752マージを明示承認した。
+infraとWebの受容記録は`expires: 2026-11-20`とし、同日00:00 UTCから拒否する。
+Vite+ coreのNode用vendor copyにも同版が残り、正式修正や非影響の証明とは扱わない。
+
+同じ承認で、今回の実測ARM64 production config
+`sha256:d61d02a8c0c0f8f0c8616c64bf53ed25a9885be72ec1c00c3383f9c4fe18e2c4`に残るHigh 28組を
+同期限まで受容する。既存22組のCVE・package・版は前回と一致し、新規6組は
+CVE-2026-107493／CVE-2026-124709それぞれの`libssl3t64`・`openssl`・`openssl-provider-legacy`
+（全て`3.5.7-1~deb13u3+dhi0`）に限定する。Critical、sourceの検出、修正可能High/Criticalは0、
+ARM64 TLSは60/60成功を確認した。
+[同一実行のSBOM・署名VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44314277139/artifacts/14431173930)と
+[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44314277139/artifacts/14432471438)を照合した。
+
+[OpenSSL公式](https://openssl-library.org/news/secadv/20261117.txt)は新規2件をLowと評価し、
+3.5系列では3.5.10を修正版とする。前者は非NULLの既存X509_INFO stackへのPEM追加に失敗した後の再利用・解放、
+後者はQUICサーバーでの拒否stream作成・resetの反復が成立条件だが、到達不能とは扱わずGrype Highを維持する。
+新規6組はこのconfigだけに限定し、containerの`expires_on`はUTC最終有効日`2026-11-19`とする。
+4枠の上限がある既存10組では最古のconfigを今回のconfigと入れ替え、現行mainのconfigは保持する。
+本番配信の承認は今回追加していない。
 
 ### 2026年11月5日の固定ツール更新
 

@@ -1830,7 +1830,7 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         "vp install --frozen-lockfile",
         "pnpm exec vp test",
         "pnpm run build",
-        "python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low",
+        "python3 ../../tools/run_npm_audit.py -- pnpm run audit",
     )
     if any(marker not in records_web for marker in required_records_web):
         raise WorkflowPolicyError("Records CI must retain the frozen install and web gates")
@@ -1928,13 +1928,20 @@ def _validate_ci_path_isolation(directory: Path) -> None:
 def _validate_records_workflows(directory: Path) -> None:
     web_package = directory.parent.parent / "apps/records-web/package.json"
     try:
-        check_script = json.loads(web_package.read_text(encoding="utf-8"))["scripts"]["check"]
+        scripts = json.loads(web_package.read_text(encoding="utf-8"))["scripts"]
+        check_script = scripts["check"]
+        audit_script = scripts["audit"]
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise WorkflowPolicyError("Records web gates require the shared check script") from error
     if check_script != "vp check --deny-warnings --continue-on-error":
         raise WorkflowPolicyError(
             "Records web gates must report all diagnostics and fail on warnings"
         )
+    if audit_script != (
+        "pnpm audit --audit-level=low --json | "
+        "node ../../infra/check-audit.mjs npm-audit-exceptions.json"
+    ):
+        raise WorkflowPolicyError("Records web gates must use the dated dependency audit gate")
 
     release_path = directory / RECORDS_RELEASE_WORKFLOW
     backfill_path = directory / RECORDS_BACKFILL_WORKFLOW
@@ -1991,7 +1998,7 @@ def _validate_records_workflows(directory: Path) -> None:
         "            pnpm run check\n"
         "            pnpm exec vp test\n"
         "            pnpm run build\n"
-        "            python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low\n"
+        "            python3 ../../tools/run_npm_audit.py -- pnpm run audit\n"
         "          )"
     )
     if release_gate_step.count(app_local_web_gates) != 1:
