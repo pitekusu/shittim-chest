@@ -944,6 +944,16 @@ Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは6
 必須CIとCodeQL成功後のマージ・本番反映を明示承認した。`expires_on`は`2026-11-19`のままとする。
 4枠を使用していた既存10組では、最古のPR #747のconfigを入れ替え、稼働中のconfigを保持する。
 
+2026-11-19、PR #756のGPT-6.2 Sol移行を含む完成ARM64 production config
+`sha256:16ded5f9931d741f3b0fb58eb8c06f9eb7556ac1f552889553cf16fd69553c11`をGrype 0.122.1で検査した。
+署名付きDHI VEX適用後のHigh 28組はPR #753の承認とCVE・パッケージ・版・修正状態が一致した。
+Critical、ソースの検出、修正可能なHigh/Criticalは0組だった。
+[完成SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44502325653/artifacts/14516579940)と[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44502325653/artifacts/14518211821)を照合した。
+
+所有者はこのconfigの同じ28組に限り、2026-11-20 09:00 JST（同日00:00 UTC）まで受容した。
+`expires_on`はUTCの最終有効日`2026-11-19`を維持する。4枠を使用していた22組では、
+最古のPR #749用configを入れ替え、PR #750用configを保持する。
+
 ## 5. 本番配信
 
 ### 共通の工程

@@ -117,12 +117,14 @@ def test_image_reselection_uses_only_other_weekly_discussions(record_id):
             generator.reselect_image(value, requester, image, [candidate])
     assert len(calls) == 1
     request = calls[0]
-    assert json.loads(request["input"]) == {"questions": [candidate.model_dump(mode="json")]}
-    assert requester.questions[0].text not in request["input"]
+    developer, user = request["input"]
+    assert developer["role"] == "developer" and user["role"] == "user"
+    assert json.loads(user["content"]) == {"questions": [candidate.model_dump(mode="json")]}
+    assert requester.questions[0].text not in user["content"]
     assert request["store"] is False and request["tools"] == []
     assert request["max_output_tokens"] == 1000
     assert all(
-        value.personas[subject.participant] in request["instructions"]
+        value.personas[subject.participant] in developer["content"]
         for subject in image.image_subjects
     )
 
@@ -237,17 +239,21 @@ def test_independent_persona_request_contains_history_and_week_facts(name, addre
         room.messages.append(SavedMessage(participant=participant, text=output.text))
     for index, request in enumerate(calls):
         slot = room.plan.turns[index].participant
-        payload = json.loads(request["input"])
+        developer, user = request["input"]
+        assert developer["role"] == "developer" and user["role"] == "user"
+        instructions = developer["content"]
+        payload = json.loads(user["content"])
         assert payload["requester"] == name
         assert payload["requesterAddress"] == address
         assert payload["topic"] == room.plan.turns[index].topic
         assert payload["previousTopic"] == (room.plan.turns[index - 1].topic if index else None)
-        assert name not in request["instructions"]
-        assert request["model"] == "gpt-6.1-terra"
+        assert name not in instructions
+        assert request["model"] == "gpt-6.2-sol"
+        assert request["reasoning"] == {"effort": "low"}
         assert request["store"] is False and request["tools"] == []
-        assert state.snapshot.personas[slot] in request["instructions"]
+        assert state.snapshot.personas[slot] in instructions
         assert all(
-            prompt not in request["instructions"]
+            prompt not in instructions
             for other, prompt in state.snapshot.personas.items()
             if other != slot
         )
@@ -265,7 +271,7 @@ def test_independent_persona_request_contains_history_and_week_facts(name, addre
         assert payload["weeklyQuestionCount"] == 1
         assert payload["questions"][0]["text"] == state.snapshot.requesters[0].questions[0].text
         assert payload["yourAffection"] == 500
-        assert requester_attitude(500) in request["instructions"]
+        assert requester_attitude(500) in instructions
 
 
 def test_discussion_switch_passes_only_the_current_question():
@@ -315,11 +321,11 @@ def test_discussion_switch_passes_only_the_current_question():
         client=SimpleNamespace(responses=SimpleNamespace(parse=parse)),
     )
     generator.prepare(value, requester, room, requester.questions, final=True)
-    assert len(json.loads(requests[0]["input"])["questions"]) == 3
+    assert len(json.loads(requests[0]["input"][1]["content"])["questions"]) == 3
     room.plan = plan
     for index, turn in enumerate(plan.turns):
         output = generator.utter(value, requester, room)
-        payload = json.loads(requests[-1]["input"])
+        payload = json.loads(requests[-1]["input"][1]["content"])
         assert payload["questions"] == [requester.questions[index // 3].model_dump(mode="json")]
         assert payload["weeklyQuestionCount"] == 3
         assert payload["weeklySummary"] is None
@@ -403,7 +409,7 @@ def test_preparation_fixes_image_slots_and_accepts_four_discussions(scores, fina
     assert [image.brief for image in result.images] == [
         brief["brief"] for brief in payload["image_briefs"]
     ]
-    assert json.loads(calls[0]["input"])["imageTargets"] == [
+    assert json.loads(calls[0]["input"][1]["content"])["imageTargets"] == [
         image.model_dump() for image in room.images
     ]
     schema = calls[0]["text_format"]

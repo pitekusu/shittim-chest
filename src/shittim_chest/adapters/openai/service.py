@@ -41,7 +41,7 @@ from shittim_chest.adapters.openai.errors import (
     OpenAIRefusal,
     OpenAIUnavailable,
 )
-from shittim_chest.adapters.openai.image_inputs import IMAGE_INPUT_RULES, responses_image_input
+from shittim_chest.adapters.openai.image_inputs import responses_input
 from shittim_chest.adapters.openai.limiter import OpenAIRequestLimiter
 from shittim_chest.adapters.openai.observability import (
     AffectionReasonKind,
@@ -560,8 +560,9 @@ class OpenAIResponsesService:
                     reasoning["mode"] = "pro"
                 response = await self.client.responses.create(
                     model=self.config.model,
-                    instructions=instructions + (IMAGE_INPUT_RULES if images else ""),
-                    input=responses_image_input(input_text, images),
+                    input=responses_input(
+                        instructions=instructions, text=input_text, images=images
+                    ),
                     text={
                         "format": {
                             "type": "json_schema",

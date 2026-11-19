@@ -40,7 +40,7 @@ from shittim_records.momotalk import (
     validate_image_choices,
 )
 
-TEXT_MODEL = "gpt-6.1-terra"
+TEXT_MODEL = "gpt-6.2-sol"
 IMAGE_MODEL = "gpt-image-2.5-sunburst"
 LOGGER = logging.getLogger(__name__)
 # Provider fields are untrusted: only known classifications may reach logs.
@@ -222,11 +222,13 @@ class OpenAIMomotalkGenerator:
         try:
             result = self._client().responses.parse(
                 model=TEXT_MODEL,
-                instructions=instructions,
-                input=json.dumps(payload, ensure_ascii=False),
+                input=[
+                    {"role": "developer", "content": instructions},
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                ],
                 text_format=model,
                 max_output_tokens=tokens,
-                reasoning={"effort": "none"},
+                reasoning={"effort": "low"},
                 tools=[],
                 tool_choice="none",
                 parallel_tool_calls=False,

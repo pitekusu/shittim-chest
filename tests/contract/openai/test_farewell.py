@@ -30,6 +30,7 @@ from shittim_chest.adapters.openai import (
 from shittim_chest.adapters.openai.schemas import FarewellOutputV2
 from shittim_chest.application.farewell import FarewellTimeContext
 from shittim_chest.domain import PARTICIPANTS, ParticipantSlot
+from tests.contract.openai.test_responses_service import request_instructions
 
 WEATHER_URL = "https://weather.example.test/tokyo"
 NEWS_URL = "https://news.example.test/fun"
@@ -114,7 +115,7 @@ def response(
             "completed_at": 1_786_448_401,
             "error": None,
             "incomplete_details": None,
-            "model": "gpt-6.1-terra",
+            "model": "gpt-6.2-sol",
             "output": output,
             "parallel_tool_calls": False,
             "tool_choice": "required",
@@ -209,7 +210,7 @@ async def test_request_uses_message_only_schema_and_first_citation() -> None:
     assert content == f"{MESSAGE}\n参考リンク: {NEWS_URL}"
     assert parse.await_args is not None
     request = parse.await_args.kwargs
-    assert request["model"] == "gpt-6.1-terra"
+    assert request["model"] == "gpt-6.2-sol"
     assert request["store"] is False
     assert request["tool_choice"] == "required"
     assert request["max_tool_calls"] == 4
@@ -217,16 +218,17 @@ async def test_request_uses_message_only_schema_and_first_citation() -> None:
     assert set(FarewellOutputV2.model_fields) == {"message"}
     assert request["include"] == ["web_search_call.action.sources"]
     assert request["reasoning"] == {"effort": "medium"}
-    assert "270 to 450 Japanese characters" in request["instructions"]
-    assert "2 to 4 short paragraphs separated by blank lines" in request["instructions"]
-    assert "must include one concrete mention of today's Tokyo weather" in request["instructions"]
-    assert "one news item" in request["instructions"]
-    assert "from today that this persona would naturally like" in request["instructions"]
-    assert "enjoyable news" not in request["instructions"]
-    assert "private prompt participant-b" in request["instructions"]
-    assert "private prompt participant-a" not in request["instructions"]
-    assert "private prompt participant-c" not in request["instructions"]
-    assert "Display participant-b" not in request["instructions"]
+    instructions = request_instructions(request)
+    assert "270 to 450 Japanese characters" in instructions
+    assert "2 to 4 short paragraphs separated by blank lines" in instructions
+    assert "must include one concrete mention of today's Tokyo weather" in instructions
+    assert "one news item" in instructions
+    assert "from today that this persona would naturally like" in instructions
+    assert "enjoyable news" not in instructions
+    assert "private prompt participant-b" in instructions
+    assert "private prompt participant-a" not in instructions
+    assert "private prompt participant-c" not in instructions
+    assert "Display participant-b" not in instructions
     assert request["tools"][0]["user_location"] == {
         "type": "approximate",
         "country": "JP",

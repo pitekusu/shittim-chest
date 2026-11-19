@@ -70,7 +70,7 @@ MEMORIAL_PARTICIPANT_REFERENCE_ASSET_KEYS: dict[ParticipantSlot, str] = {
 }
 
 MEMORIAL_IMAGE_MODEL = "gpt-image-2.5-sunburst"
-MEMORIAL_TEXT_MODEL = "gpt-6.1-terra"
+MEMORIAL_TEXT_MODEL = "gpt-6.2-sol"
 MEMORIAL_IMAGE_SOURCE_WIDTH = 1920
 MEMORIAL_IMAGE_SOURCE_HEIGHT = 1088
 MEMORIAL_IMAGE_WIDTH = 1920
@@ -2207,10 +2207,12 @@ class OpenAIMemorialContentGenerator:
         )
         response = client.responses.create(
             model=MEMORIAL_TEXT_MODEL,
-            instructions=instructions,
-            input=input_text,
+            input=[
+                {"role": "developer", "content": instructions},
+                {"role": "user", "content": input_text},
+            ],
             max_output_tokens=2_000,
-            reasoning={"effort": "none"},
+            reasoning={"effort": "low"},
             store=False,
             tools=[],
             tool_choice="none",
@@ -2218,7 +2220,7 @@ class OpenAIMemorialContentGenerator:
             truncation="disabled",
         )
         output = getattr(response, "output_text", None)
-        if isinstance(output, str):
+        if getattr(response, "status", None) == "completed" and isinstance(output, str):
             try:
                 return _normalize_narrative(output)
             except ValueError:

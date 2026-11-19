@@ -297,11 +297,13 @@ class OpenAIInspectorSummaryTranslator:
                 try:
                     response = client.responses.parse(
                         model=INSPECTOR_TRANSLATION_MODEL,
-                        instructions=_TRANSLATION_INSTRUCTIONS,
-                        input=input_text,
+                        input=[
+                            {"role": "developer", "content": _TRANSLATION_INSTRUCTIONS},
+                            {"role": "user", "content": input_text},
+                        ],
                         text_format=_ProviderTranslatedBatch,
                         max_output_tokens=8_000,
-                        reasoning={"effort": "none"},
+                        reasoning={"effort": "low"},
                         store=False,
                         tools=[],
                         tool_choice="none",
