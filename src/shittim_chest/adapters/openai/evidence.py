@@ -46,7 +46,7 @@ from shittim_chest.adapters.openai.errors import (
     OpenAIRefusal,
     OpenAIUnavailable,
 )
-from shittim_chest.adapters.openai.image_inputs import IMAGE_INPUT_RULES, responses_image_input
+from shittim_chest.adapters.openai.image_inputs import responses_input
 from shittim_chest.adapters.openai.limiter import OpenAIRequestLimiter
 from shittim_chest.adapters.openai.observability import (
     NullOpenAIUsageRecorder,
@@ -214,19 +214,18 @@ class OpenAIWebEvidenceService:
             async with self.limiter.slot():
                 response = await self.client.responses.parse(
                     model=self.config.model,
-                    instructions=evidence_instructions(
-                        system_prompt=self.system_prompt,
-                        moderator_prompt=self.moderator_prompt,
-                    )
-                    + (IMAGE_INPUT_RULES if images else ""),
-                    input=responses_image_input(
-                        json.dumps(
+                    input=responses_input(
+                        instructions=evidence_instructions(
+                            system_prompt=self.system_prompt,
+                            moderator_prompt=self.moderator_prompt,
+                        ),
+                        text=json.dumps(
                             debate_prompt_input(question, previous_debate),
                             ensure_ascii=False,
                             separators=(",", ":"),
                             sort_keys=True,
                         ),
-                        images,
+                        images=images,
                     ),
                     text_format=EvidenceDigestOutputV2,
                     include=["web_search_call.action.sources"],

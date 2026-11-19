@@ -14,7 +14,12 @@ from shittim_chest.domain import (
     InitialOpinion,
     PreferenceFrame,
 )
-from tests.contract.openai.test_responses_service import response_with, service_for
+from tests.contract.openai.test_responses_service import (
+    request_input_text,
+    request_instructions,
+    response_with,
+    service_for,
+)
 
 
 def test_final_separates_own_speech_without_private_preparation() -> None:
@@ -44,7 +49,7 @@ async def test_follow_up_keeps_previous_result_in_untrusted_input() -> None:
     finally:
         await client.aclose()
 
-    assert json.loads(server.requests[0]["input"]) == {
+    assert json.loads(request_input_text(server.requests[0])) == {
         "task": "form_preferences",
         "question": question,
         "previous_debate": {
@@ -54,8 +59,8 @@ async def test_follow_up_keeps_previous_result_in_untrusted_input() -> None:
             "caveats": ["辛さ"],
         },
     }
-    assert parent.decision not in server.requests[0]["instructions"]
-    assert "untrusted context" in server.requests[0]["instructions"]
+    assert parent.decision not in request_instructions(server.requests[0])
+    assert "untrusted context" in request_instructions(server.requests[0])
 
 
 @pytest.mark.asyncio
@@ -126,16 +131,17 @@ async def test_private_selection_is_carried_forward_without_peer_profiles() -> N
     finally:
         await client.aclose()
     assert plan.selected.proposal == "park"
-    assert json.loads(server.requests[0]["input"]) == {
+    assert json.loads(request_input_text(server.requests[0])) == {
         "task": "form_preferences",
         "question": "weekend",
     }
     for request in server.requests:
-        assert request["model"] == "gpt-6.1-terra"
+        assert request["model"] == "gpt-6.2-sol"
         assert request["store"] is False
         assert request["tools"] == []
-        assert "persona for participant-b" not in request["instructions"]
-        assert "persona for participant-c" not in request["instructions"]
+        instructions = request_instructions(request)
+        assert "persona for participant-b" not in instructions
+        assert "persona for participant-c" not in instructions
     assert [request["max_output_tokens"] for request in server.requests[:2]] == [2_000, 4_000]
     assert [request["reasoning"] for request in server.requests] == [
         {"effort": "medium"},
@@ -144,13 +150,15 @@ async def test_private_selection_is_carried_forward_without_peer_profiles() -> N
         {"effort": "high"},
         {"effort": "medium"},
     ]
-    assert all(PERSONAL_CHOICE_RULES in request["instructions"] for request in server.requests[:4])
-    initial_input = json.loads(server.requests[2]["input"])
+    assert all(
+        PERSONAL_CHOICE_RULES in request_instructions(request) for request in server.requests[:4]
+    )
+    initial_input = json.loads(request_input_text(server.requests[2]))
     assert initial_input["private_decision_data"]["selected_candidate"]["proposal"] == "park"
-    final_input = json.loads(server.requests[3]["input"])
+    final_input = json.loads(request_input_text(server.requests[3]))
     assert final_input["own_initial_opinion"]["participant"] == a
     assert {item["participant"] for item in final_input["other_initial_opinions"]} == {b, c}
-    vote_input = json.loads(server.requests[4]["input"])
+    vote_input = json.loads(request_input_text(server.requests[4]))
     assert "selected_candidate" not in vote_input["private_decision_data"]
     assert len(observer.usages) == 5
 
@@ -192,13 +200,13 @@ async def test_direct_candidates_reach_speech_and_reject_foreign_owner() -> None
     finally:
         await client.aclose()
     assert len(server.requests) == len(observer.usages) == 3
-    assert "private_decision_data" not in json.loads(server.requests[0]["input"])
+    assert "private_decision_data" not in json.loads(request_input_text(server.requests[0]))
     for request in server.requests[1:]:
-        decision = json.loads(request["input"])["private_decision_data"]
+        decision = json.loads(request_input_text(request))["private_decision_data"]
         assert set(decision) == {"selected_candidate"}
         assert decision["selected_candidate"]["proposal"] == "park"
         assert request["store"] is False
-    final = json.loads(server.requests[2]["input"])
+    final = json.loads(request_input_text(server.requests[2]))
     assert final["own_initial_opinion"]["participant"] == a
     assert {item["participant"] for item in final["other_initial_opinions"]} == {b, c}
 

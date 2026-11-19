@@ -98,11 +98,17 @@ async def test_brief_uses_the_selected_wearer_and_costume_image(performer: Parti
     )
     client.responses.create.assert_awaited_once()
     payload = client.responses.create.call_args.kwargs
+    assert payload["model"] == "gpt-6.2-sol"
+    assert payload["reasoning"] == {"effort": "low"}
     assert payload["tools"] == []
     assert payload["tool_choice"] == "none"
     assert not payload["store"]
-    assert "挨拶はperformer_referenceの着用者本人" in payload["instructions"]
-    content = payload["input"][0]["content"]
+    assert "instructions" not in payload
+    developer, user = payload["input"]
+    assert developer["role"] == "developer"
+    assert user["role"] == "user"
+    assert "挨拶はperformer_referenceの着用者本人" in developer["content"]
+    content = user["content"]
     inputs = json.loads(content[0]["text"])
     assert inputs["performer_reference"] == {
         "name": performer.value,

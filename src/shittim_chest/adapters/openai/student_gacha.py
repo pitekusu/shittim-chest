@@ -28,7 +28,7 @@ from shittim_chest.adapters.openai.errors import (
     OpenAIInvalidOutput,
     OpenAIRefusal,
 )
-from shittim_chest.adapters.openai.image_inputs import IMAGE_INPUT_RULES, responses_image_input
+from shittim_chest.adapters.openai.image_inputs import responses_input
 from shittim_chest.adapters.openai.limiter import OpenAIRequestLimiter
 from shittim_chest.adapters.openai.schemas import StrictOutput
 from shittim_chest.adapters.openai.service import _extract_parsed, _validation_error
@@ -203,9 +203,10 @@ class OpenAIStudentGacha:
                 # The SDK's parse() can raise on truncated text before exposing its status.
                 response = await self.client.responses.create(
                     model=PRODUCTION_POLICY.model,
-                    instructions=_TEXT_INSTRUCTIONS + IMAGE_INPUT_RULES,
-                    input=responses_image_input(
-                        json.dumps(input_data, ensure_ascii=False), (costume,)
+                    input=responses_input(
+                        instructions=_TEXT_INSTRUCTIONS,
+                        text=json.dumps(input_data, ensure_ascii=False),
+                        images=(costume,),
                     ),
                     text={
                         "format": {

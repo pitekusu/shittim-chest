@@ -34,6 +34,7 @@ from shittim_chest.adapters.openai.errors import (
     OpenAIRefusal,
     OpenAIUnavailable,
 )
+from shittim_chest.adapters.openai.image_inputs import responses_input
 from shittim_chest.adapters.openai.limiter import OpenAIRequestLimiter
 from shittim_chest.adapters.openai.observability import (
     NullOpenAIUsageRecorder,
@@ -183,14 +184,16 @@ class OpenAIFarewellGenerator:
         async with self.limiter.slot():
             return await self.client.responses.parse(
                 model=self.config.model,
-                instructions=farewell_instructions(
-                    self.profiles.for_participant(participant).system_prompt,
-                    system_prompt=self.system_prompt,
-                ),
-                input=farewell_input(
-                    local_datetime=time_context.local_datetime,
-                    period=time_context.period,
-                    season=time_context.season,
+                input=responses_input(
+                    instructions=farewell_instructions(
+                        self.profiles.for_participant(participant).system_prompt,
+                        system_prompt=self.system_prompt,
+                    ),
+                    text=farewell_input(
+                        local_datetime=time_context.local_datetime,
+                        period=time_context.period,
+                        season=time_context.season,
+                    ),
                 ),
                 text_format=FarewellOutputV2,
                 include=["web_search_call.action.sources"],
