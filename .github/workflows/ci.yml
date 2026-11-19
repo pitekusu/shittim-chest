@@ -596,10 +596,7 @@ jobs:
         uses: ./.github/actions/configure-tls
       - name: Install the same JDK as local development
         if: ${{ steps.scope.outputs.required == 'true' }}
-        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
-        with:
-          distribution: temurin
-          java-version-file: apps/records-android/.java-version
+        uses: ./.github/actions/setup-android-jdk
       - name: Select the filtered JDK trust store
         if: ${{ steps.scope.outputs.required == 'true' }}
         run: >-

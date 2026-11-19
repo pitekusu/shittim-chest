@@ -52,6 +52,7 @@ def validate_notification_workflows(directory: Path = WORKFLOW_DIRECTORY) -> int
     _validate_permission_syntax(directory)
     _validate_consistent_action_pins(directory)
     _validate_grype_database_action(directory)
+    _validate_android_jdk_action(directory)
     _validate_pinned_container_builder(directory)
     target_files: list[Path] = []
     for path in sorted((*directory.glob("*.yml"), *directory.glob("*.yaml"))):
@@ -2410,12 +2411,20 @@ def _validate_grype_database_action(directory: Path) -> None:
         raise WorkflowPolicyError("Grype cache must require freshness and only save from main")
 
 
+def _validate_android_jdk_action(directory: Path) -> None:
+    action = directory.parent / "actions/setup-android-jdk/action.yml"
+    if not action.is_file():
+        raise WorkflowPolicyError("Android JDK setup action is required")
+    _require_full_action_pins(action.read_text(encoding="utf-8"), "Android JDK setup")
+
+
 def _require_full_action_pins(text: str, label: str) -> None:
     for action in re.findall(r"(?m)^\s*(?:-\s*)?uses:\s*([^\s#]+)", text):
         # These repository actions are bound to the immutable checkout SHA.
         if action in {
             "./.github/actions/prepare-grype-db",
             "./.github/actions/configure-tls",
+            "./.github/actions/setup-android-jdk",
         }:
             continue
         _, separator, revision = action.rpartition("@")
