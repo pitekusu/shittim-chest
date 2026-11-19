@@ -944,6 +944,18 @@ Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは6
 必須CIとCodeQL成功後のマージ・本番反映を明示承認した。`expires_on`は`2026-11-19`のままとする。
 4枠を使用していた既存10組では、最古のPR #747のconfigを入れ替え、稼働中のconfigを保持する。
 
+2026-11-19、PR #742のPython SDK更新で完成ARM64 production config
+`sha256:b1281b59657e2bbfe1af883d7b008e8d2b6271f17e61e884eba8c792e903da0f`を計測した。
+署名付きDHI VEX適用後のHigh 28組はPR #753の既承認記録とCVE・パッケージ・版・修正状態が一致した。
+Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは60/60成功した。
+[完成SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44501957339/artifacts/14517617479)と
+[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44501957339/artifacts/14518385938)を照合した。
+
+所有者はこのconfigの28組に限り、2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、
+必須CIとCodeQL成功後のマージを承認した。`expires_on`は`2026-11-19`を維持する。
+上限4枠に達していた22組では最古のPR #749のconfigを入れ替え、
+[後続の成功済みCore配信](https://github.com/pitekusu/shittim-chest/actions/runs/44106347517)のconfigを保持した。
+
 ## 5. 本番配信
 
 ### 共通の工程
