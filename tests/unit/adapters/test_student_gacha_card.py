@@ -128,7 +128,7 @@ def test_animated_card_freezes_both_panels_while_the_art_moves() -> None:
                         )
                     artwork_colors.add(frame.getpixel((525, 200)))
         assert tuple(durations) == GACHA_APNG_FRAME_DURATIONS
-        assert sum(durations) == 1500
+        assert sum(durations) == 1800
         assert len(artwork_colors) == 12
 
 

@@ -25,6 +25,7 @@ from shittim_chest.adapters.assets.student_gacha import (
 from shittim_chest.application.student_gacha_models import (
     GACHA_APNG_FRAME_DURATIONS,
     GACHA_GIF_FRAME_DURATIONS,
+    GACHA_LEGACY_APNG_FRAME_DURATIONS,
     GachaGenerationFailure,
     GachaImageFormat,
     SchoolBranding,
@@ -169,6 +170,11 @@ async def test_finds_legacy_result_without_overwriting_it_with_apng(
     (
         ((170,), 0, False),
         (GACHA_GIF_FRAME_DURATIONS, 0, False),
+        (
+            GACHA_APNG_FRAME_DURATIONS[:-1] + GACHA_LEGACY_APNG_FRAME_DURATIONS[-1:],
+            0,
+            False,
+        ),
         (GACHA_APNG_FRAME_DURATIONS, 1, False),
         (GACHA_APNG_FRAME_DURATIONS[:-1], 0, True),
     ),
