@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -33,6 +34,7 @@ from shittim_chest.application.student_gacha_discord import (
     GachaDeliveryFailure,
     StudentGachaInteractions,
 )
+from shittim_chest.application.student_gacha_models import GachaImageFormat
 from shittim_chest.application.student_gacha_state import GachaOffer
 from shittim_chest.lambda_handlers.discord_ingress import DiscordIngressLambda
 
@@ -345,6 +347,58 @@ async def test_gallery_notice_links_to_gallery_and_recovers_the_same_reply(
     assert options["nonce"] == delivery._nonce(f"{OFFER_ID}:gallery")
     assert options["allowed_mentions"].to_dict() == discord.AllowedMentions.none().to_dict()
     assert options["suppress_embeds"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("image_format", list(GachaImageFormat))
+async def test_result_attachment_keeps_its_saved_format_when_reconciling(
+    monkeypatch: pytest.MonkeyPatch, image_format: GachaImageFormat
+) -> None:
+    gateway = delivery.DiscordStudentGacha(
+        clients={DiscordBotSlot.PARTICIPANT_A: cast(discord.Client, object())},
+        config=_config(),
+    )
+    channel = SimpleNamespace(id=102, send=AsyncMock())
+    content = b"saved card"
+    nonce = delivery._nonce(f"{OFFER_ID}:result")
+    digest = hashlib.sha256(content).hexdigest()[:16]
+    filename = f"student-{nonce}-{digest}.{image_format.value}"
+    message = SimpleNamespace(
+        id=120,
+        author=SimpleNamespace(id=202),
+        channel=channel,
+        nonce=None,
+        content="✨ 生徒募集の結果です!",
+        components=[],
+        attachments=[
+            SimpleNamespace(
+                filename=filename, size=len(content), content_type=image_format.content_type
+            )
+        ],
+    )
+
+    async def history(**_kwargs: object) -> AsyncIterator[object]:
+        if channel.send.await_count:
+            yield message
+
+    channel.history = history
+    channel.send.return_value = message
+    monkeypatch.setattr(gateway, "_channel", AsyncMock(return_value=channel))
+
+    for _ in range(2):
+        assert (
+            await gateway.send_result(
+                guild_id="101",
+                channel_id="102",
+                publication_id=OFFER_ID,
+                after_message_id="103",
+                content=content,
+                image_format=image_format,
+            )
+            == "120"
+        )
+    channel.send.assert_awaited_once()
+    assert channel.send.await_args.kwargs["files"][0].filename == filename
 
 
 @pytest.mark.asyncio

@@ -175,7 +175,7 @@ def test_selfie_submits_all_frozen_references_for_one_photo(scores, legacy):
     assert request["image"] == [
         (f"{slot}.png", f"fictional-reference-{slot}".encode(), "image/png") for slot in slots
     ]
-    assert request["n"] == 1 and request["model"] == "gpt-image-2.5-sunburst"
+    assert request["n"] == 1 and request["model"] == "gpt-image-2.6-sunburst"
     assert request["size"] == "1024x1536" and request["quality"] == "high"
     assert f"指定の{len(slots)}人全員が同じ場所で1枚" in request["prompt"]
     assert request["output_format"] == "webp" and request["timeout"] == 240

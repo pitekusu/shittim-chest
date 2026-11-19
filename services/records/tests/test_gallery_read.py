@@ -17,6 +17,7 @@ import pytest
 from PIL import Image
 from shittim_chest.adapters.assets.student_gacha import _ASSET_DIGESTS, ROSTER_KEY, SCHOOL_LOGOS_KEY
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
+from shittim_chest.application.student_gacha_models import GachaImageFormat, student_gacha_image_key
 from tests.test_http_api import NOW, SESSION_KEY, FakeSessionStore, event, session
 
 from shittim_records.auth import SESSION_COOKIE_NAME, AuthFailure, AuthStore, validate_return_to
@@ -41,7 +42,13 @@ def card_id(offer: str = OFFER) -> str:
     return base64.urlsafe_b64encode(f"{POSTED}#{offer}".encode()).decode()
 
 
-def item(offer: str = OFFER, *, ready: bool = True, rarity: int | None = 4) -> dict[str, Any]:
+def item(
+    offer: str = OFFER,
+    *,
+    ready: bool = True,
+    rarity: int | None = 4,
+    image_format: GachaImageFormat = GachaImageFormat.PNG,
+) -> dict[str, Any]:
     row = {
         "PK": PARTITION,
         "SK": f"RESULT#{POSTED}#{offer}",
@@ -55,7 +62,7 @@ def item(offer: str = OFFER, *, ready: bool = True, rarity: int | None = 4) -> d
         "owner_key": VIEWER.requester_key if offer == OFFER else "k" * 43,
         "collector_display_name": "保存時の名前",
         "stored": {
-            "key": f"student-gacha/results/{offer}.png",
+            "key": student_gacha_image_key(offer, image_format),
             "version_id": "original-version",
             "sha256": SHA256,
         },
@@ -415,13 +422,24 @@ def test_school_logos_require_browser_auth_and_return_only_validated_catalog_ico
     assert signer.catalog_reads == 2
 
 
-def test_gallery_signs_only_requested_ready_thumbnails_or_explicit_original(setup: Any) -> None:
+@pytest.mark.parametrize(
+    "image_format,width,height,content_type",
+    [
+        (GachaImageFormat.PNG, 1792, 828, "image/png"),
+        (GachaImageFormat.GIF, 1024, 473, "image/gif"),
+    ],
+)
+def test_gallery_signs_only_requested_ready_thumbnails_or_explicit_original(
+    setup: Any, image_format: GachaImageFormat, width: int, height: int, content_type: str
+) -> None:
     controller, dynamo, signer, _ = setup
+    original_key = student_gacha_image_key(OFFER, image_format)
+    dynamo.first["stored"]["key"] = original_key
     detail = controller.handle(
         event(f"{ROOT}/{{cardId}}", path={"cardId": card_id()}, cookies=COOKIES), now=NOW
     )
     data = json.loads(detail["body"])
-    assert (data["width"], data["height"]) == (1792, 828)
+    assert (data["width"], data["height"]) == (width, height)
     assert not signer.requests
 
     thumbnails = controller.handle(
@@ -454,8 +472,16 @@ def test_gallery_signs_only_requested_ready_thumbnails_or_explicit_original(setu
         event(f"{ROOT}/{{cardId}}/original", path={"cardId": card_id()}, cookies=COOKIES), now=NOW
     )
     assert original["statusCode"] == 200
-    assert signer.requests[-1]["Params"]["VersionId"] == "original-version"
-    assert signer.requests[-1]["Params"]["ResponseContentType"] == "image/png"
+    assert signer.requests[-1] == {
+        "Params": {
+            "Bucket": "media",
+            "Key": original_key,
+            "VersionId": "original-version",
+            "ResponseContentType": content_type,
+            "ResponseCacheControl": "private, no-store",
+        },
+        "ExpiresIn": 300,
+    }
 
     missing = controller.handle(
         event(f"{ROOT}/{{cardId}}/original", path={"cardId": card_id("e" * 32)}, cookies=COOKIES),
@@ -471,7 +497,15 @@ def test_gallery_signs_only_requested_ready_thumbnails_or_explicit_original(setu
     assert len(signer.requests) == 2
 
 
-@pytest.mark.parametrize("field,value", [("performer", "other"), ("rarity", True), ("PK", "other")])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("performer", "other"),
+        ("rarity", True),
+        ("PK", "other"),
+        ("stored", item("e" * 32, image_format=GachaImageFormat.GIF)["stored"]),
+    ],
+)
 def test_invalid_projection_cannot_be_used_to_sign_an_image(
     setup: Any, field: str, value: Any
 ) -> None:

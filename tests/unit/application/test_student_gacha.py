@@ -22,6 +22,7 @@ from shittim_chest.application.student_gacha_discord import GachaDeliveryFailure
 from shittim_chest.application.student_gacha_models import (
     GachaExpression,
     GachaGenerationFailure,
+    GachaImageFormat,
     GachaPresentation,
     SchoolBranding,
     StoredGachaImage,
@@ -115,13 +116,16 @@ def worker_fixture(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("image_format", list(GachaImageFormat))
 async def test_stored_draw_resumes_after_discord_failure(
     worker_fixture: tuple[StudentGachaWorker, AsyncMock, AsyncMock, AsyncMock, AsyncMock],
+    image_format: GachaImageFormat,
 ) -> None:
     worker, store, media, generator, discord = worker_fixture
-    job = _job(stored=STORED, paid_started=True, loading_message_id="103")
+    stored = replace(STORED, key=f"student-gacha/results/{OFFER}.{image_format.value}")
+    job = _job(stored=stored, paid_started=True, loading_message_id="103")
     store.claim_next.return_value = job
-    media.load.return_value = b"saved PNG"
+    media.load.return_value = b"saved media"
     discord.send_result.side_effect = [
         GachaDeliveryFailure(retryable=True, ambiguous=True),
         "104",
@@ -143,6 +147,7 @@ async def test_stored_draw_resumes_after_discord_failure(
     assert discord.send_result.await_count == 2
     assert discord.send_result.await_args_list[0] == discord.send_result.await_args_list[1]
     assert discord.send_result.await_args.kwargs["publication_id"] == OFFER
+    assert discord.send_result.await_args.kwargs["image_format"] is image_format
     assert [call[0] for call in discord.mock_calls[:4]] == [
         "delete_loading",
         "send_result",

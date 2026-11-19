@@ -41,7 +41,7 @@ from shittim_records.momotalk import (
 )
 
 TEXT_MODEL = "gpt-6.2-sol"
-IMAGE_MODEL = "gpt-image-2.5-sunburst"
+IMAGE_MODEL = "gpt-image-2.6-sunburst"
 LOGGER = logging.getLogger(__name__)
 # Provider fields are untrusted: only known classifications may reach logs.
 PROVIDER_CODES = frozenset(

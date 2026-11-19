@@ -8,14 +8,23 @@ import re
 import warnings
 from functools import cache
 from importlib.resources import files
+from struct import error as StructError
 from typing import TYPE_CHECKING
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-from shittim_chest.adapters.assets.student_gacha import RESULT_MAX_BYTES, RESULT_SIZE
+from shittim_chest.adapters.assets.student_gacha import (
+    RESULT_MAX_BYTES,
+    RESULT_SIZE,
+    validate_gacha_result,
+)
 from shittim_chest.application.student_gacha_models import (
+    GACHA_GIF_FRAME_COUNT,
+    GACHA_GIF_FRAME_DURATIONS,
+    GACHA_GIF_SIZE,
     TEACHER_PLACEHOLDER,
     GachaGenerationFailure,
+    GachaImageFormat,
 )
 from shittim_chest.domain import ParticipantSlot
 
@@ -27,7 +36,7 @@ _PERFORMER_NAMES: dict[ParticipantSlot, str] = {
     ParticipantSlot.PARTICIPANT_B: "プラナ",
     ParticipantSlot.PARTICIPANT_C: "安倍晋三",
 }
-_ART_SIZE = (1792, 832)
+GIF_ART_SIZE = (1024, 480)
 _NAVY = "#14284b"
 _INK = "#293b54"
 _WHITE = "#fcfdff"
@@ -92,40 +101,135 @@ def render_card(
     *,
     school_branding: SchoolBranding | None = None,
 ) -> bytes:
-    """Render the approved layout, without sending the display name to the provider."""
-    if not 1 <= len(art) <= RESULT_MAX_BYTES:
-        raise GachaGenerationFailure("gacha_image_invalid")
+    """Compose the animated card locally, with the panels held still across frames."""
+    art_frames = _read_art_frames(art)
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(art), formats=["PNG"]) as source:
-                if source.size != _ART_SIZE or getattr(source, "n_frames", 1) != 1:
-                    raise GachaGenerationFailure("gacha_image_invalid")
-                canvas = ImageOps.fit(source.convert("RGBA"), RESULT_SIZE)
-        rarity = presentation.student.rarity
-        if rarity == 4:
-            canvas.alpha_composite(_rare_reveal())
-        # Three-star cards use the original soft reveal lighting from the artwork.
-        elif rarity is not None and rarity < len(_BACKGROUND_PALETTES):
-            black, mid, white = _BACKGROUND_PALETTES[rarity]
-            tinted = ImageOps.colorize(
-                ImageOps.grayscale(canvas), black=black, mid=mid, white=white
-            )
-            tinted.putalpha(_edge_mask(236))
-            canvas.alpha_composite(tinted)
-        canvas.alpha_composite(_dossier(presentation, school_branding), dest=(1125, 141))
-        canvas.alpha_composite(_dialogue(presentation, teacher), dest=(132, 555))
-        output = io.BytesIO()
-        canvas.convert("RGB").save(output, format="PNG", compress_level=6)
+        panels = _card_panels(presentation, teacher, school_branding)
+        frames = [
+            _compose_frame(frame, presentation.student.rarity, panels)
+            .convert("RGB")
+            .resize(GACHA_GIF_SIZE, Image.Resampling.LANCZOS)
+            for frame in art_frames
+        ]
+        panel_mask = (
+            panels.getchannel("A")
+            .resize(GACHA_GIF_SIZE, Image.Resampling.LANCZOS)
+            .point(lambda alpha: 255 if alpha else 0, mode="1")
+        )
+        for colors in (256, 128):
+            result = _encode_gif(frames, panel_mask, colors)
+            if 1 <= len(result) <= RESULT_MAX_BYTES:
+                break
+        else:
+            raise GachaGenerationFailure("gacha_result_invalid")
     except (
         Image.DecompressionBombError,
         Image.DecompressionBombWarning,
-        UnidentifiedImageError,
         OSError,
         ValueError,
     ):
         raise GachaGenerationFailure("gacha_card_render_failed") from None
-    return output.getvalue()
+    try:
+        # Pillow can coalesce adjacent frames when their quantized pixels are identical.
+        validate_gacha_result(result, image_format=GachaImageFormat.GIF)
+    except GachaGenerationFailure:
+        raise GachaGenerationFailure("gacha_card_render_failed") from None
+    return result
+
+
+def _read_art_frames(art: bytes) -> list[Image.Image]:
+    if not 1 <= len(art) <= RESULT_MAX_BYTES or not art.endswith(b";"):
+        raise GachaGenerationFailure("gacha_image_invalid")
+    try:
+        frames: list[Image.Image] = []
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with io.BytesIO(art) as buffer, Image.open(buffer, formats=["GIF"]) as source:
+                for index in range(GACHA_GIF_FRAME_COUNT):
+                    source.seek(index)
+                    if source.size != GIF_ART_SIZE:
+                        raise GachaGenerationFailure("gacha_image_invalid")
+                    frames.append(source.convert("RGBA"))
+                try:
+                    source.seek(GACHA_GIF_FRAME_COUNT)
+                except EOFError:
+                    return frames
+    except (
+        EOFError,
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+        IndexError,
+        OSError,
+        StructError,
+        SyntaxError,
+        ValueError,
+    ):
+        raise GachaGenerationFailure("gacha_image_invalid") from None
+    raise GachaGenerationFailure("gacha_image_invalid")
+
+
+def _card_panels(
+    presentation: GachaPresentation, teacher: str, school_branding: SchoolBranding | None
+) -> Image.Image:
+    panels = Image.new("RGBA", RESULT_SIZE)
+    panels.alpha_composite(_dossier(presentation, school_branding), dest=(1125, 141))
+    panels.alpha_composite(_dialogue(presentation, teacher), dest=(132, 555))
+    return panels
+
+
+def _compose_frame(art: Image.Image, rarity: int | None, panels: Image.Image) -> Image.Image:
+    canvas = ImageOps.fit(art, RESULT_SIZE)
+    if rarity == 4:
+        canvas.alpha_composite(_rare_reveal())
+    # Three-star cards use the original soft reveal lighting from the artwork.
+    elif rarity is not None and rarity < len(_BACKGROUND_PALETTES):
+        black, mid, white = _BACKGROUND_PALETTES[rarity]
+        tinted = ImageOps.colorize(ImageOps.grayscale(canvas), black=black, mid=mid, white=white)
+        tinted.putalpha(_edge_mask(236))
+        canvas.alpha_composite(tinted)
+    canvas.alpha_composite(panels)
+    return canvas
+
+
+def _encode_gif(frames: list[Image.Image], panel_mask: Image.Image, colors: int) -> bytes:
+    # Sample the whole loop into one palette, with all panels anchored to the first frame.
+    first = frames[0]
+    sample_width, sample_height = (edge // 4 for edge in GACHA_GIF_SIZE)
+    sample_size = (sample_width, sample_height)
+    samples = Image.new("RGB", (sample_width, sample_height * len(frames)))
+    sample_mask = panel_mask.resize(sample_size, Image.Resampling.NEAREST)
+    first_sample = first.resize(sample_size, Image.Resampling.NEAREST)
+    for index, frame in enumerate(frames):
+        sample = frame.resize(sample_size, Image.Resampling.NEAREST)
+        sample.paste(first_sample, mask=sample_mask)
+        samples.paste(sample, (0, index * sample_height))
+    palette = samples.quantize(colors=colors)
+    palette_colors = palette.getpalette()
+    if palette_colors is None:
+        raise ValueError("GIF palette unavailable")
+
+    fixed_panel = first.quantize(palette=palette, dither=Image.Dither.NONE)
+    indexed: list[Image.Image] = []
+    for frame in frames:
+        # Freeze the translucent edges before diffusion so panel changes cannot bleed into the art.
+        frozen = frame.copy()
+        frozen.paste(first, mask=panel_mask)
+        dithered = frozen.quantize(palette=palette, dither=Image.Dither.FLOYDSTEINBERG)
+        dithered.paste(fixed_panel, mask=panel_mask)
+        indexed.append(dithered)
+
+    with io.BytesIO() as output:
+        indexed[0].save(
+            output,
+            format="GIF",
+            save_all=True,
+            append_images=indexed[1:],
+            duration=GACHA_GIF_FRAME_DURATIONS,
+            loop=0,
+            optimize=False,
+            palette=bytes(palette_colors),
+        )
+        return output.getvalue()
 
 
 @cache

@@ -1,4 +1,4 @@
-import { useQueries, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   defaultRangeExtractor,
   useWindowVirtualizer,
@@ -28,8 +28,12 @@ import {
   galleryCollectionSchool,
   galleryDetailQuery,
   galleryImageUrl,
+  galleryOriginalQuery,
   galleryRarityAriaLabel,
   galleryThumbnailsQuery,
+  isGalleryGif,
+  prefersReducedMotion,
+  useGalleryReducedMotion,
   type GalleryCollectionEntry,
 } from "../lib/gallery";
 import styles from "../styles/gallery.module.css";
@@ -76,6 +80,41 @@ function GalleryThumbnail({ image }: { readonly image: Thumbnail }) {
   );
 }
 
+function prefersReducedData() {
+  const { connection } = navigator as Navigator & { connection?: { saveData?: boolean } };
+  return connection?.saveData || window.matchMedia("(prefers-reduced-data: reduce)").matches;
+}
+
+function GalleryHoverPreview({
+  cardId,
+  scope,
+}: {
+  readonly cardId: string;
+  readonly scope: number;
+}) {
+  const original = useQuery({
+    ...galleryOriginalQuery(scope, cardId),
+    retry: false,
+    refetchOnReconnect: false,
+  });
+  const [loadedUrl, setLoadedUrl] = useState<string>();
+  const [failedUrl, setFailedUrl] = useState<string>();
+  const url = galleryImageUrl(original.data);
+  if (!url || failedUrl === url || !isGalleryGif(url)) return null;
+  return (
+    <img
+      alt=""
+      className={styles.hoverPreview}
+      data-loaded={loadedUrl === url ? "" : undefined}
+      decoding="async"
+      referrerPolicy="no-referrer"
+      src={url}
+      onLoad={() => setLoadedUrl(url)}
+      onError={() => setFailedUrl(url)}
+    />
+  );
+}
+
 type GalleryGridEntry = GalleryCard | GalleryCollectionEntry;
 const hiddenStudentName = "？？？？？";
 
@@ -102,6 +141,7 @@ function GalleryGridCard({
   scope,
   search,
   first,
+  previewEnabled,
   onOpen,
   onOpenGroup,
   onFocus,
@@ -114,6 +154,7 @@ function GalleryGridCard({
   readonly scope: number;
   readonly search: string;
   readonly first: boolean;
+  readonly previewEnabled: boolean;
   readonly onOpen: (event: MouseEvent<HTMLAnchorElement>) => void;
   readonly onOpenGroup: ((event: MouseEvent<HTMLAnchorElement>, id: string) => void) | undefined;
   readonly onFocus: () => void;
@@ -121,6 +162,7 @@ function GalleryGridCard({
 }) {
   const queryClient = useQueryClient();
   const hoverTimer = useRef<number | undefined>(undefined);
+  const [previewCard, setPreviewCard] = useState<string>();
   const collection = "cards" in entry ? entry : undefined;
   const card = entryCard(entry);
   const name =
@@ -129,11 +171,15 @@ function GalleryGridCard({
   const rarity = entry.rarity;
   const copies = collection?.cards.length ?? 0;
   const opensGroup = copies > 1;
-  const stopHover = () => window.clearTimeout(hoverTimer.current);
+  if (previewCard && (!previewEnabled || previewCard !== card?.cardId)) setPreviewCard(undefined);
+  const stopHover = () => {
+    window.clearTimeout(hoverTimer.current);
+    setPreviewCard(undefined);
+  };
   const prefetch = () => {
     if (card && !opensGroup) void queryClient.prefetchQuery(galleryDetailQuery(scope, card.cardId));
   };
-  useEffect(() => () => window.clearTimeout(hoverTimer.current), []);
+  useEffect(() => () => window.clearTimeout(hoverTimer.current), [card?.cardId, previewEnabled]);
 
   const contents = (
     <>
@@ -152,6 +198,9 @@ function GalleryGridCard({
                 ? "サムネイルを表示できません"
                 : "拡大して画像を見る"}
           </span>
+        )}
+        {card && previewEnabled && previewCard === card.cardId && (
+          <GalleryHoverPreview cardId={card.cardId} scope={scope} />
         )}
         {opensGroup && <span className={styles.copyCount}>{copies.toLocaleString("ja-JP")}枚</span>}
       </div>
@@ -205,6 +254,7 @@ function GalleryGridCard({
       }}
       state={opensGroup ? { galleryGroupOpened: true } : { galleryOpened: true }}
       onClick={(event) => {
+        stopHover();
         if (opensGroup) onOpenGroup?.(event, id);
         else onOpen(event);
       }}
@@ -214,13 +264,23 @@ function GalleryGridCard({
         prefetch();
       }}
       onKeyDown={onTab}
-      onMouseEnter={() => {
-        if (opensGroup || !window.matchMedia("(hover: hover) and (pointer: fine)").matches) return;
-        if (window.matchMedia("(prefers-reduced-data: reduce)").matches) return;
+      onPointerEnter={(event) => {
+        if (
+          event.pointerType !== "mouse" ||
+          !window.matchMedia("(hover: hover) and (pointer: fine)").matches ||
+          prefersReducedData()
+        ) {
+          return;
+        }
         stopHover();
-        hoverTimer.current = window.setTimeout(prefetch, 130);
+        hoverTimer.current = window.setTimeout(() => {
+          prefetch();
+          if (previewEnabled && !prefersReducedMotion() && !prefersReducedData()) {
+            setPreviewCard(card.cardId);
+          }
+        }, 130);
       }}
-      onMouseLeave={stopHover}
+      onPointerLeave={stopHover}
     >
       {contents}
     </Link>
@@ -241,6 +301,7 @@ export function GalleryGrid({
   search,
   label,
   firstCardId,
+  viewerOpen,
   restoreFocus,
   onRestoreFocus,
   onOpen,
@@ -252,6 +313,7 @@ export function GalleryGrid({
   readonly search: string;
   readonly label: string;
   readonly firstCardId?: string;
+  readonly viewerOpen: boolean;
   readonly restoreFocus?: GalleryGridReturn;
   readonly onRestoreFocus?: () => void;
   readonly onOpen: (event: MouseEvent<HTMLAnchorElement>) => void;
@@ -264,6 +326,7 @@ export function GalleryGrid({
   const pendingFocus = useRef<{ id: string; scrollY?: number } | undefined>(restoreFocus);
   const [layout, setLayout] = useState(restoreFocus?.layout ?? { width: 0, top: 0 });
   const [focusedCard, setFocusedCard] = useState(restoreFocus?.id);
+  const reducedMotion = useGalleryReducedMotion();
   const columns = gridColumns(layout.width);
   const focusedIndex = entries.findIndex((entry) => entryId(entry) === focusedCard);
   const focusedRow = focusedIndex < 0 ? -1 : Math.floor(focusedIndex / columns);
@@ -438,6 +501,7 @@ export function GalleryGrid({
                     scope={scope}
                     search={search}
                     first={firstCardId !== undefined && firstCardId === card?.cardId}
+                    previewEnabled={!viewerOpen && !reducedMotion}
                     onOpen={onOpen}
                     onOpenGroup={
                       onOpenGroup &&

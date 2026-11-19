@@ -249,6 +249,17 @@
   object-fit: contain;
 }
 
+.hoverPreview {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.hoverPreview[data-loaded] {
+  opacity: 1;
+}
+
 .question {
   color: var(--records-ink-600);
   font-size: clamp(3rem, 10vw, 5rem);

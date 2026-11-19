@@ -12,8 +12,11 @@ from shittim_chest.domain import ParticipantSlot
 STUDENT_GACHA_IMAGE_PREFIX = "student-gacha/results/"
 TEACHER_PLACEHOLDER = "{teacher}"
 STUDENT_GACHA_RARITIES = frozenset(range(5))
+GACHA_GIF_FRAME_DURATIONS = (170, 160, 170) * 4
+GACHA_GIF_FRAME_COUNT = len(GACHA_GIF_FRAME_DURATIONS)
+GACHA_GIF_SIZE = (1024, 473)
 _DRAW_ID = re.compile(r"[0-9a-f]{32}")
-_IMAGE_KEY = re.compile(re.escape(STUDENT_GACHA_IMAGE_PREFIX) + r"[0-9a-f]{32}\.png")
+_IMAGE_KEY = re.compile(re.escape(STUDENT_GACHA_IMAGE_PREFIX) + r"[0-9a-f]{32}\.(?:png|gif)")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
@@ -21,6 +24,19 @@ class GachaExpression(StrEnum):
     UNHAPPY = "unhappy"
     NEUTRAL = "neutral"
     SMILE = "smile"
+
+
+class GachaImageFormat(StrEnum):
+    PNG = "png"
+    GIF = "gif"
+
+    @property
+    def content_type(self) -> str:
+        return f"image/{self.value}"
+
+    @property
+    def size(self) -> tuple[int, int]:
+        return GACHA_GIF_SIZE if self is GachaImageFormat.GIF else (1792, 828)
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +106,10 @@ class StoredGachaImage:
         ):
             raise ValueError("invalid_student_gacha_image_receipt")
 
+    @property
+    def image_format(self) -> GachaImageFormat:
+        return GachaImageFormat(self.key.rsplit(".", 1)[1])
+
 
 class GachaGenerationFailure(RuntimeError):
     """A content-free failure, possibly after a paid image call was sent."""
@@ -108,10 +128,12 @@ def normalize_teacher_name(value: str) -> str:
     return name
 
 
-def student_gacha_image_key(draw_id: str) -> str:
+def student_gacha_image_key(
+    draw_id: str, image_format: GachaImageFormat = GachaImageFormat.PNG
+) -> str:
     if not _DRAW_ID.fullmatch(draw_id):
         raise ValueError("invalid_student_gacha_draw_id")
-    return f"{STUDENT_GACHA_IMAGE_PREFIX}{draw_id}.png"
+    return f"{STUDENT_GACHA_IMAGE_PREFIX}{draw_id}.{image_format.value}"
 
 
 def _require_printable(text: str, limit: int) -> None:

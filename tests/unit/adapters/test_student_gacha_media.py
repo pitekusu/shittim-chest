@@ -4,7 +4,7 @@ import base64
 import hashlib
 import io
 import json
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, call
 
 import boto3
 import pytest
@@ -23,8 +23,12 @@ from shittim_chest.adapters.assets.student_gacha import (
     _parse_roster,
 )
 from shittim_chest.application.student_gacha_models import (
+    GACHA_GIF_FRAME_COUNT,
+    GACHA_GIF_FRAME_DURATIONS,
     GachaGenerationFailure,
+    GachaImageFormat,
     SchoolBranding,
+    StoredGachaImage,
     Student,
     normalize_teacher_name,
     student_gacha_image_key,
@@ -33,33 +37,108 @@ from shittim_chest.application.student_gacha_models import (
 _DRAW_ID = "0" * 32
 
 
+def _gif() -> bytes:
+    frames = [
+        Image.new("RGB", GachaImageFormat.GIF.size, (20 * frame, 54, 88))
+        for frame in range(GACHA_GIF_FRAME_COUNT)
+    ]
+    with io.BytesIO() as output:
+        frames[0].save(
+            output,
+            "GIF",
+            save_all=True,
+            append_images=frames[1:],
+            duration=GACHA_GIF_FRAME_DURATIONS,
+            loop=0,
+        )
+        return output.getvalue()
+
+
+def _missing_object() -> ClientError:
+    return ClientError(
+        {
+            "Error": {"Code": "404"},
+            "ResponseMetadata": {
+                "RequestId": "test",
+                "HostId": "test",
+                "HTTPStatusCode": 404,
+                "HTTPHeaders": {},
+                "RetryAttempts": 0,
+            },
+        },
+        "HeadObject",
+    )
+
+
 @pytest.mark.asyncio
 async def test_save_reconciles_lost_put_response_and_loads_verified_version() -> None:
-    raw = io.BytesIO()
-    Image.new("RGB", RESULT_SIZE, "lavender").save(raw, "PNG")
-    png = raw.getvalue()
-    checksum = base64.b64encode(hashlib.sha256(png).digest()).decode("ascii")
+    gif = _gif()
+    checksum = base64.b64encode(hashlib.sha256(gif).digest()).decode("ascii")
     client = Mock()
     client.put_object.side_effect = ClientError(
         {"Error": {"Code": "PreconditionFailed"}}, "PutObject"
     )
-    client.head_object.return_value = {
-        "ContentType": "image/png",
-        "ContentLength": len(png),
+    gif_metadata = {
+        "ContentType": "image/gif",
+        "ContentLength": len(gif),
         "ChecksumSHA256": checksum,
         "VersionId": "original-version",
     }
-    client.get_object.return_value = {"ContentLength": len(png), "Body": io.BytesIO(png)}
+    client.head_object.side_effect = [gif_metadata, _missing_object()]
+    client.get_object.return_value = {**gif_metadata, "Body": io.BytesIO(gif)}
     media = StudentGachaMedia(client, bucket_name="private-media")
 
-    stored = await media.save(_DRAW_ID, png)
+    stored = await media.save(_DRAW_ID, gif)
 
-    assert stored.sha256 == hashlib.sha256(png).hexdigest()
-    assert stored.key == student_gacha_image_key(_DRAW_ID)
+    assert stored.sha256 == hashlib.sha256(gif).hexdigest()
+    assert stored.key == student_gacha_image_key(_DRAW_ID, GachaImageFormat.GIF)
     assert client.put_object.call_args.kwargs["IfNoneMatch"] == "*"
     assert client.put_object.call_args.kwargs["ChecksumSHA256"] == checksum
-    assert await media.load(stored) == png
+    assert client.put_object.call_args.kwargs["ContentType"] == "image/gif"
+    assert await media.load(stored) == gif
     assert client.get_object.call_args.kwargs["VersionId"] == "original-version"
+
+
+@pytest.mark.asyncio
+async def test_finds_legacy_png_and_parks_two_formats_as_a_conflict() -> None:
+    with io.BytesIO() as output:
+        Image.new("RGB", RESULT_SIZE, "lavender").save(output, "PNG")
+        png = output.getvalue()
+    png_metadata = {
+        "ContentLength": len(png),
+        "ContentType": "image/png",
+        "ChecksumSHA256": base64.b64encode(hashlib.sha256(png).digest()).decode("ascii"),
+        "VersionId": "old-version",
+    }
+    client = Mock()
+    client.head_object.side_effect = [_missing_object(), png_metadata]
+    client.get_object.return_value = {**png_metadata, "Body": io.BytesIO(png)}
+    media = StudentGachaMedia(client, bucket_name="private-media")
+
+    stored = await media.find(_DRAW_ID)
+    assert stored is not None
+    assert stored == StoredGachaImage(
+        student_gacha_image_key(_DRAW_ID), "old-version", hashlib.sha256(png).hexdigest()
+    )
+    assert await media.load(stored) == png
+
+    client.head_object.side_effect = [{**png_metadata, "ContentType": "image/gif"}, png_metadata]
+    with pytest.raises(GachaGenerationFailure, match="gacha_result_conflict") as failure:
+        await media.find(_DRAW_ID)
+    assert failure.value.ambiguous
+
+
+@pytest.mark.asyncio
+async def test_rejects_static_gif_before_saving() -> None:
+    with io.BytesIO() as output:
+        Image.new("RGB", GachaImageFormat.GIF.size, "lavender").save(output, "GIF", loop=0)
+        gif = output.getvalue()
+    client = Mock()
+    media = StudentGachaMedia(client, bucket_name="private-media")
+
+    with pytest.raises(GachaGenerationFailure, match="gacha_media_invalid"):
+        await media.save(_DRAW_ID, gif)
+    client.put_object.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -82,9 +161,14 @@ async def test_missing_result_is_distinguished_from_access_denied() -> None:
     media = StudentGachaMedia(client, bucket_name="private-media")
 
     assert await media.find(_DRAW_ID) is None
-    client.list_objects_v2.assert_called_once_with(
-        Bucket="private-media", Prefix=student_gacha_image_key(_DRAW_ID), MaxKeys=1
-    )
+    assert client.list_objects_v2.call_args_list == [
+        call(
+            Bucket="private-media",
+            Prefix=student_gacha_image_key(_DRAW_ID, image_format),
+            MaxKeys=1,
+        )
+        for image_format in (GachaImageFormat.GIF, GachaImageFormat.PNG)
+    ]
 
     client.list_objects_v2.return_value = {"Contents": [{"Key": student_gacha_image_key(_DRAW_ID)}]}
     with pytest.raises(GachaGenerationFailure, match="gacha_result_lookup_failed"):

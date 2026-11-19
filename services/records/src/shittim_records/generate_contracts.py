@@ -299,7 +299,7 @@ def _gallery_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
                 "/{cardId}/original",
                 "getGalleryOriginal",
                 "GalleryOriginalResponse",
-                "PNG原本の短命の署名URLを返す。",
+                "PNGまたはアニメーションGIF原本の短命の署名URLを返す。",
                 [card_id],
             ),
             (

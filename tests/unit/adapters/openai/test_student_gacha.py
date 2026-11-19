@@ -15,12 +15,10 @@ from PIL import Image
 
 from shittim_chest.adapters.openai.config import ParticipantProfile, ParticipantProfiles
 from shittim_chest.adapters.openai.limiter import OpenAIRequestLimiter
-from shittim_chest.adapters.openai.student_gacha import (
-    IMAGE_MODEL,
-    OpenAIStudentGacha,
-    _CardBrief,
-)
+from shittim_chest.adapters.openai.student_gacha import OpenAIStudentGacha, _CardBrief
 from shittim_chest.application.student_gacha_models import (
+    GACHA_GIF_FRAME_DURATIONS,
+    GACHA_GIF_SIZE,
     TEACHER_PLACEHOLDER,
     GachaExpression,
     GachaGenerationFailure,
@@ -219,9 +217,10 @@ async def test_provider_error_diagnostic_logs_only_allowlisted_fields(
 
 
 @pytest.mark.asyncio
-async def test_render_uses_approved_image_model_and_inserts_name_only_into_png() -> None:
+async def test_render_requests_a_sunburst_gif_and_inserts_the_name_locally() -> None:
     picture = io.BytesIO()
-    Image.new("RGB", (1792, 832), (190, 183, 214)).save(picture, "PNG")
+    frames = [Image.new("RGB", (1024, 480), (190, 183, 214 - 10 * index)) for index in range(12)]
+    frames[0].save(picture, "GIF", save_all=True, append_images=frames[1:], duration=170)
     image_response = SimpleNamespace(
         data=[SimpleNamespace(b64_json=base64.b64encode(picture.getvalue()).decode("ascii"))]
     )
@@ -241,8 +240,15 @@ async def test_render_uses_approved_image_model_and_inserts_name_only_into_png()
         costume_reference=_COSTUME,
         school_branding=_SCHOOL_BRANDING,
     )
+    edit.assert_awaited_once()
     payload = edit.call_args.kwargs
-    assert payload["model"] == IMAGE_MODEL
+    assert payload["model"] == "gpt-image-2.6-sunburst"
+    assert payload["size"] == "1024x480"
+    assert payload["quality"] == "max"
+    assert payload["output_format"] == "gif"
+    assert payload["frame_count"] == 12
+    assert payload["frame_duration_ms"] == 170
+    assert payload["n"] == 1
     assert payload["image"] == [
         ("performer.webp", b"portrait", "image/webp"),
         ("format.jpg", b"layout", "image/jpeg"),
@@ -252,12 +258,21 @@ async def test_render_uses_approved_image_model_and_inserts_name_only_into_png()
     assert "live-action photography" in payload["prompt"]
     assert "Backdrop palette: soft pink, lavender and ice-blue" in payload["prompt"]
     assert "the supplied layout's gentle light" in payload["prompt"]
+    assert "seamless looping animation" in payload["prompt"]
+    assert "Keep the specified facial expression." in payload["prompt"]
+    assert "Give the live-action cosplay a cute, natural motion" in payload["prompt"]
     assert _TEACHER not in repr(payload)
     client.with_options.assert_called_once_with(max_retries=0)
     with Image.open(io.BytesIO(result)) as image:
-        assert image.size == (1792, 828)
-        # Backdrop effects leave the center of the generated artwork intact.
-        assert image.getpixel((770, 400)) == (190, 183, 214)
+        assert (image.format, image.size, getattr(image, "n_frames", 1)) == (
+            "GIF",
+            GACHA_GIF_SIZE,
+            12,
+        )
+        assert image.info["loop"] == 0
+        for index, delay in enumerate(GACHA_GIF_FRAME_DURATIONS):
+            image.seek(index)
+            assert image.info["duration"] == delay
 
     other = await adapter.render(
         replace(presentation, student=_STUDENT, performer=ParticipantSlot.PARTICIPANT_B),
@@ -268,6 +283,7 @@ async def test_render_uses_approved_image_model_and_inserts_name_only_into_png()
     )
     prompt = edit.call_args.kwargs["prompt"]
     assert "crisp anime illustration" in prompt
+    assert "Live2D-like gentle blink, breathing and subtle motion" in prompt
     assert "Plana from image 1" in prompt
     assert "halo, and head accessories exactly as shown" in prompt
     assert "iridescent rainbow hues, bright prismatic light" in prompt
@@ -296,7 +312,9 @@ async def test_render_uses_costume_image_and_selected_performer_expression(
     edit = AsyncMock(return_value=SimpleNamespace(data=[SimpleNamespace(b64_json="YXJ0")]))
     client.with_options.return_value.images.edit = edit
     render_card = Mock(return_value=b"card")
+    pose_choice = Mock(return_value="Use a composed starting pose for this example.")
     monkeypatch.setattr("shittim_chest.adapters.openai.student_gacha.render_card", render_card)
+    monkeypatch.setattr("shittim_chest.adapters.openai.student_gacha.choice", pose_choice)
     presentation = GachaPresentation(
         _STUDENT,
         performer,
@@ -336,11 +354,16 @@ async def test_render_uses_costume_image_and_selected_performer_expression(
         assert "If image 3 has no halo, do not add one" in prompt
         assert "Do not borrow a halo or head accessories from image 1 or image 2" in prompt
         assert original_head not in prompt
+        pose_choice.assert_called_once()
+        assert len(pose_choice.call_args.args[0]) > 1
+        assert pose_choice.return_value in prompt
     else:
         assert original_head in prompt
         assert "Do not copy hair, a halo or head accessories from images 2 or 3" in prompt
         assert "If image 1 has no halo, keep it absent" in prompt
         assert cosplay_head not in prompt
+        pose_choice.assert_not_called()
+        assert pose_choice.return_value not in prompt
     assert expression_prompt in prompt
     if expression is not None:
         assert "Preserve the performer's facial expression from image 1." not in prompt

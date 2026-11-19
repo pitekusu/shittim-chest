@@ -8,10 +8,13 @@ from datetime import datetime, timedelta
 from typing import Annotated, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
-from shittim_chest.adapters.assets.student_gacha import RESULT_SIZE
 from shittim_chest.adapters.assets.student_gacha_schools import _SCHOOL_ALIASES
 from shittim_chest.adapters.dynamodb.serializer import DynamoItem
-from shittim_chest.application.student_gacha_models import Student, student_gacha_image_key
+from shittim_chest.application.student_gacha_models import (
+    GachaImageFormat,
+    Student,
+    student_gacha_image_key,
+)
 
 from shittim_records.auth import SessionRecord
 from shittim_records.contracts import (
@@ -88,6 +91,10 @@ class GalleryProjection(BaseModel):
     stored: GalleryAsset
     thumbnail: GalleryThumbnailAsset | None = None
 
+    @property
+    def image_format(self) -> GachaImageFormat:
+        return GachaImageFormat(self.stored.key.rsplit(".", 1)[-1])
+
     @model_validator(mode="after")
     def validate_keys(self) -> GalleryProjection:
         if (
@@ -96,7 +103,7 @@ class GalleryProjection(BaseModel):
         ):
             raise ValueError("invalid gallery result key")
         _card_id(self.sk)
-        if self.stored.key != student_gacha_image_key(self.offer_id):
+        if self.stored.key != student_gacha_image_key(self.offer_id, self.image_format):
             raise ValueError("invalid gallery original key")
         if self.thumbnail is not None and (
             self.thumbnail.key
@@ -116,7 +123,7 @@ class GalleryStore(Protocol):
 
     def load_cards(self, partition: str, sort_keys: tuple[str, ...]) -> list[DynamoItem]: ...
 
-    def sign(self, asset: GalleryAsset, *, thumbnail: bool) -> str: ...
+    def sign(self, asset: GalleryAsset, *, content_type: str) -> str: ...
 
     def load_school_logos(self) -> dict[str, str]: ...
 
@@ -201,7 +208,7 @@ class GalleryReadService:
         self, *, card_id: str, viewer: SessionRecord, include_avatars: bool = False
     ) -> GalleryDetailResponse:
         row = self._load_card(card_id)
-        width, height = RESULT_SIZE
+        width, height = row.image_format.size
         return GalleryDetailResponse(
             schema_version=1,
             card=self._summaries([row], viewer, include_avatars=include_avatars)[0],
@@ -226,7 +233,7 @@ class GalleryReadService:
             items=[
                 GalleryThumbnail(
                     card_id=card_id,
-                    url=self._store.sign(asset, thumbnail=True),
+                    url=self._store.sign(asset, content_type="image/webp"),
                     expires_at=expires_at,
                 )
                 for card_id, key in zip(ids, keys, strict=True)
@@ -238,7 +245,7 @@ class GalleryReadService:
         row = self._load_card(card_id)
         return GalleryOriginalResponse(
             schema_version=1,
-            url=self._store.sign(row.stored, thumbnail=False),
+            url=self._store.sign(row.stored, content_type=row.image_format.content_type),
             expires_at=now + timedelta(seconds=GALLERY_IMAGE_URL_TTL_SECONDS),
         )
 
