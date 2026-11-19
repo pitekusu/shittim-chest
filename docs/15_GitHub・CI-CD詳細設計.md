@@ -532,6 +532,18 @@ DependabotのActions更新は`uses:`を扱い、`with.version`、`driver-opts`�
 - 終了値は最新`0`、更新候補あり`1`、取得/設定不正`2`。
   `main`限定で`contents: read`と`issues: write`を使い、書換え・自動マージ・AWS操作・配信開始はしない。
 
+### 2026年11月19日の固定ツール更新
+
+[Issue #700](https://github.com/pitekusu/shittim-chest/issues/700)に追加された更新候補を反映する。
+Grypeはamd64／ARM64とも[0.122.1](https://github.com/anchore/grype/releases/tag/v0.122.1)へ更新し、
+公式チェックサムの署名と両配布物のSHA-256を照合する。この版はJVM版の比較とPythonパッケージへの誤ったマッチングを修正する。
+完成ARM64イメージは従来のSBOM・署名付きVEX・期限付き受容に照合する。
+
+Androidの`.java-version`は[Temurin 21.0.13.1+2](https://github.com/adoptium/temurin21-binaries/releases/tag/jdk-21.0.13.1%2B2)へ更新する。
+`setup-java`のファイル入力では4桁目とbuild番号が落ちるため、Android CI・配布・依存グラフ・CodeQLは
+共通のセットアップを使い、同じファイルの完全な版を`java-version`入力へ渡す。
+配布物の署名検証とインストール後の実際の版照合を必須にし、AndroidのビルドとCodeQLの手動抽出で確認する。
+
 ### 2026年11月18日の固定ツール更新
 
 [Issue #700](https://github.com/pitekusu/shittim-chest/issues/700)の更新候補を反映する。
@@ -556,6 +568,8 @@ CLIと版番号が分かれたcoreエイリアス／overrideは8.3.8000とし、
 2026年11月20日09:00 JSTまで受容し、CI成功後のPR #752マージを明示承認した。
 infraとWebの受容記録は`expires: 2026-11-20`とし、同日00:00 UTCから拒否する。
 Vite+ coreのNode用vendor copyにも同版が残り、正式修正や非影響の証明とは扱わない。
+11月19日、GitHubで当該アドバイザリの取り下げを確認した。固定版pnpmとnpmの監査でも
+報告されなくなったため、Webとinfraの未使用の受容記録を削除した。依存の版は維持する。
 
 同じ承認で、今回の実測ARM64 production config
 `sha256:d61d02a8c0c0f8f0c8616c64bf53ed25a9885be72ec1c00c3383f9c4fe18e2c4`に残るHigh 28組を

@@ -1,0 +1,25 @@
+name: Set up the pinned Android JDK
+description: Install the exact Temurin release configured for Records Android.
+runs:
+  using: composite
+  steps:
+    - name: Read the exact JDK version
+      id: version
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: |
+        # setup-java's file parser drops the fourth JEP 322 version component.
+        version=$(<apps/records-android/.java-version)
+        [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?\+[0-9]+$ ]]
+        printf 'value=%s\n' "${version}" >> "${GITHUB_OUTPUT}"
+    - name: Install Temurin
+      uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+      with:
+        distribution: temurin
+        java-version: ${{ steps.version.outputs.value }}
+        verify-signature: true
+    - name: Verify the installed build
+      shell: bash
+      env:
+        EXPECTED_JAVA_VERSION: ${{ steps.version.outputs.value }}
+      run: grep -Fx -- "IMPLEMENTOR_VERSION=\"Temurin-${EXPECTED_JAVA_VERSION}\"" "${JAVA_HOME}/release"
