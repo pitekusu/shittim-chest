@@ -591,7 +591,7 @@ describe("RecordsApplicationStack", () => {
     template.resourceCountIs("AWS::Lambda::Version", 7);
     template.resourceCountIs("AWS::Lambda::Alias", 7);
     template.resourceCountIs("AWS::ApiGatewayV2::Api", 1);
-    template.resourceCountIs("AWS::ApiGatewayV2::Route", 53);
+    template.resourceCountIs("AWS::ApiGatewayV2::Route", 54);
     template.resourceCountIs("AWS::ApiGatewayV2::Stage", 1);
     template.hasResourceProperties("AWS::ApiGatewayV2::Stage", {
       AutoDeploy: true,
@@ -1561,6 +1561,7 @@ describe("RecordsApplicationStack", () => {
     const gallery = routes.filter((route) => route.Properties.RouteKey.startsWith("GET /api/v1/gallery"));
     expect(gallery.map((route) => route.Properties.RouteKey).sort()).toEqual([
       "GET /api/v1/gallery",
+      "GET /api/v1/gallery/roster",
       "GET /api/v1/gallery/school-logos",
       "GET /api/v1/gallery/thumbnails",
       "GET /api/v1/gallery/{cardId}",
@@ -1578,9 +1579,11 @@ describe("RecordsApplicationStack", () => {
     expect(read.flatMap(actionsOf).sort()).toEqual([
       "dynamodb:BatchGetItem", "dynamodb:GetItem", "dynamodb:Query", "s3:GetObject", "s3:GetObjectVersion",
     ]);
-    const logoRead = read.find((statement) => actionsOf(statement).includes("s3:GetObject"));
-    expect(JSON.stringify(logoRead?.Resource)).toContain("student-gacha/assets/blue_archive_school_logos.zip");
-    expect(JSON.stringify(logoRead?.Resource)).not.toContain("*");
+    const assetRead = read.find((statement) => actionsOf(statement).includes("s3:GetObject"));
+    expect(assetRead?.Resource).toHaveLength(2);
+    expect(JSON.stringify(assetRead?.Resource)).toContain("student-gacha/assets/blue_archive_school_logos.zip");
+    expect(JSON.stringify(assetRead?.Resource)).toContain("student-gacha/roster/blue_archive_characters_with_npcs.json");
+    expect(JSON.stringify(assetRead?.Resource)).not.toContain("*");
     expect(JSON.stringify(read)).not.toContain("GACHA#OFFER#");
     for (const role of ["ProjectorFunctionRole", "BackfillFunctionRole"]) {
       const statements = galleryStatements(role);

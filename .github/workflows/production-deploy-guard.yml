@@ -31,7 +31,7 @@ env:
   SSL_CERT_DIR: /etc/ssl/certs
   AWS_REGION: ap-northeast-1
   PYTHON_VERSION: 3.14.10
-  UV_VERSION: 0.13.7
+  UV_VERSION: 0.13.9
 
 jobs:
   guard:
@@ -50,11 +50,10 @@ jobs:
             echo "Deploy Guard can run only from refs/heads/main." >&2
             exit 1
           fi
-      - name: Update and verify system trust before checkout
+      - name: Verify hosted runner trust before checkout
         working-directory: ${{ runner.temp }}
         run: |
-          sudo apt-get update --quiet
-          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          dpkg-query --show --showformat='Hosted CA package: ${Version}\n' ca-certificates
           python3 - <<'PY_TLS'
           import hashlib
           import pathlib

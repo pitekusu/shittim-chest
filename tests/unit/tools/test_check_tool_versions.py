@@ -226,6 +226,194 @@ def test_source_pins_read_both_workflows_and_reject_drift(tmp_path: Path, other:
         assert pin.expected_tag == "v0.37.0"
 
 
+@pytest.mark.parametrize("core_alias", ["8.3.8000", "8.3.8001"])
+def test_vite_plus_cli_and_core_have_independent_versions_but_aliases_must_agree(
+    tmp_path: Path, core_alias: str
+) -> None:
+    (tmp_path / "package.json").write_text(
+        json.dumps({"vite-plus": "1.7.0", "vite": "npm:@voidzero-dev/vite-plus-core@8.3.8000"})
+    )
+    (tmp_path / "workspace.yaml").write_text(
+        f'vite: "npm:@voidzero-dev/vite-plus-core@{core_alias}"\n'
+    )
+    config = tmp_path / "tools.json"
+    _write_config(
+        config,
+        {
+            "sources": {
+                "vite-plus": {
+                    "repository": "voidzero-dev/vite-plus",
+                    "tag_prefix": "v",
+                    "files": {"package.json": r'"vite-plus": "([0-9.]+)"'},
+                },
+                "vite-plus-core": {
+                    "repository": "voidzero-dev/vite-plus",
+                    "tag_prefix": "",
+                    "npm_package": "@voidzero-dev/vite-plus-core",
+                    "files": {
+                        "package.json": r"npm:@voidzero-dev/vite-plus-core@([0-9.]+)",
+                        "workspace.yaml": r"npm:@voidzero-dev/vite-plus-core@([0-9.]+)",
+                    },
+                },
+            }
+        },
+    )
+    if core_alias != "8.3.8000":
+        with pytest.raises(ValueError, match="inconsistent source versions for vite-plus-core"):
+            load_source_pins(config, tmp_path)
+    else:
+        cli, core = load_source_pins(config, tmp_path)
+        assert cli.expected_tag == "v1.7.0"
+        assert core.expected_tag == "8.3.8000"
+        assert core.npm_package == "@voidzero-dev/vite-plus-core"
+
+
+@pytest.mark.parametrize(
+    ("package", "tag_prefix", "release_prefix"),
+    [
+        ("../core", "", ""),
+        ("@scope/core?token=x", "", ""),
+        ("@scope/core", "v", ""),
+        ("@scope/core", "", "8."),
+        ("", "", ""),
+    ],
+)
+def test_npm_sources_reject_invalid_names_and_github_tag_settings(
+    tmp_path: Path, package: str, tag_prefix: str, release_prefix: str
+) -> None:
+    config = tmp_path / "tools.json"
+    _write_config(
+        config,
+        {
+            "sources": {
+                "core": {
+                    "repository": "owner/project",
+                    "tag_prefix": tag_prefix,
+                    "release_prefix": release_prefix,
+                    "npm_package": package,
+                    "files": {"package.json": r"version: ([0-9.]+)"},
+                }
+            }
+        },
+    )
+    with pytest.raises(ValueError, match=r"npm_package|npm package"):
+        load_source_pins(config, tmp_path)
+
+
+def test_npm_latest_uses_encoded_package_name_without_github_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = "@voidzero-dev/vite-plus-core"
+    monkeypatch.setenv("GH_TOKEN", "github-credential-must-not-reach-npm")
+
+    def urlopen(request: checker.urllib.request.Request, *, timeout: int) -> io.BytesIO:
+        assert request.full_url == (
+            "https://registry.npmjs.org/%40voidzero-dev%2Fvite-plus-core/latest"
+        )
+        assert request.get_header("Authorization") is None
+        assert timeout == 20
+        return io.BytesIO(json.dumps({"name": package, "version": "8.3.8000"}).encode())
+
+    monkeypatch.setattr(checker.urllib.request, "urlopen", urlopen)
+    checker.fetch_latest_npm_version.cache_clear()
+    try:
+        assert checker.fetch_latest_npm_version(package) == "8.3.8000"
+    finally:
+        checker.fetch_latest_npm_version.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"not json",
+        b"\xff",
+        b"x" * (checker.MAX_RESPONSE_BYTES + 1),
+        b"[]",
+        b'{"name":"other-package","version":"8.3.8000"}',
+        b'{"name":"core","version":"8.3.8000-beta.1"}',
+        b'{"name":"core","version":"v8.3.8000"}',
+        b'{"name":"core","version":832}',
+        b'{"name":"core"}',
+    ],
+)
+def test_npm_latest_rejects_untrusted_or_unstable_response(
+    monkeypatch: pytest.MonkeyPatch, payload: bytes
+) -> None:
+    monkeypatch.setattr(
+        checker.urllib.request, "urlopen", lambda *_args, **_kwargs: io.BytesIO(payload)
+    )
+    checker.fetch_latest_npm_version.cache_clear()
+    try:
+        with pytest.raises(RuntimeError):
+            checker.fetch_latest_npm_version("core")
+    finally:
+        checker.fetch_latest_npm_version.cache_clear()
+
+
+def test_npm_network_failure_does_not_escape_as_a_current_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*_args: object, **_kwargs: object) -> io.BytesIO:
+        raise OSError("private-network-detail")
+
+    monkeypatch.setattr(checker.urllib.request, "urlopen", fail)
+    pin = ToolPin("core", "owner/project", "8.3.8000", "", "", "", npm_package="core")
+    checker.fetch_latest_npm_version.cache_clear()
+    try:
+        report, status = build_report(
+            [pin], lambda source: checker.fetch_latest_npm_version(source.npm_package)
+        )
+    finally:
+        checker.fetch_latest_npm_version.cache_clear()
+    assert status == 2
+    assert "取得失敗(未確認)" in report
+    assert "private-network-detail" not in report
+
+
+@pytest.mark.parametrize("latest", ["8.3.8000", "8.3.8001"])
+def test_cli_queries_npm_core_independently_of_the_github_cli_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, latest: str
+) -> None:
+    config = tmp_path / "tools.json"
+    _write_config(config, _valid_config())
+    monkeypatch.setattr(
+        checker,
+        "load_source_pins",
+        lambda *_: (
+            ToolPin("vite-plus", "voidzero-dev/vite-plus", "1.7.0", "v", "", ""),
+            ToolPin(
+                "vite-plus-core",
+                "voidzero-dev/vite-plus",
+                "8.3.8000",
+                "",
+                "",
+                "",
+                npm_package="@voidzero-dev/vite-plus-core",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        checker,
+        "fetch_latest_release_tag",
+        lambda repo, *_: "v1.6.1" if repo == "betterleaks/betterleaks" else "v1.7.0",
+    )
+
+    def npm_version(package: str) -> str:
+        assert package == "@voidzero-dev/vite-plus-core"
+        return latest
+
+    monkeypatch.setattr(checker, "fetch_latest_npm_version", npm_version)
+    monkeypatch.setattr(checker, "check_signer_bundle", lambda *_: ())
+    report = tmp_path / "report.md"
+    assert checker.main(["latest", str(config), "--report", str(report)]) == int(
+        latest != "8.3.8000"
+    )
+    text = report.read_text()
+    assert "| vite-plus | v1.7.0 | 最新 |" in text
+    assert "https://www.npmjs.com/package/@voidzero-dev/vite-plus-core" in text
+    assert f"| vite-plus-core | 8.3.8000 | {'最新' if latest == '8.3.8000' else latest} |" in text
+
+
 def test_release_line_uses_numeric_stable_tags(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         checker,

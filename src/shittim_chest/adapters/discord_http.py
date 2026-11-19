@@ -36,6 +36,7 @@ from shittim_chest.application.student_gacha_discord import (
     GachaInteractionResult,
 )
 from shittim_chest.application.student_gacha_models import normalize_teacher_name
+from shittim_chest.domain.attachments import MAX_DEBATE_IMAGES, MAX_IMAGE_BYTES
 
 DISCORD_SIGNATURE_REPLAY_TOLERANCE = timedelta(minutes=5)
 # Discord interactions are small JSON documents. Bound attacker-controlled input
@@ -48,6 +49,12 @@ _MESSAGE_COMPONENT = 3
 _MODAL_SUBMIT = 5
 _LABEL_COMPONENT = 18
 _TEXT_INPUT_COMPONENT = 4
+_FILE_UPLOAD_COMPONENT = 19
+_FOLLOW_UP_IMAGES_FIELD = "follow_up_images"
+_FOLLOW_UP_IMAGE_LIMITS = (
+    f"JPEG・PNG・静止WebP、1枚{MAX_IMAGE_BYTES // (1024 * 1024)} MiBまで、"
+    f"最大{MAX_DEBATE_IMAGES}枚。"
+)
 STUDENT_GACHA_ROUTE = "POST /interactions/student-gacha"
 STUDENT_GACHA_OFFER_ID = re.compile(r"[0-9a-f]{32}\Z")
 STUDENT_GACHA_OFFER_BUTTON = re.compile(r"([0-9a-f]{32}):[A-Za-z0-9_-]{22}\Z")
@@ -88,6 +95,10 @@ class DiscordHttpAuthenticationError(DiscordHttpBoundaryError):
 
 class DiscordHttpPayloadError(DiscordHttpBoundaryError):
     """A signed request that does not match the supported payload contract."""
+
+
+class _DiscordHttpAttachmentMetadataError(DiscordHttpPayloadError):
+    """A resolved attachment outside the supported image limits."""
 
 
 class DiscordHttpPayloadTooLargeError(DiscordHttpPayloadError):
@@ -413,8 +424,9 @@ def _parse_follow_up(
     if not is_modal and _integer(data.get("component_type")) != _BUTTON_COMPONENT:
         raise DiscordHttpPayloadError
     question = None
+    pending_attachments: tuple[PendingDiscordImage, ...] | None = ()
     if is_modal:
-        value = _parse_modal_text(data, field=FOLLOW_UP_QUESTION_FIELD)
+        value, pending_attachments = _parse_follow_up_modal(data)
         if value.strip() and len(value) <= 1_000:
             question = value
     return DiscordFollowUpOperation(
@@ -435,7 +447,37 @@ def _parse_follow_up(
         binding=binding,
         is_modal=is_modal,
         question=question,
+        pending_attachments=pending_attachments,
     )
+
+
+def _parse_follow_up_modal(
+    data: Mapping[str, object],
+) -> tuple[str, tuple[PendingDiscordImage, ...] | None]:
+    labels = _sequence(data.get("components"))
+    fields: dict[str, Mapping[str, object]] = {}
+    for label in labels:
+        component = _parse_modal_label(label)
+        field = _text(component.get("custom_id"))
+        if field not in {FOLLOW_UP_QUESTION_FIELD, _FOLLOW_UP_IMAGES_FIELD} or field in fields:
+            raise DiscordHttpPayloadError
+        fields[field] = component
+    text_input = fields.get(FOLLOW_UP_QUESTION_FIELD)
+    if text_input is None:
+        raise DiscordHttpPayloadError
+    question = _parse_modal_text(text_input, field=FOLLOW_UP_QUESTION_FIELD)
+
+    upload = fields.get(_FOLLOW_UP_IMAGES_FIELD)
+    if upload is None:
+        # A form opened before the upload field was added remains valid.
+        return question, ()
+    if _integer(upload.get("type")) != _FILE_UPLOAD_COMPONENT:
+        raise DiscordHttpPayloadError
+    attachment_ids = tuple(_snowflake(value) for value in _sequence(upload.get("values")))
+    try:
+        return question, _parse_resolved_images(data, attachment_ids)
+    except _DiscordHttpAttachmentMetadataError:
+        return question, None
 
 
 def _has_follow_up_button(message: Mapping[str, object], custom_id: str) -> bool:
@@ -508,7 +550,10 @@ def _parse_student_gacha(
 
 
 def _parse_teacher_name(data: Mapping[str, object]) -> str | None:
-    value = _parse_modal_text(data, field=_STUDENT_GACHA_TEACHER_FIELD)
+    components = _sequence(data.get("components"))
+    if len(components) != 1:
+        raise DiscordHttpPayloadError
+    value = _parse_modal_text(_parse_modal_label(components[0]), field=_STUDENT_GACHA_TEACHER_FIELD)
     try:
         return normalize_teacher_name(value)
     except ValueError:
@@ -516,14 +561,14 @@ def _parse_teacher_name(data: Mapping[str, object]) -> str | None:
         return None
 
 
-def _parse_modal_text(data: Mapping[str, object], *, field: str) -> str:
-    components = _sequence(data.get("components"))
-    if len(components) != 1:
-        raise DiscordHttpPayloadError
-    label = _mapping(components[0])
+def _parse_modal_label(raw_label: object) -> Mapping[str, object]:
+    label = _mapping(raw_label)
     if _integer(label.get("type")) != _LABEL_COMPONENT:
         raise DiscordHttpPayloadError
-    text_input = _mapping(label.get("component"))
+    return _mapping(label.get("component"))
+
+
+def _parse_modal_text(text_input: Mapping[str, object], *, field: str) -> str:
     if (
         _integer(text_input.get("type")) != _TEXT_INPUT_COMPONENT
         or text_input.get("custom_id") != field
@@ -536,7 +581,7 @@ def _parse_modal_text(data: Mapping[str, object], *, field: str) -> str:
 
 
 def follow_up_modal_response(binding: FollowUpCustomId) -> ApiGatewayV2Response:
-    """Collect the next question without creating a queue item on button click."""
+    """Collect the next question and optional images from the completion button."""
 
     return _json_response(
         200,
@@ -556,6 +601,19 @@ def follow_up_modal_response(binding: FollowUpCustomId) -> ApiGatewayV2Response:
                             "required": True,
                             "min_length": 1,
                             "max_length": 1_000,
+                        },
+                    },
+                    {
+                        "type": _LABEL_COMPONENT,
+                        "label": "画像 (任意)",
+                        "description": _FOLLOW_UP_IMAGE_LIMITS,
+                        "component": {
+                            "type": _FILE_UPLOAD_COMPONENT,
+                            "custom_id": _FOLLOW_UP_IMAGES_FIELD,
+                            "min_values": 0,
+                            "max_values": MAX_DEBATE_IMAGES,
+                            "required": False,
+                            "file_types": [".jpg", ".jpeg", ".png", ".webp"],
                         },
                     },
                 ],
@@ -688,6 +746,9 @@ def ingress_response(outcome: IngressOutcome) -> ApiGatewayV2Response:
             "\u274c 現在20件の依頼が待機しています。\nしばらくしてから再実行してください。"
         ),
         IngressOutcome.INVALID_FOLLOW_UP_QUESTION: "追加の質問を1〜1,000文字で入力してください。",
+        IngressOutcome.INVALID_FOLLOW_UP_ATTACHMENTS: (
+            f"添付画像を確認してください。{_FOLLOW_UP_IMAGE_LIMITS}"
+        ),
         IngressOutcome.NOT_ALLOWED: "この場所または操作では利用できません。",
     }[outcome]
     return _json_response(
@@ -762,53 +823,15 @@ def _parse_command(
     if question_option is None or _integer(question_option.get("type")) != _STRING_OPTION:
         raise DiscordHttpPayloadError
     question = _text(question_option.get("value"))
-    pending: list[PendingDiscordImage] = []
+    attachment_ids: list[str] = []
     for name in ("image1", "image2", "image3"):
         option = by_name.get(name)
         if option is None:
             continue
         if _integer(option.get("type")) != 11:
             raise DiscordHttpPayloadError
-        attachment_id = _text(option.get("value"))
-        resolved = _mapping(_mapping(data.get("resolved")).get("attachments"))
-        attachment = _mapping(resolved.get(attachment_id))
-        if _text(attachment.get("id")) != attachment_id:
-            raise DiscordHttpPayloadError
-        url = _text(attachment.get("url"))
-        try:
-            location = urlsplit(url)
-            parts = location.path.split("/")
-            if (
-                location.scheme != "https"
-                or location.hostname != "cdn.discordapp.com"
-                or location.username is not None
-                or location.password is not None
-                or location.port not in (None, 443)
-                or location.fragment
-                or len(parts) != 5
-                or parts[1] not in {"attachments", "ephemeral-attachments"}
-                or parts[3] != attachment_id
-                or not parts[2].isdecimal()
-                or not parts[4]
-            ):
-                raise ValueError("invalid image source")
-            pending.append(
-                PendingDiscordImage(
-                    attachment_id=str(uuid5(NAMESPACE_URL, "discord-attachment:" + attachment_id)),
-                    discord_attachment_id=attachment_id,
-                    content_type=_text(attachment.get("content_type")),
-                    size_bytes=_integer(attachment.get("size")),
-                    url=url,
-                    width=None
-                    if attachment.get("width") is None
-                    else _integer(attachment.get("width")),
-                    height=None
-                    if attachment.get("height") is None
-                    else _integer(attachment.get("height")),
-                )
-            )
-        except TypeError, ValueError:
-            raise DiscordHttpPayloadError from None
+        attachment_ids.append(_snowflake(option.get("value")))
+    pending = _parse_resolved_images(data, tuple(attachment_ids))
     try:
         return DiscordHttpOperation(
             interaction_id=interaction_id,
@@ -826,10 +849,69 @@ def _parse_command(
             received_at=received_at,
             command_name=command_name,
             question=question,
-            pending_attachments=tuple(pending),
+            pending_attachments=pending,
         )
     except TypeError, ValueError:
         raise DiscordHttpPayloadError from None
+
+
+def _parse_resolved_images(
+    data: Mapping[str, object], attachment_ids: tuple[str, ...]
+) -> tuple[PendingDiscordImage, ...]:
+    if not attachment_ids:
+        return ()
+    if len(attachment_ids) > MAX_DEBATE_IMAGES or len(set(attachment_ids)) != len(attachment_ids):
+        raise DiscordHttpPayloadError
+    resolved = _mapping(_mapping(data.get("resolved")).get("attachments"))
+    return tuple(
+        _parse_resolved_image(_mapping(resolved.get(attachment_id)), attachment_id)
+        for attachment_id in attachment_ids
+    )
+
+
+def _parse_resolved_image(
+    attachment: Mapping[str, object], attachment_id: str
+) -> PendingDiscordImage:
+    if _text(attachment.get("id")) != attachment_id:
+        raise DiscordHttpPayloadError
+    url = _text(attachment.get("url"))
+    try:
+        location = urlsplit(url)
+        parts = location.path.split("/")
+        if (
+            location.scheme != "https"
+            or location.hostname != "cdn.discordapp.com"
+            or location.username is not None
+            or location.password is not None
+            or location.port not in (None, 443)
+            or location.fragment
+            or len(parts) != 5
+            or parts[1] not in {"attachments", "ephemeral-attachments"}
+            or parts[3] != attachment_id
+            or not parts[2].isdecimal()
+            or not parts[4]
+        ):
+            raise ValueError("invalid image source")
+    except ValueError:
+        raise DiscordHttpPayloadError from None
+
+    content_type = attachment.get("content_type")
+    if not isinstance(content_type, str):
+        raise _DiscordHttpAttachmentMetadataError
+    width = attachment.get("width")
+    height = attachment.get("height")
+    try:
+        return PendingDiscordImage(
+            attachment_id=str(uuid5(NAMESPACE_URL, "discord-attachment:" + attachment_id)),
+            discord_attachment_id=attachment_id,
+            content_type=content_type,
+            size_bytes=_integer(attachment.get("size")),
+            url=url,
+            width=None if width is None else _integer(width),
+            height=None if height is None else _integer(height),
+        )
+    except ValueError:
+        raise _DiscordHttpAttachmentMetadataError from None
 
 
 def _parse_component(

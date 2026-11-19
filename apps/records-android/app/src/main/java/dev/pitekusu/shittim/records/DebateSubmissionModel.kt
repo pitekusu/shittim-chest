@@ -49,7 +49,7 @@ internal class DebateSubmissionModel(
   private val sendWithImages: (suspend (String, String, List<DraftAttachment>) -> DebateRequest?)? = null,
   private val control: (suspend (String, String, String, String) -> DebateControlResponse)? = null,
   private val findControl: (suspend (String, String) -> DebateControlResponse?)? = null,
-  private val sendFollowUp: (suspend (String, String, String) -> DebateRequest?)? = null,
+  private val sendFollowUp: (suspend (String, String, List<DraftAttachment>, String) -> DebateRequest?)? = null,
 ) : ViewModel() {
   private val mutable = MutableStateFlow(DebateSubmissionState())
   val state = mutable.asStateFlow()
@@ -108,7 +108,7 @@ internal class DebateSubmissionModel(
     val current = mutable.value
     val workspace = current.workspace ?: return
     val importer = importImage ?: return
-    if (!authorized() || current.busy || workspace.requestId != null || workspace.parentRecordId != null || uris.isEmpty()) return
+    if (!authorized() || current.busy || workspace.requestId != null || uris.isEmpty()) return
     if (workspace.attachments.size + uris.size > MAX_ATTACHMENT_COUNT) {
       mutable.value = DebateSubmissionState(workspace, failure = DebateFailure.ATTACHMENT_INVALID)
       return
@@ -262,7 +262,7 @@ internal class DebateSubmissionModel(
         val parent = frozen.parentRecordId
         val receipt = when {
           parent != null -> (sendFollowUp ?: throw DebateRequestException(DebateFailure.UNAVAILABLE))
-            .invoke(id, question, parent)
+            .invoke(id, question, frozen.attachments, parent)
           sendWithImages != null -> sendWithImages.invoke(id, question, frozen.attachments)
           else -> send(id, question)
         } ?: return@launch

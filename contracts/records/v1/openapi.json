@@ -2419,6 +2419,136 @@
         "title": "GalleryCard",
         "type": "object"
       },
+      "GalleryCollectionCard": {
+        "additionalProperties": false,
+        "properties": {
+          "cardId": {
+            "pattern": "^[A-Za-z0-9_-]{80}$",
+            "title": "Cardid",
+            "type": "string"
+          },
+          "collector": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GalleryCollector"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "isMine": {
+            "title": "Ismine",
+            "type": "boolean"
+          },
+          "performer": {
+            "enum": [
+              "participant-a",
+              "participant-b",
+              "participant-c"
+            ],
+            "title": "Performer",
+            "type": "string"
+          },
+          "postedAt": {
+            "format": "date-time",
+            "title": "Postedat",
+            "type": "string"
+          },
+          "rarity": {
+            "anyOf": [
+              {
+                "maximum": 4,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rarity"
+          },
+          "schoolName": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Schoolname",
+            "type": "string"
+          },
+          "studentId": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Studentid",
+            "type": "string"
+          },
+          "studentName": {
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Studentname",
+            "type": "string"
+          },
+          "thumbnailReady": {
+            "title": "Thumbnailready",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cardId",
+          "postedAt",
+          "performer",
+          "studentName",
+          "schoolName",
+          "rarity",
+          "collector",
+          "isMine",
+          "thumbnailReady",
+          "studentId"
+        ],
+        "title": "GalleryCollectionCard",
+        "type": "object"
+      },
+      "GalleryCollectionListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "contract": {
+            "const": "gallery-collection-v1",
+            "title": "Contract",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/GalleryCollectionCard"
+            },
+            "maxItems": 100,
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "contract",
+          "items",
+          "nextCursor"
+        ],
+        "title": "GalleryCollectionListResponse",
+        "type": "object"
+      },
       "GalleryCollector": {
         "additionalProperties": false,
         "properties": {
@@ -2552,6 +2682,81 @@
           "schemaVersion"
         ],
         "title": "GalleryOriginalResponse",
+        "type": "object"
+      },
+      "GalleryRosterEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "rarity": {
+            "maximum": 4,
+            "minimum": 0,
+            "title": "Rarity",
+            "type": "integer"
+          },
+          "schoolName": {
+            "anyOf": [
+              {
+                "maxLength": 40,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schoolname"
+          },
+          "studentId": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Studentid",
+            "type": "string"
+          },
+          "studentName": {
+            "anyOf": [
+              {
+                "maxLength": 60,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Studentname"
+          }
+        },
+        "required": [
+          "studentId",
+          "studentName",
+          "schoolName",
+          "rarity"
+        ],
+        "title": "GalleryRosterEntry",
+        "type": "object"
+      },
+      "GalleryRosterResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/GalleryRosterEntry"
+            },
+            "maxItems": 2000,
+            "minItems": 1,
+            "title": "Items",
+            "type": "array"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "items"
+        ],
+        "title": "GalleryRosterResponse",
         "type": "object"
       },
       "GallerySchoolLogosResponse": {
@@ -6880,6 +7085,18 @@
       "post": {
         "description": "本人の依頼のみ。Cookie混在拒否・private, no-store。討論の途中本文や内部識別子を返さず、Archive公開後だけrecordIdを返す。",
         "operationId": "reserveDebateAttachment",
+        "parameters": [
+          {
+            "description": "更問の元の議事録ID。指定時は元のチャンネルへの投稿権限を確認する。",
+            "in": "query",
+            "name": "parentRecordId",
+            "required": false,
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -6992,6 +7209,16 @@
               "format": "uuid",
               "type": "string"
             }
+          },
+          {
+            "description": "更問の元の議事録ID。指定時は元のチャンネルへの投稿権限を確認する。",
+            "in": "query",
+            "name": "parentRecordId",
+            "required": false,
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -7094,6 +7321,16 @@
             "required": true,
             "schema": {
               "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "更問の元の議事録ID。指定時は元のチャンネルへの投稿権限を確認する。",
+            "in": "query",
+            "name": "parentRecordId",
+            "required": false,
+            "schema": {
+              "pattern": "^[A-Za-z0-9_-]{43}$",
               "type": "string"
             }
           }
@@ -7211,6 +7448,18 @@
               "maxLength": 1024,
               "type": "string"
             }
+          },
+          {
+            "description": "更問の添付IDを返す。省略時は更問のattachmentIdsを空配列で返す。",
+            "in": "header",
+            "name": "X-Records-Contract",
+            "required": false,
+            "schema": {
+              "enum": [
+                "debate-follow-up-images-v1"
+              ],
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -7302,7 +7551,7 @@
         ]
       },
       "post": {
-        "description": "本人の依頼のみ。Cookie混在拒否・private, no-store。討論の途中本文や内部識別子を返さず、Archive公開後だけrecordIdを返す。",
+        "description": "本人の依頼のみ。Cookie混在拒否・private, no-store。討論の途中本文や内部識別子を返さず、Archive公開後だけrecordIdを返す。parentRecordIdを指定すると元の討論への更問になる。通常の討論と更問に本人の準備済み画像をattachmentIdsで最大3枚指定できる。",
         "operationId": "startMobileDebate",
         "requestBody": {
           "content": {
@@ -7416,6 +7665,18 @@
               "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
               "type": "string"
             }
+          },
+          {
+            "description": "更問の添付IDを返す。省略時は更問のattachmentIdsを空配列で返す。",
+            "in": "header",
+            "name": "X-Records-Contract",
+            "required": false,
+            "schema": {
+              "enum": [
+                "debate-follow-up-images-v1"
+              ],
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -7518,6 +7779,18 @@
             "required": true,
             "schema": {
               "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "更問の添付IDを返す。省略時は更問のattachmentIdsを空配列で返す。",
+            "in": "header",
+            "name": "X-Records-Contract",
+            "required": false,
+            "schema": {
+              "enum": [
+                "debate-follow-up-images-v1"
+              ],
               "type": "string"
             }
           }
@@ -7643,6 +7916,18 @@
               "format": "uuid",
               "type": "string"
             }
+          },
+          {
+            "description": "更問の添付IDを返す。省略時は更問のattachmentIdsを空配列で返す。",
+            "in": "header",
+            "name": "X-Records-Contract",
+            "required": false,
+            "schema": {
+              "enum": [
+                "debate-follow-up-images-v1"
+              ],
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -7745,6 +8030,18 @@
             "required": true,
             "schema": {
               "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "更問の添付IDを返す。省略時は更問のattachmentIdsを空配列で返す。",
+            "in": "header",
+            "name": "X-Records-Contract",
+            "required": false,
+            "schema": {
+              "enum": [
+                "debate-follow-up-images-v1"
+              ],
               "type": "string"
             }
           }
@@ -7850,7 +8147,7 @@
     },
     "/api/v1/gallery": {
       "get": {
-        "description": "投稿済み作品のメタデータを新着順で返す。gallery-avatars-v1で獲得者のアイコンを含める。",
+        "description": "投稿済み作品のメタデータを新着順で返す。gallery-avatars-v1で獲得者のアイコン、gallery-collection-v1でアイコンと図鑑の照合IDを含める。",
         "operationId": "listGalleryCards",
         "parameters": [
           {
@@ -7868,7 +8165,8 @@
             "required": false,
             "schema": {
               "enum": [
-                "gallery-avatars-v1"
+                "gallery-avatars-v1",
+                "gallery-collection-v1"
               ],
               "type": "string"
             }
@@ -7879,11 +8177,112 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/GalleryListResponse"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/GalleryListResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GalleryCollectionListResponse"
+                    }
+                  ]
                 }
               }
             },
-            "description": "投稿済み作品のメタデータを新着順で返す。gallery-avatars-v1で獲得者のアイコンを含める。"
+            "description": "投稿済み作品のメタデータを新着順で返す。gallery-avatars-v1で獲得者のアイコン、gallery-collection-v1でアイコンと図鑑の照合IDを含める。"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid request"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authentication required"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Guild membership required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Record not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Projection conflict"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request rate limited"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Records service unavailable"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/api/v1/gallery/roster": {
+      "get": {
+        "description": "現行の生徒名簿を返す。星なしと星4の名前と所属は伏せる。",
+        "operationId": "getGalleryRoster",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GalleryRosterResponse"
+                }
+              }
+            },
+            "description": "現行の生徒名簿を返す。星なしと星4の名前と所属は伏せる。"
           },
           "400": {
             "content": {

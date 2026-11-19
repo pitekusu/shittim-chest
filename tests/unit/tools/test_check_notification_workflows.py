@@ -35,8 +35,8 @@ from tools.check_notification_workflows import (
 
 @pytest.fixture
 def directory(tmp_path: Path) -> Path:
-    directory = tmp_path / "workflows"
-    directory.mkdir()
+    directory = tmp_path / ".github/workflows"
+    directory.mkdir(parents=True)
     for name in (
         ALLOWED_TARGET_WORKFLOW,
         "discord-security-digest.yml",
@@ -54,6 +54,10 @@ def directory(tmp_path: Path) -> Path:
     ):
         (directory / name).write_bytes((WORKFLOW_DIRECTORY / name).read_bytes())
     shutil.copytree(WORKFLOW_DIRECTORY.parent / "actions", directory.parent / "actions")
+    relative_package = Path("apps/records-web/package.json")
+    package = tmp_path / relative_package
+    package.parent.mkdir(parents=True)
+    shutil.copyfile(WORKFLOW_DIRECTORY.parent.parent / relative_package, package)
     return directory
 
 
@@ -474,13 +478,13 @@ def test_grype_cache_cannot_bypass_freshness_or_write_from_prs(
         ),
         (
             RECORDS_CI_WORKFLOW,
-            "python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low",
-            "pnpm audit --audit-level=low",
+            "python3 ../../tools/run_npm_audit.py -- pnpm run audit",
+            "pnpm run audit",
         ),
         (
             RECORDS_RELEASE_WORKFLOW,
-            "python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low",
-            "pnpm audit --audit-level=low",
+            "python3 ../../tools/run_npm_audit.py -- pnpm run audit",
+            "pnpm run audit",
         ),
     ),
 )
@@ -688,8 +692,8 @@ def test_records_release_resolves_pnpm_from_records_web_boundary(directory: Path
 def test_records_release_runs_web_gates_from_records_web_boundary(directory: Path) -> None:
     _replace(
         directory / RECORDS_RELEASE_WORKFLOW,
-        "            cd apps/records-web\n            pnpm exec vp check --deny-warnings\n",
-        "            cd .\n            pnpm --dir apps/records-web exec vp check --deny-warnings\n",
+        "            cd apps/records-web\n            pnpm run check\n",
+        "            cd .\n            pnpm --dir apps/records-web run check\n",
         1,
     )
 
@@ -849,19 +853,29 @@ def test_records_dependency_signature_audit_follows_actual_changes(
 
 
 def test_records_ci_requires_the_web_gates(directory: Path) -> None:
-    _replace(
-        directory / RECORDS_CI_WORKFLOW, "pnpm exec vp check --deny-warnings", "npm run check", 1
-    )
+    _replace(directory / RECORDS_CI_WORKFLOW, "pnpm run check", "npm run check", 1)
 
     with pytest.raises(WorkflowPolicyError, match="frozen install and web gates"):
         validate_notification_workflows(directory)
 
 
-@pytest.mark.parametrize("workflow", [RECORDS_CI_WORKFLOW, RECORDS_RELEASE_WORKFLOW])
-def test_records_web_checks_reject_warnings(directory: Path, workflow: str) -> None:
-    _replace(directory / workflow, "pnpm exec vp check --deny-warnings", "pnpm exec vp check", 1)
+@pytest.mark.parametrize("flag", ["--deny-warnings", "--continue-on-error"])
+def test_records_web_gates_require_the_shared_check_flags(directory: Path, flag: str) -> None:
+    package = directory.parent.parent / "apps/records-web/package.json"
+    _replace(package, f" {flag}", "", 1)
 
     with pytest.raises(WorkflowPolicyError, match=r"web gates"):
+        validate_notification_workflows(directory)
+
+
+@pytest.mark.parametrize("script", ["pnpm audit --audit-level=low", "echo audit-disabled"])
+def test_records_web_audit_cannot_bypass_the_dated_gate(directory: Path, script: str) -> None:
+    package = directory.parent.parent / "apps/records-web/package.json"
+    contents = json.loads(package.read_text())
+    contents["scripts"]["audit"] = script
+    package.write_text(json.dumps(contents))
+
+    with pytest.raises(WorkflowPolicyError, match="dated dependency audit gate"):
         validate_notification_workflows(directory)
 
 

@@ -63,8 +63,7 @@ internal class DebateRequest(
     check(Instant.parse(updatedAt) >= Instant.parse(createdAt))
     check(phase == null || phase.matches(Regex("[A-Za-z_]{1,64}")))
     check(recordId == null || mobileOpaqueValue.matches(recordId))
-    check(parentRecordId == null || (mobileOpaqueValue.matches(parentRecordId) &&
-      parentRecordId != recordId && attachmentIds.isEmpty()))
+    check(parentRecordId == null || (mobileOpaqueValue.matches(parentRecordId) && parentRecordId != recordId))
     check((status == "published") == (recordId != null))
     check(errorCode == null || errorCode.matches(Regex("[A-Z_]{1,64}")))
     check(attemptToken == null || validDebateAttemptToken(attemptToken))
@@ -111,7 +110,7 @@ internal class DebateRequestsClient(private val engine: HttpClientEngine = OkHtt
     attachmentIds: List<String> = emptyList(), parentRecordId: String? = null): DebateRequest {
     check(validDebateRequestId(requestId) && validDebateQuestion(question))
     check(attachmentIds.size <= MAX_ATTACHMENT_COUNT && attachmentIds.distinct().size == attachmentIds.size && attachmentIds.all(::validDebateRequestId))
-    check(parentRecordId == null || (mobileOpaqueValue.matches(parentRecordId) && attachmentIds.isEmpty()))
+    check(parentRecordId == null || mobileOpaqueValue.matches(parentRecordId))
     val body = if (parentRecordId == null) json.encodeToString(Start(requestId, question, attachmentIds))
       else json.encodeToString(FollowUpStart(requestId, question, attachmentIds, parentRecordId))
     val result = call<DebateRequest>(token, HttpMethod.Post, "", body)
@@ -187,6 +186,7 @@ internal class DebateRequestsClient(private val engine: HttpClientEngine = OkHtt
         bearerAuth(token)
         accept(ContentType.Application.Json)
         header(HttpHeaders.CacheControl, "no-store")
+        header("X-Records-Contract", "debate-follow-up-images-v1")
         if (cursor != null) parameter("cursor", cursor)
         if (body != null) {
           val bytes = body.encodeToByteArray()
@@ -203,9 +203,14 @@ internal class DebateRequestsClient(private val engine: HttpClientEngine = OkHtt
         val text = bytes.decodeToString(throwOnInvalidSequence = true)
         if (response.status.value !in setOf(200, 201, 202)) {
           val code = json.decodeFromString<ErrorEnvelope>(text).error.code
-          if (code == "FOLLOW_UP_PARENT_UNAVAILABLE")
-            throw DebateRequestException(DebateFailure.FOLLOW_UP_PARENT_UNAVAILABLE)
-          throw DebateRequestException(when (response.status.value) {
+          val requestFailure = when (code) {
+            "FOLLOW_UP_PARENT_UNAVAILABLE" -> DebateFailure.FOLLOW_UP_PARENT_UNAVAILABLE
+            "ATTACHMENT_EXPIRED" -> DebateFailure.ATTACHMENT_EXPIRED
+            "ATTACHMENT_INVALID" -> DebateFailure.ATTACHMENT_INVALID
+            "ATTACHMENT_NOT_FOUND", "ATTACHMENT_NOT_READY" -> DebateFailure.ATTACHMENT_NOT_READY
+            else -> null
+          }
+          throw DebateRequestException(requestFailure ?: when (response.status.value) {
             401 -> DebateFailure.AUTH_REQUIRED
             403 -> when (code) {
               "DEBATE_START_REAUTH_REQUIRED", "DEBATE_CONTROL_REAUTH_REQUIRED" -> DebateFailure.REAUTH_REQUIRED

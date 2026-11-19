@@ -308,7 +308,7 @@ async def test_gallery_notice_links_to_gallery_and_recovers_the_same_reply(
         config=_config(),
     )
     channel = SimpleNamespace(id=102, guild=SimpleNamespace(id=101), send=AsyncMock())
-    content = "過去の募集結果は[ギャラリー](https://shittim.pitekusu.dev/gallery)で見れますよ\uff01"
+    content = "過去の募集結果は[生徒図鑑](https://shittim.pitekusu.dev/gallery)で見れますよ\uff01"
     notice = SimpleNamespace(
         id=121,
         author=SimpleNamespace(id=202),

@@ -26,7 +26,11 @@ from shittim_chest.application.ingress import (
     IngressOutcome,
     _outcome_for_status,
 )
-from shittim_chest.application.models import DebateAuthorizationSnapshot, FollowUpParent
+from shittim_chest.application.models import (
+    DebateAuthorizationSnapshot,
+    FollowUpParent,
+    PendingDiscordImage,
+)
 from shittim_chest.application.ports import (
     DebateLookup,
     IngressRepository,
@@ -228,10 +232,20 @@ async def test_follow_up_authorizes_other_posting_member_and_admits_only_modal_s
     assert (await app.accept_follow_up(click)).outcome is IngressOutcome.NOT_ALLOWED
     submit = replace(click, is_modal=True, interaction_id="302")
     assert (await app.accept_follow_up(submit)).outcome is IngressOutcome.INVALID_FOLLOW_UP_QUESTION
+    submit = replace(submit, question="ビーフとポークなら?")
+    invalid = await app.accept_follow_up(replace(submit, pending_attachments=None))
+    assert invalid.outcome is IngressOutcome.INVALID_FOLLOW_UP_ATTACHMENTS
     assert ingress.saved is None
     assert events == []
 
-    result = await app.accept_follow_up(replace(submit, question="ビーフとポークなら?"))
+    image = PendingDiscordImage(
+        attachment_id="4510b0d3-dee2-406b-9d65-6ebbe6ef41d9",
+        discord_attachment_id="123",
+        content_type="image/png",
+        size_bytes=100,
+        url="https://cdn.discordapp.com/ephemeral-attachments/102/123/sample.png",
+    )
+    result = await app.accept_follow_up(replace(submit, pending_attachments=(image,)))
     assert result.outcome is IngressOutcome.PENDING
     assert result.created
     assert ingress.saved is not None
@@ -239,6 +253,7 @@ async def test_follow_up_authorizes_other_posting_member_and_admits_only_modal_s
     assert ingress.saved.kind is IngressKind.NEW_DEBATE
     assert ingress.saved.requester_id == click.requester_id != snapshot.requester_id
     assert ingress.saved.follow_up_parent == parent
+    assert ingress.saved.pending_attachments == (image,)
     assert events == ["enqueue"]
 
     for phase in (DebatePhase.FAILED, DebatePhase.CANCELLED):

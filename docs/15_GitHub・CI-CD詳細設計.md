@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-11-10
+updated: 2026-11-16
 ---
 
 # GitHub・CI-CD詳細設計
@@ -165,7 +165,7 @@ step outcomeとconclusionを検査し、未実行・失敗・キャンセルやc
 対象外と実行成功は各ジョブのSummaryで区別する。主要3ワークフローの全対象時は20ジョブとなる。
 CodeQLは`.github/workflows/codeql.yml`のadvanced setupでPython、JavaScript/TypeScript、
 GitHub Actions、Java/Kotlinを解析し、`ubuntu-26.04`と`security-extended`を使う。
-CodeQL Action v4.39.1はCLI 2.27.3を同梱する。Java/Kotlinだけ`manual`モードでAndroidをビルドし、既存3言語の`none`モードは維持する。
+解析には完全SHAで固定したCodeQL Actionの既定CLIを使う。Java/Kotlinだけ`manual`モードでAndroidをビルドし、既存3言語の`none`モードは維持する。
 PR、mainへのpush、週次定期実行、手動実行を対象にする。
 2026年10月11日にKotlin 2.4.20のローカルmanual抽出を確認した。C04完了にはPRとマージ後のmainで4言語の解析・upload成功を確認する。
 既存3言語の解析・必須チェックを維持し、Androidの失敗を成功や対象外に置き換えない。
@@ -279,8 +279,17 @@ cache hitでも選択対象のinstrumentation testを実行する。cache miss�
 `setup-vp`の更新時はworkflow参照・検査用の許可SHA・repositoryの選択Action許可を同じ完全SHAへ揃える。選択Action設定は既存許可を維持し、必要な完全SHAだけを追加する。
 Records WebのCIとReleaseは完全SHA固定の`voidzero-dev/setup-vp`でNode・Vite+・pnpmを設定し、
 Action標準のpnpm依存キャッシュと`cache-toolchain: true`を使う。Nodeはworkflowのexact version、Vite+とpnpmはWebの`package.json`のexact versionを選択する。toolchain／package managerのキャッシュはOS・CPU・libc・版・取得設定に対応する完全キーで復元し、Action標準の実行probe・payload／layout検証に失敗した場合は通常のinstallへ戻す。CIとReleaseのキャッシュ保存はmainのみとし、依存は毎回`vp install --frozen-lockfile`で固定する。キャッシュはCA制御・依存署名監査・check／test／buildを省略する根拠にしない。
-ローカルの`pnpm run check`とCI／Releaseの`vp check`には`--deny-warnings`を付け、lint警告も失敗として扱う。
-ローカルの`pnpm run check`は`--continue-on-error`も使い、途中で検査に失敗しても残りの診断を表示する。
+ローカル・Records CI・Records Releaseは`pnpm run check`を使う。`--deny-warnings`でlint警告も失敗として扱い、
+`--continue-on-error`で残りの整形・lint・型診断を表示してから失敗を返す。
+IaCのローカル再確認では`npm run test:infra:failed`で直前の失敗だけを再実行できる。
+直前に失敗がなければ成功で終了する。CIとReleaseからは全件を実行する。
+
+React Compilerは2026年11月16日にランキングの5コンポーネントをアノテーションで選んで計測した。
+Viteの本番ビルド各6回の中央値は、現行0.877秒、Compiler直列1.275秒、Babelワーカー並列1.325秒だった。
+Chromiumの390×844、CPU 4倍スローダウンで、6つの実行環境ごとに各操作を30回試した。スクリプトCPU中央値は
+開閉が2.288→1.718 ms、期間切替が2.274→1.293 msだった。画面が安定するまでの中央値はいずれも約33 msだった。
+ランキングの遅延読み込みJSはgzipで15,023→17,821 bytesとなった。体感に関わる時間の改善を確認できなかったため、
+計測結果だけを記録し、本番構成への導入を保留する。候補のランキングPlaywright試験は9件成功、設定によるskipは1件だった。
 書式・lint・型のいずれかが失敗した場合は非0で終了する。
 pnpm 12の環境用lock documentは[GitHubの静的依存検出に未対応の報告](https://github.com/dependabot/dependabot-core/issues/15904)があるため、
 `pmOnFail: ignore`でproject依存の単一documentを維持する。pnpm自身によるversion切替・検査は無効になるので、
@@ -319,6 +328,11 @@ GitHub OIDCからGoogle WIFとサービスアカウントへ委譲し、短寿�
 ### npm監査サービスの障害
 
 `npm audit`/`pnpm audit`は通常どおり必須である。
+Coreの`npm run audit:infra`とWebの`pnpm run audit`は、各監査の完全なJSONを
+共用の`infra/check-audit.mjs`へ渡し、package・advisory・severityが一致する未失効の受容だけを適用する。
+受容ファイルはinfraとWebで分け、別projectの受容を流用しない。pnpm形式の読取を共用gateへ追加し、
+期限切れ・未知の検出・不正な応答・未使用の例外は従来どおり拒否する。
+CIとRecords Releaseは、このpackage scriptを既存のnpm障害確認ラッパー経由で実行する。
 npm公式Statuspageで「Security Auditコンポーネントの劣化」と「同コンポーネントに紐づく進行中インシデント」を
 同時に確認できた実行だけ、Node系の外部監査を省略し、警告を残す。
 公式情報の取得失敗・不正な形式・インシデント不明は拒否し、監査で検出された脆弱性や通常の非0終了を省略理由にしない。
@@ -371,18 +385,20 @@ Web／Discord入力からglobへ渡す経路や既定値を書き換える設定
 - [uvの公式対策版](https://github.com/astral-sh/uv/security/advisories/GHSA-hq85-5cpj-mr62)0.13.4へ、Dockerのtag・digest、全workflow、両Python projectの`required-version`・`uv_build`、Dependabotの対応系列、固定ツール監視を合わせる。Pythonは3.14を維持する。両projectでfrozen同期・依存整合性・wheel／sdistを確認する。
 - [certifiの公式対策](https://github.com/certifi/python-certifi/security/advisories/GHSA-6q48-6c7w-9gw2)2026.10.19を直接依存の下限にも指定する。CoreのDiscord／OpenAI／画像取得、RecordsのOAuth／identity／avatar／OpenAIは、共通の`create_public_tls_context()`を標準クライアントへ渡して、このbundleだけを選ぶ。HTTPX2の既定truststore経路やLambdaのOS CAへ依存しない。hostname・証明書検証、SDKの接続制限・timeout・retryは維持する。Discord connectorは各event loopで生成し、失敗・cancel時も閉じる。企業CAなどOSへ追加したCAはこの経路には加わらない。
 - HTTPXによるDiscord status／announcement、botocoreの通常経路、Firebaseのrequests／Google APIのhttplib2はcertifiを使う。CA環境変数・custom locator・certifi不在時のbotocore同梱bundleへのfallbackも別途確認する。配置済みECSとアプリ用shared bundleを使う22 LambdaにCA／proxy上書きはなく、両Lambda ZIPのcertifi実体も照合済みである。別のCDK infrastructure helperへこの結果を外挿しない。
-- VPCのdefault security groupを制限するCDK helper 1関数は、managed `nodejs24.x`でruntime同梱EC2 SDKとCloudFormation応答用の標準`https.request`を使う。アプリ用22関数とは別のCA経路であり、ビルド用Nodeの固定版更新やcertifi更新では対策されない。実Node patch・managed runtimeのCA実体・対象チェーン拒否は別途確認する。
-- このhelperだけへ標準Lambda Layerを適用し、公開certifi 2026.10.19から証明書PEMブロックだけ抽出した120根、MPLライセンス、取得元とSHA-256のmetadata、小さな`trust.cjs`を同梱する。元ファイルの`metadata.source_sha256`は`50f79f98dac192b20dbf73f35c56f0b0c557ab267ff5199d1117cc1180b70785`、配布する`cacert.pem`の`metadata.sha256`は`222b3f908aa5845aea1152eb88fa6524921605bac786c4719f5091cb8a9f390a`であり、証明書DERの120根集合は元のcertifiと完全に同じである。コメントを含めず、公開面検査は弱めない。CA snapshotは`uv run --frozen python -m tools.sync_cdk_helper_ca --write`で生成し、`uv run --frozen python -m tools.sync_cdk_helper_ca --check`で照合する。`NODE_OPTIONS=--require=/opt/shittim-tls/trust.cjs`でhandlerの前にNode標準`tls.setDefaultCACertificates()`を実行し、既定CA集合を完全置換してreadbackする。Nodeのcompile-time `NODE_OPENSSL_SYSTEM_CERT_PATH`が非空の場合に既存CAを追加する条件が残るため、`--use-openssl-ca`と`SSL_CERT_FILE`／`SSL_CERT_DIR`だけの案は採用しない。PEM欠落・SHA不一致・標準API欠如・TLS検証無効指定はhandler前に起動を失敗させる。独自TLS verifierや`https`のmonkeypatchは使わず、EC2 SDKとCloudFormation応答の両方へ標準既定CAを適用する。既存helperのlogical ID・handler・SDK・IAMを維持し、Layerの新assetも署名済みCDK asset閉包へ含め、過不足を厳密に検証する。
+- VPCのdefault security groupを制限するCDK helperは、managed `nodejs24.x`で同梱EC2 SDKとCloudFormation応答用の標準`https.request`を使う。
+- 当初はこのhelperに専用CA Layerを適用した。[AWSの2026年11月11日更新](https://aws.amazon.com/security/security-bulletins/2026-150-aws/)で、ZIP型Node.js 24関数のTLS修正配布が完了した。実配置はx86_64の`nodejs24.x`、自動更新`Auto`を確認した。
+- [公開Lambdaイメージ](https://gallery.ecr.aws/lambda/nodejs)の2026年11月15日版（x86_64、manifest `sha256:7cdb66735cb609e6d79c4b5b198399427fa50599e08711adb5ed444840098b6e`）から、標準Node.js 24.22.3と同梱Smithy 4.9.13を取得して試験した。追加CAとpreloadを指定せず、`https.request`と`NodeHttpHandler`で正常3件・対象12件をそれぞれ判定できた。本番プロセス内の実CA列挙は行っていない。
+- 公式配布と上記検証に基づき、CDKから専用Layerと`NODE_OPTIONS`を撤去する。VPC補助関数の論理ID・コード・IAMは維持し、署名対象には従来どおり補助関数ZIPを含める。新しいアセット証跡はschema v2の4テンプレートと1 ZIPとし、旧schema v1は既存のLayer付き証跡の照合に使う。
 - DHI builder／runtimeは同じPython／Debian系列のCA更新済みdigestへ固定する。旧runtimeの`ca-certificates 20250419+dhi2`が対象rootを含んでいたため、修正済みbuilderで`update-ca-certificates --fresh`を実行し、runtimeのanchorと生成済みCA directoryを丸ごと置き換えるoverlayを導入した。古いhashed aliasをmergeで残さず、固定digestと`SOURCE_DATE_EPOCH`で再現可能にする。これはCA設定のoverlayであり、runtimeのdpkg台帳を架空の更新版にしない。2026年10月22日のCA更新済みruntime採用でもoverlayを維持し、撤去は実際に採用するCA集合・拒否動作・完成imageの検証と影響評価を経た別の変更として扱う。
 - [Node 24.22.1](https://github.com/nodejs/node/releases/tag/v24.22.1)の対象公開鍵拒否とroot更新を使い、固定版と`engines`の下限を合わせる。PATHのNode更新だけではrunner内蔵Node、native downloader、Lambdaのmanaged Nodeは更新されない。
-- [Ubuntu公式USN-8944-1](https://ubuntu.com/security/notices/USN-8944-1)の26.04修正版`ca-certificates 20260816ubuntu0.26.04.1`を含む、署名済みAPTからCAを更新する。各jobの最初のネットワークAction実行前に、対象4root表現がbundle／CA directoryに残る場合は停止する。この手順はcheckout前なので、作業directoryを`runner.temp`に明示する。workflowの`NODE_OPTIONS=--use-openssl-ca`で内蔵NodeもこのOS CAを使う。runner自身によるAction archiveの事前取得はjobの先行stepより早く、提供元の更新確認が必要である。
-- checkout直後のlocal composite actionから`tools.configure_build_tls`を使う。使い捨てhosted runnerのみOSの標準CA設定を更新する。子ツールには既存OS bundleから対象root／公開鍵だけを除いたPEMと空のCA directoryを指定し、curl／Git／urllib／AWS CLI／vp／pnpmにも適用する。Go／OpenSSLの追加directory経由を残さない。Docker daemonはCA更新後に再起動し、BuildKitは起動前から同じPEMを選び、実際のdaemon環境とbundleを検査する。
+- Hosted Ubuntu 26.04 x64／ARM64の公式CAパッケージを使い、checkout前に実際の`ca-certificates`版を記録する。bundleが空、または対象4root表現がbundle／CA directoryに残る場合は停止する。作業directoryは`runner.temp`に明示し、workflowの`NODE_OPTIONS=--use-openssl-ca`で内蔵NodeもこのOS CAを使う。両archのhosted runnerで[Ubuntu公式修正版](https://ubuntu.com/security/notices/USN-9001-1)が既に配備され、正常チェーンの受理と対象チェーンの拒否を確認したため、jobごとのAPT更新は撤去した。runnerが行うAction archiveの取得は各jobの最初のstepより早い。提供元の実行時設定とその通信経路は別に確認する。
+- checkout直後のlocal composite actionは`tools.configure_build_tls`で、Ubuntuの公式パッケージが管理するOS bundleとPEM／hashed aliasを検査する。対象の証明書・公開鍵が見つかればジョブを停止する。子ツールには対象root／公開鍵を除いたPEMと空のCA directoryを指定し、curl／Git／urllib／AWS CLI／vp／pnpmに適用する。Docker daemonは実際のシステムストアと追加CAを検査した後に再起動する。BuildKitは起動時から同じPEMを選び、実際のdaemon環境とbundleを検査する。
 - pip 26.2.2への更新に加え、pip-auditがensurepipの旧pipを起動する間も安全なbundleだけを選ばせる。[pip公式のCA選択](https://pip.pypa.io/en/stable/topics/https-certificates/)に従い、限定した子環境で`PIP_USE_DEPRECATED=legacy-certs`と`PIP_CERT`／`REQUESTS_CA_BUNDLE`を組み合わせ、古いOSとvendored bundleの混在を避ける。証明書検証を維持し、既存の`--strict --require-hashes`を変更しない。不正hashが失敗することも確認する。
-- Javaは選択したJDKの既存cacertsから対象だけを除いたPKCS12を標準`javax.net.ssl.trustStore`で指定する。別CA集合とのunionや新CA追加は行わない。CIではJDK設定直後、ローカルAndroidでは管理対象ビルドの一時領域に限定し、Gradle Wrapper／Maven／SDK取得に適用する。ホストの恒久的な信頼ストアは変更しない。
+- Hosted CIでは固定JDKのcacertsを検査し、すべての証明書が安全で、JVM起動オプション・JSSEが優先するjssecacerts・既存のストア指定がなければ標準ストアをそのまま使う。ローカルビルドとそれ以外の条件では、選択したJDKのcacertsから対象だけを除いた一時PKCS12を標準`javax.net.ssl.trustStore`で指定する。Gradle Wrapper／Maven／SDK取得に適用する。
 
 対策前の配置済みCore imageのOS CAは対象12チェーンを受理し、アプリとLambda bundleのcertifiは全12本を拒否した。ローカル修正後のHTTPX2同期／非同期とaiohttpは、旧OS bundle／hashed directoryを環境に指定しても対象12本を全て拒否し、正常な公開HTTPSを受理した。CA overlayも抽出した実ARM64 layerを使い、CAfile／CApathの双方で12本の拒否と正常3本の成功を確認する。完成ARM64 imageのbuild・container gate・SBOM／VEX／risk gateは別の検証であり、layer検証の成功で代替しない。ARM64 CIでは完成した同じproduction imageから、OS既定・CApathのみ・アプリcertifi・botocore同梱fallbackの4ストアを標準SSLContextで別々に検証し、対象12ホストの拒否と正常3ホストの受理、合計60判定を要求する。HTTP要求・認証情報は送らず、timeout・DNS・期限切れ・hostname不一致はCA拒否の成功として扱わない。標準のIPv4／IPv6接続切り替えを使い、通信障害だけを最大3回試す。全試行の固定分類を残し、証明書の受理・拒否は再試行せず判定する。実際のPython／OpenSSL・信頼集合のhash・image情報と結果をSBOMと同じartifactへ残す。
 
-CDK helperのLayerは、旧・修正版のNodeで既定CA readback、対象12チェーンの拒否と正常系、壊れたbundleや無効な設定での起動失敗をローカル検証する。検証結果はアプリ用22 Lambdaや完成ARM64 imageの結果と分ける。本番設定、配置されたLayer ZIPのhash・CA集合、同一Layerを使った隔離検証、AWS内processの実際のCA選択は別々に記録する。ローカル検証や配置設定の照合だけで、managed runtimeの実版・CA実体やAWS内processの動作まで確認済みとは扱わない。
+旧CA Layerは、旧・修正版Nodeで対象12チェーンの拒否と正常系を検証していた。今回の撤去はAWSの配布完了告知と公開イメージの標準CA検証を根拠とする。本番反映時は、Change Setの変更が補助関数からのLayer・環境変数削除と専用Layerリソースの削除に限定され、補助関数の置換がないことを確認する。
 
 AndroidのKtor／OkHttp全4クライアントとCoilは、標準のTLS／hostname検証が成功した後、HTTP送信前にcleaned peer chainの8対象公開鍵を追加拒否する。信頼するCAを固定するpinningや独自TrustManagerは使わない。未更新AOSP API36で標準TrustManagerが対象12本を受理する条件でも、アプリは全件を送信前に拒否する。cached intermediateを使う場合と正常HTTPSも確認する。
 
@@ -398,7 +414,7 @@ Records用lockの`certifi`を`2026.10.23`へ更新し、emSign Root CA - C1／em
 
 [botocoreの公式修正PR #3838](https://github.com/boto/botocore/pull/3838)は、Sectigoのクロス署名経路に使われる`AAA Certificate Services`を同梱`cacert.pem`から削除する。[配布版1.43.117](https://pypi.org/project/botocore/1.43.117/)の実wheelをPyPIのSHA-256と照合し、公式tagと同じPEMであること、126根に既存拒否ポリシーのDER／SPKIが残らないことを確認した。直前の1.43.116も含む1.43.114～1.43.116は同じ127根の旧PEMで対象CAを含むため、修正下限は1.43.117とする。rootとRecordsのboto3下限を1.43.117へ上げ、両lockのboto3／botocoreを同版に揃える。botocoreへの独自patchや新CA追加は行わない。
 
-botocoreは通常`certifi.where()`を使い、certifiのimportが`ImportError`になった場合だけ同梱bundleを選ぶ。`AWS_CA_BUNDLE`や共有設定の`ca_bundle`、クライアントの明示`verify`パスは別のCA選択であり、通常経路の成功をそのまま外挿しない。隔離試験ではcertifiあり／import不可／明示CAパスを区別し、実際に選んだbundleと対象チェーン拒否を確認する。Coreの依存はDocker imageからCore Lambda bundleへ、Recordsの依存はRecords lockからRecords Lambda bundleへ伝播するため、各成果物の同梱fallback自体も検証する。既存のOS CA overlay、アプリの明示certifi選択、CDK helperのCA Layer、pip向け限定CA指定は全て維持する。
+botocoreは通常`certifi.where()`を使い、certifiのimportが`ImportError`になった場合だけ同梱bundleを選ぶ。`AWS_CA_BUNDLE`や共有設定の`ca_bundle`、クライアントの明示`verify`パスは別のCA選択であり、通常経路の成功をそのまま外挿しない。隔離試験ではcertifiあり／import不可／明示CAパスを区別し、実際に選んだbundleと対象チェーン拒否を確認する。Coreの依存はDocker imageからCore Lambda bundleへ、Recordsの依存はRecords lockからRecords Lambda bundleへ伝播するため、各成果物の同梱fallback自体も検証する。この確認時点では、OS CA overlay、アプリの明示certifi選択、CDK helperのCA Layer、pip向け限定CA指定を維持した。
 
 このfallbackの提供元修正待ちは解消しているが、PRでの依存更新・検証と本番への適用は別である。この変更のmerge・追加の本番反映・Android配布は未実施であり、AWS管理ランタイムに同梱されたSDKの実版・CA実体もこのwheelの検査だけでは確認済みと扱わない。
 
@@ -408,7 +424,7 @@ botocoreは通常`certifi.where()`を使い、certifiのimportが`ImportError`�
 
 CoreのDHIは別の採用条件を持つ。2026年10月22日、認証済みregistryで`3.14.9-debian13`／`3.14.9-debian13-dev`はいずれもmanifest未公開であり、既存固定digestの取得は成功した。一方、公開済みのCA更新済み3.14.8を採用するため、builderのindex digestを`03cf5ae71ab5a7761ec0dcbf9d522c0209581fb5196ac303537c74d2ac92de32`、runtimeを`046a46512297187590b40b85e86ea2b128077d57601847ce916ecb7d919a7291`へ更新する。ARM64 manifestはそれぞれ`05095418e3d664d7e768b48282b9ea36af7f4a12ee20972b795849ba05958c12`と`d988e9c5e19801c2fe5a69b7961d386646136e1fa46493e86f25d938c24a5ca4`である。Python実版は3.14.8を維持し、OSは`ca-certificates 20250419+deb13u1+dhi0`の148根、installed pipとensurepip wheelは26.2.2、両vendored certifiは2026.10.19の120根で、抽出実体に対象fingerprint／SPKIがないことを確認した。パッケージ版の一致だけで採用完了とせず、提供元の署名・SBOM／VEXと、完成した同一ARM64 imageのPython実版・OS CAfile／CApath・アプリCA・正常系と対象12チェーン拒否・risk gateを照合し、それぞれの実施結果を記録する。3.14.9 ARM64 imageの提供元待ちは、この3.14.8の採用検証と分けて[issue #639](https://github.com/pitekusu/shittim-chest/issues/639)で追跡する。
 
-既存のOS CA overlay、アプリの明示certifi選択、CDK helperのCA Layer、pip向けの限定したCA環境指定は維持する。提供元の更新版が出たことやPythonの版番号だけを理由に撤去しない。Lambdaのmanaged `python3.14`も、build用Pythonの固定値ではpatch版を指定できないため、AWSの配布・実適用確認を分ける。この更新PRの完了、本番反映、Android配布はそれぞれ独立した承認・確認対象である。今回のdigest更新はPRでの検証までを対象とし、merge・本番反映・Android配布は未実施である。
+この評価時点では、OS CA overlay、アプリの明示certifi選択、CDK helperのCA Layer、pip向けの限定したCA環境指定を維持した。提供元の更新版が出たことやPythonの版番号だけを理由に撤去しない。Lambdaのmanaged `python3.14`も、build用Pythonの固定値ではpatch版を指定できないため、AWSの配布・実適用確認を分ける。この更新PRの完了、本番反映、Android配布はそれぞれ独立した承認・確認対象である。今回のdigest更新はPRでの検証までを対象とし、merge・本番反映・Android配布は未実施である。
 
 ### Python 3.15への移行評価（2026年10月14日）
 
@@ -479,7 +495,7 @@ Dependabotの通常更新には、`cooldown`を省略しても既定で3日の�
 Docker Hubを使う試験・ビルド用イメージには既定の待機期間を適用する。
 
 Vite+の`npm:`エイリアスとpnpmの固定overrideは、Dependabotの通常更新だけでは揃わない。
-Vite+関連は専用グループへ分け、CLI・coreエイリアス・Vitest overrideの不一致を通常CIで拒否する。
+Vite+関連は専用グループへ分け、CLIとcoreエイリアスは公式の対応版へ揃え、coreの直接依存とoverride、Vitest overrideの不一致を通常CIで拒否する。
 Vite+のメジャー更新は公式の移行コマンドを使い、同梱Vitestと上書き設定も同時に更新する。
 Vitest 5への移行では`clearMocks: false`を明示して既存試験の互換動作を保ち、型検査・全Web試験・build・Playwrightを確認する。
 Gradleが配布するWindows用WrapperのCRLFは、該当ファイルだけにGitの`whitespace=cr-at-eol`属性を指定する。
@@ -507,13 +523,72 @@ DependabotのActions更新は`uses:`を扱い、`with.version`、`driver-opts`�
 - 通常CIはネットワークを使わず、固定値の形式と複数箇所の整合を検査する。
 - 定期監視は公式リリースの安定版を、明示したPython/Node/uv/pnpm系列の中で比較する。系列変更を自動採用しない。
   Temurinは採用JDK系列の公式リリース、Android SDK PlatformとBuild ToolsはGoogleの正式配布一覧を確認する。
-  Vite+のcoreエイリアスと固定overrideも実ファイルから読み、互換性のため保留中の更新を通知から漏らさない。
+  Vite+のCLIはGitHub Release、独立した版番号を持つcoreは公式npm registryの安定版を比較する。
+  coreエイリアスと固定overrideも実ファイルから読み、不一致を拒否し、互換性のため保留中の更新を通知から漏らさない。
 - AWS Signerのインストーラーは`latest`配布物・署名・公開鍵のチェックサム差分だけを検出する。
   取得したツールの実行・インストール・署名鍵の自動交換はしない。
+- Git履歴の秘密検査で公開チェックサムを誤検出した場合は、公式配布物のSHA-256を照合したうえで、
+  対象ファイル・項目名・既知の値が全て一致する行だけを除外する。ECR Credential Helperの
+  ARM64版0.12.0と0.13.0もこの範囲で扱い、別の値や他のファイルへの除外へ広げない。
 - 結果は実行サマリーと通知Botが管理する単一Issueへ集約する。変化がなければ再投稿しない。
   全項目が確認済みで最新の場合だけIssueを閉じ、一部取得失敗を「最新」にしない。
 - 終了値は最新`0`、更新候補あり`1`、取得/設定不正`2`。
   `main`限定で`contents: read`と`issues: write`を使い、書換え・自動マージ・AWS操作・配信開始はしない。
+
+### 2026年11月19日の固定ツール更新
+
+[Issue #700](https://github.com/pitekusu/shittim-chest/issues/700)に追加された更新候補を反映する。
+Grypeはamd64／ARM64とも[0.122.1](https://github.com/anchore/grype/releases/tag/v0.122.1)へ更新し、
+公式チェックサムの署名と両配布物のSHA-256を照合する。この版はJVM版の比較とPythonパッケージへの誤ったマッチングを修正する。
+完成ARM64イメージは従来のSBOM・署名付きVEX・期限付き受容に照合する。
+
+Androidの`.java-version`は[Temurin 21.0.13.1+2](https://github.com/adoptium/temurin21-binaries/releases/tag/jdk-21.0.13.1%2B2)へ更新する。
+`setup-java`のファイル入力では4桁目とbuild番号が落ちるため、Android CI・配布・依存グラフ・CodeQLは
+共通のセットアップを使い、同じファイルの完全な版を`java-version`入力へ渡す。
+配布物の署名検証とインストール後の実際の版照合を必須にし、AndroidのビルドとCodeQLの手動抽出で確認する。
+
+### 2026年11月18日の固定ツール更新
+
+[Issue #700](https://github.com/pitekusu/shittim-chest/issues/700)の更新候補を反映する。
+Grypeはamd64／ARM64とも0.122.0、Syftは1.57.2、ECR Credential Helperは0.13.0へ更新し、
+Grype／SyftのGitHub asset digestとchecksum署名、ECRの公式S3 checksumを配布物の実体と照合する。
+GrypeのDHI OSV対応やSyftのdpkg重複修正は、既存のSBOM・VEX・risk gateを省略する根拠にしない。
+
+uvは全workflowとDockerの両方を0.13.9へ揃え、Dockerのmanifest digest固定を維持する。
+[0.13.9の公式変更](https://github.com/astral-sh/uv/releases/tag/0.13.9)には別名wheelの拒否と
+同値なplatform markerのlock検査修正が含まれる。CLI更新だけを理由にPython本体・uv_build・両lockを更新しない。
+既存のlockで`lock --check`と`sync --frozen --all-groups`を確認する。
+
+Webはpnpm 12.22.0、Vite+ 1.7.0、Vitest／UI／関連override 5.1.1へ揃える。
+[Vite+ 1.7.0の公式変更](https://github.com/voidzero-dev/vite-plus/releases/tag/v1.7.0)に従い、
+CLIと版番号が分かれたcoreエイリアス／overrideは8.3.8000とし、広すぎるVite peer許可を外す。
+型検査は同梱のtsrsへ切り替わるため、警告拒否を維持したcheck・単体試験・build・Playwrightで確認する。
+依存の公開後待機期間の例外は、今回指定した正確な版だけに限定する。
+
+既存mainのlockにも含まれるpicomatch 4.0.7は、
+[GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)の対象で、
+11月18日の確認時点では修正版が公開されていない。同日、所有者が開発・CI用の本件Highを
+2026年11月20日09:00 JSTまで受容し、CI成功後のPR #752マージを明示承認した。
+infraとWebの受容記録は`expires: 2026-11-20`とし、同日00:00 UTCから拒否する。
+Vite+ coreのNode用vendor copyにも同版が残り、正式修正や非影響の証明とは扱わない。
+11月19日、GitHubで当該アドバイザリの取り下げを確認した。固定版pnpmとnpmの監査でも
+報告されなくなったため、Webとinfraの未使用の受容記録を削除した。依存の版は維持する。
+
+同じ承認で、今回の実測ARM64 production config
+`sha256:d61d02a8c0c0f8f0c8616c64bf53ed25a9885be72ec1c00c3383f9c4fe18e2c4`に残るHigh 28組を
+同期限まで受容する。既存22組のCVE・package・版は前回と一致し、新規6組は
+CVE-2026-107493／CVE-2026-124709それぞれの`libssl3t64`・`openssl`・`openssl-provider-legacy`
+（全て`3.5.7-1~deb13u3+dhi0`）に限定する。Critical、sourceの検出、修正可能High/Criticalは0、
+ARM64 TLSは60/60成功を確認した。
+[同一実行のSBOM・署名VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44314277139/artifacts/14431173930)と
+[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44314277139/artifacts/14432471438)を照合した。
+
+[OpenSSL公式](https://openssl-library.org/news/secadv/20261117.txt)は新規2件をLowと評価し、
+3.5系列では3.5.10を修正版とする。前者は非NULLの既存X509_INFO stackへのPEM追加に失敗した後の再利用・解放、
+後者はQUICサーバーでの拒否stream作成・resetの反復が成立条件だが、到達不能とは扱わずGrype Highを維持する。
+新規6組はこのconfigだけに限定し、containerの`expires_on`はUTC最終有効日`2026-11-19`とする。
+4枠の上限がある既存10組では最古のconfigを今回のconfigと入れ替え、現行mainのconfigは保持する。
+本番配信の承認は今回追加していない。
 
 ### 2026年11月5日の固定ツール更新
 
@@ -820,6 +895,54 @@ Critical・修正可能High／Critical・source検出は0件。raw High23組か�
 
 
 通常PR/`main`では本番イメージの基本検証を行い、訓練用イメージを本番リスク承認の対象へ含めない。
+
+2026-11-17、PR #747の完成ARM64 production config
+`sha256:c8da1fd6b7ed267792133b90d24241aded7f7a9d7e8f3681352712fada31e329`
+について、現行本番と同じHigh 24組のうち署名付きVEXの適用後に同じ10組が残ることを確認した。
+Critical、修正可能なHigh/Critical、ソースのHigh/Criticalはいずれも0組で、TLSは60件すべて通過した。
+Grypeの更新後にCVE-2026-125709のMediumが3パッケージで新たに検出された。
+[同一実行のARM64 SBOM・VEX・TLS・Grype](https://github.com/pitekusu/shittim-chest/actions/runs/43892845317)
+
+所有者は、このconfigに残るHigh 10組を2026-11-20 09:00 JST（同日00:00 UTC）まで受容すると明示承認した。
+`expires_on`にはUTCの最終有効日`2026-11-19`を指定する。4枠の上限に従い、
+稼働中のconfigを含む直近3枠と今回のconfigで対象を構成し、最古のPR #719用の枠を外す。
+
+2026-11-17、PR #749の完成ARM64 production config
+`sha256:f3ed7f3fbfac2e8865eb866239749962b8225a17da959ee4e97293fe91d598b7`
+では、GrypeのHigh 36組のうち署名付きDHI VEXの適用後に22組が残った。
+従来と同じ10組に加え、OpenSSLのCVE-2026-88823／95691／95692／107496が
+`libssl3t64`、`openssl`、`openssl-provider-legacy`の各`3.5.7-1~deb13u3+dhi0`でHighとなった。
+Critical、修正可能なHigh/Critical、ソースのHigh/Criticalは0組で、TLSは60件すべて通過した。
+[同一実行の完成ARM64 SBOM・VEX・TLS・Grype](https://github.com/pitekusu/shittim-chest/actions/runs/44052362770)
+
+OpenSSLはこの4件をLowと評価している。Dockerの署名付きパッケージ索引から取得して検証した
+`+dhi1`には修正がある。CIと同一のGrype版・DBでSBOM上の版だけを差し替えた検証では、
+12組ともDebian由来の修正版未検出が続いた。今回の完成イメージには`+dhi0`が含まれる。
+[OpenSSLの告知](https://openssl-library.org/news/secadv/20261110.txt)・[Dockerの署名付きパッケージ索引](https://dhi.io/deb/debian/main/dists/trixie/InRelease)
+
+所有者は今回のconfigに限り、残る22組を2026-11-20 09:00 JSTまで受容し、必須CI通過後の
+マージと本番配信を明示承認した。`expires_on`はUTCの最終有効日`2026-11-19`とする。
+既存の10組では最古のPR #720用configを入れ替え、追加12組の対象は今回のconfigだけに限定する。
+
+2026-11-17、PR #750の完成ARM64 production config
+`sha256:d26ef2004599ed0be2c31e93a513b92f7d5c4f3b755b28edece0e2f8d42d0c07`
+では、署名付きDHI VEX適用後のHigh 22組が現行本番と同じCVE・パッケージ・版だった。
+Critical、修正可能なHigh/Critical、ソースのHigh/Criticalは0組で、TLSは60件すべて通過した。
+[同一実行の完成ARM64 SBOM・VEX・TLS・Grype](https://github.com/pitekusu/shittim-chest/actions/runs/44099220055)
+
+所有者はこのconfigの22組を2026-11-20 09:00 JSTまで受容し、必須CIとCodeQLの成功後のマージ、本番配信、Playクローズドテスト配布を明示承認した。
+`expires_on`は`2026-11-19`とし、既存の10組では4枠の上限に従って最古のPR #723用configを今回のconfigへ入れ替える。
+
+2026-11-19、PR #753を最新mainへ合わせた完成ARM64 production config
+`sha256:3a42446d8992733a9b7a06680a6588c12c68cb0604da33d2a8ed13ed3380d4c1`を再計測した。
+Grypeのraw Highは42組、署名付きDHI VEX適用後は28組で、既承認のCVE・パッケージ・版・修正状態と一致した。
+Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは60/60成功した。
+[完成SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44496940681/artifacts/14515322210)と
+[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44496940681/artifacts/14515457231)を照合した。
+
+所有者はこのconfigに限り、同じ28組を2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、
+必須CIとCodeQL成功後のマージ・本番反映を明示承認した。`expires_on`は`2026-11-19`のままとする。
+4枠を使用していた既存10組では、最古のPR #747のconfigを入れ替え、稼働中のconfigを保持する。
 
 ## 5. 本番配信
 

@@ -49,7 +49,7 @@ async def _start_runtime(repository: DynamoDbRuntimeStateRepository) -> RuntimeS
     )
 
 
-def _queue_progress(repository: DynamoDbStudentGachaRepository, *, at: datetime) -> None:
+def _complete_first_debate(repository: DynamoDbStudentGachaRepository, *, at: datetime) -> None:
     repository._transact(
         *repository.admission_actions(
             debate_id="first-debate",
@@ -80,7 +80,7 @@ async def test_runtime_must_finish_waking_before_claiming_queued_gacha(
     at = NOW + timedelta(seconds=1)
     idle = await runtime_repository.replace(expected=ready, updated=ready.begin_idle(at=at))
 
-    _queue_progress(repository, at=at)
+    _complete_first_debate(repository, at=at)
     assert await repository.claim_next(claim_owner=RUNTIME_OWNER, at=at) is None
 
     at += timedelta(seconds=1)
@@ -110,7 +110,7 @@ async def test_stale_idle_transition_waits_for_gacha_activity_to_finish(
     idle = ready.begin_idle(at=at)
 
     # Recruitment work can enqueue after the reconciler observes an empty queue.
-    _queue_progress(repository, at=at)
+    _complete_first_debate(repository, at=at)
     with pytest.raises(RepositoryConflict):
         await runtime_repository.replace(expected=ready, updated=idle)
     assert await runtime_repository.get() == ready
@@ -123,6 +123,42 @@ async def test_stale_idle_transition_waits_for_gacha_activity_to_finish(
     await repository.finish(notice, at=at)
     assert await runtime_repository.replace(expected=ready, updated=idle) == idle
     assert await runtime_repository.get() == idle
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("old_count", "expected_remaining"), [(0, 2), (1, 2), (2, 2), (3, 1), (4, None)]
+)
+async def test_legacy_gacha_progress_is_capped_at_three_before_completion(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+    runtime_repository: DynamoDbRuntimeStateRepository,
+    old_count: int,
+    expected_remaining: int | None,
+) -> None:
+    repository = DynamoDbStudentGachaRepository(client=dynamodb_client, table_name=dynamodb_table)
+    await _start_runtime(runtime_repository)
+    repository._transact(
+        repository._put_new(
+            {
+                "PK": f"GACHA#OWNER#{OWNER}",
+                "SK": "STATE",
+                "count": old_count,
+                "generation": 1,
+                "version": 2,
+            }
+        )
+    )
+
+    _complete_first_debate(repository, at=NOW)
+
+    notice = await repository.claim_next(claim_owner=RUNTIME_OWNER, at=NOW)
+    assert notice is not None
+    assert notice.remaining == expected_remaining
+    if expected_remaining is None:
+        assert notice.kind is GachaJobKind.OFFER and notice.offer_id is not None
+    else:
+        assert notice.kind is GachaJobKind.PROGRESS and notice.offer_id is None
 
 
 @pytest.mark.asyncio
@@ -155,7 +191,7 @@ async def test_cycle_eligibility_survives_contention_and_cannot_cross_a_reward(
         if actions:
             repository._transact(*actions)
 
-    for number in range(1, 5):
+    for number in range(1, 3):
         admit(f"debate-{number}")
         complete(f"debate-{number}", at=NOW + timedelta(microseconds=number))
         complete(f"debate-{number}")
@@ -163,16 +199,16 @@ async def test_cycle_eligibility_survives_contention_and_cannot_cross_a_reward(
             claim_owner=RUNTIME_OWNER, at=NOW + timedelta(seconds=1)
         )
         assert notice is not None
-        assert notice.kind is GachaJobKind.PROGRESS and notice.remaining == 5 - number
+        assert notice.kind is GachaJobKind.PROGRESS and notice.remaining == 3 - number
         await repository.finish(notice, at=NOW + timedelta(seconds=1))
 
-    admit("fifth")
+    admit("third")
     admit("in-flight")
-    fifth = repository.completion_actions(debate_id="fifth", guild_id="1", channel_id="2", at=NOW)
+    third = repository.completion_actions(debate_id="third", guild_id="1", channel_id="2", at=NOW)
     competitor = repository.completion_actions(
         debate_id="in-flight", guild_id="1", channel_id="2", at=NOW
     )
-    repository._transact(*fifth)
+    repository._transact(*third)
     with pytest.raises(RepositoryConflict, match="gacha transaction conflict"):
         repository._transact(*competitor)
     notice = await repository.claim_next(claim_owner=RUNTIME_OWNER, at=NOW)
@@ -181,7 +217,7 @@ async def test_cycle_eligibility_survives_contention_and_cannot_cross_a_reward(
         TableName=dynamodb_table,
         Item=marshal_item(
             {
-                "PK": "DEBATE#fifth",
+                "PK": "DEBATE#third",
                 "SK": "META",
                 "record_type": "debate_meta",
                 "requester_id": "4",
@@ -354,7 +390,7 @@ async def test_cycle_eligibility_survives_contention_and_cannot_cross_a_reward(
     complete("other")
     for _ in range(2):
         progress = await repository.claim_next(claim_owner=RUNTIME_OWNER, at=later)
-        assert progress is not None and progress.remaining == 4
+        assert progress is not None and progress.remaining == 2
         await repository.finish(progress, at=later)
 
     stored_activity = dynamodb_client.get_item(

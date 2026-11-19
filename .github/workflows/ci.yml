@@ -25,7 +25,7 @@ env:
   SSL_CERT_DIR: /etc/ssl/certs
   DOCKER_BUILD_RECORD_RETENTION_DAYS: "30"
   PYTHON_VERSION: "3.14.10"
-  UV_VERSION: "0.13.7"
+  UV_VERSION: "0.13.9"
 
 jobs:
   changes:
@@ -41,11 +41,10 @@ jobs:
       core: ${{ steps.classify.outputs.core }}
       android: ${{ steps.classify.outputs.android }}
     steps:
-      - name: Update and verify system trust before checkout
+      - name: Verify hosted runner trust before checkout
         working-directory: ${{ runner.temp }}
         run: |
-          sudo apt-get update --quiet
-          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          dpkg-query --show --showformat='Hosted CA package: ${Version}\n' ca-certificates
           python3 - <<'PY_TLS'
           import hashlib
           import pathlib
@@ -105,11 +104,10 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - name: Update and verify system trust before checkout
+      - name: Verify hosted runner trust before checkout
         working-directory: ${{ runner.temp }}
         run: |
-          sudo apt-get update --quiet
-          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          dpkg-query --show --showformat='Hosted CA package: ${Version}\n' ca-certificates
           python3 - <<'PY_TLS'
           import hashlib
           import pathlib
@@ -154,7 +152,6 @@ jobs:
           uv run --frozen ruff format --check .
           uv run --frozen ruff check .
           uv run --frozen python tools/check_container_policy.py
-          uv run --frozen python -m tools.sync_cdk_helper_ca --check
           uv run --frozen python tools/check_tool_versions.py validate \
             .github/tool-versions.json
       - name: Validate the versioned student gacha roster
@@ -184,11 +181,10 @@ jobs:
       CI_CHANGES_RESULT: ${{ needs.changes.result }}
       CI_REQUIRED: ${{ needs.changes.outputs.core_tests }}
     steps:
-      - name: Update and verify system trust before checkout
+      - name: Verify hosted runner trust before checkout
         working-directory: ${{ runner.temp }}
         run: |
-          sudo apt-get update --quiet
-          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          dpkg-query --show --showformat='Hosted CA package: ${Version}\n' ca-certificates
           python3 - <<'PY_TLS'
           import hashlib
           import pathlib
@@ -267,11 +263,10 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
-      - name: Update and verify system trust before checkout
+      - name: Verify hosted runner trust before checkout
         working-directory: ${{ runner.temp }}
         run: |
-          sudo apt-get update --quiet
-          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          dpkg-query --show --showformat='Hosted CA package: ${Version}\n' ca-certificates
           python3 - <<'PY_TLS'
           import hashlib
           import pathlib
@@ -397,11 +392,10 @@ jobs:
       CI_CHANGES_RESULT: ${{ needs.changes.result }}
       CI_REQUIRED: ${{ needs.changes.outputs.core_package }}
     steps:
-      - name: Update and verify system trust before checkout
+      - name: Verify hosted runner trust before checkout
         working-directory: ${{ runner.temp }}
         run: |
-          sudo apt-get update --quiet
-          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          dpkg-query --show --showformat='Hosted CA package: ${Version}\n' ca-certificates
           python3 - <<'PY_TLS'
           import hashlib
           import pathlib
@@ -490,11 +484,10 @@ jobs:
       CI_CHANGES_RESULT: ${{ needs.changes.result }}
       CI_REQUIRED: ${{ needs.changes.outputs.infra }}
     steps:
-      - name: Update and verify system trust before checkout
+      - name: Verify hosted runner trust before checkout
         working-directory: ${{ runner.temp }}
         run: |
-          sudo apt-get update --quiet
-          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          dpkg-query --show --showformat='Hosted CA package: ${Version}\n' ca-certificates
           python3 - <<'PY_TLS'
           import hashlib
           import pathlib
@@ -564,11 +557,10 @@ jobs:
       CI_CHANGES_RESULT: ${{ needs.changes.result }}
       CI_REQUIRED: ${{ needs.changes.outputs.android }}
     steps:
-      - name: Update and verify system trust before checkout
+      - name: Verify hosted runner trust before checkout
         working-directory: ${{ runner.temp }}
         run: |
-          sudo apt-get update --quiet
-          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          dpkg-query --show --showformat='Hosted CA package: ${Version}\n' ca-certificates
           python3 - <<'PY_TLS'
           import hashlib
           import pathlib
@@ -604,10 +596,7 @@ jobs:
         uses: ./.github/actions/configure-tls
       - name: Install the same JDK as local development
         if: ${{ steps.scope.outputs.required == 'true' }}
-        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
-        with:
-          distribution: temurin
-          java-version-file: apps/records-android/.java-version
+        uses: ./.github/actions/setup-android-jdk
       - name: Select the filtered JDK trust store
         if: ${{ steps.scope.outputs.required == 'true' }}
         run: >-
@@ -772,11 +761,10 @@ jobs:
       CI_CHANGES_RESULT: ${{ needs.changes.result }}
       CI_REQUIRED: ${{ needs.changes.outputs.runtime_container }}
     steps:
-      - name: Update and verify system trust before checkout
+      - name: Verify hosted runner trust before checkout
         working-directory: ${{ runner.temp }}
         run: |
-          sudo apt-get update --quiet
-          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          dpkg-query --show --showformat='Hosted CA package: ${Version}\n' ca-certificates
           python3 - <<'PY_TLS'
           import hashlib
           import pathlib
@@ -1145,11 +1133,10 @@ jobs:
       CI_REQUIRED: ${{ needs.changes.outputs.runtime_container }}
       CI_DEPENDENCY_RESULTS: ${{ toJSON(needs) }}
     steps:
-      - name: Update and verify system trust before checkout
+      - name: Verify hosted runner trust before checkout
         working-directory: ${{ runner.temp }}
         run: |
-          sudo apt-get update --quiet
-          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          dpkg-query --show --showformat='Hosted CA package: ${Version}\n' ca-certificates
           python3 - <<'PY_TLS'
           import hashlib
           import pathlib
@@ -1356,11 +1343,10 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
-      - name: Update and verify system trust before checkout
+      - name: Verify hosted runner trust before checkout
         working-directory: ${{ runner.temp }}
         run: |
-          sudo apt-get update --quiet
-          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          dpkg-query --show --showformat='Hosted CA package: ${Version}\n' ca-certificates
           python3 - <<'PY_TLS'
           import hashlib
           import pathlib

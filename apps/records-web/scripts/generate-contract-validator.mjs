@@ -32,6 +32,8 @@ const validators = [
   ["MomotalkRoomsResponse", "momotalk-rooms-response-validator.mjs"],
   ["MomotalkRoomResponse", "momotalk-room-response-validator.mjs"],
   ["GalleryListResponse", "gallery-list-response-validator.mjs"],
+  ["GalleryCollectionListResponse", "gallery-collection-list-response-validator.mjs"],
+  ["GalleryRosterResponse", "gallery-roster-response-validator.mjs"],
   ["GalleryDetailResponse", "gallery-detail-response-validator.mjs"],
   ["GalleryThumbnailsResponse", "gallery-thumbnails-response-validator.mjs"],
   ["GalleryOriginalResponse", "gallery-original-response-validator.mjs"],

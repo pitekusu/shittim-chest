@@ -86,7 +86,7 @@ internal fun DebateComposeScreen(state: DebateSubmissionState, online: Boolean,
       minLines = 6, modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp).testTag("debate-question"))
     if (selectedImages.isNotEmpty()) AttachmentThumbnails(selectedImages, { openedImage = it },
       onRemove = if (!frozen && !state.busy) onRemoveImage else null)
-    if (!frozen && !isFollowUp) OutlinedButton(onClick = {
+    if (!frozen) OutlinedButton(onClick = {
       val request = PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
       if (workspace.attachments.size == MAX_ATTACHMENT_COUNT - 1) singlePicker.launch(request)
       else multiplePicker.launch(request)
@@ -97,7 +97,7 @@ internal fun DebateComposeScreen(state: DebateSubmissionState, online: Boolean,
       Spacer(Modifier.width(ButtonDefaults.IconSpacing))
       Text(stringResource(R.string.attachment_add))
     }
-    if (!isFollowUp) Text(stringResource(R.string.attachment_limits), style = MaterialTheme.typography.labelSmall)
+    Text(stringResource(R.string.attachment_limits), style = MaterialTheme.typography.labelSmall)
     if (demo && !frozen && !isFollowUp) TextButton(onClick = { onImagesSelected(listOf(DEMO_SAMPLE_IMAGE_URI)) },
       enabled = !state.busy && workspace.attachments.size < MAX_ATTACHMENT_COUNT,
       modifier = Modifier.testTag("review-demo-sample-image")) {

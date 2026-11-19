@@ -207,7 +207,7 @@ export function Layout({
               to="/gallery"
             >
               <NavigationIcon kind="gallery" />
-              生徒ガチャ
+              生徒図鑑
             </NavLink>
           </div>
           <section className={styles.systemAccess} aria-labelledby="system-access-label">
@@ -298,12 +298,12 @@ export function Layout({
           <span>メモリアル</span>
         </NavLink>
         <NavLink
-          aria-label="生徒ガチャ"
+          aria-label="生徒図鑑"
           className={({ isActive }) => (isActive ? styles.navActive : styles.navLink)}
           to="/gallery"
         >
           <NavigationIcon kind="gallery" />
-          <span>ガチャ</span>
+          <span>生徒図鑑</span>
         </NavLink>
       </nav>
     </div>

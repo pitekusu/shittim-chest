@@ -204,6 +204,7 @@ class DiscordFollowUpOperation:
     binding: FollowUpCustomId
     is_modal: bool
     question: str | None
+    pending_attachments: tuple[PendingDiscordImage, ...] | None = ()
 
 
 type DiscordHttpInput = DiscordHttpPing | DiscordHttpOperation | DiscordFollowUpOperation

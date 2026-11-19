@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -51,6 +52,7 @@ def validate_notification_workflows(directory: Path = WORKFLOW_DIRECTORY) -> int
     _validate_permission_syntax(directory)
     _validate_consistent_action_pins(directory)
     _validate_grype_database_action(directory)
+    _validate_android_jdk_action(directory)
     _validate_pinned_container_builder(directory)
     target_files: list[Path] = []
     for path in sorted((*directory.glob("*.yml"), *directory.glob("*.yaml"))):
@@ -1734,7 +1736,7 @@ def _validate_ci_path_isolation(directory: Path) -> None:
             raise WorkflowPolicyError(f"CI {job} must verify every required step outcome")
         for name in re.findall(r"(?m)^      - name: (.+)$", block):
             if name in {
-                "Update and verify system trust before checkout",
+                "Verify hosted runner trust before checkout",
                 "Check out the tested commit",
                 "Require an explicit CI scope",
                 "Verify the required work or report it as not applicable",
@@ -1820,12 +1822,16 @@ def _validate_ci_path_isolation(directory: Path) -> None:
         marker not in dependency_classification for marker in required_dependency_inputs
     ):
         raise WorkflowPolicyError("Records CI must classify dependency signature audit inputs")
+    web_check = _workflow_step_block(records_web, "Check Records web formatting, lint, and types")
+    if "        run: pnpm run check" not in web_check.splitlines() or re.search(
+        r"(?m)^\s*(?:if|continue-on-error):", web_check
+    ):
+        raise WorkflowPolicyError("Records CI must retain the frozen install and web gates")
     required_records_web = (
         "vp install --frozen-lockfile",
-        "pnpm exec vp check --deny-warnings",
         "pnpm exec vp test",
         "pnpm run build",
-        "python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low",
+        "python3 ../../tools/run_npm_audit.py -- pnpm run audit",
     )
     if any(marker not in records_web for marker in required_records_web):
         raise WorkflowPolicyError("Records CI must retain the frozen install and web gates")
@@ -1921,6 +1927,23 @@ def _validate_ci_path_isolation(directory: Path) -> None:
 
 
 def _validate_records_workflows(directory: Path) -> None:
+    web_package = directory.parent.parent / "apps/records-web/package.json"
+    try:
+        scripts = json.loads(web_package.read_text(encoding="utf-8"))["scripts"]
+        check_script = scripts["check"]
+        audit_script = scripts["audit"]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise WorkflowPolicyError("Records web gates require the shared check script") from error
+    if check_script != "vp check --deny-warnings --continue-on-error":
+        raise WorkflowPolicyError(
+            "Records web gates must report all diagnostics and fail on warnings"
+        )
+    if audit_script != (
+        "pnpm audit --audit-level=low --json | "
+        "node ../../infra/check-audit.mjs npm-audit-exceptions.json"
+    ):
+        raise WorkflowPolicyError("Records web gates must use the dated dependency audit gate")
+
     release_path = directory / RECORDS_RELEASE_WORKFLOW
     backfill_path = directory / RECORDS_BACKFILL_WORKFLOW
     if not release_path.is_file() or not backfill_path.is_file():
@@ -1973,10 +1996,10 @@ def _validate_records_workflows(directory: Path) -> None:
     app_local_web_gates = (
         "          (\n"
         "            cd apps/records-web\n"
-        "            pnpm exec vp check --deny-warnings\n"
+        "            pnpm run check\n"
         "            pnpm exec vp test\n"
         "            pnpm run build\n"
-        "            python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low\n"
+        "            python3 ../../tools/run_npm_audit.py -- pnpm run audit\n"
         "          )"
     )
     if release_gate_step.count(app_local_web_gates) != 1:
@@ -2388,12 +2411,20 @@ def _validate_grype_database_action(directory: Path) -> None:
         raise WorkflowPolicyError("Grype cache must require freshness and only save from main")
 
 
+def _validate_android_jdk_action(directory: Path) -> None:
+    action = directory.parent / "actions/setup-android-jdk/action.yml"
+    if not action.is_file():
+        raise WorkflowPolicyError("Android JDK setup action is required")
+    _require_full_action_pins(action.read_text(encoding="utf-8"), "Android JDK setup")
+
+
 def _require_full_action_pins(text: str, label: str) -> None:
     for action in re.findall(r"(?m)^\s*(?:-\s*)?uses:\s*([^\s#]+)", text):
         # These repository actions are bound to the immutable checkout SHA.
         if action in {
             "./.github/actions/prepare-grype-db",
             "./.github/actions/configure-tls",
+            "./.github/actions/setup-android-jdk",
         }:
             continue
         _, separator, revision = action.rpartition("@")

@@ -194,6 +194,9 @@ function ApplicationRoutes({
   const location = useLocation();
   useEffect(() => {
     if (!/^\/records\/[A-Za-z0-9_-]{43}$/.test(location.pathname)) setPageMetadata();
+    if (routeScenePath(location.pathname) === "/gallery") {
+      document.title = "生徒図鑑 | シッテムの箱 議事録閲覧システム";
+    }
   }, [location.pathname]);
   const navigate = useNavigate();
   const [showLogoutTransition, setShowLogoutTransition] = useState(false);

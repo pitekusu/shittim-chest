@@ -32,7 +32,7 @@ env:
   COST_REGION: us-east-1
   PYTHON_VERSION: 3.14.10
   PYTHONDONTWRITEBYTECODE: "1"
-  UV_VERSION: 0.13.7
+  UV_VERSION: 0.13.9
   AWS_SIGNER_NOTATION_INSTALLER_VERSION: 2.2.0-1
   NOTATION_CLI_VERSION: 1.3.2
   AWS_SIGNER_NOTATION_PLUGIN_VERSION: 1.0.2292
@@ -40,8 +40,8 @@ env:
   AWS_SIGNER_NOTATION_SIGNATURE_SHA256: ef9bb5125579e1ca24f9508ac0903b7db4afcc20a31333c9203c784e8c34cf6b
   AWS_SIGNER_NOTATION_KEY_SHA256: e215d69bf0bd59d7a2efe165d7fb777201364f76328702248f8b82b30ec41991
   AWS_SIGNER_NOTATION_FINGERPRINT: E84AF8A2A9B52F1F4435AE71A3B52DA65461CF90
-  ECR_CREDENTIAL_HELPER_VERSION: 0.12.0
-  ECR_CREDENTIAL_HELPER_SHA256: 5bdd30fb6c7a92462f5b454cce1aa906ca7926a6c2e39efad9613a7bf7661fac
+  ECR_CREDENTIAL_HELPER_VERSION: 0.13.0
+  ECR_CREDENTIAL_HELPER_SHA256: f0669e1666c6e1c70f9484df2cbd01c89b82f687f63dc55c50b05e8d20ebd2e1
   AWS_ECR_DISABLE_CACHE: "true"
   RELEASE_IMAGE_CONTEXT: ${{ github.workspace }}/release-image-context
 
@@ -70,11 +70,10 @@ jobs:
           test "${GITHUB_REPOSITORY}" = "${EXPECTED_REPOSITORY}"
           test "${GITHUB_REPOSITORY_ID}" = "${EXPECTED_REPOSITORY_ID}"
           test "${GITHUB_SHA}" = "${GITHUB_WORKFLOW_SHA}"
-      - name: Update and verify system trust before checkout
+      - name: Verify hosted runner trust before checkout
         working-directory: ${{ runner.temp }}
         run: |
-          sudo apt-get update --quiet
-          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          dpkg-query --show --showformat='Hosted CA package: ${Version}\n' ca-certificates
           python3 - <<'PY_TLS'
           import hashlib
           import pathlib
@@ -1111,11 +1110,10 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - name: Update and verify system trust before checkout
+      - name: Verify hosted runner trust before checkout
         working-directory: ${{ runner.temp }}
         run: |
-          sudo apt-get update --quiet
-          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          dpkg-query --show --showformat='Hosted CA package: ${Version}\n' ca-certificates
           python3 - <<'PY_TLS'
           import hashlib
           import pathlib
@@ -1723,11 +1721,10 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - name: Update and verify system trust before checkout
+      - name: Verify hosted runner trust before checkout
         working-directory: ${{ runner.temp }}
         run: |
-          sudo apt-get update --quiet
-          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          dpkg-query --show --showformat='Hosted CA package: ${Version}\n' ca-certificates
           python3 - <<'PY_TLS'
           import hashlib
           import pathlib

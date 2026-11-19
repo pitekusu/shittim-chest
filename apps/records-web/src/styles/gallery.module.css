@@ -1,6 +1,7 @@
 .page {
   display: grid;
   align-content: start;
+  container-type: inline-size;
   min-inline-size: 0;
 }
 
@@ -16,11 +17,35 @@
   letter-spacing: -0.025em;
 }
 
+.backButton {
+  min-block-size: 44px;
+  justify-self: start;
+  margin-block-end: 20px;
+  padding: 0 18px;
+  border: 1px solid var(--records-link);
+  border-radius: var(--records-radius-control);
+  background: var(--records-link);
+  color: var(--records-reading-surface);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.groupTitle {
+  margin: 0 0 12px;
+  color: var(--records-ink-900);
+  font-size: clamp(1.2rem, 3vw, 1.6rem);
+}
+
 .filters {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 146px), 1fr));
-  gap: 12px;
-  padding: clamp(12px, 2vw, 20px);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: end;
+  gap: 10px 12px;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 12px clamp(12px, 2vw, 16px);
   border: 1px solid var(--records-panel-border);
   border-radius: var(--records-radius-card);
   background: var(--records-panel-background);
@@ -29,6 +54,86 @@
 
 .filters > * {
   min-inline-size: 0;
+}
+
+.searchField,
+.sortField,
+.acquiredFilter {
+  grid-column: 1 / -1;
+}
+
+.searchField {
+  display: grid;
+  gap: 7px;
+  color: var(--records-ink-600);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.searchField input {
+  inline-size: 100%;
+  min-block-size: 46px;
+  padding: 0 12px;
+  border: 1px solid var(--records-line-strong);
+  border-radius: var(--records-radius-control);
+  background: var(--records-control-background);
+  color: var(--records-ink-900);
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 400;
+}
+
+.acquiredFilter {
+  display: flex;
+  min-block-size: 46px;
+  align-items: center;
+  justify-self: start;
+  gap: 8px;
+  color: var(--records-ink-900);
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.acquiredFilter input {
+  inline-size: 18px;
+  block-size: 18px;
+  min-inline-size: 18px;
+  min-block-size: 18px;
+  flex: none;
+  margin: 0;
+  accent-color: var(--records-link);
+  cursor: inherit;
+}
+
+@container (min-width: 480px) {
+  .searchField,
+  .sortField {
+    grid-column: auto;
+  }
+}
+
+@container (min-width: 700px) {
+  .filters {
+    grid-template-columns: minmax(160px, 1.4fr) minmax(116px, 1fr) minmax(100px, 0.8fr) minmax(
+        210px,
+        1.3fr
+      );
+  }
+}
+
+@container (min-width: 900px) {
+  .filters {
+    grid-template-columns: minmax(205px, 1.75fr) minmax(138px, 1fr) minmax(106px, 0.75fr) minmax(
+        208px,
+        1.3fr
+      ) max-content;
+  }
+
+  .acquiredFilter {
+    grid-column: auto;
+    margin-inline-start: 4px;
+  }
 }
 
 .resultsBar {
@@ -122,13 +227,14 @@
       border-color 120ms ease,
       box-shadow 120ms ease;
   }
-  .card:hover {
+  a.card:hover {
     border-color: var(--gallery-rarity-accent);
     box-shadow: var(--records-shadow);
   }
 }
 
 .cardMedia {
+  position: relative;
   display: grid;
   aspect-ratio: 1792 / 828;
   place-items: center;
@@ -141,6 +247,35 @@
   inline-size: 100%;
   block-size: 100%;
   object-fit: contain;
+}
+
+.question {
+  color: var(--records-ink-600);
+  font-size: clamp(3rem, 10vw, 5rem);
+  font-weight: 800;
+  line-height: 1;
+}
+
+.copyCount {
+  position: absolute;
+  inset: auto 8px 8px auto;
+  padding: 2px 8px;
+  border: 1px solid var(--records-line-strong);
+  border-radius: 999px;
+  background: var(--records-reading-surface);
+  color: var(--records-ink-900);
+  font-size: 0.8rem;
+  font-weight: 750;
+}
+
+.firstCard {
+  justify-self: start;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--records-control-background-soft);
+  color: var(--records-ink-900);
+  font-size: 0.75rem;
+  font-weight: 750;
 }
 
 .imagePlaceholder {

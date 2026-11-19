@@ -15,7 +15,7 @@ from zipfile import ZipFile
 
 import pytest
 from PIL import Image
-from shittim_chest.adapters.assets.student_gacha import _ASSET_DIGESTS, SCHOOL_LOGOS_KEY
+from shittim_chest.adapters.assets.student_gacha import _ASSET_DIGESTS, ROSTER_KEY, SCHOOL_LOGOS_KEY
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from tests.test_http_api import NOW, SESSION_KEY, FakeSessionStore, event, session
 
@@ -134,14 +134,31 @@ class Signer:
         self.requests: list[dict[str, Any]] = []
         self.catalog: bytes = b""
         self.catalog_reads = 0
+        self.roster: bytes = b""
+        self.roster_reads = 0
+        self.roster_version = "roster-version"
 
     def generate_presigned_url(self, operation: str, **arguments: Any) -> str:
         assert operation == "get_object"
         self.requests.append(arguments)
         return "https://media.example.invalid/signed"
 
-    def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:
-        assert Bucket == "media" and Key == SCHOOL_LOGOS_KEY
+    def get_object(
+        self, *, Bucket: str, Key: str, ChecksumMode: str | None = None
+    ) -> dict[str, Any]:
+        assert Bucket == "media"
+        if Key == ROSTER_KEY:
+            assert ChecksumMode == "ENABLED"
+            self.roster_reads += 1
+            return {
+                "Body": io.BytesIO(self.roster),
+                "ContentLength": len(self.roster),
+                "ContentType": "application/json",
+                "VersionId": self.roster_version,
+                "ChecksumType": "FULL_OBJECT",
+                "ChecksumSHA256": base64.b64encode(hashlib.sha256(self.roster).digest()).decode(),
+            }
+        assert Key == SCHOOL_LOGOS_KEY
         self.catalog_reads += 1
         return {"Body": io.BytesIO(self.catalog), "ContentLength": len(self.catalog)}
 
@@ -185,6 +202,7 @@ def test_gallery_metadata_is_private_paginated_and_contains_no_signed_urls(setup
     data = json.loads(first["body"])
     assert data["schemaVersion"] == 1
     card = data["items"][0]
+    assert "contract" not in data and "studentId" not in card
     assert card["cardId"] == card_id()
     assert card["performer"] == "participant-c"
     assert card["schoolName"] == "ゲヘナ学園"
@@ -239,7 +257,9 @@ def test_gallery_avatar_contract_keeps_existing_client_shape_and_signs_only_owne
     second = controller.handle(
         event(ROOT, query=f"{query}&cursor={cursor}", cookies=COOKIES), now=NOW
     )
-    collector = json.loads(second["body"])["items"][0]["collector"]
+    avatar_list = json.loads(second["body"])
+    assert "contract" not in avatar_list and "studentId" not in avatar_list["items"][0]
+    collector = avatar_list["items"][0]["collector"]
     assert collector["avatar"]["kind"] == "image"
     assert collector["avatar"]["url"] == "https://media.example.invalid/avatar"
     assert profiles.requests == [f"requesters/{dynamo.second['owner_key']}/avatar.webp"]
@@ -249,6 +269,95 @@ def test_gallery_avatar_contract_keeps_existing_client_shape_and_signs_only_owne
         ]
         == 400
     )
+
+
+def test_gallery_roster_masks_secrets_and_joins_confirmed_cards_on_every_page(setup: Any) -> None:
+    controller, dynamo, signer, gallery = setup
+    route = f"{ROOT}/roster"
+    new_year = "ハルカ\uff08正月\uff09"
+    uniform = "ハルカ\uff08制服\uff09"
+    rows = [
+        {"name": name, "school": school, "rarity": rarity}
+        for name, school, rarity in [
+            ("名無しの生徒", "シッテムの箱", 0),
+            (new_year, "ゲヘナ", 1),
+            ("カヨコ", "ゲヘナ学園", 2),
+            ("アル", "未登録の学校", 3),
+            ("ハルカ", "シッテムの箱", 4),
+        ]
+    ]
+    signer.roster = json.dumps(rows).encode()
+    assert controller.handle(event(route), now=NOW)["statusCode"] == 401
+    assert (
+        controller.handle(event(route, query="guild=other", cookies=COOKIES), now=NOW)["statusCode"]
+        == 400
+    )
+    assert signer.roster_reads == 0
+
+    response = controller.handle(event(route, cookies=COOKIES), now=NOW)
+    assert response["statusCode"] == 200
+    assert response["headers"]["Cache-Control"] == "private, no-store"
+    roster = json.loads(response["body"])
+    assert roster["schemaVersion"] == 1
+    slots = {entry["rarity"]: entry for entry in roster["items"]}
+    assert {rarity: entry["studentName"] for rarity, entry in slots.items()} == {
+        0: None,
+        1: new_year,
+        2: "カヨコ",
+        3: "アル",
+        4: None,
+    }
+    assert {rarity: entry["schoolName"] for rarity, entry in slots.items()} == {
+        0: None,
+        1: "ゲヘナ学園",
+        2: "ゲヘナ学園",
+        3: "未登録の学校",
+        4: None,
+    }
+    assert len({entry["studentId"] for entry in slots.values()}) == 5
+    fields = {"studentId", "studentName", "schoolName", "rarity"}
+    assert all(set(entry) == fields for entry in slots.values())
+    assert not dynamo.requests
+
+    other_guild = GalleryReadService(
+        gallery._store, Profiles(), guild_id="2" * 18, session_key=SESSION_KEY
+    )
+    assert {entry.student_id for entry in other_guild.get_roster().items}.isdisjoint(
+        {entry["studentId"] for entry in slots.values()}
+    )
+
+    # Existing results can have a different owner and no recorded rarity.
+    query = "contract=gallery-collection-v1"
+    first = json.loads(
+        controller.handle(event(ROOT, query=query, cookies=COOKIES), now=NOW)["body"]
+    )
+    second = json.loads(
+        controller.handle(
+            event(ROOT, query=f"{query}&cursor={first['nextCursor']}", cookies=COOKIES), now=NOW
+        )["body"]
+    )
+    assert first["contract"] == second["contract"] == "gallery-collection-v1"
+    assert (
+        first["items"][0]["studentId"] == second["items"][0]["studentId"] == slots[4]["studentId"]
+    )
+    assert first["items"][0]["collector"]["avatar"]["kind"] == "placeholder"
+    assert second["items"][0]["isMine"] is False
+    assert second["items"][0]["rarity"] is None
+    assert not signer.requests
+
+    # The published roster can change while the read Lambda remains warm.
+    rows[1]["name"] = uniform
+    signer.roster = json.dumps(rows[::-1]).encode()
+    refreshed = controller.handle(event(route, cookies=COOKIES), now=NOW)
+    updated = {entry["rarity"]: entry for entry in json.loads(refreshed["body"])["items"]}
+    assert updated[1]["studentName"] == uniform
+    assert updated[1]["studentId"] != slots[1]["studentId"]
+    assert updated[4] == slots[4]
+
+    signer.roster_version = "null"
+    failure = controller.handle(event(route, cookies=COOKIES), now=NOW)
+    assert failure["statusCode"] == 503
+    assert json.loads(failure["body"])["error"]["code"] == "GALLERY_UNAVAILABLE"
 
 
 def test_school_logos_require_browser_auth_and_return_only_validated_catalog_icons(
@@ -353,6 +462,12 @@ def test_gallery_signs_only_requested_ready_thumbnails_or_explicit_original(setu
         now=NOW,
     )
     assert missing["statusCode"] == 404
+    missing_detail = controller.handle(
+        event(f"{ROOT}/{{cardId}}", path={"cardId": card_id("e" * 32)}, cookies=COOKIES),
+        now=NOW,
+    )
+    assert missing_detail["statusCode"] == 404
+    assert json.loads(missing_detail["body"])["error"]["code"] == "GALLERY_CARD_NOT_FOUND"
     assert len(signer.requests) == 2
 
 

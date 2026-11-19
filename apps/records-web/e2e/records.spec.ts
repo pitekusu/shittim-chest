@@ -2246,7 +2246,7 @@ test("Gallery, Memorial and SYSTEM ACCESS keep usable targets in the narrow mobi
   });
   await expect(mobileNavigation).toBeVisible();
   await expect(mobileNavigation.getByRole("link")).toHaveCount(5);
-  await expect(mobileNavigation.getByRole("link", { name: "生徒ガチャ" })).toBeVisible();
+  await expect(mobileNavigation.getByRole("link", { name: "生徒図鑑" })).toBeVisible();
   await expect(mobileNavigation.getByRole("link", { name: "モモトーク" })).toBeVisible();
   await expect(
     mobileNavigation.getByRole("link", { name: "メモリアル", exact: true }),
@@ -3207,7 +3207,7 @@ for (const directRoute of [
   { path: `/records/${RECORD_ID}`, chunkName: "RecordDetail", heading: detail.question },
   { path: "/insights", chunkName: "RankingsPage", heading: "いろいろな記録" },
   { path: "/memorial", chunkName: "MemorialPage", heading: "メモリアルロビー" },
-  { path: "/gallery", chunkName: "GalleryPage", heading: "生徒ガチャ" },
+  { path: "/gallery", chunkName: "GalleryPage", heading: "生徒図鑑" },
   { path: "/admin", chunkName: "AdminPage", heading: "サービス状態確認" },
   { path: "/admin/prompts", chunkName: "AdminPromptsPage", heading: "プロンプト管理" },
 ] as const) {
@@ -3219,7 +3219,30 @@ for (const directRoute of [
     await mockAuthenticatedApi(page);
     await page.route(
       (url) => url.pathname === "/api/v1/gallery",
-      (route) => route.fulfill({ json: { schemaVersion: 1, items: [], nextCursor: null } }),
+      (route) =>
+        route.fulfill({
+          json: {
+            schemaVersion: 1,
+            contract: "gallery-collection-v1",
+            items: [],
+            nextCursor: null,
+          },
+        }),
+    );
+    await page.route("**/api/v1/gallery/roster", (route) =>
+      route.fulfill({
+        json: {
+          schemaVersion: 1,
+          items: [
+            {
+              studentId: "a".repeat(43),
+              studentName: "アリス",
+              schoolName: "ミレニアムサイエンススクール",
+              rarity: 3,
+            },
+          ],
+        },
+      }),
     );
 
     await page.goto(directRoute.path);
