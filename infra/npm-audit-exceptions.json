@@ -5,12 +5,5 @@
     "severity": "moderate",
     "reason": "2026-11-16に所有者が、修正版を同梱した公式aws-cdk-libが未公開であることを確認したうえで、PR #726の必須CI・統合・本番配信を進めるため、現行aws-cdk-lib 2.275.0がnode_modules/aws-cdk-lib/node_modules/minimatchへ同梱するminimatch 10.2.6のGHSA-g3hv-75wg-m249（CVE-2026-118764、moderate）1件を期限付きで受容した。CVE-2026-118764ではoptimizationLevel 2以上で外部指定のglobを処理するとCPUとメモリを過剰に消費しうる。同梱CDKの呼び出しは既定のoptimizationLevel 1を使う。未修正依存はCDKを使う開発とCIに残る。2026-11-20 00:00 UTC（09:00 JST）に失効する。修正版を同梱したCDKへ更新した時点で削除する。",
     "expires": "2026-11-20"
-  },
-  {
-    "id": "GHSA-fc5q-39xc-vjpf",
-    "package": "picomatch",
-    "severity": "high",
-    "reason": "2026-11-18に所有者が、修正版未公開を確認したうえで、PR #752の必須CIと統合を進めるため、開発・CI用Vitest 5.1.0、Vite 8.3.8、tinyglobby／fdirから参照されるpicomatch 4.0.7のGHSA-fc5q-39xc-vjpf（CVE-2026-112366、high）を期限付きで明示受容した。外部指定の単一分岐を反復するextglobによりNode.jsのevent loopを長時間占有しうる。現行の呼び出しはリポジトリ設定とCLIのglobを使い、製品の利用者入力からの到達経路は確認していない。未修正依存は開発・CIへ残る。2026-11-20 00:00 UTC（09:00 JST）に失効し、修正版へ更新した時点で削除する。",
-    "expires": "2026-11-20"
   }
 ]

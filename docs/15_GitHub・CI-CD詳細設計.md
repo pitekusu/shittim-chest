@@ -527,6 +527,9 @@ DependabotのActions更新は`uses:`を扱い、`with.version`、`driver-opts`�
   coreエイリアスと固定overrideも実ファイルから読み、不一致を拒否し、互換性のため保留中の更新を通知から漏らさない。
 - AWS Signerのインストーラーは`latest`配布物・署名・公開鍵のチェックサム差分だけを検出する。
   取得したツールの実行・インストール・署名鍵の自動交換はしない。
+- Git履歴の秘密検査で公開チェックサムを誤検出した場合は、公式配布物のSHA-256を照合したうえで、
+  対象ファイル・項目名・既知の値が全て一致する行だけを除外する。ECR Credential Helperの
+  ARM64版0.12.0と0.13.0もこの範囲で扱い、別の値や他のファイルへの除外へ広げない。
 - 結果は実行サマリーと通知Botが管理する単一Issueへ集約する。変化がなければ再投稿しない。
   全項目が確認済みで最新の場合だけIssueを閉じ、一部取得失敗を「最新」にしない。
 - 終了値は最新`0`、更新候補あり`1`、取得/設定不正`2`。
@@ -556,6 +559,8 @@ CLIと版番号が分かれたcoreエイリアス／overrideは8.3.8000とし、
 2026年11月20日09:00 JSTまで受容し、CI成功後のPR #752マージを明示承認した。
 infraとWebの受容記録は`expires: 2026-11-20`とし、同日00:00 UTCから拒否する。
 Vite+ coreのNode用vendor copyにも同版が残り、正式修正や非影響の証明とは扱わない。
+11月19日、GitHubで当該アドバイザリの取り下げを確認した。固定版pnpmとnpmの監査でも
+報告されなくなったため、Webとinfraの未使用の受容記録を削除した。依存の版は維持する。
 
 同じ承認で、今回の実測ARM64 production config
 `sha256:d61d02a8c0c0f8f0c8616c64bf53ed25a9885be72ec1c00c3383f9c4fe18e2c4`に残るHigh 28組を
@@ -915,6 +920,17 @@ Critical、修正可能なHigh/Critical、ソースのHigh/Criticalは0組で、
 
 所有者はこのconfigの22組を2026-11-20 09:00 JSTまで受容し、必須CIとCodeQLの成功後のマージ、本番配信、Playクローズドテスト配布を明示承認した。
 `expires_on`は`2026-11-19`とし、既存の10組では4枠の上限に従って最古のPR #723用configを今回のconfigへ入れ替える。
+
+2026-11-19、PR #753を最新mainへ合わせた完成ARM64 production config
+`sha256:3a42446d8992733a9b7a06680a6588c12c68cb0604da33d2a8ed13ed3380d4c1`を再計測した。
+Grypeのraw Highは42組、署名付きDHI VEX適用後は28組で、既承認のCVE・パッケージ・版・修正状態と一致した。
+Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは60/60成功した。
+[完成SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44496940681/artifacts/14515322210)と
+[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44496940681/artifacts/14515457231)を照合した。
+
+所有者はこのconfigに限り、同じ28組を2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、
+必須CIとCodeQL成功後のマージ・本番反映を明示承認した。`expires_on`は`2026-11-19`のままとする。
+4枠を使用していた既存10組では、最古のPR #747のconfigを入れ替え、稼働中のconfigを保持する。
 
 ## 5. 本番配信
 
