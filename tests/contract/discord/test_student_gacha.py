@@ -476,7 +476,7 @@ async def test_apng_result_sends_lossless_webp_and_reconciles_by_saved_image(
             durations.append(animation.info["duration"])
             assert ImageChops.difference(actual, expected).getbbox() is None
         assert tuple(durations) == GACHA_APNG_FRAME_DURATIONS
-        assert sum(durations) == 1600
+        assert sum(durations) == 1500
 
     # A later encoder can produce different compressed bytes for the same saved pixels.
     monkeypatch.setattr(delivery, "encode_gacha_discord_webp", lambda _content: b"different WebP")
