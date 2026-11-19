@@ -977,16 +977,6 @@ raw Highは42組、署名付きDHI VEX適用後の未修正High 28組は稼働�
 `expires_on`はUTCの最終有効日`2026-11-19`を維持する。
 4枠を使用していた22組では旧PR #750用configを入れ替え、PR #753・#756・#742用configを保持する。
 
-2026-11-20 JST、PR #758の生徒ガチャAPNG・画風・衣装参照を含む完成ARM64 production config
-`sha256:8a135866ee8c066196a9cb802096bd21bfa21eddbaa7bc2de4060761361d3bba`を検査した。
-raw High 42組のうち署名付きDHI VEX適用後のHigh 28組は、現行本番とCVE・パッケージ・版・修正状態が一致した。
-新規High、Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは60/60成功した。
-[完成ARM64 SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44553871901/artifacts/14542498999)と[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44553871901/artifacts/14544303625)を照合した。
-
-所有者はこのconfigに限り、同じHigh 28組を2026-11-20 09:00 JST（同日00:00 UTC）まで受容した。
-`expires_on`はUTCの最終有効日`2026-11-19`を維持する。
-全28組で上限4枠を使用していたため、旧PR #753用configを入れ替え、PR #756・#742・#757用configを保持する。
-
 ## 5. 本番配信
 
 ### 共通の工程

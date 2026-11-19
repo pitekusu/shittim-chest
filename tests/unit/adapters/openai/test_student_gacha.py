@@ -347,7 +347,8 @@ async def test_render_uses_costume_image_and_selected_performer_expression(
     assert "the sole wardrobe reference" in prompt
     assert "Keep the costume from image 3 visible in every frame" in prompt
     assert "gaze direction, eye shape and color" in prompt
-    assert "Use a wide shot" in prompt
+    assert "Frame the performer from just below the waist" in prompt
+    assert "beyond the top edge" in prompt
     assert "at about x=42%" in prompt
     assert "vivid rainbow prism reflections" in prompt
     assert "Backdrop palette: luminous light sky blue" in prompt
