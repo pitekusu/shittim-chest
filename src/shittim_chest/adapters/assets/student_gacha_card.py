@@ -18,6 +18,7 @@ from shittim_chest.adapters.assets.student_gacha import (
     RESULT_SIZE,
     validate_gacha_result,
 )
+from shittim_chest.adapters.assets.student_gacha_matte import key_gacha_frame
 from shittim_chest.application.student_gacha_models import (
     GACHA_APNG_FRAME_COUNT,
     GACHA_APNG_FRAME_DURATIONS,
@@ -53,9 +54,10 @@ _STAR_CENTERS = (
     (27, 56, 85, 114),
 )
 _BACKGROUND_PALETTES = (
-    ("#c6cfdf", "#f3f6fa", "#ffffff"),
-    ("#1949a8", "#499ef4", "#c9efff"),
-    ("#a4510e", "#f8b842", "#fff3b8"),
+    ("#8b9db6", "#dde6f2", "#ffffff"),
+    None,
+    ("#a4510e", "#f3b140", "#fff6cc"),
+    ("#583bb2", "#b19bed", "#fff3ff"),
 )
 _RAINBOW = (
     "#4d40ed",
@@ -99,23 +101,22 @@ def render_card(
     presentation: GachaPresentation,
     teacher: str,
     *,
+    key_color: str,
     school_branding: SchoolBranding | None = None,
 ) -> bytes:
-    """Compose the APNG card locally and freeze both panels across the animation."""
+    """Composite keyed animation frames over a static background and fixed text panels."""
     art_frames = _read_art_frames(art)
     try:
-        panels = _card_panels(presentation, teacher, school_branding)
+        background = _card_background(presentation.student.rarity)
+        panels = _card_panels(presentation, teacher, school_branding).resize(
+            GACHA_GIF_SIZE, Image.Resampling.LANCZOS
+        )
         frames = [
-            _compose_frame(frame, presentation.student.rarity, panels)
-            .convert("RGB")
-            .resize(GACHA_GIF_SIZE, Image.Resampling.LANCZOS)
+            _compose_frame(key_gacha_frame(frame, key_color), background, panels).convert("RGB")
             for frame in art_frames
         ]
-        panel_mask = (
-            panels.getchannel("A")
-            .resize(GACHA_GIF_SIZE, Image.Resampling.LANCZOS)
-            .point(lambda alpha: 255 if alpha else 0, mode="1")
-        )
+        # Reuse pixels under translucent borders and shadows as well as opaque panel pixels.
+        panel_mask = panels.getchannel("A").point(lambda alpha: 255 if alpha else 0, mode="1")
         first = frames[0]
         for frame in frames[1:]:
             frame.paste(first, mask=panel_mask)
@@ -185,16 +186,28 @@ def _card_panels(
     return panels
 
 
-def _compose_frame(art: Image.Image, rarity: int | None, panels: Image.Image) -> Image.Image:
-    canvas = ImageOps.fit(art, RESULT_SIZE)
+@cache
+def _card_background(rarity: int | None) -> Image.Image:
+    with (
+        files(__package__).joinpath("student-gacha-backdrop.png").open("rb") as source,
+        Image.open(source, formats=["PNG"]) as art,
+    ):
+        background = art.convert("RGBA")
     if rarity == 4:
-        canvas.alpha_composite(_rare_reveal())
-    # Three-star cards use the original soft reveal lighting from the artwork.
-    elif rarity is not None and rarity < len(_BACKGROUND_PALETTES):
-        black, mid, white = _BACKGROUND_PALETTES[rarity]
-        tinted = ImageOps.colorize(ImageOps.grayscale(canvas), black=black, mid=mid, white=white)
-        tinted.putalpha(_edge_mask(236))
-        canvas.alpha_composite(tinted)
+        background.alpha_composite(_rare_reveal().resize(GACHA_GIF_SIZE, Image.Resampling.LANCZOS))
+    else:
+        palette = _BACKGROUND_PALETTES[3 if rarity is None else rarity]
+        if palette is not None:
+            black, mid, white = palette
+            background = ImageOps.colorize(
+                ImageOps.grayscale(background), black=black, mid=mid, white=white
+            ).convert("RGBA")
+    return background
+
+
+def _compose_frame(art: Image.Image, background: Image.Image, panels: Image.Image) -> Image.Image:
+    canvas = background.copy()
+    canvas.alpha_composite(ImageOps.fit(art, canvas.size, Image.Resampling.LANCZOS))
     canvas.alpha_composite(panels)
     return canvas
 
