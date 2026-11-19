@@ -17,7 +17,7 @@ from shittim_chest.adapters.openai.config import ParticipantProfile, Participant
 from shittim_chest.adapters.openai.limiter import OpenAIRequestLimiter
 from shittim_chest.adapters.openai.student_gacha import OpenAIStudentGacha, _CardBrief
 from shittim_chest.application.student_gacha_models import (
-    GACHA_GIF_FRAME_DURATIONS,
+    GACHA_APNG_FRAME_DURATIONS,
     GACHA_GIF_SIZE,
     TEACHER_PLACEHOLDER,
     GachaExpression,
@@ -247,7 +247,7 @@ async def test_render_requests_sunburst_gif_and_composes_the_apng_locally() -> N
     assert payload["quality"] == "max"
     assert payload["output_format"] == "gif"
     assert payload["frame_count"] == 12
-    assert payload["frame_duration_ms"] == 170
+    assert payload["frame_duration_ms"] == 130
     assert payload["n"] == 1
     assert payload["image"] == [
         ("performer.webp", b"portrait", "image/webp"),
@@ -270,7 +270,7 @@ async def test_render_requests_sunburst_gif_and_composes_the_apng_locally() -> N
             12,
         )
         assert image.info["loop"] == 0
-        for index, delay in enumerate(GACHA_GIF_FRAME_DURATIONS):
+        for index, delay in enumerate(GACHA_APNG_FRAME_DURATIONS):
             image.seek(index)
             assert image.info["duration"] == delay
 

@@ -35,7 +35,7 @@ from shittim_chest.adapters.openai.schemas import StrictOutput
 from shittim_chest.adapters.openai.service import _extract_parsed, _validation_error
 from shittim_chest.application.generation_policy import PRODUCTION_POLICY
 from shittim_chest.application.student_gacha_models import (
-    GACHA_GIF_FRAME_COUNT,
+    GACHA_APNG_FRAME_COUNT,
     TEACHER_PLACEHOLDER,
     GachaExpression,
     GachaGenerationFailure,
@@ -53,7 +53,7 @@ _LOGGER = logging.getLogger(__name__)
 IMAGE_MODEL: Final = "gpt-image-2.6-sunburst"
 _TEXT_TIMEOUT = 40
 _IMAGE_TIMEOUT = 240
-_IMAGE_FRAME_DURATION_MS = 170
+_IMAGE_FRAME_DURATION_MS = 130
 _PROVIDER_CODES = frozenset(
     {
         "content_policy_violation",
@@ -327,7 +327,7 @@ class OpenAIStudentGacha:
                     size=f"{GIF_ART_SIZE[0]}x{GIF_ART_SIZE[1]}",
                     quality="max",
                     output_format="gif",
-                    frame_count=GACHA_GIF_FRAME_COUNT,
+                    frame_count=GACHA_APNG_FRAME_COUNT,
                     frame_duration_ms=_IMAGE_FRAME_DURATION_MS,
                     n=1,
                     timeout=_IMAGE_TIMEOUT,

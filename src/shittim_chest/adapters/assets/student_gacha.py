@@ -22,7 +22,7 @@ from shittim_chest.adapters.assets.student_gacha_schools import (
     school_branding,
 )
 from shittim_chest.application.student_gacha_models import (
-    GACHA_GIF_FRAME_DURATIONS,
+    GACHA_APNG_FRAME_DURATIONS,
     STUDENT_GACHA_RARITIES,
     GachaGenerationFailure,
     GachaImageFormat,
@@ -324,7 +324,7 @@ def validate_gacha_result(content: bytes, *, image_format: GachaImageFormat) -> 
         content,
         expected_format=image_format.pillow_format,
         expected_size=image_format.size,
-        frame_durations=GACHA_GIF_FRAME_DURATIONS if image_format.is_animated else (),
+        frame_durations=image_format.frame_durations,
     )
 
 
@@ -339,7 +339,7 @@ def encode_gacha_discord_webp(apng: bytes) -> bytes:
                 format="WEBP",
                 save_all=True,
                 append_images=remaining,
-                duration=GACHA_GIF_FRAME_DURATIONS,
+                duration=GACHA_APNG_FRAME_DURATIONS,
                 loop=0,
                 lossless=True,
             )
@@ -352,7 +352,7 @@ def encode_gacha_discord_webp(apng: bytes) -> bytes:
         result,
         expected_format="WEBP",
         expected_size=GachaImageFormat.APNG.size,
-        frame_durations=GACHA_GIF_FRAME_DURATIONS,
+        frame_durations=GACHA_APNG_FRAME_DURATIONS,
     )
     return result
 

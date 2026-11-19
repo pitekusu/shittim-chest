@@ -23,7 +23,7 @@ from shittim_chest.adapters.assets.student_gacha import (
     _parse_roster,
 )
 from shittim_chest.application.student_gacha_models import (
-    GACHA_GIF_FRAME_COUNT,
+    GACHA_APNG_FRAME_DURATIONS,
     GACHA_GIF_FRAME_DURATIONS,
     GachaGenerationFailure,
     GachaImageFormat,
@@ -40,10 +40,12 @@ _DRAW_ID = "0" * 32
 def _animation(
     image_format: GachaImageFormat,
     *,
-    durations: tuple[int, ...] = GACHA_GIF_FRAME_DURATIONS,
+    durations: tuple[int, ...] | None = None,
     loop: int = 0,
     default_image: bool = False,
 ) -> bytes:
+    if durations is None:
+        durations = image_format.frame_durations
     frames = [
         Image.new("RGB", image_format.size, (18 * frame, 54, 88))
         for frame in range(len(durations) + default_image)
@@ -166,9 +168,9 @@ async def test_finds_legacy_result_without_overwriting_it_with_apng(
     ("durations", "loop", "default_image"),
     (
         ((170,), 0, False),
-        ((170,) * GACHA_GIF_FRAME_COUNT, 0, False),
-        (GACHA_GIF_FRAME_DURATIONS, 1, False),
-        (GACHA_GIF_FRAME_DURATIONS[:-1], 0, True),
+        (GACHA_GIF_FRAME_DURATIONS, 0, False),
+        (GACHA_APNG_FRAME_DURATIONS, 1, False),
+        (GACHA_APNG_FRAME_DURATIONS[:-1], 0, True),
     ),
 )
 async def test_rejects_invalid_apng_before_saving(

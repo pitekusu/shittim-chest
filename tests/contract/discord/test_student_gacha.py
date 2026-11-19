@@ -37,7 +37,7 @@ from shittim_chest.application.student_gacha_discord import (
     StudentGachaInteractions,
 )
 from shittim_chest.application.student_gacha_models import (
-    GACHA_GIF_FRAME_DURATIONS,
+    GACHA_APNG_FRAME_DURATIONS,
     GachaImageFormat,
 )
 from shittim_chest.application.student_gacha_state import GachaOffer
@@ -412,7 +412,7 @@ async def test_apng_result_sends_lossless_webp_and_reconciles_by_saved_image(
 ) -> None:
     frames = [
         Image.new("RGB", GachaImageFormat.APNG.size, (13 * index, 161, 203))
-        for index in range(len(GACHA_GIF_FRAME_DURATIONS))
+        for index in range(len(GACHA_APNG_FRAME_DURATIONS))
     ]
     with io.BytesIO() as output:
         frames[0].save(
@@ -420,7 +420,7 @@ async def test_apng_result_sends_lossless_webp_and_reconciles_by_saved_image(
             format="PNG",
             save_all=True,
             append_images=frames[1:],
-            duration=GACHA_GIF_FRAME_DURATIONS,
+            duration=GACHA_APNG_FRAME_DURATIONS,
             loop=0,
         )
         apng = output.getvalue()
@@ -469,11 +469,14 @@ async def test_apng_result_sends_lossless_webp_and_reconciles_by_saved_image(
     with Image.open(io.BytesIO(captured), formats=["WEBP"]) as animation:
         assert animation.info["loop"] == 0
         assert getattr(animation, "n_frames", 1) == len(frames)
+        durations = []
         for index, expected in enumerate(frames):
             animation.seek(index)
             actual = animation.convert("RGB")
-            assert animation.info["duration"] == GACHA_GIF_FRAME_DURATIONS[index]
+            durations.append(animation.info["duration"])
             assert ImageChops.difference(actual, expected).getbbox() is None
+        assert tuple(durations) == GACHA_APNG_FRAME_DURATIONS
+        assert sum(durations) == 1600
 
     # A later encoder can produce different compressed bytes for the same saved pixels.
     monkeypatch.setattr(delivery, "encode_gacha_discord_webp", lambda _content: b"different WebP")

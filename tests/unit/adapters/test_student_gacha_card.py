@@ -10,8 +10,8 @@ from PIL import Image, ImageChops, ImageDraw
 from shittim_chest.adapters.assets import student_gacha_card
 from shittim_chest.adapters.assets.student_gacha_card import GIF_ART_SIZE, render_card
 from shittim_chest.application.student_gacha_models import (
-    GACHA_GIF_FRAME_COUNT,
-    GACHA_GIF_FRAME_DURATIONS,
+    GACHA_APNG_FRAME_COUNT,
+    GACHA_APNG_FRAME_DURATIONS,
     GACHA_GIF_SIZE,
     GachaGenerationFailure,
     GachaPresentation,
@@ -62,7 +62,7 @@ def _render(
 def _gif(
     *,
     size: tuple[int, int] = GIF_ART_SIZE,
-    frame_count: int = GACHA_GIF_FRAME_COUNT,
+    frame_count: int = GACHA_APNG_FRAME_COUNT,
     panel_motion_only: bool = False,
 ) -> bytes:
     frames = []
@@ -100,11 +100,12 @@ def test_animated_card_freezes_both_panels_while_the_art_moves() -> None:
         assert len(result) <= student_gacha_card.RESULT_MAX_BYTES
 
         artwork_colors = set()
+        durations = []
         with card.convert("RGB") as first:
             assert first.getcolors(maxcolors=256) is None
-            for index, duration in enumerate(GACHA_GIF_FRAME_DURATIONS):
+            for index in range(GACHA_APNG_FRAME_COUNT):
                 card.seek(index)
-                assert card.info["duration"] == duration
+                durations.append(card.info["duration"])
                 with card.convert("RGB") as frame:
                     difference = ImageChops.difference(first, frame)
                     assert all(
@@ -112,6 +113,8 @@ def test_animated_card_freezes_both_panels_while_the_art_moves() -> None:
                         for band in difference.split()
                     )
                     artwork_colors.add(frame.getpixel((525, 200)))
+        assert tuple(durations) == GACHA_APNG_FRAME_DURATIONS
+        assert sum(durations) == 1600
         assert len(artwork_colors) == 12
 
 

@@ -19,8 +19,8 @@ from shittim_chest.adapters.assets.student_gacha import (
     validate_gacha_result,
 )
 from shittim_chest.application.student_gacha_models import (
-    GACHA_GIF_FRAME_COUNT,
-    GACHA_GIF_FRAME_DURATIONS,
+    GACHA_APNG_FRAME_COUNT,
+    GACHA_APNG_FRAME_DURATIONS,
     GACHA_GIF_SIZE,
     TEACHER_PLACEHOLDER,
     GachaGenerationFailure,
@@ -125,7 +125,7 @@ def render_card(
                 format="PNG",
                 save_all=True,
                 append_images=frames[1:],
-                duration=GACHA_GIF_FRAME_DURATIONS,
+                duration=GACHA_APNG_FRAME_DURATIONS,
                 loop=0,
                 optimize=True,
             )
@@ -153,13 +153,13 @@ def _read_art_frames(art: bytes) -> list[Image.Image]:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with io.BytesIO(art) as buffer, Image.open(buffer, formats=["GIF"]) as source:
-                for index in range(GACHA_GIF_FRAME_COUNT):
+                for index in range(GACHA_APNG_FRAME_COUNT):
                     source.seek(index)
                     if source.size != GIF_ART_SIZE:
                         raise GachaGenerationFailure("gacha_image_invalid")
                     frames.append(source.convert("RGBA"))
                 try:
-                    source.seek(GACHA_GIF_FRAME_COUNT)
+                    source.seek(GACHA_APNG_FRAME_COUNT)
                 except EOFError:
                     return frames
     except (
