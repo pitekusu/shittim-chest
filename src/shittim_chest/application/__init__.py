@@ -48,7 +48,7 @@ from shittim_chest.application.errors import (
 )
 from shittim_chest.application.generation_policy import (
     PRODUCTION_POLICY,
-    TERRA_STANDARD,
+    SOL_STANDARD,
     GenerationPolicy,
     GenerationPolicyId,
     PhaseBudget,
@@ -146,11 +146,11 @@ __all__ = (
     "OUTBOX_CLAIM_SECONDS",
     "PRODUCTION_POLICY",
     "SHITTIM_COMMAND_NAME",
+    "SOL_STANDARD",
     "STARTUP_TERMINAL_DEADLINE_ERROR",
     "STARTUP_TIMEOUT",
     "STATUS_PUBLICATION_SWEEP_LIMIT",
     "TERMINAL_TIMEOUT",
-    "TERRA_STANDARD",
     "AcceptDebateRequest",
     "AcceptedDebate",
     "AcceptedRetry",

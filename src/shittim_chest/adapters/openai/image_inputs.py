@@ -1,4 +1,4 @@
-"""Construct Responses image inputs without public or expiring image URLs."""
+"""Construct Responses messages with ordered inline attachments."""
 
 from __future__ import annotations
 
@@ -16,12 +16,14 @@ IMAGE_INPUT_RULES = (
 )
 
 
-def responses_image_input(text: str, images: tuple[ImageInput, ...]) -> str | ResponseInputParam:
-    """Keep text-only requests identical and label ordered image content explicitly."""
+def responses_input(
+    *, instructions: str, text: str, images: tuple[ImageInput, ...] = ()
+) -> ResponseInputParam:
+    """Put developer instructions before user input for GPT-6.2."""
 
     validate_images(images)
-    if not images:
-        return text
+    if images:
+        instructions += IMAGE_INPUT_RULES
     content: list[ResponseInputContentParam] = [{"type": "input_text", "text": text}]
     for index, image in enumerate(images, start=1):
         content.append({"type": "input_text", "text": f"Attached image {index}"})
@@ -33,4 +35,7 @@ def responses_image_input(text: str, images: tuple[ImageInput, ...]) -> str | Re
                 "detail": "high",
             }
         )
-    return [{"role": "user", "content": content}]
+    return [
+        {"role": "developer", "content": instructions},
+        {"role": "user", "content": content},
+    ]

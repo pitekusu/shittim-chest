@@ -1139,7 +1139,8 @@ class ParticipantReferences:
 
 
 class OpenAIRecorder:
-    def __init__(self) -> None:
+    def __init__(self, status: str = "completed") -> None:
+        self.status = status
         self.response_calls: list[dict[str, Any]] = []
         self.image_calls: list[dict[str, Any]] = []
         self.responses = SimpleNamespace(create=self._response)
@@ -1147,7 +1148,7 @@ class OpenAIRecorder:
 
     def _response(self, **kwargs: Any) -> Any:
         self.response_calls.append(kwargs)
-        return SimpleNamespace(output_text=NARRATIVE)
+        return SimpleNamespace(status=self.status, output_text=NARRATIVE)
 
     def _image(self, **kwargs: Any) -> Any:
         self.image_calls.append(kwargs)
@@ -1198,10 +1199,14 @@ def test_openai_generation_is_stateless_split_and_uses_two_reference_images(
         )
 
     text_call = client.response_calls[0]
-    assert text_call["model"] == "gpt-6.1-terra"
+    assert text_call["model"] == "gpt-6.2-sol"
+    assert text_call["reasoning"] == {"effort": "low"}
     assert text_call["store"] is False
     assert text_call["tools"] == []
-    assert "trusted persona" in text_call["instructions"]
+    developer, user = text_call["input"]
+    assert developer["role"] == "developer"
+    assert "trusted persona" in developer["content"]
+    assert user["role"] == "user"
     image_call = client.image_calls[0]
     assert image_call["model"] == "gpt-image-2.5-sunburst"
     assert image_call["size"] == "1920x1088"
@@ -1218,6 +1223,22 @@ def test_openai_generation_is_stateless_split_and_uses_two_reference_images(
     assert "private-api-key" not in caplog.text
     assert questions[0] not in caplog.text
     assert NARRATIVE not in caplog.text
+
+
+def test_openai_narrative_rejects_incomplete_response_with_valid_length() -> None:
+    generator = OpenAIMemorialContentGenerator(
+        cast(Any, TrustedConfiguration()),
+        participant_references=cast(Any, ParticipantReferences()),
+        client=OpenAIRecorder(status="incomplete"),
+    )
+
+    with pytest.raises(MemorialFailure, match="MEMORIAL_PROVIDER_OUTPUT_INVALID"):
+        generator.generate_narrative(
+            participant="participant-a",
+            requester_display_name="質問者",
+            questions=("非公開の質問",),
+            achieved_on=date(2026, 9, 3),
+        )
 
 
 @pytest.mark.parametrize("operation", ("narrative", "image"))
