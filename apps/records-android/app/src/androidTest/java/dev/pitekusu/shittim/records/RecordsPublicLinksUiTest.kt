@@ -34,8 +34,11 @@ class RecordsPublicLinksUiTest {
     val events = mutableListOf<BootstrapScreen.Event>()
     showMenu(demo = false, events)
     compose.onNodeWithTag("momotalk-open").performScrollTo().assertIsDisplayed().performClick()
-    compose.onNodeWithTag("web-page-Momotalk").assertDoesNotExist()
     compose.onNodeWithTag("records-menu-open").performClick()
+    compose.onNodeWithTag("student-collection-open").performScrollTo().assertIsDisplayed().performClick()
+    compose.onNodeWithTag("records-menu-open").performClick()
+    compose.onNodeWithTag("web-page-Momotalk").assertDoesNotExist()
+    compose.onNodeWithTag("web-page-StudentGacha").assertDoesNotExist()
     RecordsWebPage.entries.forEach { page ->
       compose.onNodeWithTag("web-page-${page.name}").performScrollTo().assertIsDisplayed().performClick()
     }
@@ -44,7 +47,8 @@ class RecordsPublicLinksUiTest {
     }
     compose.onNodeWithTag("records-menu-logout").performScrollTo().assertIsDisplayed()
     compose.runOnIdle { assertEquals(
-      listOf(BootstrapScreen.Event.ShowMomotalk) + RecordsWebPage.entries.map { BootstrapScreen.Event.OpenWebPage(it) } +
+      listOf(BootstrapScreen.Event.ShowMomotalk, BootstrapScreen.Event.ShowStudentCollection) +
+        RecordsWebPage.entries.map { BootstrapScreen.Event.OpenWebPage(it) } +
         RecordsPublicPage.entries.map { BootstrapScreen.Event.OpenPublicPage(it) }, events) }
   }
 
@@ -53,6 +57,7 @@ class RecordsPublicLinksUiTest {
     showMenu(demo = true, events)
     compose.onNodeWithTag("momotalk-open").performScrollTo().assertIsDisplayed().performClick()
     compose.onNodeWithTag("records-menu-open").performClick()
+    compose.onNodeWithTag("student-collection-open").assertDoesNotExist()
     RecordsWebPage.entries.forEach { page ->
       compose.onNodeWithTag("web-page-${page.name}").assertDoesNotExist()
     }

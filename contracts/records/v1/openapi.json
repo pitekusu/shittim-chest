@@ -8264,6 +8264,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "mobileBearer": []
           }
         ]
       }
@@ -8358,6 +8361,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "mobileBearer": []
           }
         ]
       }
@@ -8452,6 +8458,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "mobileBearer": []
           }
         ]
       }
@@ -8556,6 +8565,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "mobileBearer": []
           }
         ]
       }
@@ -8671,13 +8683,16 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "mobileBearer": []
           }
         ]
       }
     },
     "/api/v1/gallery/{cardId}/original": {
       "get": {
-        "description": "PNGまたはアニメーションGIF原本の短命の署名URLを返す。",
+        "description": "PNG、GIF、またはAPNG原本の短命の署名URLを返す。",
         "operationId": "getGalleryOriginal",
         "parameters": [
           {
@@ -8699,7 +8714,7 @@
                 }
               }
             },
-            "description": "PNGまたはアニメーションGIF原本の短命の署名URLを返す。"
+            "description": "PNG、GIF、またはAPNG原本の短命の署名URLを返す。"
           },
           "400": {
             "content": {
@@ -8775,6 +8790,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "mobileBearer": []
           }
         ]
       }

@@ -16,7 +16,6 @@ from shittim_chest.application.student_gacha_models import (
     student_gacha_image_key,
 )
 
-from shittim_records.auth import SessionRecord
 from shittim_records.contracts import (
     GALLERY_CARD_ID_PATTERN,
     GALLERY_COLLECTION_CONTRACT,
@@ -136,6 +135,17 @@ class GalleryProfiles(Protocol):
     def avatar_url(self, *, asset_key: str) -> str: ...
 
 
+class GalleryViewer(Protocol):
+    @property
+    def requester_key(self) -> str: ...
+
+    @property
+    def display_name(self) -> str: ...
+
+    @property
+    def avatar_asset_key(self) -> str | None: ...
+
+
 class GalleryReadService:
     def __init__(
         self, store: GalleryStore, profiles: GalleryProfiles, *, guild_id: str, session_key: bytes
@@ -149,7 +159,7 @@ class GalleryReadService:
         self,
         *,
         cursor: str | None,
-        viewer: SessionRecord,
+        viewer: GalleryViewer,
         now: datetime,
         include_avatars: bool = False,
     ) -> GalleryListResponse:
@@ -163,7 +173,7 @@ class GalleryReadService:
         )
 
     def list_collection_cards(
-        self, *, cursor: str | None, viewer: SessionRecord, now: datetime
+        self, *, cursor: str | None, viewer: GalleryViewer, now: datetime
     ) -> GalleryCollectionListResponse:
         page = self.list_cards(cursor=cursor, viewer=viewer, now=now, include_avatars=True)
         return GalleryCollectionListResponse(
@@ -205,7 +215,7 @@ class GalleryReadService:
         )
 
     def get_card(
-        self, *, card_id: str, viewer: SessionRecord, include_avatars: bool = False
+        self, *, card_id: str, viewer: GalleryViewer, include_avatars: bool = False
     ) -> GalleryDetailResponse:
         row = self._load_card(card_id)
         width, height = row.image_format.size
@@ -269,7 +279,7 @@ class GalleryReadService:
         return row
 
     def _summaries(
-        self, rows: list[GalleryProjection], viewer: SessionRecord, *, include_avatars: bool
+        self, rows: list[GalleryProjection], viewer: GalleryViewer, *, include_avatars: bool
     ) -> list[GalleryCard]:
         keys = tuple(
             dict.fromkeys(

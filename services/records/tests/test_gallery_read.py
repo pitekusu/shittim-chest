@@ -7,7 +7,7 @@ import hashlib
 import io
 import json
 from dataclasses import replace
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
 from urllib.parse import urlencode
@@ -19,6 +19,9 @@ from shittim_chest.adapters.assets.student_gacha import _ASSET_DIGESTS, ROSTER_K
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.application.student_gacha_models import GachaImageFormat, student_gacha_image_key
 from tests.test_http_api import NOW, SESSION_KEY, FakeSessionStore, event, session
+from tests.test_mobile_auth_adapters import mobile_session
+from tests.test_mobile_read import BEARER, DIGEST
+from tests.test_mobile_session import SessionStore
 
 from shittim_records.auth import SESSION_COOKIE_NAME, AuthFailure, AuthStore, validate_return_to
 from shittim_records.gallery_read import GalleryReadService
@@ -171,7 +174,16 @@ class Signer:
 
 
 @pytest.fixture
-def setup() -> tuple[ReadHttpController, Dynamo, Signer, GalleryReadService]:
+def mobile_store() -> SessionStore:
+    store = SessionStore()
+    store.sessions[DIGEST] = mobile_session(now_epoch=int(NOW.timestamp()))
+    return store
+
+
+@pytest.fixture
+def setup(
+    mobile_store: SessionStore,
+) -> tuple[ReadHttpController, Dynamo, Signer, GalleryReadService]:
     dynamo = Dynamo()
     signer = Signer()
     store = DynamoGalleryStore(cast(Any, dynamo), cast(Any, signer), table="stats", bucket="media")
@@ -181,6 +193,8 @@ def setup() -> tuple[ReadHttpController, Dynamo, Signer, GalleryReadService]:
         session_key=SESSION_KEY,
         records=cast(RecordsReadService, SimpleNamespace()),
         gallery=lambda: gallery,
+        mobile_store=mobile_store,
+        clock=lambda: NOW,
     )
     return controller, dynamo, signer, gallery
 
@@ -193,7 +207,7 @@ def test_gallery_metadata_is_private_paginated_and_contains_no_signed_urls(setup
         validate_return_to(f"/gallery/{card_id()}?redirect=outside")
     assert controller.handle(event(ROOT), now=NOW)["statusCode"] == 401
     assert (
-        controller.handle(event(ROOT, headers={"authorization": f"Bearer {'t' * 43}"}), now=NOW)[
+        controller.handle(event(ROOT, headers={"authorization": f"Bearer {'u' * 43}"}), now=NOW)[
             "statusCode"
         ]
         == 401
@@ -241,6 +255,75 @@ def test_gallery_metadata_is_private_paginated_and_contains_no_signed_urls(setup
     )
     with pytest.raises(RuntimeError, match="CURSOR_INVALID"):
         other_guild.list_cards(cursor=cursor, viewer=session(), now=NOW)
+
+
+def test_gallery_mobile_session_reads_shared_collection_and_signs_images(
+    setup: Any, mobile_store: SessionStore
+) -> None:
+    controller, _, signer, _ = setup
+    signer.roster = json.dumps(
+        [
+            {"name": name, "school": "ゲヘナ", "rarity": rarity}
+            for rarity, name in enumerate(("名無しの生徒", "カヨコ", "ムツキ", "アル", "ハルカ"))
+        ]
+    ).encode()
+    path = {"cardId": card_id()}
+    query = "contract=gallery-collection-v1"
+    roster = controller.handle(event(f"{ROOT}/roster", headers=BEARER), now=NOW)
+    assert roster["statusCode"] == 200
+    assert roster == controller.handle(event(f"{ROOT}/roster", cookies=COOKIES), now=NOW)
+    slot = next(entry for entry in json.loads(roster["body"])["items"] if entry["rarity"] == 4)
+    assert slot["studentName"] is None and slot["schoolName"] is None
+
+    collection = controller.handle(event(ROOT, query=query, headers=BEARER), now=NOW)
+    browser = controller.handle(event(ROOT, query=query, cookies=COOKIES), now=NOW)
+    assert collection["statusCode"] == browser["statusCode"] == 200
+    assert collection["headers"]["Cache-Control"] == "private, no-store"
+    assert "cookies" not in collection
+    card = json.loads(collection["body"])["items"][0]
+    browser_card = json.loads(browser["body"])["items"][0]
+    assert card["studentId"] == browser_card["studentId"] == slot["studentId"]
+    assert card["collector"]["id"] == browser_card["collector"]["id"]
+    assert card["collector"]["displayName"] == mobile_store.sessions[DIGEST].display_name
+    assert browser_card["collector"]["displayName"] == VIEWER.display_name
+    assert card["isMine"] is True and browser_card["isMine"] is True
+    assert VIEWER.requester_key not in collection["body"]
+
+    detail = controller.handle(event(f"{ROOT}/{{cardId}}", path=path, headers=BEARER), now=NOW)
+    assert detail["statusCode"] == 200
+    assert json.loads(detail["body"])["card"]["isMine"] is True
+    thumbnails = controller.handle(
+        event(f"{ROOT}/thumbnails", query=f"ids={card_id()}", headers=BEARER), now=NOW
+    )
+    assert thumbnails["statusCode"] == 200
+    assert json.loads(thumbnails["body"])["items"][0]["cardId"] == card_id()
+    original = controller.handle(
+        event(f"{ROOT}/{{cardId}}/original", path=path, headers=BEARER), now=NOW
+    )
+    assert original["statusCode"] == 200
+    assert len(signer.requests) == 2
+
+
+def test_gallery_rejects_mixed_expired_and_revoked_sessions_before_signing(
+    setup: Any, mobile_store: SessionStore
+) -> None:
+    controller, dynamo, signer, _ = setup
+    route = f"{ROOT}/{{cardId}}/original"
+    path = {"cardId": card_id()}
+    mixed = controller.handle(event(route, path=path, headers=BEARER, cookies=COOKIES), now=NOW)
+    assert mixed["statusCode"] == 400
+    assert not mobile_store.reads
+    original = event(route, path=path, headers=BEARER)
+    controller._clock = lambda: datetime.fromtimestamp(
+        mobile_store.sessions[DIGEST].expires_at, UTC
+    )
+    expired = controller.handle(original, now=NOW)
+    assert expired["statusCode"] == 401
+    assert expired["headers"]["WWW-Authenticate"] == "Bearer"
+    controller._clock = lambda: NOW
+    mobile_store.delete_session(session_hash=DIGEST)
+    assert controller.handle(original, now=NOW)["statusCode"] == 401
+    assert not dynamo.requests and not signer.requests
 
 
 def test_gallery_avatar_contract_keeps_existing_client_shape_and_signs_only_owned_icons(
@@ -367,7 +450,7 @@ def test_gallery_roster_masks_secrets_and_joins_confirmed_cards_on_every_page(se
     assert json.loads(failure["body"])["error"]["code"] == "GALLERY_UNAVAILABLE"
 
 
-def test_school_logos_require_browser_auth_and_return_only_validated_catalog_icons(
+def test_school_logos_require_auth_and_return_only_validated_catalog_icons(
     setup: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     controller, _, signer, _ = setup
@@ -430,7 +513,7 @@ def test_school_logos_require_browser_auth_and_return_only_validated_catalog_ico
     assert prefix == "data:image/webp;base64"
     with Image.open(io.BytesIO(base64.b64decode(data)), formats=["WEBP"]) as logo:
         assert logo.size == (64, 32)
-    assert controller.handle(event(route, cookies=COOKIES), now=NOW) == response
+    assert controller.handle(event(route, headers=BEARER), now=NOW) == response
     assert signer.catalog_reads == 2
 
 

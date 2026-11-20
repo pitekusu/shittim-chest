@@ -256,7 +256,7 @@ def _gallery_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
         f"/api/v1/gallery{suffix}": {
             "get": {
                 "operationId": operation,
-                "security": [{"sessionCookie": []}],
+                "security": [{"sessionCookie": []}, {"mobileBearer": []}],
                 "description": description,
                 "parameters": parameters,
                 "responses": {"200": _response(schema, description), **error_responses},
@@ -299,7 +299,7 @@ def _gallery_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
                 "/{cardId}/original",
                 "getGalleryOriginal",
                 "GalleryOriginalResponse",
-                "PNGまたはアニメーションGIF原本の短命の署名URLを返す。",
+                "PNG、GIF、またはAPNG原本の短命の署名URLを返す。",
                 [card_id],
             ),
             (

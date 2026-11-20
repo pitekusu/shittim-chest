@@ -18,7 +18,6 @@ from shittim_records.auth import (
     AuthFailure,
     AuthService,
     AuthStore,
-    SessionRecord,
     authenticate_browser_session,
     csrf_token_matches,
     require_csrf_submission,
@@ -54,7 +53,7 @@ if TYPE_CHECKING:
         GallerySchoolLogosResponse,
         GalleryThumbnailsResponse,
     )
-    from shittim_records.gallery_read import GalleryReadService
+    from shittim_records.gallery_read import GalleryReadService, GalleryViewer
     from shittim_records.mobile_http import MobileAuthHttpController
     from shittim_records.momotalk_read import MomotalkReadService
 
@@ -78,6 +77,12 @@ MOBILE_READ_ROUTES = frozenset(
         "GET /api/v1/insights/rankings",
         "GET /api/v1/insights/affection-rankings",
         "GET /api/v1/insights/costs",
+        "GET /api/v1/gallery",
+        "GET /api/v1/gallery/roster",
+        "GET /api/v1/gallery/school-logos",
+        "GET /api/v1/gallery/thumbnails",
+        "GET /api/v1/gallery/{cardId}",
+        "GET /api/v1/gallery/{cardId}/original",
         "GET /api/v1/momotalk/weeks",
         "GET /api/v1/momotalk/weeks/{weekId}/rooms",
         "GET /api/v1/momotalk/weeks/{weekId}/rooms/{roomId}",
@@ -248,21 +253,20 @@ class ReadHttpController:
             include_attachment_count = False
             include_follow_ups = False
             session = None
+            mobile_session = None
             raw_token = _read_bearer_token(
                 event.get("headers") or {}, has_cookies=bool(event.get("cookies"))
             )
             if raw_token is not None:
                 if request.route_key not in MOBILE_READ_ROUTES or self._mobile_store is None:
                     raise AuthFailure("session_required")
-                if (
-                    authenticate_mobile_session(
-                        store=self._mobile_store,
-                        session_key=self._session_key,
-                        raw_token=raw_token,
-                        clock=self._clock,
-                    )
-                    is None
-                ):
+                mobile_session = authenticate_mobile_session(
+                    store=self._mobile_store,
+                    session_key=self._session_key,
+                    raw_token=raw_token,
+                    clock=self._clock,
+                )
+                if mobile_session is None:
                     raise AuthFailure("session_required")
             else:
                 session = authenticate_browser_session(
@@ -276,9 +280,10 @@ class ReadHttpController:
             if request.route_key == "GET /api/v1/gallery" or request.route_key.startswith(
                 "GET /api/v1/gallery/"
             ):
-                if session is None:
+                viewer = mobile_session or session
+                if viewer is None:
                     raise AuthFailure("session_required")
-                result = self._gallery_read(request, session, now)
+                result = self._gallery_read(request, viewer, now)
             elif request.route_key.startswith("GET /api/v1/momotalk/"):
                 result = self._momotalk_read(request, now)
             elif request.route_key == "GET /api/v1/records":
@@ -462,7 +467,7 @@ class ReadHttpController:
             return error_response(error.status, error.code, request.request_id)
 
     def _gallery_read(
-        self, request: Request, viewer: SessionRecord, now: datetime
+        self, request: Request, viewer: GalleryViewer, now: datetime
     ) -> (
         GalleryListResponse
         | GalleryCollectionListResponse
