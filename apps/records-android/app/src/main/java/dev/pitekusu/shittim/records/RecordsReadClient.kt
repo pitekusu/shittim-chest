@@ -25,6 +25,10 @@ import java.net.URI
 import java.time.Instant
 import java.time.OffsetDateTime
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 import kotlinx.serialization.json.Json
@@ -613,6 +617,87 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     insightRead("/api/v1/insights/costs?period=${period.wireValue}", accessToken) {
       it.validate(); check(it.period == period)
     }
+
+  suspend fun galleryCollection(accessToken: String, checkAccess: () -> Unit = {}): StudentCollection =
+    galleryRead {
+      if (!mobileOpaqueValue.matches(accessToken)) throw GalleryReadException(GalleryReadFailure.AUTH_REQUIRED)
+      coroutineScope {
+        val roster = async {
+          checkAccess()
+          read<GalleryRosterResponse>("/api/v1/gallery/roster", accessToken).also { it.validate() }
+        }
+        val seenCursors = mutableSetOf<String>()
+        val cards = linkedMapOf<String, GalleryCard>()
+        var cursor: String? = null
+        do {
+          checkAccess()
+          val page = read<GalleryCardPage>("/api/v1/gallery", accessToken, cursor,
+            contract = GALLERY_COLLECTION_CONTRACT).also { it.validate() }
+          page.items.forEach {
+            val card = it.toCard()
+            check(cards.put(card.cardId, card) == null)
+          }
+          cursor = page.nextCursor
+          check(cursor == null || seenCursors.add(cursor))
+        } while (cursor != null)
+        combineStudentCollection(roster.await().items, cards.values.toList())
+      }
+    }
+
+  suspend fun galleryThumbnails(accessToken: String, ids: List<String>): List<GalleryThumbnailTicket> =
+    galleryRead {
+      if (!mobileOpaqueValue.matches(accessToken)) throw GalleryReadException(GalleryReadFailure.AUTH_REQUIRED)
+      check(ids.size in 1..GALLERY_THUMBNAIL_BATCH_SIZE && ids.toSet().size == ids.size &&
+        ids.all { galleryDrawId(it) != null })
+      val response = read<GalleryThumbnailsResponse>(
+        "/api/v1/gallery/thumbnails?ids=${ids.joinToString(",")}", accessToken)
+      check(response.schemaVersion == 1 && response.items.size <= ids.size &&
+        response.items.map { it.cardId }.toSet().size == response.items.size &&
+        response.items.all { it.cardId in ids })
+      response.items
+    }
+
+  suspend fun galleryOriginal(accessToken: String, cardId: String): GalleryOriginalTicket = galleryRead {
+    if (!mobileOpaqueValue.matches(accessToken)) throw GalleryReadException(GalleryReadFailure.AUTH_REQUIRED)
+    check(galleryDrawId(cardId) != null)
+    read<GalleryOriginalTicket>("/api/v1/gallery/$cardId/original", accessToken).also {
+      check(it.schemaVersion == 1)
+    }
+  }
+
+  suspend fun galleryImage(url: String, expiresAt: String, cardId: String, thumbnail: Boolean): ByteArray =
+    galleryRead {
+      val format = galleryImageFormat(url, cardId, thumbnail)
+      checkGalleryImageExpiry(expiresAt)
+      // Keep presigned media on the no-cookie, no-redirect client without API authorization.
+      client.prepareGet(url) { header(HttpHeaders.CacheControl, "no-store") }.execute { response ->
+        if (response.status.value != 200) throw GalleryReadException(GalleryReadFailure.UNAVAILABLE)
+        check(response.contentType()?.withoutParameters()?.toString() == format.contentType)
+        val bytes = response.bodyAsChannel().readBuffer((format.maximum + 1).toLong()).readByteArray()
+        try {
+          withContext(Dispatchers.Default) { format.validate(bytes) }
+          bytes
+        } catch (error: Exception) {
+          bytes.fill(0)
+          throw error
+        }
+      }
+    }
+
+  private suspend inline fun <T> galleryRead(request: () -> T): T {
+    try { return request() }
+    catch (error: CancellationException) { throw error }
+    catch (error: GalleryReadException) { throw error }
+    catch (error: RecordReadException) {
+      throw GalleryReadException(when (error.failure) {
+        RecordReadFailure.AUTH_REQUIRED -> GalleryReadFailure.AUTH_REQUIRED
+        RecordReadFailure.NOT_FOUND -> GalleryReadFailure.NOT_FOUND
+        RecordReadFailure.UNAVAILABLE -> GalleryReadFailure.UNAVAILABLE
+        else -> GalleryReadFailure.INVALID_RESPONSE
+      }, serverRejectedSession = error.serverRejectedSession)
+    } catch (_: IOException) { throw GalleryReadException(GalleryReadFailure.UNAVAILABLE) }
+    catch (_: Exception) { throw GalleryReadException(GalleryReadFailure.INVALID_RESPONSE) }
+  }
 
   suspend fun momotalkWeeks(accessToken: String, cursor: String? = null): MomotalkWeeksPage =
     momotalkRead("/api/v1/momotalk/weeks?limit=20", accessToken, cursor,

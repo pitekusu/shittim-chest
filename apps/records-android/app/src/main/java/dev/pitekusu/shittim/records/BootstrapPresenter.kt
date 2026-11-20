@@ -75,6 +75,7 @@ internal data object BootstrapScreen : Screen {
     val publicPageError: Boolean = false,
     val insights: InsightsUiState = InsightsUiState(),
     val momotalk: MomotalkUiState = MomotalkUiState(),
+    val studentGallery: StudentGallery? = null,
     val related: RecordRelatedState = RecordRelatedState(),
     val showFollowUpsFor: String? = null,
     val followUpDraftConflict: String? = null,
@@ -126,6 +127,7 @@ internal data object BootstrapScreen : Screen {
     data object NewDebateDraft : Event
     data object ShowInsights : Event
     data class InsightsAction(val action: InsightsEvent) : Event
+    data object ShowStudentCollection : Event
     data object ShowMomotalk : Event
     data class MomotalkAction(val action: MomotalkEvent) : Event
     data object ShowDebateRequests : Event
@@ -208,6 +210,13 @@ internal class BootstrapPresenter private constructor(
       onDispose { if (cacheAccountId != null) SingletonImageLoader.get(context).memoryCache?.clear() }
     }
     val launcher = rememberLauncherForActivityResult(MobileLoginContract()) { session?.loginResult(it) }
+    val galleryOwner = cacheAccountId?.takeIf { demo == null && StudentGalleryRoute in backStack }
+    val studentGallery = remember(runtime, galleryOwner, cachePermit) {
+      galleryOwner?.let { createStudentGallery(context.applicationContext, runtime, it, cachePermit) }
+    }
+    DisposableEffect(studentGallery) {
+      onDispose { studentGallery?.close() }
+    }
     val modelOwner = requireNotNull(LocalViewModelStoreOwner.current)
     var insightsSelection by remember(cacheAccountId) { mutableStateOf(InsightsSelection()) }
     val insightsModel = remember(cacheAccountId, cachePermit, modelOwner) {
@@ -720,7 +729,7 @@ internal class BootstrapPresenter private constructor(
         DebateSubmissionState() else debate,
       debateStatus = debateStatus, debateHistory = debateHistory,
       debateOnline = debateOnline, debateImages = debateImages, demoEntryId = runtime.demoEntryId,
-      publicPageError = publicPageError, insights = insights, momotalk = momotalk,
+      publicPageError = publicPageError, insights = insights, momotalk = momotalk, studentGallery = studentGallery,
       related = related, showFollowUpsFor = showFollowUpsFor, followUpDraftConflict = followUpDraftConflict,
       followUpParent = followUpParent) { event ->
       when (event) {
@@ -891,6 +900,12 @@ internal class BootstrapPresenter private constructor(
             backStack.closeRecord()
             backStack.add(DebateCompose)
           }
+        }
+        BootstrapScreen.Event.ShowStudentCollection -> if (demo == null &&
+          cacheAccountId != null && runtime.isActive(cacheAccountId) && stackOwner == cacheAccountId &&
+          session?.pendingDestination?.value == null && backStack.lastOrNull() != StudentGalleryRoute) {
+          if (backStack.lastOrNull() == DebateCompose) debateModel?.flush { backStack.add(StudentGalleryRoute) }
+          else backStack.add(StudentGalleryRoute)
         }
         BootstrapScreen.Event.ShowMomotalk -> if (cacheAccountId != null && runtime.isActive(cacheAccountId) &&
           stackOwner == cacheAccountId && session?.pendingDestination?.value == null &&

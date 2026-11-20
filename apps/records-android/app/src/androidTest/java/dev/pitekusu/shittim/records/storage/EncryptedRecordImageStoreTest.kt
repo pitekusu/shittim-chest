@@ -22,7 +22,7 @@ class EncryptedRecordImageStoreTest {
   private lateinit var directory: File
   private lateinit var context: Context
   private lateinit var keys: KeystorePrivateKeyStore
-  private val account = "synthetic_account"
+  private val account = "a".repeat(43)
   private val imageId = "11111111-2222-4333-8444-abcdefabcdef"
   @Before fun setup() {
     val app = InstrumentationRegistry.getInstrumentation().targetContext
@@ -72,11 +72,38 @@ class EncryptedRecordImageStoreTest {
     failure { EncryptedRecordImageStore(context, availableBytes = { 64L * 1024 * 1024 })
       .save(account, "debate-draft", image, bytes) }
     assertArrayEquals(bytes, store.read(account, "debate-draft", image))
+    store.saveGallery(account, "b".repeat(80), thumbnail = false, bytes = bytes)
     val unrelated = File(directory, "unrelated").apply { writeText("keep") }
     EncryptedRecordImageStore.clear(context)
     assertFalse(File(directory, "record-images-v1").exists())
     assertEquals("keep", unrelated.readText())
   }
+
+  @Test fun galleryVariantsSurviveReopenAndCannotBeReadAsAnotherCardOrAccount() = runBlocking {
+    val galleryAccount = "a".repeat(43)
+    val card = "b".repeat(80)
+    val thumbnail = ByteArray(128) { 7 }
+    val original = ByteArray(2 * 1024 * 1024) { 42 }
+    val store = EncryptedRecordImageStore(context)
+    store.saveGallery(galleryAccount, card, thumbnail = true, bytes = thumbnail)
+    val images = File(directory, "record-images-v1")
+    val thumbnailFile = images.walkTopDown().single { it.isFile }
+    store.saveGallery(galleryAccount, card, thumbnail = false, bytes = original)
+    val originalFile = images.walkTopDown().single { it.isFile && it != thumbnailFile }
+    assertFalse(originalFile.readBytes().contentEquals(original))
+    assertFalse(thumbnailFile.readBytes().contentEquals(thumbnail))
+    assertFalse(originalFile.path.contains(card))
+    assertFalse(originalFile.path.contains(galleryAccount))
+
+    val reopened = EncryptedRecordImageStore(context)
+    assertArrayEquals(thumbnail, reopened.readGallery(galleryAccount, card, thumbnail = true))
+    assertArrayEquals(original, reopened.readGallery(galleryAccount, card, thumbnail = false))
+    assertNull(reopened.readGallery("c".repeat(43), card, thumbnail = false))
+    assertNull(reopened.readGallery(galleryAccount, "c".repeat(80), thumbnail = false))
+    thumbnailFile.copyTo(originalFile, overwrite = true)
+    failure { reopened.readGallery(galleryAccount, card, thumbnail = false) }
+  }
+
   private suspend fun failure(block: suspend () -> Any?) {
     try { block(); fail("expected encrypted image failure") }
     catch (error: RecordImageException) { assertNull(error.cause); assertTrue(error.message!!.startsWith("record_image_")) }

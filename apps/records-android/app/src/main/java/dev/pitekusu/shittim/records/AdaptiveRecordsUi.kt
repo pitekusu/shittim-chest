@@ -287,6 +287,14 @@ internal fun AdaptiveRecordsUi(
               }, Modifier.fillMaxSize(), showAppBar = false)
             }
           }
+          entry<StudentGalleryRoute> {
+            val value = currentState.value
+            ShittimBackdrop(Modifier.fillMaxSize()) {
+              value.studentGallery?.let { gallery ->
+                StudentCollectionScreen(gallery, value.debateOnline, Modifier.fillMaxSize())
+              }
+            }
+          }
           entry<DebateCompose> { composeContent.value() }
           entry<Momotalk> {
             ShittimBackdrop(Modifier.fillMaxSize()) {
