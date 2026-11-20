@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import io
+import logging
 import warnings
 from collections import Counter
+from functools import partial
 from typing import Final, cast
 
 from PIL import Image, ImageChops, ImageFilter
@@ -18,9 +20,14 @@ _MAX_REFERENCE_PIXELS: Final = 12_000_000
 _REFERENCE_SAMPLE_EDGE: Final = 256
 _MAX_FRAME_PIXELS: Final = 1024 * 480
 _EDGE_REACH_PIXELS: Final = 24
+_LOGGER = logging.getLogger(__name__)
 
 type _RGB = tuple[int, int, int]
 type _RGBA = tuple[int, int, int, int]
+
+
+class GachaChromaFailure(ValueError):
+    """A frame could not be keyed without risking its foreground or background."""
 
 
 def choose_gacha_chroma_key(portrait: bytes, costume: bytes) -> str:
@@ -79,19 +86,55 @@ def _collision(color: _RGB, *, green_key: bool) -> int:
     )
 
 
+def key_gacha_frames(frames: list[Image.Image], key_color: str) -> list[Image.Image]:
+    """Preserve the loop timing by filling rejected frames with the nearest usable cutout."""
+    cutouts: dict[int, Image.Image] = {}
+    rejected: Counter[str] = Counter()
+    for index, frame in enumerate(frames):
+        try:
+            cutouts[index] = key_gacha_frame(frame, key_color)
+        except GachaChromaFailure as error:
+            rejected[str(error)] += 1
+
+    if not cutouts:
+        reason = rejected.most_common(1)[0][0] if rejected else "gacha_chroma_no_usable_frames"
+        raise GachaChromaFailure(reason)
+    if not rejected:
+        return list(cutouts.values())
+
+    _LOGGER.warning(
+        "student_gacha_chroma_recovered rejected_frames=%d reasons=%s",
+        rejected.total(),
+        ",".join(f"{reason}:{count}" for reason, count in sorted(rejected.items())),
+    )
+    restored = []
+    for index in range(len(frames)):
+        if index in cutouts:
+            restored.append(cutouts[index])
+        else:
+            nearest = min(cutouts, key=partial(_loop_distance, index, len(frames)))
+            restored.append(cutouts[nearest])
+    return restored
+
+
+def _loop_distance(index: int, frame_count: int, candidate: int) -> tuple[int, int]:
+    steps_back = (index - candidate) % frame_count
+    return min(steps_back, frame_count - steps_back), steps_back
+
+
 def key_gacha_frame(frame: Image.Image, key_color: str) -> Image.Image:
     """Extract one opaque actor and its feathered edges from a measured flat key."""
     if (
         key_color not in (_GREEN, _MAGENTA)
         or not 1 <= frame.width * frame.height <= _MAX_FRAME_PIXELS
     ):
-        raise ValueError("gacha_chroma_frame_invalid")
+        raise GachaChromaFailure("gacha_chroma_frame_invalid")
     try:
         rgba = frame.convert("RGBA")
     except OSError, ValueError:
-        raise ValueError("gacha_chroma_frame_invalid") from None
+        raise GachaChromaFailure("gacha_chroma_frame_invalid") from None
     if rgba.getchannel("A").getextrema() != (255, 255):
-        raise ValueError("gacha_chroma_frame_invalid")
+        raise GachaChromaFailure("gacha_chroma_frame_invalid")
     rgb = rgba.convert("RGB")
     green_key = key_color == _GREEN
     screen, tolerance = _measure_screen(rgb, key_color)
@@ -105,7 +148,7 @@ def key_gacha_frame(frame: Image.Image, key_color: str) -> Image.Image:
     }
     hard = Image.frombytes("L", rgb.size, bytes(255 if color in clear else 0 for color in pixels))
     if not len(pixels) * 0.20 <= hard.histogram()[255] <= len(pixels) * 0.98:
-        raise ValueError("gacha_chroma_subject_or_background_missing")
+        raise GachaChromaFailure("gacha_chroma_subject_or_background_missing")
 
     # Green spill in a narrow hair gap can be well away from any perfectly flat pixel.
     # Expand through connected key-like colors, leaving isolated costume accents intact.
@@ -170,14 +213,14 @@ def _measure_screen(frame: Image.Image, key_color: str) -> tuple[_RGB, int]:
         and _key_contrast(color, green_key=key_color == _GREEN) >= 80
     ]
     if not candidates:
-        raise ValueError("gacha_chroma_screen_not_found")
+        raise GachaChromaFailure("gacha_chroma_screen_not_found")
     _frequency, screen = max(candidates)
     tolerance = max(24, _key_contrast(screen, green_key=key_color == _GREEN) // 5)
     matching = sum(
         count for color, count in border.items() if _distance(color, screen) <= tolerance
     )
     if matching < border.total() * 0.65:
-        raise ValueError("gacha_chroma_screen_not_flat")
+        raise GachaChromaFailure("gacha_chroma_screen_not_flat")
     return screen, tolerance
 
 

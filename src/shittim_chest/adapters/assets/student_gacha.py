@@ -9,11 +9,13 @@ import hashlib
 import io
 import json
 import warnings
+from itertools import pairwise
 from struct import error as StructError
 from typing import TYPE_CHECKING, Final
 
 from botocore.exceptions import BotoCoreError, ClientError, FlexibleChecksumError
-from PIL import Image, ImageSequence
+from PIL import Image, ImageChops, ImageSequence
+from PIL.PngImagePlugin import Blend
 
 from shittim_chest.adapters.assets.images import DebateImageFailure, validate_image
 from shittim_chest.adapters.assets.student_gacha_costumes import load_wiki_costume
@@ -22,6 +24,7 @@ from shittim_chest.adapters.assets.student_gacha_schools import (
     school_branding,
 )
 from shittim_chest.application.student_gacha_models import (
+    GACHA_APNG_FRAME_DURATIONS,
     GACHA_LEGACY_APNG_FRAME_DURATIONS,
     STUDENT_GACHA_RARITIES,
     GachaGenerationFailure,
@@ -333,18 +336,56 @@ def validate_gacha_result(content: bytes, *, image_format: GachaImageFormat) -> 
     )
 
 
+def encode_gacha_apng(frames: list[Image.Image]) -> bytes:
+    """Encode full-color RGB card frames with the configured frame count and timing."""
+    encoded = []
+    blends = [Blend.OP_SOURCE]
+    for previous, frame in pairwise(frames):
+        # Pillow merges identical frames. A transparent one-pixel OVER delta leaves the
+        # displayed frame intact and alternates with SOURCE frames to retain each tick.
+        if blends[-1] == Blend.OP_SOURCE and _same_pixels(previous, frame):
+            frame = frame.convert("RGBA")
+            frame.putpixel((0, 0), (0, 0, 0, 0))
+            blends.append(Blend.OP_OVER)
+        else:
+            blends.append(Blend.OP_SOURCE)
+        encoded.append(frame)
+    with io.BytesIO() as output:
+        frames[0].save(
+            output,
+            format="PNG",
+            save_all=True,
+            append_images=encoded,
+            duration=GACHA_APNG_FRAME_DURATIONS,
+            blend=blends,
+            loop=0,
+            optimize=True,
+        )
+        return output.getvalue()
+
+
 def encode_gacha_discord_webp(apng: bytes) -> bytes:
-    """Preserve the saved frames in a Discord-compatible animated attachment."""
+    """Preserve displayed pixels and timing in a Discord-compatible attachment."""
     durations = validate_gacha_result(apng, image_format=GachaImageFormat.APNG)
     try:
         with Image.open(io.BytesIO(apng), formats=["PNG"]) as artwork, io.BytesIO() as output:
-            first, *remaining = (frame.copy() for frame in ImageSequence.Iterator(artwork))
+            frames: list[Image.Image] = []
+            visible_durations: list[int] = []
+            # libwebp coalesces repeated frames. Combine their delays before encoding so
+            # validation can still check the exact length of each distinct visible frame.
+            for frame, duration in zip(ImageSequence.Iterator(artwork), durations, strict=True):
+                if frames and _same_pixels(frames[-1], frame):
+                    visible_durations[-1] += duration
+                else:
+                    frames.append(frame.copy())
+                    visible_durations.append(duration)
+            first, *remaining = frames
             first.save(
                 output,
                 format="WEBP",
-                save_all=True,
+                save_all=bool(remaining),
                 append_images=remaining,
-                duration=durations,
+                duration=visible_durations,
                 loop=0,
                 lossless=True,
             )
@@ -357,9 +398,13 @@ def encode_gacha_discord_webp(apng: bytes) -> bytes:
         result,
         expected_format="WEBP",
         expected_size=GachaImageFormat.APNG.size,
-        allowed_durations=(durations,),
+        allowed_durations=(tuple(visible_durations),) if remaining else (),
     )
     return result
+
+
+def _same_pixels(left: Image.Image, right: Image.Image) -> bool:
+    return ImageChops.difference(left, right).getbbox(alpha_only=False) is None
 
 
 def _require_image(

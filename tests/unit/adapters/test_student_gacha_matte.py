@@ -6,8 +6,10 @@ import pytest
 from PIL import Image, ImageDraw
 
 from shittim_chest.adapters.assets.student_gacha_matte import (
+    GachaChromaFailure,
     choose_gacha_chroma_key,
     key_gacha_frame,
+    key_gacha_frames,
 )
 
 
@@ -105,3 +107,36 @@ def test_removes_magenta_without_losing_green_or_preserving_magenta_spill() -> N
 def test_rejects_unusable_frames(color: tuple[int, int, int], key_color: str, error: str) -> None:
     with Image.new("RGB", (64, 64), color) as image, pytest.raises(ValueError, match=error):
         key_gacha_frame(image, key_color)
+
+
+@pytest.mark.parametrize("key_color", ["#00FF00", "#FF00FF"])
+def test_restores_rejected_frames_from_the_nearest_screen_that_was_keyed(
+    key_color: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    with (
+        Image.new("RGB", (64, 64), key_color) as first,
+        Image.new("RGB", (64, 64), key_color) as last,
+        Image.new("RGB", (64, 64), "blue") as rejected,
+    ):
+        ImageDraw.Draw(first).rectangle((20, 20, 40, 40), fill="red")
+        ImageDraw.Draw(last).rectangle((20, 20, 40, 40), fill="white")
+
+        restored = key_gacha_frames([rejected, rejected, first, rejected, last], key_color)
+
+        assert len(restored) == 5
+        assert restored[0] is restored[4]
+        assert restored[1] is restored[2]
+        assert restored[3] is restored[2]
+        assert restored[2].tobytes() == key_gacha_frame(first, key_color).tobytes()
+        assert restored[4].tobytes() == key_gacha_frame(last, key_color).tobytes()
+        assert all(frame.getpixel((4, 4)) == (0, 0, 0, 0) for frame in restored)
+        assert "student_gacha_chroma_recovered rejected_frames=3" in caplog.text
+
+
+def test_fails_with_a_bounded_reason_when_no_frames_can_be_keyed() -> None:
+    with (
+        Image.new("RGB", (64, 64), "blue") as no_screen,
+        Image.new("RGB", (64, 64), "#00FF00") as no_actor,
+        pytest.raises(GachaChromaFailure, match="gacha_chroma_screen_not_found"),
+    ):
+        key_gacha_frames([no_screen, no_actor, no_screen], "#00FF00")

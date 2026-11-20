@@ -21,6 +21,8 @@ from shittim_chest.adapters.assets.student_gacha import (
     SCHOOL_LOGOS_KEY,
     StudentGachaMedia,
     _parse_roster,
+    encode_gacha_apng,
+    encode_gacha_discord_webp,
 )
 from shittim_chest.application.student_gacha_models import (
     GACHA_APNG_FRAME_DURATIONS,
@@ -63,6 +65,31 @@ def _animation(
             **options,
         )
         return output.getvalue()
+
+
+@pytest.mark.parametrize("repetitions", [(12,), (2, 4, 1, 5)])
+def test_discord_webp_preserves_visible_playback_of_repeated_apng_frames(
+    repetitions: tuple[int, ...],
+) -> None:
+    distinct = [
+        Image.new("RGB", GachaImageFormat.APNG.size, (index * 60, 54, 88))
+        for index in range(len(repetitions))
+    ]
+    frames = [
+        frame for frame, count in zip(distinct, repetitions, strict=True) for _ in range(count)
+    ]
+    apng = encode_gacha_apng(frames)
+    result = encode_gacha_discord_webp(apng)
+
+    with Image.open(io.BytesIO(result), formats=["WEBP"]) as webp:
+        assert getattr(webp, "n_frames", 1) == len(distinct)
+        if len(distinct) > 1:
+            assert webp.info["loop"] == 0
+        for index, (frame, count) in enumerate(zip(distinct, repetitions, strict=True)):
+            webp.seek(index)
+            assert webp.convert("RGB").tobytes() == frame.tobytes()
+            if len(distinct) > 1:
+                assert webp.info["duration"] == count * GACHA_APNG_FRAME_DURATIONS[0]
 
 
 def _missing_object() -> ClientError:
