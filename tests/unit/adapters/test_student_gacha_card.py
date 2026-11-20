@@ -8,6 +8,7 @@ import pytest
 from PIL import Image, ImageChops, ImageDraw
 
 from shittim_chest.adapters.assets import student_gacha_card
+from shittim_chest.adapters.assets.student_gacha import encode_gacha_discord_webp
 from shittim_chest.adapters.assets.student_gacha_card import GIF_ART_SIZE, render_card
 from shittim_chest.application.student_gacha_models import (
     GACHA_APNG_FRAME_COUNT,
@@ -68,11 +69,16 @@ def _gif(
     frame_count: int = GACHA_APNG_FRAME_COUNT,
     panel_motion_only: bool = False,
     bad_key_frames: tuple[int, ...] = (),
+    transparent_background: bool = False,
 ) -> bytes:
     frames = []
     for index in range(frame_count):
         color = (19 + 19 * index, 105, 175)
-        frame = Image.new("RGB", size, "#0011EE" if index in bad_key_frames else _KEY_COLOR)
+        frame = (
+            Image.new("RGBA", size, (16, 245, 128, 0))
+            if transparent_background
+            else Image.new("RGB", size, "#0011EE" if index in bad_key_frames else _KEY_COLOR)
+        )
         draw = ImageDraw.Draw(frame)
         shift = 0 if panel_motion_only else index
         draw.rectangle(
@@ -83,8 +89,36 @@ def _gif(
         draw.rectangle((747, 160, 785, 180), fill=color)
         frames.append(frame)
     with BytesIO() as output:
-        frames[0].save(output, "GIF", save_all=True, append_images=frames[1:], duration=170)
+        frames[0].save(
+            output,
+            "GIF",
+            save_all=True,
+            append_images=frames[1:],
+            duration=170,
+            disposal=2 if transparent_background else 0,
+        )
         return output.getvalue()
+
+
+def test_transparent_provider_gif_renders_card_and_discord_attachment() -> None:
+    art = _gif(transparent_background=True)
+    with Image.open(BytesIO(art)) as source:
+        assert source.convert("RGBA").getchannel("A").getpixel((4, 4)) == 0
+
+    result = render_card(art, _presentation(3), "サンプル先生", key_color=_KEY_COLOR)
+    attachment = encode_gacha_discord_webp(result)
+    background = student_gacha_card._card_background(3).convert("RGB").getpixel((4, 4))
+
+    for content in (result, attachment):
+        with Image.open(BytesIO(content)) as image:
+            assert getattr(image, "n_frames", 1) == GACHA_APNG_FRAME_COUNT
+            assert image.info["loop"] == 0
+            for index, duration in enumerate(GACHA_APNG_FRAME_DURATIONS):
+                image.seek(index)
+                with image.convert("RGB") as frame:
+                    assert frame.getpixel((4, 4)) == background
+                    assert frame.getpixel((525, 200)) == (19 + 19 * index, 105, 175)
+                assert image.info["duration"] == duration
 
 
 def test_animated_card_freezes_both_panels_while_the_art_moves() -> None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import io
 
 import pytest
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 
 from shittim_chest.adapters.assets.student_gacha_matte import (
     GachaChromaFailure,
@@ -94,6 +94,43 @@ def test_removes_magenta_without_losing_green_or_preserving_magenta_spill() -> N
             red, green, blue, alpha = edge
             assert 0 < alpha < 255
             assert min(red, blue) <= green + 7
+
+
+def test_keeps_an_already_transparent_cutout_including_key_colored_costume() -> None:
+    with Image.new("RGBA", (64, 64), (16, 245, 128, 0)) as image:
+        ImageDraw.Draw(image).rectangle((20, 8, 43, 53), fill=(0, 255, 0, 255))
+
+        with key_gacha_frame(image, "#00FF00") as keyed:
+            assert keyed.getpixel((32, 32)) == (0, 255, 0, 255)
+            assert keyed.getpixel((4, 4)) == (0, 0, 0, 0)
+
+
+def test_removes_a_flat_screen_and_keeps_existing_transparency() -> None:
+    with Image.new("RGBA", (64, 64), (70, 245, 80, 255)) as image:
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((0, 0, 31, 63), fill=(230, 15, 40, 0))
+        draw.rectangle((20, 8, 43, 53), fill=(40, 65, 180, 255))
+        draw.rectangle((21, 22, 31, 40), fill=(20, 105, 50, 255))
+        image.putpixel((30, 32), (230, 15, 40, 0))
+
+        with key_gacha_frame(image, "#00FF00") as keyed:
+            assert keyed.getpixel((4, 4)) == (0, 0, 0, 0)
+            assert keyed.getpixel((60, 4)) == (0, 0, 0, 0)
+            assert keyed.getpixel((38, 32)) == (40, 65, 180, 255)
+            assert keyed.getpixel((30, 32)) == (0, 0, 0, 0)
+            expected = keyed.tobytes()
+
+        image.paste((0, 255, 0, 0), mask=ImageChops.invert(image.getchannel("A")))
+        with key_gacha_frame(image, "#00FF00") as keyed_again:
+            assert keyed_again.tobytes() == expected
+
+
+def test_rejects_a_transparent_frame_without_a_visible_actor() -> None:
+    with (
+        Image.new("RGBA", (64, 64)) as image,
+        pytest.raises(GachaChromaFailure, match="gacha_chroma_subject_or_background_missing"),
+    ):
+        key_gacha_frame(image, "#00FF00")
 
 
 @pytest.mark.parametrize(

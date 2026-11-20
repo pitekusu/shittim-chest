@@ -20,6 +20,9 @@ _MAX_REFERENCE_PIXELS: Final = 12_000_000
 _REFERENCE_SAMPLE_EDGE: Final = 256
 _MAX_FRAME_PIXELS: Final = 1024 * 480
 _EDGE_REACH_PIXELS: Final = 24
+_MIN_BACKGROUND_FRACTION: Final = 0.20
+_MAX_BACKGROUND_FRACTION: Final = 0.98
+_MIN_BORDER_COVERAGE: Final = 0.65
 _LOGGER = logging.getLogger(__name__)
 
 type _RGB = tuple[int, int, int]
@@ -123,21 +126,35 @@ def _loop_distance(index: int, frame_count: int, candidate: int) -> tuple[int, i
 
 
 def key_gacha_frame(frame: Image.Image, key_color: str) -> Image.Image:
-    """Extract one opaque actor and its feathered edges from a measured flat key."""
-    if (
-        key_color not in (_GREEN, _MAGENTA)
-        or not 1 <= frame.width * frame.height <= _MAX_FRAME_PIXELS
-    ):
+    """Keep a valid GIF cutout or extract the actor from a measured flat key."""
+    area = frame.width * frame.height
+    if key_color not in (_GREEN, _MAGENTA) or not 1 <= area <= _MAX_FRAME_PIXELS:
         raise GachaChromaFailure("gacha_chroma_frame_invalid")
     try:
         rgba = frame.convert("RGBA")
     except OSError, ValueError:
         raise GachaChromaFailure("gacha_chroma_frame_invalid") from None
-    if rgba.getchannel("A").getextrema() != (255, 255):
-        raise GachaChromaFailure("gacha_chroma_frame_invalid")
+    source_alpha = rgba.getchannel("A")
+    source_clear = None
+    if source_alpha.getextrema() != (255, 255):
+        histogram = source_alpha.histogram()
+        clear_count = histogram[0]
+        if clear_count + histogram[255] != area:
+            raise GachaChromaFailure("gacha_chroma_alpha_invalid")
+        if clear_count > area * _MAX_BACKGROUND_FRACTION:
+            raise GachaChromaFailure("gacha_chroma_subject_or_background_missing")
+        if clear_count >= area * _MIN_BACKGROUND_FRACTION and _has_clear_border(source_alpha):
+            cutout = Image.new("RGBA", rgba.size)
+            cutout.paste(rgba, mask=source_alpha)
+            return cutout
+        # Count existing transparency as known background without using its hidden RGB.
+        source_clear = ImageChops.invert(source_alpha)
+
     rgb = rgba.convert("RGB")
     green_key = key_color == _GREEN
-    screen, tolerance = _measure_screen(rgb, key_color)
+    screen, tolerance = _measure_screen(rgb, key_color, source_clear)
+    if source_clear is not None:
+        rgb.paste((0, 0, 0), mask=source_clear)
     screen_contrast = _key_contrast(screen, green_key=green_key)
     pixels = cast("tuple[_RGB, ...]", rgb.get_flattened_data())
     colors = set(pixels)
@@ -147,7 +164,10 @@ def key_gacha_frame(frame: Image.Image, key_color: str) -> Image.Image:
         if _distance(color, screen) <= tolerance and _key_contrast(color, green_key=green_key) >= 44
     }
     hard = Image.frombytes("L", rgb.size, bytes(255 if color in clear else 0 for color in pixels))
-    if not len(pixels) * 0.20 <= hard.histogram()[255] <= len(pixels) * 0.98:
+    if source_clear is not None:
+        hard = ImageChops.lighter(hard, source_clear)
+    clear_count = hard.histogram()[255]
+    if not area * _MIN_BACKGROUND_FRACTION <= clear_count <= area * _MAX_BACKGROUND_FRACTION:
         raise GachaChromaFailure("gacha_chroma_subject_or_background_missing")
 
     # Green spill in a narrow hair gap can be well away from any perfectly flat pixel.
@@ -178,8 +198,8 @@ def key_gacha_frame(frame: Image.Image, key_color: str) -> Image.Image:
     edges = ImageChops.lighter(fringe, ImageChops.subtract(strong, solid_colors)).tobytes()
     despill: dict[_RGB, _RGBA] = {}
     output = bytearray()
-    for color, near_screen in zip(pixels, edges, strict=True):
-        if color in clear:
+    for color, near_screen, opacity in zip(pixels, edges, source_alpha.tobytes(), strict=True):
+        if not opacity or color in clear:
             output.extend((0, 0, 0, 0))
         elif near_screen:
             if color not in despill:
@@ -195,17 +215,39 @@ def key_gacha_frame(frame: Image.Image, key_color: str) -> Image.Image:
     return cutout
 
 
-def _measure_screen(frame: Image.Image, key_color: str) -> tuple[_RGB, int]:
-    width, height = frame.size
+def _border_boxes(size: tuple[int, int]) -> tuple[tuple[int, int, int, int], ...]:
+    width, height = size
     inset_x, inset_y = max(1, width // 40), max(1, height // 26)
-    border = Counter[_RGB]()
-    for box in (
+    return (
         (0, 0, inset_x, height),
         (width - inset_x, 0, width, height),
         (0, 0, width, inset_y),
         (0, height - inset_y, width, height),
-    ):
-        border.update(cast("tuple[_RGB, ...]", frame.crop(box).get_flattened_data()))
+    )
+
+
+def _has_clear_border(alpha: Image.Image) -> bool:
+    clear = total = 0
+    for box in _border_boxes(alpha.size):
+        border = alpha.crop(box)
+        clear += border.histogram()[0]
+        total += border.width * border.height
+    return clear >= total * _MIN_BORDER_COVERAGE
+
+
+def _measure_screen(
+    frame: Image.Image, key_color: str, source_clear: Image.Image | None
+) -> tuple[_RGB, int]:
+    border = Counter[_RGB]()
+    transparent = 0
+    for box in _border_boxes(frame.size):
+        pixels = cast("tuple[_RGB, ...]", frame.crop(box).get_flattened_data())
+        if source_clear is None:
+            border.update(pixels)
+        else:
+            mask = source_clear.crop(box).tobytes()
+            transparent += mask.count(255)
+            border.update(color for color, clear in zip(pixels, mask, strict=True) if not clear)
     candidates = [
         (frequency, color)
         for color, frequency in border.items()
@@ -219,7 +261,7 @@ def _measure_screen(frame: Image.Image, key_color: str) -> tuple[_RGB, int]:
     matching = sum(
         count for color, count in border.items() if _distance(color, screen) <= tolerance
     )
-    if matching < border.total() * 0.65:
+    if matching + transparent < (border.total() + transparent) * _MIN_BORDER_COVERAGE:
         raise GachaChromaFailure("gacha_chroma_screen_not_flat")
     return screen, tolerance
 
