@@ -1190,7 +1190,9 @@ Wiki照合だけを実行する場合は `python -m tools.update_student_gacha_r
 既存の非公開・バージョニング済みメディアバケットの `student-gacha/roster/` 配下にある名簿1件に限り、
 条件付きで更新し、S3から同一バージョンと現在のバージョンを再取得してチェックサムと内容を照合する。
 この初回配信と読み戻しを済ませてから同じキーを読むCoreを配信する。
-以降の名簿だけの差分は同じActionsで反映する。CoreとRecordsのコード配信には既存の本番承認を適用する。
+以降の名簿だけの差分は同じActionsで反映する。
+専用素材を読むコードや権限の変更を含む追加では、素材の準備と同一SHAのRecords・Coreの配信を済ませてから名簿を配信する。
+CoreとRecordsのコード配信には既存の本番承認を適用する。
 
 正確な時刻・対象・権限は[ワークフロー定義](https://github.com/pitekusu/shittim-chest/tree/main/.github/workflows)、
 通知の挙動は[通知運用設計](21_GitHub・Discord通知運用設計.md)を正とする。

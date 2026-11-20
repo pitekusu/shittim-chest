@@ -392,6 +392,17 @@ def test_school_logos_require_browser_auth_and_return_only_validated_catalog_ico
                             "sha256": hashlib.sha256(png).hexdigest(),
                         },
                         {
+                            "id": "mnc",
+                            "name": "MNC",
+                            "kind": "organization",
+                            "logo_path": "logos/mnc.png",
+                            "width": 180,
+                            "height": 90,
+                            "format": "PNG",
+                            "sha256": hashlib.sha256(png).hexdigest(),
+                            "gallery_listed": False,
+                        },
+                        {
                             "id": "no-logo",
                             "name": "ロゴ未登録",
                             "kind": "school",
@@ -401,6 +412,7 @@ def test_school_logos_require_browser_auth_and_return_only_validated_catalog_ico
                 ),
             )
             archive.writestr("blue_archive_school_logos/logos/gehenna.png", png)
+            archive.writestr("blue_archive_school_logos/logos/mnc.png", png)
         signer.catalog = output.getvalue()
     assert controller.handle(event(route), now=NOW)["statusCode"] == 401
     assert signer.catalog_reads == 0

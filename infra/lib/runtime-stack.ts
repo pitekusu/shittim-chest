@@ -994,7 +994,13 @@ export class RuntimeStack extends Stack {
       "student-gacha/roster/blue_archive_characters_with_npcs.json",
       "student-gacha/assets/show.gif",
       "student-gacha/assets/format.jpg",
+      "student-gacha/assets/costumes/mnc/spako.png",
+      "student-gacha/assets/costumes/mnc/sfare.png",
+      "student-gacha/assets/costumes/mnc/chiffon.png",
+      "student-gacha/assets/costumes/mnc/grus.png",
+      // Keep the previous catalog readable during deployment and rollback.
       "student-gacha/assets/blue_archive_school_logos.zip",
+      "student-gacha/assets/blue_archive_school_logos_mnc_v1.zip",
       "participants/participant-a/memorial-reference.png",
       "participants/participant-b/memorial-reference.webp",
       "participants/participant-c/memorial-reference.webp",
