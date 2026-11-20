@@ -1019,6 +1019,16 @@ Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは6
 必須CI通過後のマージと本番反映を承認した。
 `expires_on`はUTCの最終有効日`2026-11-20`とし、期限切れの旧configを有効対象から外した。
 
+2026-11-20 JST、PR #762の透過GIF対応を含む完成ARM64 production config
+`sha256:63b52c13472bdc6259b4663ade2d5090f4b28de281148ea9b0e9e610ff487cc6`を検査した。
+raw High 45組、署名付きDHI VEX適用後High 31組は、本番とCVE・パッケージ・版・修正状態が一致した。
+新規High、Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは60/60成功した。
+[完成ARM64 SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44726636406/artifacts/14624691000)と[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44726636406/artifacts/14624666411)を照合した。
+実画像APIが返した透過GIFの全12フレームから、人物の色と1.8秒の再生を維持した完成APNGおよびDiscord用WebPを確認した。
+
+所有者は実画像検証を条件に、このconfigのHigh 31組を2026-11-21 09:00 JST（同日00:00 UTC）まで受容し、
+必須CI通過後のマージと本番反映を承認した。`expires_on`はUTCの最終有効日`2026-11-20`とする。
+
 ## 5. 本番配信
 
 ### 共通の工程
