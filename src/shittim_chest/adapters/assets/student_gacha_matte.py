@@ -134,8 +134,10 @@ def key_gacha_frame(frame: Image.Image, key_color: str) -> Image.Image:
         rgba = frame.convert("RGBA")
     except OSError, ValueError:
         raise GachaChromaFailure("gacha_chroma_frame_invalid") from None
+    rgb = rgba.convert("RGB")
     source_alpha = rgba.getchannel("A")
     source_clear = None
+    residual = None
     if source_alpha.getextrema() != (255, 255):
         histogram = source_alpha.histogram()
         clear_count = histogram[0]
@@ -143,16 +145,17 @@ def key_gacha_frame(frame: Image.Image, key_color: str) -> Image.Image:
             raise GachaChromaFailure("gacha_chroma_alpha_invalid")
         if clear_count > area * _MAX_BACKGROUND_FRACTION:
             raise GachaChromaFailure("gacha_chroma_subject_or_background_missing")
-        if clear_count >= area * _MIN_BACKGROUND_FRACTION and _has_clear_border(source_alpha):
-            cutout = Image.new("RGBA", rgba.size)
-            cutout.paste(rgba, mask=source_alpha)
-            return cutout
         # Count existing transparency as known background without using its hidden RGB.
         source_clear = ImageChops.invert(source_alpha)
+        if clear_count >= area * _MIN_BACKGROUND_FRACTION and _has_clear_border(source_alpha):
+            residual = _measure_opaque_key_edge(rgb, key_color, source_clear)
+            if residual is None:
+                cutout = Image.new("RGBA", rgba.size)
+                cutout.paste(rgba, mask=source_alpha)
+                return cutout
 
-    rgb = rgba.convert("RGB")
+    screen, tolerance = residual or _measure_screen(rgb, key_color, source_clear)
     green_key = key_color == _GREEN
-    screen, tolerance = _measure_screen(rgb, key_color, source_clear)
     if source_clear is not None:
         rgb.paste((0, 0, 0), mask=source_clear)
     screen_contrast = _key_contrast(screen, green_key=green_key)
@@ -248,22 +251,55 @@ def _measure_screen(
             mask = source_clear.crop(box).tobytes()
             transparent += mask.count(255)
             border.update(color for color, clear in zip(pixels, mask, strict=True) if not clear)
-    candidates = [
-        (frequency, color)
-        for color, frequency in border.items()
-        if _distance(color, _KEY_RGB[key_color]) <= 94
-        and _key_contrast(color, green_key=key_color == _GREEN) >= 80
-    ]
-    if not candidates:
+    measurement = _screen_candidate(border, key_color)
+    if measurement is None:
         raise GachaChromaFailure("gacha_chroma_screen_not_found")
-    _frequency, screen = max(candidates)
-    tolerance = max(24, _key_contrast(screen, green_key=key_color == _GREEN) // 5)
-    matching = sum(
-        count for color, count in border.items() if _distance(color, screen) <= tolerance
-    )
+    screen, tolerance = measurement
+    matching = _matching_screen_pixels(border, screen, tolerance)
     if matching + transparent < (border.total() + transparent) * _MIN_BORDER_COVERAGE:
         raise GachaChromaFailure("gacha_chroma_screen_not_flat")
+    return measurement
+
+
+def _measure_opaque_key_edge(
+    frame: Image.Image, key_color: str, source_clear: Image.Image
+) -> tuple[_RGB, int] | None:
+    # A flat opaque strip is evidence of a remaining screen even when the other edges
+    # are transparent. Isolated key-colored pixels may belong to the costume.
+    for box in _border_boxes(frame.size):
+        mask = source_clear.crop(box).tobytes()
+        if len(mask) - mask.count(255) < len(mask) * _MIN_BORDER_COVERAGE:
+            continue
+        pixels = cast("tuple[_RGB, ...]", frame.crop(box).get_flattened_data())
+        border = Counter(color for color, clear in zip(pixels, mask, strict=True) if not clear)
+        measurement = _screen_candidate(border, key_color)
+        if (
+            measurement is not None
+            and _matching_screen_pixels(border, *measurement) >= len(mask) * _MIN_BORDER_COVERAGE
+        ):
+            return measurement
+    return None
+
+
+def _screen_candidate(border: Counter[_RGB], key_color: str) -> tuple[_RGB, int] | None:
+    candidate = max(
+        (
+            (frequency, color)
+            for color, frequency in border.items()
+            if _distance(color, _KEY_RGB[key_color]) <= 94
+            and _key_contrast(color, green_key=key_color == _GREEN) >= 80
+        ),
+        default=None,
+    )
+    if candidate is None:
+        return None
+    _frequency, screen = candidate
+    tolerance = max(24, _key_contrast(screen, green_key=key_color == _GREEN) // 5)
     return screen, tolerance
+
+
+def _matching_screen_pixels(border: Counter[_RGB], screen: _RGB, tolerance: int) -> int:
+    return sum(count for color, count in border.items() if _distance(color, screen) <= tolerance)
 
 
 def _clamp_channel(value: float) -> int:
