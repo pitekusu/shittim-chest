@@ -1041,6 +1041,16 @@ Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは6
 所有者はこの最終configのHigh 31組に限り、2026-11-21 09:00 JST（同日00:00 UTC）まで受容し、
 必須CI通過後のマージと本番反映を承認した。先に検証した未配信のPR #762用configを対象から外した。
 
+2026-11-21 JST、PR #763のMNC追加を含む完成ARM64 production config
+`sha256:1e134372c8f35e35c82b300c123c3a8b211d286853646cfff9cf8f5cebdc7efb`を検査した。
+raw High 45組、署名付きDHI VEX適用後High 31組で、現行本番とCVE・パッケージ・版・修正状態がすべて一致した。
+Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは60/60成功した。
+[完成ARM64 SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44779382623/artifacts/14651671596)と[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44779382623/artifacts/14652515744)を照合した。
+所有者は今回のconfigと31組について1年間の受容と、必須CI通過後のマージ・本番配信を承認した。
+Coreの有効期間の上限は90日なので、`approved_on` はUTC日付の `2026-11-20`、
+`expires_on` は `2027-02-18` とし、日本時間の2027-02-19 09:00に失効する。
+対象configはPR #763で実測した1件とし、従来の承認を他のconfigに引き継がない。
+
 ## 5. 本番配信
 
 ### 共通の工程
