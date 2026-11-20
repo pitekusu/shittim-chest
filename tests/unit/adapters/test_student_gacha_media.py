@@ -318,6 +318,53 @@ async def test_special_costume_uses_the_matching_private_portrait_as_webp(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("name", "filename"),
+    [
+        ("スパ子", "spako.png"),
+        ("スファレ", "sfare.png"),
+        ("シフォン", "chiffon.png"),
+        ("Grus", "grus.png"),
+    ],
+)
+async def test_mnc_costume_uses_the_matching_verified_attachment(
+    monkeypatch: pytest.MonkeyPatch, name: str, filename: str
+) -> None:
+    key = f"student-gacha/assets/costumes/mnc/{filename}"
+    source = io.BytesIO()
+    Image.new("RGB", (16, 24), "teal").save(source, "PNG")
+    png = source.getvalue()
+    source.seek(0)
+    assert key in _ASSET_DIGESTS
+    monkeypatch.setitem(_ASSET_DIGESTS, key, hashlib.sha256(png).hexdigest())
+    wiki = AsyncMock()
+    monkeypatch.setattr("shittim_chest.adapters.assets.student_gacha.load_wiki_costume", wiki)
+    client = Mock()
+    client.get_object.return_value = {"ContentLength": len(png), "Body": source}
+    media = StudentGachaMedia(client, bucket_name="private-media")
+
+    costume = await media.costume_reference(Student(name, "MNC", 4))
+
+    with Image.open(io.BytesIO(costume)) as image:
+        assert image.format == "WEBP"
+        assert image.size == (16, 24)
+    client.get_object.assert_called_once_with(Bucket="private-media", Key=key)
+    wiki.assert_not_awaited()
+    assert source.closed
+
+
+@pytest.mark.asyncio
+async def test_mnc_costume_rejects_a_changed_attachment() -> None:
+    content = b"changed file"
+    client = Mock()
+    client.get_object.return_value = {"ContentLength": len(content), "Body": io.BytesIO(content)}
+    media = StudentGachaMedia(client, bucket_name="private-media")
+
+    with pytest.raises(GachaGenerationFailure, match="gacha_asset_checksum_mismatch"):
+        await media.costume_reference(Student("Grus", "MNC", 4))
+
+
+@pytest.mark.asyncio
 async def test_invalid_special_costume_has_no_usable_reference() -> None:
     content = b"not an image"
     buffer = io.BytesIO(content)
@@ -347,7 +394,7 @@ async def test_reads_only_the_verified_private_school_logo_bundle(
 
     assert result == branding
     client.get_object.assert_called_once_with(
-        Bucket="private-media", Key="student-gacha/assets/blue_archive_school_logos.zip"
+        Bucket="private-media", Key="student-gacha/assets/blue_archive_school_logos_mnc_v1.zip"
     )
     lookup.assert_called_once_with(catalog, "ゲヘナ")
     assert buffer.closed

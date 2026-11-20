@@ -300,7 +300,7 @@ async def test_render_requests_sunburst_gif_and_composes_the_apng_locally() -> N
     assert "crisp anime illustration" in prompt
     assert "Live2D-like gentle blink, breathing and subtle motion" in prompt
     assert "Plana from image 1" in prompt
-    assert "halo, and head accessories exactly as shown" in prompt
+    assert "hair, eye shape and color, and native halo as shown there" in prompt
     assert "exact solid chroma-key color #00FF00" in prompt
     assert _STUDENT.name not in prompt
     assert other != result
@@ -365,6 +365,11 @@ async def test_render_uses_costume_image_and_selected_performer_expression(
     assert "Image 3 is the exact outfit variant" in prompt
     assert "the sole wardrobe reference" in prompt
     assert "Keep the costume from image 3 visible in every frame" in prompt
+    assert "For every performer, put any clearly visible wearable costume headwear" in prompt
+    assert "from image 3 on their\nhead" in prompt
+    assert "hat, cap, beret, hood worn up, or a headband with costume ears" in prompt
+    assert "A hood worn down stays down" in prompt
+    assert "Never copy anatomical ears or invent headwear" in prompt
     assert "gaze direction, eye shape and color" in prompt
     assert "Show the performer from the top of the head through the upper thighs" in prompt
     assert "about 18% of the canvas width" in prompt
@@ -375,7 +380,7 @@ async def test_render_uses_costume_image_and_selected_performer_expression(
     assert "Backdrop palette:" not in prompt
     assert "Ignore its background\nand lighting" in prompt
     assert "Do not reproduce its person, face,\nhair, halo, headwear, accessories" in prompt
-    original_head = "Keep the performer's hair color and style, halo and head accessories"
+    original_head = "Keep the performer's hair color and style and native halo from image 1"
     cosplay_head = "Use image 3 as the only source for the cosplay wig, halo and head"
     if performer is ParticipantSlot.PARTICIPANT_C:
         assert cosplay_head in prompt
@@ -388,8 +393,9 @@ async def test_render_uses_costume_image_and_selected_performer_expression(
         assert pose_choice.return_value in prompt
     else:
         assert original_head in prompt
-        assert "Do not copy hair, a halo or head accessories from images 2 or 3" in prompt
-        assert "If image 1 has no halo, keep it absent" in prompt
+        assert "Fit the costume headwear over that hair" in prompt
+        assert "Do not copy hair, a halo or other hair ornaments from image 3" in prompt
+        assert "If image 1 has no\nhalo, keep it absent" in prompt
         assert cosplay_head not in prompt
         pose_choice.assert_not_called()
         assert pose_choice.return_value not in prompt
@@ -407,6 +413,49 @@ async def test_render_uses_costume_image_and_selected_performer_expression(
         key_color=key_color,
     )
     assert result == b"card"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("student", "guidance"),
+    [
+        (Student("シフォン", "MNC", 4), "floppy fabric dog ears"),
+        (Student("Grus", "MNC", 4), "white long-sleeve shirt, blue jeans and jewelry"),
+        (Student("シフォン", "別の学校", 4), None),
+    ],
+)
+async def test_render_applies_mnc_costume_details_to_the_matching_student(
+    monkeypatch: pytest.MonkeyPatch, student: Student, guidance: str | None
+) -> None:
+    client = Mock()
+    edit = AsyncMock(return_value=SimpleNamespace(data=[SimpleNamespace(b64_json="YXJ0")]))
+    client.with_options.return_value.images.edit = edit
+    monkeypatch.setattr("shittim_chest.adapters.openai.student_gacha.render_card", Mock())
+    presentation = GachaPresentation(
+        student,
+        ParticipantSlot.PARTICIPANT_A,
+        "衣装の説明",
+        "衣装研究会",
+        "サポーター",
+        "なし",
+        (f"{TEACHER_PLACEHOLDER}、こんにちは。", "衣装を着ました。", "よろしくお願いします。"),
+    )
+
+    await _adapter(client).render(
+        presentation,
+        teacher_name=_TEACHER,
+        references=(b"layout", _PORTRAIT_PNG),
+        costume_reference=_COSTUME,
+        school_branding=SchoolBranding(student.school),
+    )
+
+    prompt = edit.call_args.kwargs["prompt"]
+    assert "Arona from image 1" in prompt
+    assert "light blue bob and floating blue halo" in prompt
+    if guidance is not None:
+        assert guidance in prompt
+    else:
+        assert "floppy fabric dog ears" not in prompt
 
 
 @pytest.mark.asyncio

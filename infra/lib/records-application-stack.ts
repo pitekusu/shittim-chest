@@ -51,7 +51,11 @@ const MODERATOR_TOKEN_PARAMETER_NAME =
 const GALLERY_TABLE_KEY = "GACHA#GALLERY#*";
 const GALLERY_ORIGINAL_PREFIX = "student-gacha/results";
 const GALLERY_THUMBNAIL_PREFIX = "student-gacha/thumbnails/v1";
-const GALLERY_SCHOOL_CATALOG_KEY = "student-gacha/assets/blue_archive_school_logos.zip";
+// Keep the previous catalog readable during the Lambda alias transition and rollback.
+const GALLERY_SCHOOL_CATALOG_KEYS = [
+  "student-gacha/assets/blue_archive_school_logos.zip",
+  "student-gacha/assets/blue_archive_school_logos_mnc_v1.zip",
+] as const;
 const GALLERY_ROSTER_KEY = "student-gacha/roster/blue_archive_characters_with_npcs.json";
 
 export class RecordsApplicationStack extends Stack {
@@ -434,7 +438,7 @@ export class RecordsApplicationStack extends Stack {
       }));
       worker.addToRolePolicy(new iam.PolicyStatement({
         actions: ["s3:GetObject"],
-        resources: [`${mediaBucket.bucketArn}/${GALLERY_SCHOOL_CATALOG_KEY}`],
+        resources: GALLERY_SCHOOL_CATALOG_KEYS.map((key) => `${mediaBucket.bucketArn}/${key}`),
       }));
       worker.addToRolePolicy(new iam.PolicyStatement({
         actions: ["s3:GetObjectVersion"],
@@ -963,7 +967,7 @@ export class RecordsApplicationStack extends Stack {
         }),
         new iam.PolicyStatement({
           actions: ["s3:GetObject"],
-          resources: [GALLERY_SCHOOL_CATALOG_KEY, GALLERY_ROSTER_KEY].map((key) =>
+          resources: [...GALLERY_SCHOOL_CATALOG_KEYS, GALLERY_ROSTER_KEY].map((key) =>
             `${mediaBucket.bucketArn}/${key}`,
           ),
         }),
@@ -1968,7 +1972,7 @@ export class RecordsApplicationStack extends Stack {
                 "student-gacha/roster/blue_archive_characters_with_npcs.json",
                 "student-gacha/assets/show.gif",
                 "student-gacha/assets/format.jpg",
-                GALLERY_SCHOOL_CATALOG_KEY,
+                ...GALLERY_SCHOOL_CATALOG_KEYS,
                 "participants/participant-a/memorial-reference.png",
                 "participants/participant-b/memorial-reference.webp",
                 "participants/participant-c/memorial-reference.webp",

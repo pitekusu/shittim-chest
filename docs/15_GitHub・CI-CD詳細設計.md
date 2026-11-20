@@ -359,6 +359,9 @@ Web／Discord入力からglobへ渡す経路や既定値を書き換える設定
 例外はこのID・minimatch・Moderateのパッケージ単位であり、CDKのpathだけへ限定する機能ではない。
 公式CDKが修正版minimatch 11.0.1以降を同梱したら実体を確認して更新し、例外を削除して通常監査を行う。
 依存経路が変わった場合は受容根拠を再確認し、他の監査・必須試験・CodeQLを維持する。
+2026-11-21、PR #763で期限切れを検出した。公式npm配布のaws-cdk-lib 2.276.0と2.277.0も
+minimatch 10.2.6を同梱していることを照合した。所有者は同じModerate 1件を1年間受容した。
+新しい失効時刻は2027-11-21 00:00 UTC（09:00 JST）である。
 2026-10-03に受容したbrace-expansionの旧3件は、CDK 2.273.0での上流修正採用時に削除済みである。
 
 ## 3. 依存と配信ツールの更新
@@ -1038,6 +1041,16 @@ Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは6
 所有者はこの最終configのHigh 31組に限り、2026-11-21 09:00 JST（同日00:00 UTC）まで受容し、
 必須CI通過後のマージと本番反映を承認した。先に検証した未配信のPR #762用configを対象から外した。
 
+2026-11-21 JST、PR #763のMNC追加を含む完成ARM64 production config
+`sha256:1e134372c8f35e35c82b300c123c3a8b211d286853646cfff9cf8f5cebdc7efb`を検査した。
+raw High 45組、署名付きDHI VEX適用後High 31組で、現行本番とCVE・パッケージ・版・修正状態がすべて一致した。
+Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは60/60成功した。
+[完成ARM64 SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44779382623/artifacts/14651671596)と[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44779382623/artifacts/14652515744)を照合した。
+所有者は今回のconfigと31組について1年間の受容と、必須CI通過後のマージ・本番配信を承認した。
+Coreの有効期間の上限は90日なので、`approved_on` はUTC日付の `2026-11-20`、
+`expires_on` は `2027-02-18` とし、日本時間の2027-02-19 09:00に失効する。
+対象configはPR #763で実測した1件とし、従来の承認を他のconfigに引き継がない。
+
 ## 5. 本番配信
 
 ### 共通の工程
@@ -1190,7 +1203,9 @@ Wiki照合だけを実行する場合は `python -m tools.update_student_gacha_r
 既存の非公開・バージョニング済みメディアバケットの `student-gacha/roster/` 配下にある名簿1件に限り、
 条件付きで更新し、S3から同一バージョンと現在のバージョンを再取得してチェックサムと内容を照合する。
 この初回配信と読み戻しを済ませてから同じキーを読むCoreを配信する。
-以降の名簿だけの差分は同じActionsで反映する。CoreとRecordsのコード配信には既存の本番承認を適用する。
+以降の名簿だけの差分は同じActionsで反映する。
+専用素材を読むコードや権限の変更を含む追加では、素材の準備と同一SHAのRecords・Coreの配信を済ませてから名簿を配信する。
+CoreとRecordsのコード配信には既存の本番承認を適用する。
 
 正確な時刻・対象・権限は[ワークフロー定義](https://github.com/pitekusu/shittim-chest/tree/main/.github/workflows)、
 通知の挙動は[通知運用設計](21_GitHub・Discord通知運用設計.md)を正とする。

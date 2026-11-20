@@ -656,11 +656,16 @@ describe("RuntimeStack", () => {
     expect(rosterResources).toContain("student-gacha/roster/blue_archive_characters_with_npcs.json");
     expect(rosterResources).not.toContain("student-gacha/assets/blue_archive_characters");
     expect(rosterResources).not.toContain("*");
+    for (const costume of ["spako", "sfare", "chiffon", "grus"]) {
+      expect(rosterResources).toContain(`student-gacha/assets/costumes/mnc/${costume}.png`);
+    }
     const schoolLogosStatements = normal?.Properties.PolicyDocument.Statement.filter(
       (statement: { Action?: string | string[]; Resource?: unknown }) =>
         JSON.stringify(statement.Resource).includes("student-gacha/assets/blue_archive_school_logos.zip"),
     );
     expect(schoolLogosStatements).toHaveLength(1);
+    expect(JSON.stringify(schoolLogosStatements?.[0].Resource))
+      .toContain("student-gacha/assets/blue_archive_school_logos_mnc_v1.zip");
     expect(schoolLogosStatements?.[0]).toMatchObject({
       Action: "s3:GetObject",
       Effect: "Allow",

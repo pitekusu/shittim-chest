@@ -140,12 +140,31 @@ _IMAGE_OUTFIT = """Image 3 is the exact outfit variant and the sole wardrobe ref
 the entire outfit below the neck with the clothes from image 3, including its collar, sleeves,
 garment layers, trims, patterns, recognizable colors, and distinctive below-the-head accessories
 and non-weapon props. The performer's face and eyes come exclusively from image 1.
-Follow the head-reference rules below for hair, halo and head accessories. Keep the outfit's
-silhouette, construction, and pattern placement. Confine any insignia to the clothing.
+For every performer, put any clearly visible wearable costume headwear from image 3 on their
+head, including a hat, cap, beret, hood worn up, or a headband with costume ears. Match its shape,
+color and placement, and keep it recognizable in every frame. A hood worn down stays down.
+Treat wearable ears as costume pieces. Never copy anatomical ears or invent headwear.
+Follow the rules below for hair, halo and other head accessories. Keep the outfit's silhouette,
+construction, and pattern placement. Confine any insignia to the clothing.
 For a non-human target, translate its visible colors, shapes and design motifs into the costume."""
-_IMAGE_ORIGINAL_HEAD = """Keep the performer's hair color and style, halo and head accessories
-exactly as shown in image 1. Do not copy hair, a halo or head accessories from images 2 or 3.
-If image 1 has no halo, keep it absent. If it has no head accessories, keep them absent."""
+_IMAGE_ORIGINAL_HEAD = """Keep the performer's hair color and style and native halo from image 1.
+Fit the costume headwear over that hair, with the hairstyle and original hair ornaments visible
+where the headwear naturally allows. Keep the halo's original shape and color. If image 1 has no
+halo, keep it absent. Do not copy hair, a halo or other hair ornaments from image 3."""
+_MNC_COSTUME_GUIDANCE: Final = {
+    "シフォン": (
+        "Wear a pair of clearly visible soft floppy fabric dog ears matching the costume."
+        " Both ears must fold over and hang down from the top of the head alongside the hair,"
+        " as removable costume accessories. Give the floppy ears room to show clearly."
+        " Keep the white-and-blue hoodie lowered around the neck."
+    ),
+    "Grus": (
+        "For clothing and jewelry, match the white long-sleeve shirt, blue jeans and jewelry"
+        " from image 3."
+        " Image 3 has no hat, hood or costume headwear. Start in a relaxed pose,"
+        " with no need to match the reference pose."
+    ),
+}
 _IMAGE_COSPLAY_HEAD = """Use image 3 as the only source for the cosplay wig, halo and head
 accessories. Fit a realistic wearable wig matching the hairstyle and hair color visible in image 3.
 Replace the original hairstyle with the wig, without changing the performer's facial structure,
@@ -305,15 +324,25 @@ class OpenAIStudentGacha:
             else "Use a crisp anime illustration matching the performer reference style."
         )
         head = _IMAGE_COSPLAY_HEAD if is_live_action else _IMAGE_ORIGINAL_HEAD
-        if presentation.performer is ParticipantSlot.PARTICIPANT_B:
+        if presentation.performer is ParticipantSlot.PARTICIPANT_A:
+            style += (
+                " The only performer is Arona from image 1. Keep her face, blue eyes,"
+                " light blue bob and floating blue halo recognizable throughout."
+            )
+        elif presentation.performer is ParticipantSlot.PARTICIPANT_B:
             style += (
                 " The person is Plana from image 1. Preserve her distinctive facial structure,"
-                " hair, eye shape and color, halo, and head accessories exactly as shown."
+                " hair, eye shape and color, and native halo as shown there."
             )
         portrait_type = "png" if presentation.performer is ParticipantSlot.PARTICIPANT_A else "webp"
         motion = f"{_COSPLAY_MOTION}\n{choice(_COSPLAY_POSES)}" if is_live_action else _ANIME_MOTION
+        costume_guidance = (
+            _MNC_COSTUME_GUIDANCE.get(presentation.student.name, "")
+            if presentation.student.school == "MNC" and presentation.student.rarity == 4
+            else ""
+        )
         prompt = (
-            f"{_IMAGE_INSTRUCTIONS}\n{_IMAGE_OUTFIT}\n{head}\n{style}\n"
+            f"{_IMAGE_INSTRUCTIONS}\n{style}\n{_IMAGE_OUTFIT}\n{costume_guidance}\n{head}\n"
             f"{_FACIAL_EXPRESSION[expression]}\n{_IMAGE_KEY_BACKGROUND.format(key_color=key_color)}\n"
             f"{_IMAGE_MOTION}\n{motion}"
         )

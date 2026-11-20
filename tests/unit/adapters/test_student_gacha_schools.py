@@ -50,6 +50,12 @@ def test_returns_original_logo_and_canonical_name(affiliation: str) -> None:
     assert school_branding(_catalog(logo), affiliation) == SchoolBranding(_SCHOOL, logo)
 
 
+def test_logo_excluded_from_gallery_remains_available_for_card_branding() -> None:
+    logo = _logo_png()
+    catalog = _catalog(logo, gallery_listed=False)
+    assert school_branding(catalog, _SCHOOL) == SchoolBranding(_SCHOOL, logo)
+
+
 @pytest.mark.parametrize("affiliation", ["柵川中学", "その他生徒", "シッテムの箱", "自民党"])
 def test_uses_affiliation_text_for_school_without_logo(affiliation: str) -> None:
     assert school_branding(_catalog(_logo_png()), affiliation) == SchoolBranding(affiliation)
@@ -63,6 +69,7 @@ def test_uses_affiliation_text_for_school_without_logo(affiliation: str) -> None
         {"width": 10_000_000},
         {"width": 4},
         {"sha256": "0" * 64},
+        {"gallery_listed": "false"},
     ],
 )
 def test_rejects_invalid_logo_reference(entry_overrides: dict[str, object]) -> None:

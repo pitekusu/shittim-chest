@@ -1469,6 +1469,7 @@ describe("RecordsApplicationStack", () => {
               "student-gacha/assets/show.gif",
               "student-gacha/assets/format.jpg",
               "student-gacha/assets/blue_archive_school_logos.zip",
+              "student-gacha/assets/blue_archive_school_logos_mnc_v1.zip",
               "participants/participant-a/memorial-reference.png",
               "participants/participant-b/memorial-reference.webp",
               "participants/participant-c/memorial-reference.webp",
@@ -1580,8 +1581,9 @@ describe("RecordsApplicationStack", () => {
       "dynamodb:BatchGetItem", "dynamodb:GetItem", "dynamodb:Query", "s3:GetObject", "s3:GetObjectVersion",
     ]);
     const assetRead = read.find((statement) => actionsOf(statement).includes("s3:GetObject"));
-    expect(assetRead?.Resource).toHaveLength(2);
+    expect(assetRead?.Resource).toHaveLength(3);
     expect(JSON.stringify(assetRead?.Resource)).toContain("student-gacha/assets/blue_archive_school_logos.zip");
+    expect(JSON.stringify(assetRead?.Resource)).toContain("student-gacha/assets/blue_archive_school_logos_mnc_v1.zip");
     expect(JSON.stringify(assetRead?.Resource)).toContain("student-gacha/roster/blue_archive_characters_with_npcs.json");
     expect(JSON.stringify(assetRead?.Resource)).not.toContain("*");
     expect(JSON.stringify(read)).not.toContain("GACHA#OFFER#");

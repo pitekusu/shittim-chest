@@ -132,7 +132,9 @@ class DynamoGalleryStore:
             return {
                 name: _logo_data_url(logo)
                 for name, entry in schools.items()
-                if entry is not None and (logo := school_branding(content, name).logo) is not None
+                if entry is not None
+                and entry.gallery_listed
+                and (logo := school_branding(content, name).logo) is not None
             }
         except (
             BotoCoreError,

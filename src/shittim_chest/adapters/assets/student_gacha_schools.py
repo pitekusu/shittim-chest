@@ -49,6 +49,7 @@ class _Logo:
     path: str
     size: tuple[int, int]
     sha256: str = field(repr=False)
+    gallery_listed: bool
 
 
 def school_branding(catalog: bytes, school: str) -> SchoolBranding:
@@ -121,6 +122,9 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
 
 def _logo_entry(row: dict[str, object], identifier: str) -> _Logo | None:
     path = row["logo_path"]
+    gallery_listed = row.get("gallery_listed", True)
+    if not isinstance(gallery_listed, bool):
+        raise ValueError
     if path is None:
         return None
     width, height, sha256 = row["width"], row["height"], row["sha256"]
@@ -138,7 +142,7 @@ def _logo_entry(row: dict[str, object], identifier: str) -> _Logo | None:
         or _SHA256.fullmatch(sha256) is None
     ):
         raise ValueError
-    return _Logo(path, (width, height), sha256)
+    return _Logo(path, (width, height), sha256, gallery_listed)
 
 
 def _read_member(archive: zipfile.ZipFile, path: str, maximum: int) -> bytes:
