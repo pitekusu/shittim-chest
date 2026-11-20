@@ -3,7 +3,7 @@
     "id": "GHSA-g3hv-75wg-m249",
     "package": "minimatch",
     "severity": "moderate",
-    "reason": "2026-11-16に所有者が、修正版を同梱した公式aws-cdk-libが未公開であることを確認したうえで、PR #726の必須CI・統合・本番配信を進めるため、現行aws-cdk-lib 2.275.0がnode_modules/aws-cdk-lib/node_modules/minimatchへ同梱するminimatch 10.2.6のGHSA-g3hv-75wg-m249（CVE-2026-118764、moderate）1件を期限付きで受容した。CVE-2026-118764ではoptimizationLevel 2以上で外部指定のglobを処理するとCPUとメモリを過剰に消費しうる。同梱CDKの呼び出しは既定のoptimizationLevel 1を使う。未修正依存はCDKを使う開発とCIに残る。2026-11-20 00:00 UTC（09:00 JST）に失効する。修正版を同梱したCDKへ更新した時点で削除する。",
-    "expires": "2026-11-20"
+    "reason": "2026-11-21に所有者が、CDKに同梱されたminimatch 10.2.6のGHSA-g3hv-75wg-m249（CVE-2026-118764、moderate）1件を1年間受容した。公式aws-cdk-lib 2.277.0まで修正版を含まない。CDKの呼び出しは既定のoptimizationLevel 1を使い、未修正依存はCDKを使う開発とCIに残る。2027-11-21 00:00 UTC（09:00 JST）に失効する。修正版を同梱したCDKへ更新した時点で削除する。",
+    "expires": "2027-11-21"
   }
 ]
