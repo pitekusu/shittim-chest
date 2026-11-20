@@ -16,12 +16,12 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 from shittim_chest.adapters.assets.student_gacha import (
     RESULT_MAX_BYTES,
     RESULT_SIZE,
+    encode_gacha_apng,
     validate_gacha_result,
 )
-from shittim_chest.adapters.assets.student_gacha_matte import key_gacha_frame
+from shittim_chest.adapters.assets.student_gacha_matte import GachaChromaFailure, key_gacha_frames
 from shittim_chest.application.student_gacha_models import (
     GACHA_APNG_FRAME_COUNT,
-    GACHA_APNG_FRAME_DURATIONS,
     GACHA_GIF_SIZE,
     TEACHER_PLACEHOLDER,
     GachaGenerationFailure,
@@ -107,30 +107,19 @@ def render_card(
     """Composite keyed animation frames over a static background and fixed text panels."""
     art_frames = _read_art_frames(art)
     try:
+        actors = key_gacha_frames(art_frames, key_color)
+    except GachaChromaFailure as error:
+        raise GachaGenerationFailure(str(error)) from None
+    try:
         background = _card_background(presentation.student.rarity)
         panels = _card_panels(presentation, teacher, school_branding).resize(
             GACHA_GIF_SIZE, Image.Resampling.LANCZOS
         )
-        frames = [
-            _compose_frame(key_gacha_frame(frame, key_color), background, panels).convert("RGB")
-            for frame in art_frames
-        ]
+        frames = [_compose_frame(actor, background, panels).convert("RGB") for actor in actors]
         # Reuse pixels under translucent borders and shadows as well as opaque panel pixels.
         panel_mask = panels.getchannel("A").point(lambda alpha: 255 if alpha else 0, mode="1")
-        first = frames[0]
         for frame in frames[1:]:
-            frame.paste(first, mask=panel_mask)
-        with io.BytesIO() as output:
-            first.save(
-                output,
-                format="PNG",
-                save_all=True,
-                append_images=frames[1:],
-                duration=GACHA_APNG_FRAME_DURATIONS,
-                loop=0,
-                optimize=True,
-            )
-            result = output.getvalue()
+            frame.paste(frames[0], mask=panel_mask)
     except (
         Image.DecompressionBombError,
         Image.DecompressionBombWarning,
@@ -139,10 +128,13 @@ def render_card(
     ):
         raise GachaGenerationFailure("gacha_card_render_failed") from None
     try:
-        # Pillow can coalesce adjacent frames that become identical after composition.
+        result = encode_gacha_apng(frames)
+    except OSError, ValueError:
+        raise GachaGenerationFailure("gacha_card_apng_encode_failed") from None
+    try:
         validate_gacha_result(result, image_format=GachaImageFormat.APNG)
     except GachaGenerationFailure:
-        raise GachaGenerationFailure("gacha_card_render_failed") from None
+        raise GachaGenerationFailure("gacha_card_apng_invalid") from None
     return result
 
 

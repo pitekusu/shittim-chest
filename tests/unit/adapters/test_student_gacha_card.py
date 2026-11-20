@@ -67,11 +67,12 @@ def _gif(
     size: tuple[int, int] = GIF_ART_SIZE,
     frame_count: int = GACHA_APNG_FRAME_COUNT,
     panel_motion_only: bool = False,
+    bad_key_frames: tuple[int, ...] = (),
 ) -> bytes:
     frames = []
     for index in range(frame_count):
         color = (19 + 19 * index, 105, 175)
-        frame = Image.new("RGB", size, _KEY_COLOR)
+        frame = Image.new("RGB", size, "#0011EE" if index in bad_key_frames else _KEY_COLOR)
         draw = ImageDraw.Draw(frame)
         shift = 0 if panel_motion_only else index
         draw.rectangle(
@@ -158,11 +159,55 @@ def test_card_rejects_truncated_input() -> None:
         render_card(_gif()[:-120] + b";", _presentation(3), "サンプル先生", key_color=_KEY_COLOR)
 
 
-def test_card_rejects_animation_that_becomes_still_after_composition() -> None:
-    with pytest.raises(GachaGenerationFailure, match="gacha_card_render_failed"):
+def test_card_preserves_timing_when_animation_becomes_still_after_composition() -> None:
+    result = render_card(
+        _gif(panel_motion_only=True), _presentation(3), "サンプル先生", key_color=_KEY_COLOR
+    )
+
+    with Image.open(BytesIO(result)) as image:
+        assert getattr(image, "n_frames", 1) == GACHA_APNG_FRAME_COUNT
+        assert image.info["loop"] == 0
+        first = image.convert("RGB").tobytes()
+        durations = []
+        for index in range(GACHA_APNG_FRAME_COUNT):
+            image.seek(index)
+            durations.append(image.info["duration"])
+            assert image.convert("RGB").tobytes() == first
+    assert tuple(durations) == GACHA_APNG_FRAME_DURATIONS
+
+
+def test_card_reuses_a_keyed_frame_when_one_source_frame_loses_its_background() -> None:
+    result = render_card(
+        _gif(bad_key_frames=(3,)), _presentation(3), "サンプル先生", key_color=_KEY_COLOR
+    )
+
+    with Image.open(BytesIO(result)) as image:
+        assert getattr(image, "n_frames", 1) == GACHA_APNG_FRAME_COUNT
+        image.seek(2)
+        previous = image.convert("RGB").tobytes()
+        image.seek(3)
+        assert image.info["duration"] == GACHA_APNG_FRAME_DURATIONS[3]
+        assert image.convert("RGB").tobytes() == previous
+        image.seek(4)
+        assert image.convert("RGB").tobytes() != previous
+
+
+def test_card_distinguishes_unusable_chroma_from_failed_apng_validation() -> None:
+    presentation = _presentation(3)
+    teacher = "サンプル先生"
+    with pytest.raises(GachaGenerationFailure, match="gacha_chroma_screen_not_found"):
         render_card(
-            _gif(panel_motion_only=True), _presentation(3), "サンプル先生", key_color=_KEY_COLOR
+            _gif(bad_key_frames=tuple(range(GACHA_APNG_FRAME_COUNT))),
+            presentation,
+            teacher,
+            key_color=_KEY_COLOR,
         )
+
+    with (
+        patch.object(student_gacha_card, "encode_gacha_apng", return_value=b"invalid"),
+        pytest.raises(GachaGenerationFailure, match="gacha_card_apng_invalid"),
+    ):
+        render_card(_gif(), presentation, teacher, key_color=_KEY_COLOR)
 
 
 @pytest.mark.parametrize(
