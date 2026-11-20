@@ -1019,6 +1019,25 @@ Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは6
 必須CI通過後のマージと本番反映を承認した。
 `expires_on`はUTCの最終有効日`2026-11-20`とし、期限切れの旧configを有効対象から外した。
 
+2026-11-20 JST、PR #762の透過GIF対応を含む完成ARM64 production config
+`sha256:63b52c13472bdc6259b4663ade2d5090f4b28de281148ea9b0e9e610ff487cc6`を検査した。
+raw High 45組、署名付きDHI VEX適用後High 31組は、本番とCVE・パッケージ・版・修正状態が一致した。
+新規High、Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは60/60成功した。
+[完成ARM64 SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44726636406/artifacts/14624691000)と[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44726636406/artifacts/14624666411)を照合した。
+実画像APIが返した透過GIFの全12フレームから、人物の色と1.8秒の再生を維持した完成APNGおよびDiscord用WebPを確認した。
+
+所有者は実画像検証を条件に、このconfigのHigh 31組を2026-11-21 09:00 JST（同日00:00 UTC）まで受容し、
+必須CI通過後のマージと本番反映を承認した。`expires_on`はUTCの最終有効日`2026-11-20`とする。
+
+2026-11-20 JST、PR #762のレビュー対応で一辺に残る単色背景の除去を追加した。
+実画像APIが返した同じ透過GIFを最終版で再処理し、完成APNGとDiscord用WebPが先に検証した画像と一致した。
+最終ARM64 production configは`sha256:590ec571ed5d87eea8e47d6be7c70d5f050fb9df087c823718e396abd857be69`。
+raw High 45組と署名付きDHI VEX適用後のHigh 31組は、現行本番とCVE・パッケージ・版・修正状態が一致した。
+Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは60/60成功した。
+[完成ARM64 SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44730667612/artifacts/14625978331)と[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44730667612/artifacts/14627020129)を照合した。
+所有者はこの最終configのHigh 31組に限り、2026-11-21 09:00 JST（同日00:00 UTC）まで受容し、
+必須CI通過後のマージと本番反映を承認した。先に検証した未配信のPR #762用configを対象から外した。
+
 ## 5. 本番配信
 
 ### 共通の工程
