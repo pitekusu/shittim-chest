@@ -7,11 +7,13 @@ import logging
 import warnings
 from collections import Counter
 from functools import partial
+from itertools import groupby
 from typing import Final, cast
 
 from PIL import Image, ImageChops, ImageFilter
 
 from shittim_chest.adapters.assets.images import MAX_IMAGE_BYTES
+from shittim_chest.application.student_gacha_models import GACHA_GIF_SIZE
 
 _GREEN: Final = "#00FF00"
 _MAGENTA: Final = "#FF00FF"
@@ -23,6 +25,9 @@ _EDGE_REACH_PIXELS: Final = 24
 _MIN_BACKGROUND_FRACTION: Final = 0.20
 _MAX_BACKGROUND_FRACTION: Final = 0.98
 _MIN_BORDER_COVERAGE: Final = 0.65
+_FRAME_DIVIDER: Final = "gacha_provider_frame_divider"
+_DARK_PIXEL_MASK: Final = [255] * 17 + [0] * 239
+_MIN_DIVIDER_COVERAGE: Final = 0.90
 _LOGGER = logging.getLogger(__name__)
 
 type _RGB = tuple[int, int, int]
@@ -90,7 +95,7 @@ def _collision(color: _RGB, *, green_key: bool) -> int:
 
 
 def key_gacha_frames(frames: list[Image.Image], key_color: str) -> list[Image.Image]:
-    """Preserve the loop timing by filling rejected frames with the nearest usable cutout."""
+    """Key complete frames and preserve the loop timing when artwork is rejected."""
     cutouts: dict[int, Image.Image] = {}
     rejected: Counter[str] = Counter()
     for index, frame in enumerate(frames):
@@ -110,6 +115,8 @@ def key_gacha_frames(frames: list[Image.Image], key_color: str) -> list[Image.Im
         rejected.total(),
         ",".join(f"{reason}:{count}" for reason, count in sorted(rejected.items())),
     )
+    if rejected[_FRAME_DIVIDER]:
+        return _replay_usable_segment(cutouts, len(frames))
     restored = []
     for index in range(len(frames)):
         if index in cutouts:
@@ -118,6 +125,20 @@ def key_gacha_frames(frames: list[Image.Image], key_color: str) -> list[Image.Im
             nearest = min(cutouts, key=partial(_loop_distance, index, len(frames)))
             restored.append(cutouts[nearest])
     return restored
+
+
+def _replay_usable_segment(cutouts: dict[int, Image.Image], frame_count: int) -> list[Image.Image]:
+    # A sheet divider can separate fragments of different poses. Replay a continuous
+    # run of intact frames forward and back so the recovered loop closes on its start.
+    indices = (index % frame_count for index in range(2 * frame_count))
+    runs = (list(run) for usable, run in groupby(indices, key=cutouts.__contains__) if usable)
+    segment = max(runs, key=len)
+    half_loop = frame_count // 2
+    replay = []
+    for index in range(frame_count):
+        phase = min(index, frame_count - index) / half_loop
+        replay.append(cutouts[segment[round(phase * (len(segment) - 1))]])
+    return replay
 
 
 def _loop_distance(index: int, frame_count: int, candidate: int) -> tuple[int, int]:
@@ -136,6 +157,8 @@ def key_gacha_frame(frame: Image.Image, key_color: str) -> Image.Image:
         raise GachaChromaFailure("gacha_chroma_frame_invalid") from None
     rgb = rgba.convert("RGB")
     source_alpha = rgba.getchannel("A")
+    if _has_frame_divider(rgb, source_alpha):
+        raise GachaChromaFailure(_FRAME_DIVIDER)
     source_clear = None
     residual = None
     if source_alpha.getextrema() != (255, 255):
@@ -216,6 +239,18 @@ def key_gacha_frame(frame: Image.Image, key_color: str) -> Image.Image:
     softened = Image.blend(alpha, alpha.filter(ImageFilter.GaussianBlur(0.6)), 0.45)
     cutout.putalpha(ImageChops.darker(alpha, softened))
     return cutout
+
+
+def _has_frame_divider(rgb: Image.Image, alpha: Image.Image) -> bool:
+    # A near-black opaque row spanning the canvas survives chroma keying. Ignore
+    # the edge padding that is cropped off when the actor is fitted onto the card.
+    red, green, blue = rgb.split()
+    brightest = ImageChops.lighter(ImageChops.lighter(red, green), blue)
+    dark = ImageChops.darker(brightest.point(_DARK_PIXEL_MASK), alpha)
+    cropped_rows = max(0, (rgb.height - GACHA_GIF_SIZE[1]) // 2)
+    row_coverage = dark.reduce((rgb.width, 1)).tobytes()
+    visible_rows = row_coverage[cropped_rows : rgb.height - cropped_rows]
+    return any(coverage >= 255 * _MIN_DIVIDER_COVERAGE for coverage in visible_rows)
 
 
 def _border_boxes(size: tuple[int, int]) -> tuple[tuple[int, int, int, int], ...]:
