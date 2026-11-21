@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
@@ -40,15 +39,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -61,7 +57,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -73,7 +68,6 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
@@ -85,20 +79,14 @@ import coil3.compose.AsyncImage
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
 import dev.pitekusu.shittim.records.ui.ShittimProgress
-import java.text.Collator
-import java.text.Normalizer
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
-import me.saket.telephoto.zoomable.ZoomableContentLocation
-import me.saket.telephoto.zoomable.rememberZoomableState
-import me.saket.telephoto.zoomable.zoomable
 
 private const val THUMBNAIL_MEMORY_LIMIT = 48
 private val galleryDate = DateTimeFormatter.ofPattern("yyyy/MM/dd", Locale.JAPAN).withZone(ZoneId.of("Asia/Tokyo"))
-private val galleryWhitespace = Regex("\\s+")
 
 @Composable
 internal fun StudentCollectionScreen(gallery: StudentGallery, isOnline: Boolean, modifier: Modifier = Modifier) {
@@ -137,32 +125,6 @@ internal fun StudentCollectionScreen(gallery: StudentGallery, isOnline: Boolean,
   }
 }
 
-private enum class GallerySort(@StringRes val label: Int, @StringRes val cardLabel: Int = label) {
-  Common(R.string.gallery_common),
-  Rare(R.string.gallery_rare),
-  Newest(R.string.gallery_first_newest, R.string.gallery_card_newest),
-  Oldest(R.string.gallery_first_oldest, R.string.gallery_card_oldest),
-}
-
-private data class GalleryFilters(
-  val rarity: Int? = null,
-  val school: String? = null,
-  val acquiredOnly: Boolean = false,
-  val sort: GallerySort = GallerySort.Common,
-) {
-  fun matches(name: String?, school: String?, rarity: Int?, terms: List<String>): Boolean =
-    (this.rarity == null || this.rarity == rarity) && (this.school == null || this.school == school) &&
-      terms.all(normalizedGallerySearch(name.orEmpty())::contains)
-
-  fun rarityOrder(rarity: Int?): Int = when (rarity) {
-    null, 0 -> Int.MAX_VALUE
-    else -> if (sort == GallerySort.Rare) -rarity else rarity
-  }
-}
-
-private fun normalizedGallerySearch(value: String): String =
-  Normalizer.normalize(value, Normalizer.Form.NFKC).trim().lowercase(Locale.JAPAN)
-
 private data class GalleryTile(
   val id: String,
   val name: String?,
@@ -176,45 +138,29 @@ private data class GalleryTile(
 private fun GalleryCard.tile(first: Boolean = false) =
   GalleryTile(cardId, studentName, schoolName, rarity, this, first = first)
 
-private fun GalleryFilters.tiles(collection: StudentCollection, cardsView: Boolean, query: String): List<GalleryTile> {
-  val terms = normalizedGallerySearch(query).split(galleryWhitespace).filter(String::isNotEmpty)
-  if (cardsView) {
-    val cards = collection.cards.filter { matches(it.studentName, it.schoolName, it.rarity, terms) }
-    return when (sort) {
-      GallerySort.Newest -> cards
-      GallerySort.Oldest -> cards.asReversed()
-      else -> cards.sortedBy { rarityOrder(it.rarity) }
-    }.map { it.tile() }
-  }
-  val entries = collection.entries.filter {
-    (!acquiredOnly || it.cards.isNotEmpty()) && matches(it.studentName, it.schoolName, it.rarity, terms)
-  }
-  return when (sort) {
-    GallerySort.Newest -> entries.sortedBy { it.firstAcquisitionOrder?.let(Int::unaryMinus) ?: Int.MAX_VALUE }
-    GallerySort.Oldest -> entries.sortedBy { it.firstAcquisitionOrder ?: Int.MAX_VALUE }
-    else -> entries.sortedBy { rarityOrder(it.rarity) }
-  }.map { GalleryTile(it.studentId, it.studentName, it.schoolName, it.rarity, it.cards.firstOrNull(), it.cards.size) }
-}
-
 @Composable
 private fun GalleryCollectionContent(collection: StudentCollection, gallery: StudentGallery, isOnline: Boolean,
   refreshing: Boolean, failed: Boolean, attempt: Int, onRefresh: () -> Unit) {
   var cardsView by remember { mutableStateOf(false) }
-  var query by remember { mutableStateOf("") }
-  var filters by remember { mutableStateOf(GalleryFilters()) }
-  var showFilters by remember { mutableStateOf(false) }
+  var collectionFilters by remember { mutableStateOf(GalleryFilters()) }
+  var cardFilters by remember { mutableStateOf(GalleryFilters(sort = GallerySort.Newest)) }
   var groupId by remember { mutableStateOf<String?>(null) }
   var cardId by remember { mutableStateOf<String?>(null) }
-  val gridState = rememberLazyGridState()
-  val tiles = remember(collection, cardsView, query, filters) { filters.tiles(collection, cardsView, query) }
-  val acquired = remember(collection) { collection.entries.count { it.cards.isNotEmpty() } }
-  val schools = remember(collection, cardsView) {
-    val names = if (cardsView) collection.cards.map { it.schoolName }
-      else collection.entries.mapNotNull { it.schoolName }
-    names.distinct().sortedWith(Collator.getInstance(Locale.JAPAN))
+  val filters = if (cardsView) cardFilters else collectionFilters
+  val updateFilters: (GalleryFilters) -> Unit = {
+    if (cardsView) cardFilters = it else collectionFilters = it
   }
+  val gridState = rememberLazyGridState()
+  val tiles = remember(collection, cardsView, filters) {
+    if (cardsView) filters.cards(collection).map { it.tile() }
+    else filters.entries(collection).map {
+      GalleryTile(it.studentId, it.studentName, it.schoolName, it.rarity, it.cards.firstOrNull(), it.cards.size)
+    }
+  }
+  val acquired = remember(collection) { collection.entries.count { it.cards.isNotEmpty() } }
+  val schools = remember(collection, cardsView) { gallerySchoolOptions(collection, cardsView) }
   val focus = LocalFocusManager.current
-  LaunchedEffect(cardsView, query, filters) { gridState.scrollToItem(0) }
+  LaunchedEffect(cardsView) { gridState.scrollToItem(0) }
 
   GalleryGrid(tiles, gridState, gallery, isOnline, attempt, Modifier.fillMaxSize().testTag("gallery-grid"),
     onClick = { tile ->
@@ -222,16 +168,6 @@ private fun GalleryCollectionContent(collection: StudentCollection, gallery: Stu
       if ((tile.count ?: 0) > 1) groupId = tile.id else cardId = tile.cover?.cardId
     }, header = {
       Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-          val count = if (cardsView) stringResource(R.string.gallery_cards_count, collection.cards.size)
-            else stringResource(R.string.gallery_collection_count, acquired, collection.entries.size)
-          Text(count, Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite },
-            style = MaterialTheme.typography.titleMediumEmphasized)
-          IconButton(onClick = onRefresh, enabled = isOnline && !refreshing,
-            modifier = Modifier.testTag("gallery-refresh")) {
-            Icon(painterResource(R.drawable.ic_refresh), stringResource(R.string.gallery_refresh))
-          }
-        }
         if (refreshing) LinearProgressIndicator(Modifier.fillMaxWidth())
         if (!isOnline || failed) Text(stringResource(if (isOnline) R.string.gallery_load_failed else R.string.gallery_offline),
           color = if (failed && isOnline) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -239,35 +175,34 @@ private fun GalleryCollectionContent(collection: StudentCollection, gallery: Stu
             liveRegion = LiveRegionMode.Polite
           })
         FlowRow(Modifier.fillMaxWidth().selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-          FilterChip(selected = !cardsView, onClick = {
-            if (cardsView) { cardsView = false; filters = GalleryFilters() }
-          }, label = { Text(stringResource(R.string.gallery_collection_tab)) })
-          FilterChip(selected = cardsView, onClick = {
-            if (!cardsView) { cardsView = true; filters = GalleryFilters(sort = GallerySort.Newest) }
-          }, label = { Text(stringResource(R.string.gallery_cards_tab)) }, modifier = Modifier.testTag("gallery-cards-tab"))
+          FilterChip(selected = !cardsView, onClick = { cardsView = false },
+            label = { Text(stringResource(R.string.gallery_collection_tab)) }, modifier = Modifier.testTag("gallery-collection-tab"))
+          FilterChip(selected = cardsView, onClick = { cardsView = true },
+            label = { Text(stringResource(R.string.gallery_cards_tab)) }, modifier = Modifier.testTag("gallery-cards-tab"))
         }
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-          OutlinedTextField(query, { query = it }, Modifier.weight(1f).testTag("gallery-search"),
-            label = { Text(stringResource(R.string.gallery_search)) }, singleLine = true,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = KeyboardActions(onSearch = { focus.clearFocus() }),
-            trailingIcon = if (query.isEmpty()) null else ({
-              IconButton(onClick = { query = "" }) {
-                Icon(painterResource(R.drawable.ic_close), stringResource(R.string.record_search_clear_text))
-              }
-            }))
-          val active = filters.rarity != null || filters.school != null || filters.acquiredOnly
-          IconButton(onClick = { focus.clearFocus(); showFilters = true }, modifier = Modifier.testTag("gallery-filters")) {
-            val filterLabel = stringResource(if (active) R.string.gallery_filter_active else R.string.record_filter_open)
-            Icon(painterResource(R.drawable.ic_filter), filterLabel,
-              tint = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+        GalleryFilterControls(filters, cardsView, schools, updateFilters)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+          val count = if (cardsView) stringResource(R.string.gallery_cards_count, collection.cards.size)
+            else stringResource(R.string.gallery_collection_count, acquired, collection.entries.size)
+          Column(Modifier.weight(1f).padding(top = 8.dp)) {
+            Text(count, Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+              style = MaterialTheme.typography.titleMediumEmphasized)
+            if (filters.hasFilters) TextButton(onClick = {
+              focus.clearFocus()
+              updateFilters(filters.clearFilters())
+            }, modifier = Modifier.testTag("gallery-clear-filters")) {
+              Text(stringResource(R.string.gallery_clear_filters))
+            }
+          }
+          IconButton(onClick = onRefresh, enabled = isOnline && !refreshing,
+            modifier = Modifier.testTag("gallery-refresh")) {
+            Icon(painterResource(R.drawable.ic_refresh), stringResource(R.string.gallery_refresh))
           }
         }
-        if (tiles.isEmpty()) Text(stringResource(R.string.gallery_no_results),
+        if (tiles.isEmpty()) Text(stringResource(if (cardsView) R.string.gallery_no_results else R.string.gallery_no_students),
           Modifier.padding(vertical = 16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
       }
     })
-  if (showFilters) GalleryFilterSheet(filters, cardsView, schools, { filters = it }) { showFilters = false }
 
   val group = collection.entries.firstOrNull { it.studentId == groupId && it.cards.isNotEmpty() }
   val viewerCards = group?.cards ?: tiles.mapNotNull { it.cover }
@@ -294,57 +229,100 @@ private fun GalleryCollectionContent(collection: StudentCollection, gallery: Stu
   }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun GalleryFilterSheet(filters: GalleryFilters, cardsView: Boolean, schools: List<String>,
-  onChange: (GalleryFilters) -> Unit, onClose: () -> Unit) {
-  val empty = stringResource(R.string.record_filter_all)
-  ModalBottomSheet(onDismissRequest = onClose, sheetState = rememberBottomSheetState(initialValue = SheetValue.Hidden,
-    enabledValues = setOf(SheetValue.Hidden, SheetValue.Expanded))) {
-    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).imePadding()
-      .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
-      verticalArrangement = Arrangement.spacedBy(8.dp)) {
-      Text(stringResource(R.string.gallery_filter_title), style = MaterialTheme.typography.titleLargeEmphasized,
-        modifier = Modifier.semantics { heading() })
-      GalleryPicker(stringResource(R.string.gallery_rarity), filters.rarity, listOf(null, 1, 2, 3, 4, 0),
-        label = { if (it == null) empty else stringResource(galleryRarityResource(it), it) },
-        onPick = { onChange(filters.copy(rarity = it)) })
-      GalleryPicker(stringResource(R.string.gallery_school), filters.school, listOf(null) + schools,
-        label = { it ?: empty }, onPick = { onChange(filters.copy(school = it)) })
-      GalleryPicker(stringResource(R.string.gallery_sort), filters.sort, GallerySort.entries,
-        label = { stringResource(if (cardsView) it.cardLabel else it.label) },
-        onPick = { onChange(filters.copy(sort = it)) })
-      if (!cardsView) Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
+private fun GalleryFilterControls(filters: GalleryFilters, cardsView: Boolean, schools: List<String>,
+  onChange: (GalleryFilters) -> Unit) {
+  val focus = LocalFocusManager.current
+  val all = stringResource(R.string.record_filter_all)
+  val search: @Composable (Modifier) -> Unit = { modifier ->
+    OutlinedTextField(filters.query, { onChange(filters.copy(query = it)) },
+      modifier.testTag("gallery-search"),
+      label = { Text(stringResource(R.string.gallery_student_name)) },
+      placeholder = { Text(stringResource(R.string.gallery_search)) }, singleLine = true,
+      keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+      keyboardActions = KeyboardActions(onSearch = { focus.clearFocus() }),
+      trailingIcon = if (filters.query.isEmpty()) null else ({
+        IconButton(onClick = { onChange(filters.copy(query = "")) }) {
+          Icon(painterResource(R.drawable.ic_close), stringResource(R.string.record_search_clear_text))
+        }
+      }))
+  }
+  val school: @Composable (Modifier) -> Unit = { modifier ->
+    GalleryPicker(stringResource(R.string.gallery_school), filters.school, listOf(null) + schools,
+      label = { Text(it ?: all) }, onPick = { onChange(filters.copy(school = it)) },
+      modifier = modifier, tag = "gallery-school-filter")
+  }
+  val rarity: @Composable (Modifier) -> Unit = { modifier ->
+    GalleryPicker(stringResource(R.string.gallery_rarity), filters.rarity, listOf(null) + GALLERY_RARITIES,
+      label = { if (it == null) Text(all) else GalleryRarity(it) }, onPick = { onChange(filters.copy(rarity = it)) },
+      modifier = modifier, tag = "gallery-rarity-filter")
+  }
+  val sort: @Composable (Modifier) -> Unit = { modifier ->
+    GalleryPicker(stringResource(R.string.gallery_sort), filters.sort, GallerySort.entries,
+      label = { Text(stringResource(it.label(cardsView))) }, onPick = { onChange(filters.copy(sort = it)) },
+      modifier = modifier, tag = "gallery-sort")
+  }
+  val fontScale = LocalDensity.current.fontScale
+  BoxWithConstraints(Modifier.fillMaxWidth()) {
+    val width = maxWidth
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+      if (width >= 760.dp && fontScale < 1.3f) {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Bottom) {
+          search(Modifier.weight(1.4f))
+          school(Modifier.weight(1f))
+          rarity(Modifier.weight(.75f))
+          sort(Modifier.weight(1.5f))
+        }
+      } else {
+        search(Modifier.fillMaxWidth())
+        if (width >= 264.dp && fontScale < 1.5f) {
+          Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Bottom) {
+            school(Modifier.weight(1f))
+            rarity(Modifier.weight(1f))
+          }
+        } else {
+          school(Modifier.fillMaxWidth())
+          rarity(Modifier.fillMaxWidth())
+        }
+        sort(Modifier.fillMaxWidth())
+      }
+      if (!cardsView) Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("gallery-acquired-only")
         .toggleable(filters.acquiredOnly, role = Role.Checkbox, onValueChange = { onChange(filters.copy(acquiredOnly = it)) }),
         verticalAlignment = Alignment.CenterVertically) {
         Checkbox(checked = filters.acquiredOnly, onCheckedChange = null, modifier = Modifier.padding(horizontal = 12.dp))
         Text(stringResource(R.string.gallery_acquired_only))
       }
-      FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        TextButton(onClick = { onChange(GalleryFilters(sort = if (cardsView) GallerySort.Newest else GallerySort.Common)) }) {
-          Text(stringResource(R.string.gallery_clear_filters))
-        }
-        TextButton(onClick = onClose, modifier = Modifier.testTag("gallery-filters-close")) {
-          Text(stringResource(R.string.detail_close))
-        }
-      }
     }
   }
 }
 
+@StringRes
+private fun GallerySort.label(cardsView: Boolean): Int = when (this) {
+  GallerySort.Common -> R.string.gallery_common
+  GallerySort.Rare -> R.string.gallery_rare
+  GallerySort.Newest -> if (cardsView) R.string.gallery_card_newest else R.string.gallery_first_newest
+  GallerySort.Oldest -> if (cardsView) R.string.gallery_card_oldest else R.string.gallery_first_oldest
+}
+
 @Composable
-private fun <T> GalleryPicker(title: String, value: T, choices: List<T>, label: @Composable (T) -> String,
-  onPick: (T) -> Unit) {
-  Text(title, style = MaterialTheme.typography.labelLarge)
+private fun <T> GalleryPicker(title: String, value: T, choices: List<T>, label: @Composable (T) -> Unit,
+  onPick: (T) -> Unit, modifier: Modifier, tag: String) {
+  val focus = LocalFocusManager.current
   var expanded by remember { mutableStateOf(false) }
-  Box {
-    OutlinedButton(onClick = { expanded = true }) {
-      Text(label(value), Modifier.weight(1f, fill = false))
-      Icon(painterResource(R.drawable.ic_expand_more), null, Modifier.size(24.dp))
-    }
-    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, Modifier.heightIn(max = 320.dp)) {
-      choices.forEach { choice ->
-        DropdownMenuItem(text = { Text(label(choice)) }, onClick = { onPick(choice); expanded = false })
+  Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Text(title, style = MaterialTheme.typography.labelLarge)
+    Box {
+      OutlinedButton(onClick = { focus.clearFocus(); expanded = true },
+        modifier = Modifier.fillMaxWidth().testTag(tag).semantics { contentDescription = title },
+        shape = MaterialTheme.shapes.medium, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)) {
+        Box(Modifier.weight(1f)) { label(value) }
+        Icon(painterResource(R.drawable.ic_expand_more), null, Modifier.size(24.dp))
+      }
+      DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false },
+        Modifier.heightIn(max = 320.dp).testTag("$tag-menu")) {
+        choices.forEach { choice ->
+          DropdownMenuItem(text = { label(choice) }, onClick = { onPick(choice); expanded = false })
+        }
       }
     }
   }
@@ -401,7 +379,7 @@ private fun GalleryTileContent(tile: GalleryTile, bytes: ByteArray?, onClick: ()
             style = MaterialTheme.typography.headlineLargeEmphasized,
             color = if (secret) colors.onTertiaryContainer else colors.onSurfaceVariant)
           else {
-            val image = rememberGalleryImage(bytes)
+            val image = rememberGalleryThumbnail(bytes)
             Icon(painterResource(R.drawable.ic_image), null, Modifier.size(28.dp), tint = colors.onSurfaceVariant)
             if (image != null) AsyncImage(image, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
           }
@@ -526,18 +504,9 @@ private fun GalleryOriginal(gallery: StudentGallery, cardId: String, isOnline: B
       notFound = problem.failure == GalleryReadFailure.NOT_FOUND
     }
   }
-  val image = rememberGalleryImage(bytes, original = true)
+  val image = bytes
   if (image != null && !failed) {
-    var contentSize by remember(image) { mutableStateOf(Size(1f, 1f)) }
-    val zoom = rememberZoomableState().apply {
-      setContentLocation(ZoomableContentLocation.scaledInsideAndCenterAligned(contentSize))
-    }
-    AsyncImage(image, stringResource(R.string.gallery_card_image),
-      Modifier.fillMaxSize().zoomable(zoom).then(
-        if (contentSize.width > 1f) Modifier.testTag("gallery-original-image") else Modifier),
-      contentScale = ContentScale.Inside,
-      onSuccess = { contentSize = Size(it.result.image.width.toFloat(), it.result.image.height.toFloat()) },
-      onError = { failed = true })
+    GalleryOriginalImage(image, onError = { failed = true })
   } else if (!failed) {
     ShittimProgress(stringResource(R.string.gallery_original_loading), Modifier.widthIn(max = 360.dp))
   } else {
@@ -551,11 +520,11 @@ private fun GalleryOriginal(gallery: StudentGallery, cardId: String, isOnline: B
 }
 
 @Composable
-private fun rememberGalleryImage(bytes: ByteArray?, original: Boolean = false): ImageRequest? {
+private fun rememberGalleryThumbnail(bytes: ByteArray?): ImageRequest? {
   val context = LocalContext.current
-  return remember(context, bytes, original) {
+  return remember(context, bytes) {
     bytes?.let {
-      ImageRequest.Builder(context).data(it).size(if (original) 4096 else 768)
+      ImageRequest.Builder(context).data(it).size(768)
         .memoryCachePolicy(CachePolicy.DISABLED).diskCachePolicy(CachePolicy.DISABLED).build()
     }
   }

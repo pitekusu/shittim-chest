@@ -19,6 +19,7 @@ firebase-bom = "35.2.0"
 google-services = "4.6.0"
 play-app-update = "2.1.0"
 coil = "3.6.3"
+apng = "3.0.5"
 telephoto = "0.19.0"
 paging = "3.5.3"
 markdown = "0.46.0"
@@ -83,7 +84,10 @@ firebase-installations = { module = "com.google.firebase:firebase-installations"
 play-app-update = { module = "com.google.android.play:app-update", version.ref = "play-app-update" }
 telephoto-zoomable = { module = "me.saket.telephoto:zoomable", version.ref = "telephoto" }
 coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
+coil-gif = { module = "io.coil-kt.coil3:coil-gif", version.ref = "coil" }
 coil-network-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coil" }
+apng = { module = "com.github.penfeizhou.android.animation:apng", version.ref = "apng" }
+androidx-vectordrawable-animated = { module = "androidx.vectordrawable:vectordrawable-animated", version = "1.2.0" }
 androidx-paging-runtime = { module = "androidx.paging:paging-runtime", version.ref = "paging" }
 androidx-paging-compose = { module = "androidx.paging:paging-compose", version.ref = "paging" }
 markdown-core = { module = "com.mikepenz:multiplatform-markdown-renderer", version.ref = "markdown" }

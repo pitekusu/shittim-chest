@@ -141,6 +141,9 @@ dependencies {
   implementation(libs.firebase.installations)
   implementation(libs.play.app.update)
   implementation(libs.coil.compose)
+  implementation(libs.coil.gif)
+  implementation(libs.apng)
+  implementation(libs.androidx.vectordrawable.animated) // APNGDrawable exposes Animatable2Compat.
   implementation(libs.telephoto.zoomable)
   implementation(libs.coil.network.okhttp)
   implementation(libs.androidx.paging.runtime)
