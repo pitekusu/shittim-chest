@@ -6,10 +6,11 @@ import warnings
 from collections.abc import Iterator
 from contextlib import suppress
 from datetime import date, datetime
+from statistics import fmean
 from struct import error as StructError
 from typing import TYPE_CHECKING, Any, cast
 
-from PIL import Image, ImageChops, ImageOps
+from PIL import Image, ImageChops, ImageOps, ImageStat
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 
 from shittim_records.contracts import MomotalkWeek
@@ -218,6 +219,51 @@ class DynamoMomotalkStore:
                 yield self.decode_room(unmarshal_item(item))
 
 
+def _selfie_seam_start(frame: Image.Image) -> int | None:
+    # A displaced provider panel leaves a narrow, almost entirely black vertical seam.
+    gray = frame.convert("L")
+    dark = [
+        x
+        for x in range(frame.width * 4 // 5, frame.width - 4)
+        if sum(gray.crop((x, 0, x + 1, frame.height)).histogram()[:33]) >= frame.height * 0.95
+    ]
+    if 1 <= len(dark) <= 3 and dark[-1] - dark[0] == len(dark) - 1:
+        return dark[0]
+    return None
+
+
+def _selfie_frame_change(frames: list[Image.Image]) -> float:
+    samples = [frame.resize((120, 180), Image.Resampling.BOX).convert("L") for frame in frames]
+    return fmean(
+        ImageStat.Stat(ImageChops.difference(a, b)).mean[0]
+        for a, b in zip(samples, samples[1:] + samples[:1], strict=True)
+    )
+
+
+def _repair_slipping_selfie(frames: list[Image.Image]) -> list[Image.Image] | None:
+    seams = [_selfie_seam_start(frame) for frame in frames]
+    boundaries = [seam for seam in seams if seam is not None]
+    if len(boundaries) != len(frames) or max(boundaries) - min(boundaries) < 8:
+        return None
+
+    # Keep the shared region of the primary panel to the left of each seam.
+    # The right strip may be another panel, so wrapping it back adds a second seam.
+    width, height = ANIMATION_SIZE
+    inset = 4
+    common_width = min(boundaries) - inset
+    crop_height = round(common_width * height / width)
+    repaired = []
+    for frame, boundary in zip(frames, boundaries, strict=True):
+        right = boundary - (inset - 1)
+        cropped = frame.crop((right - common_width, inset, right, inset + crop_height))
+        repaired.append(cropped.resize(ANIMATION_SIZE, Image.Resampling.LANCZOS))
+
+    # A real slip moves the whole scene. Avoid changing an incidental dark line.
+    if _selfie_frame_change(repaired) < _selfie_frame_change(frames) * 0.75:
+        return repaired
+    return None
+
+
 def decode_selfie_animation(content: bytes) -> tuple[bytes, Image.Image]:
     """Validate one provider GIF and produce the looping original and its poster."""
     if not 1 <= len(content) <= ANIMATION_MAX_BYTES or not content.endswith(b";"):
@@ -244,11 +290,21 @@ def decode_selfie_animation(content: bytes) -> tuple[bytes, Image.Image]:
                 pass
             else:
                 raise MomotalkFailure("MOMOTALK_IMAGE_INVALID")
+        repaired = _repair_slipping_selfie(frames)
+        if repaired is not None:
+            frames = repaired
         poster = frames[0]
         if not any(ImageChops.difference(poster, frame).getbbox() for frame in frames[1:]):
             raise MomotalkFailure("MOMOTALK_IMAGE_INVALID")
-        if loop == 0 and durations == [ANIMATION_FRAME_MS] * ANIMATION_FRAME_COUNT:
+        if (
+            repaired is None
+            and loop == 0
+            and durations == [ANIMATION_FRAME_MS] * ANIMATION_FRAME_COUNT
+        ):
             return content, poster
+        # The decoded RGB frames can inherit the provider's old palette metadata.
+        for frame in frames:
+            frame.info.clear()
         with io.BytesIO() as buffer:
             poster.save(
                 buffer,

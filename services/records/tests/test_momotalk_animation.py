@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from PIL import Image, ImageSequence
+from PIL import Image, ImageChops, ImageDraw, ImageSequence
 from tests.test_momotalk import snapshot
 
 from shittim_records.momotalk import (
@@ -22,7 +22,7 @@ from shittim_records.momotalk import (
     image_key,
     image_targets,
 )
-from shittim_records.momotalk_adapters import MomotalkAssets
+from shittim_records.momotalk_adapters import MomotalkAssets, decode_selfie_animation
 from shittim_records.momotalk_openai import OpenAIMomotalkGenerator
 
 
@@ -168,3 +168,51 @@ def test_store_repairs_gif_poster_and_signs_each_format():
     assert [call["Params"]["Key"] for call in signed] == [original, poster]
     assert signed[0]["Params"]["ResponseContentDisposition"].endswith('-selfie.gif"')
     assert signed[1]["Params"]["ResponseContentDisposition"].endswith('-selfie.webp"')
+
+
+@pytest.mark.parametrize("slips", [(0, 16, 32, 48), (0, 0, 0, 0)])
+def test_only_a_slipping_provider_panel_is_realigned(slips):
+    width, height = ANIMATION_SIZE
+    background = Image.new("RGB", ANIMATION_SIZE)
+    draw = ImageDraw.Draw(background)
+    for x in range(0, width, 21):
+        color = (64 + x * 7 % 172, 64 + x * 11 % 172, 64 + x * 17 % 172)
+        draw.rectangle((x, 0, x + 20, height), fill=color)
+    draw.rectangle((465, 0, 466, height), fill="black")
+    frames = []
+    for index in range(ANIMATION_FRAME_COUNT):
+        frame = background.copy()
+        ImageDraw.Draw(frame).rectangle((110 + index * 2, 280, 130 + index * 2, 300), fill="white")
+        frames.append(ImageChops.offset(frame, -slips[index % len(slips)], 0))
+
+    with io.BytesIO() as buffer:
+        frames[0].save(
+            buffer,
+            format="GIF",
+            save_all=True,
+            append_images=frames[1:],
+            duration=ANIMATION_FRAME_MS,
+            loop=0,
+            disposal=2,
+        )
+        raw = buffer.getvalue()
+    encoded, poster = decode_selfie_animation(raw)
+    if not any(slips):
+        assert encoded == raw
+        return
+
+    assert encoded != raw and poster.size == ANIMATION_SIZE
+    with Image.open(io.BytesIO(encoded)) as image:
+        assert image.info["loop"] == 0
+        decoded = []
+        for frame in ImageSequence.Iterator(image):
+            assert frame.info["duration"] == ANIMATION_FRAME_MS
+            decoded.append(frame.convert("RGB"))
+    assert len(decoded) == ANIMATION_FRAME_COUNT
+    # The background stays registered and the small foreground motion remains.
+    for frame in decoded:
+        assert not sum(frame.crop((0, 20, width, 21)).convert("L").histogram()[:33])
+        moving_area = ImageChops.difference(frame, decoded[0]).getbbox()
+        if moving_area:
+            assert 230 < moving_area[1] < 360 and moving_area[3] < 390
+    assert ImageChops.difference(decoded[-1], decoded[0]).getbbox()
