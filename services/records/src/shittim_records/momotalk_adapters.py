@@ -2,17 +2,23 @@
 
 import io
 import json
+import warnings
 from collections.abc import Iterator
 from contextlib import suppress
 from datetime import date, datetime
+from struct import error as StructError
 from typing import TYPE_CHECKING, Any, cast
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageChops, ImageOps
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 
 from shittim_records.contracts import MomotalkWeek
 from shittim_records.memorial_adapters import MemorialConfigurationRepository
 from shittim_records.momotalk import (
+    ANIMATION_FRAME_COUNT,
+    ANIMATION_FRAME_MS,
+    ANIMATION_MAX_BYTES,
+    ANIMATION_SIZE,
     MAX_CHAIN_STEPS,
     PARTICIPANTS,
     MomotalkFailure,
@@ -212,6 +218,63 @@ class DynamoMomotalkStore:
                 yield self.decode_room(unmarshal_item(item))
 
 
+def decode_selfie_animation(content: bytes) -> tuple[bytes, Image.Image]:
+    """Validate one provider GIF and produce the looping original and its poster."""
+    if not 1 <= len(content) <= ANIMATION_MAX_BYTES or not content.endswith(b";"):
+        raise MomotalkFailure("MOMOTALK_IMAGE_INVALID")
+    try:
+        with (
+            warnings.catch_warnings(action="error", category=Image.DecompressionBombWarning),
+            Image.open(io.BytesIO(content), formats=["GIF"]) as source,
+        ):
+            if source.size != ANIMATION_SIZE:
+                raise MomotalkFailure("MOMOTALK_IMAGE_INVALID")
+            loop = source.info.get("loop")
+            frames = []
+            durations = []
+            for index in range(ANIMATION_FRAME_COUNT):
+                source.seek(index)
+                if source.size != ANIMATION_SIZE:
+                    raise MomotalkFailure("MOMOTALK_IMAGE_INVALID")
+                frames.append(source.convert("RGB"))
+                durations.append(source.info.get("duration"))
+            try:
+                source.seek(ANIMATION_FRAME_COUNT)
+            except EOFError:
+                pass
+            else:
+                raise MomotalkFailure("MOMOTALK_IMAGE_INVALID")
+        poster = frames[0]
+        if not any(ImageChops.difference(poster, frame).getbbox() for frame in frames[1:]):
+            raise MomotalkFailure("MOMOTALK_IMAGE_INVALID")
+        if loop == 0 and durations == [ANIMATION_FRAME_MS] * ANIMATION_FRAME_COUNT:
+            return content, poster
+        with io.BytesIO() as buffer:
+            poster.save(
+                buffer,
+                format="GIF",
+                save_all=True,
+                append_images=frames[1:],
+                duration=ANIMATION_FRAME_MS,
+                loop=0,
+            )
+            normalized = buffer.getvalue()
+        if len(normalized) > ANIMATION_MAX_BYTES:
+            raise MomotalkFailure("MOMOTALK_IMAGE_INVALID")
+        return normalized, poster
+    except (
+        EOFError,
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+        IndexError,
+        OSError,
+        StructError,
+        SyntaxError,
+        ValueError,
+    ):
+        raise MomotalkFailure("MOMOTALK_IMAGE_INVALID") from None
+
+
 class MomotalkAssets:
     def __init__(self, client: S3Client, bucket: str) -> None:
         self.client = client
@@ -262,7 +325,7 @@ class MomotalkAssets:
         thumbnail_key = image_key(room, image, thumbnail=True)
         # A narrowly scoped ListBucket permission distinguishes absence from a 403.
         response = self.client.list_objects_v2(
-            Bucket=self.bucket, Prefix=full_key.removesuffix(".webp"), MaxKeys=10
+            Bucket=self.bucket, Prefix=full_key.rsplit(".", 1)[0], MaxKeys=10
         )
         keys = {entry["Key"] for entry in response.get("Contents", [])}
         if full_key not in keys:
@@ -271,43 +334,65 @@ class MomotalkAssets:
             # Recover a failed thumbnail write without paying to generate the image again.
             response = self.client.get_object(Bucket=self.bucket, Key=full_key)
             with response["Body"] as body:
-                self.store_image(room, image, body.read(), thumbnail_only=True)
+                limit = ANIMATION_MAX_BYTES if image.animated else 20 * 1024 * 1024
+                self.store_image(room, image, body.read(limit + 1), thumbnail_only=True)
         return True
 
     def store_image(
-        self, room: Room, image: SavedImage, content: bytes, *, thumbnail_only: bool = False
+        self,
+        room: Room,
+        image: SavedImage,
+        content: bytes,
+        *,
+        thumbnail_only: bool = False,
     ) -> None:
-        if len(content) > 20 * 1024 * 1024:
+        limit = ANIMATION_MAX_BYTES if image.animated else 20 * 1024 * 1024
+        if not 1 <= len(content) <= limit:
             raise MomotalkFailure("MOMOTALK_IMAGE_INVALID")
-        with Image.open(io.BytesIO(content)) as source:
-            if source.width * source.height > 16_000_000 or min(source.size) < 256:
-                raise MomotalkFailure("MOMOTALK_IMAGE_INVALID")
-            decoded = ImageOps.exif_transpose(source).convert("RGB")
+        if image.animated and not thumbnail_only:
+            content, decoded = decode_selfie_animation(content)
+        else:
+            # An already stored, normalized GIF only needs its first frame for repair.
+            with Image.open(
+                io.BytesIO(content), formats=["GIF"] if image.animated else None
+            ) as source:
+                if source.width * source.height > 16_000_000 or min(source.size) < 256:
+                    raise MomotalkFailure("MOMOTALK_IMAGE_INVALID")
+                decoded = ImageOps.exif_transpose(source).convert("RGB")
         for thumbnail in (True,) if thumbnail_only else (False, True):
-            output = decoded.copy()
-            output.thumbnail((320, 480) if thumbnail else (1024, 1536))
-            buffer = io.BytesIO()
-            output.save(buffer, format="WEBP", quality=84 if thumbnail else 94, method=4)
+            if image.animated and not thumbnail:
+                body, content_type = content, "image/gif"
+            else:
+                output = decoded.copy()
+                output.thumbnail((320, 480) if thumbnail else (1024, 1536))
+                with io.BytesIO() as buffer:
+                    output.save(buffer, format="WEBP", quality=84 if thumbnail else 94, method=4)
+                    body = buffer.getvalue()
+                content_type = "image/webp"
             self.client.put_object(
                 Bucket=self.bucket,
                 Key=image_key(room, image, thumbnail=thumbnail),
-                Body=buffer.getvalue(),
-                ContentType="image/webp",
+                Body=body,
+                ContentType=content_type,
                 ServerSideEncryption="AES256",
                 CacheControl="private, max-age=300",
             )
 
     def image_url(
-        self, room: Room, image: SavedImage, *, thumbnail: bool = False, download: bool = False
+        self,
+        room: Room,
+        image: SavedImage,
+        *,
+        thumbnail: bool = False,
+        download: bool = False,
     ) -> str:
-        parameters = {
-            "Bucket": self.bucket,
-            "Key": image_key(room, image, thumbnail=thumbnail),
-        }
+        key = image_key(room, image, thumbnail=thumbnail)
+        parameters = {"Bucket": self.bucket, "Key": key}
         if download:
             name = "selfie" if image.subjects is not None else image.mood
+            extension = key.rsplit(".", 1)[1]
             parameters["ResponseContentDisposition"] = (
-                f'attachment; filename="momotalk-{room.week_id}-{name}.webp"'
+                f'attachment; filename="momotalk-{room.week_id}-{name}.{extension}"'
             )
         return self.client.generate_presigned_url("get_object", Params=parameters, ExpiresIn=300)
 

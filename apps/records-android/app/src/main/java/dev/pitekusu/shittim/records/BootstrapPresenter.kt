@@ -75,6 +75,7 @@ internal data object BootstrapScreen : Screen {
     val publicPageError: Boolean = false,
     val insights: InsightsUiState = InsightsUiState(),
     val momotalk: MomotalkUiState = MomotalkUiState(),
+    val loadMomotalkAnimation: suspend (String, String, String) -> ByteArray? = { _, _, _ -> null },
     val studentGallery: StudentGallery? = null,
     val related: RecordRelatedState = RecordRelatedState(),
     val showFollowUpsFor: String? = null,
@@ -730,6 +731,7 @@ internal class BootstrapPresenter private constructor(
       debateStatus = debateStatus, debateHistory = debateHistory,
       debateOnline = debateOnline, debateImages = debateImages, demoEntryId = runtime.demoEntryId,
       publicPageError = publicPageError, insights = insights, momotalk = momotalk, studentGallery = studentGallery,
+      loadMomotalkAnimation = { week, room, imageKey -> momotalkModel?.loadAnimation(week, room, imageKey) },
       related = related, showFollowUpsFor = showFollowUpsFor, followUpDraftConflict = followUpDraftConflict,
       followUpParent = followUpParent) { event ->
       when (event) {

@@ -18,6 +18,7 @@ import common from "../styles/common.module.css";
 import styles from "../styles/momotalk.module.css";
 
 const STATES = { preparing: "準備中", ready: "会話を見る", failed: "生成できませんでした" };
+const IMAGE_MOODS = { happy: "楽しそう", neutral: "自然体", unhappy: "嫌そう" };
 const weekDate = new Intl.DateTimeFormat("ja-JP", {
   timeZone: "Asia/Tokyo",
   year: "numeric",
@@ -262,6 +263,7 @@ function usePlayback(messages: readonly MomotalkMessage[]) {
   const shown = skipped || reduced ? messages.length : completed;
   return {
     shown,
+    reducedMotion: reduced,
     partial: units.slice(0, letters).join(""),
     done: shown >= messages.length,
     skip: () => setSkipped(true),
@@ -278,13 +280,19 @@ function ImageViewer({
   names,
   onClose,
   pointerEntry,
+  reducedMotion,
 }: {
   readonly pointerEntry: boolean;
+  readonly reducedMotion: boolean;
   readonly image: MomotalkImage;
   readonly names: string;
   readonly onClose: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
+  const [playbackOverride, setPlaybackOverride] = useState<boolean>();
+  const playing = image.animated && (playbackOverride ?? !reducedMotion);
+  const showPoster = image.animated && !playing;
+  const playbackAction = playing ? "停止" : "再生";
   useEffect(() => {
     const element = dialog.current;
     const previousFocus = document.activeElement;
@@ -299,6 +307,7 @@ function ImageViewer({
       ref={dialog}
       className={styles.imageDialog}
       data-pointer-entry={pointerEntry}
+      data-animated={image.animated ? "" : undefined}
       aria-label="モモトークの画像"
       onCancel={onClose}
     >
@@ -306,12 +315,22 @@ function ImageViewer({
         <a className={common.primaryButton} href={image.downloadUrl ?? undefined} rel="noreferrer">
           画像を保存
         </a>
+        {image.animated && (
+          <button
+            type="button"
+            aria-label={`アニメーションを${playbackAction}`}
+            onClick={() => setPlaybackOverride(!playing)}
+          >
+            {playbackAction}
+          </button>
+        )}
         <button type="button" onClick={onClose} autoFocus>
           閉じる
         </button>
       </div>
       <img
-        src={image.url ?? undefined}
+        src={(showPoster ? image.thumbnailUrl : image.url) ?? undefined}
+        onError={playing ? () => setPlaybackOverride(false) : undefined}
         alt={`${names}の自撮り（AI生成）`}
         referrerPolicy="no-referrer"
       />
@@ -320,7 +339,7 @@ function ImageViewer({
 }
 
 function imagePeople(image: MomotalkImage, participants: MomotalkRoomResponse["participants"]) {
-  return (image.subjects ?? [image]).flatMap((subject) => {
+  return image.subjects.flatMap((subject) => {
     const participant = participants.find((person) => person.slot === subject.participant);
     return participant ? [{ participant, mood: subject.mood }] : [];
   });
@@ -476,16 +495,14 @@ function Conversation({
                   <Avatar avatar={lead.avatar} />
                   <div>
                     <strong>{names}</strong>
-                    {item.subjects && (
-                      <p className={styles.imageSubjects}>
-                        {people
-                          .map(
-                            ({ participant, mood }) =>
-                              `${participant.displayName}：${mood === "happy" ? "楽しそう" : "嫌そう"}`,
-                          )
-                          .join(" / ")}
-                      </p>
-                    )}
+                    <p className={styles.imageSubjects}>
+                      {people
+                        .map(
+                          ({ participant, mood }) =>
+                            `${participant.displayName}：${IMAGE_MOODS[mood]}`,
+                        )
+                        .join(" / ")}
+                    </p>
                     {item.state === "ready" && item.thumbnailUrl ? (
                       <button
                         className={styles.thumbnail}
@@ -538,6 +555,7 @@ function Conversation({
             .map(({ participant }) => participant.displayName)
             .join("・")}
           pointerEntry={imagePointerEntry}
+          reducedMotion={playback.reducedMotion}
           onClose={() => setImageMood(null)}
         />
       )}

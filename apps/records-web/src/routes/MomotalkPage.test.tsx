@@ -141,6 +141,7 @@ async function openConversation(images: readonly MomotalkImage[]) {
 const selfie: MomotalkImage = {
   participant: "participant-a",
   mood: "happy",
+  animated: false,
   subjects: [
     { participant: "participant-a", mood: "happy" },
     { participant: "participant-b", mood: "unhappy" },
@@ -154,7 +155,7 @@ const selfie: MomotalkImage = {
 
 describe("Momotalk selfies", () => {
   it.each([1, 2, 3])("shows %i subjects in one photo and saves that photo", async (count) => {
-    const image = { ...selfie, subjects: selfie.subjects!.slice(0, count) };
+    const image = { ...selfie, subjects: selfie.subjects.slice(0, count) };
     const client = await openConversation([image]);
     const names = conversation.participants
       .slice(0, count)
@@ -187,16 +188,19 @@ describe("Momotalk selfies", () => {
   });
 
   it("keeps both existing single-person photos independently viewable", async () => {
-    const images: MomotalkImage[] = conversation.participants
-      .slice(0, 2)
-      .map(({ slot }, index) => ({
+    const images: MomotalkImage[] = conversation.participants.slice(0, 2).map(({ slot }, index) => {
+      const mood = index === 0 ? "happy" : "unhappy";
+      return {
         participant: slot,
-        mood: index === 0 ? "happy" : "unhappy",
+        mood,
+        subjects: [{ participant: slot, mood }],
+        animated: false,
         state: "ready",
         url: `/legacy-${slot}.webp`,
         thumbnailUrl: `/legacy-thumbnail-${slot}.webp`,
         downloadUrl: `/legacy-download-${slot}.webp`,
-      }));
+      };
+    });
     const client = await openConversation(images);
     for (const [index, participant] of conversation.participants.slice(0, 2).entries()) {
       fireEvent.click(

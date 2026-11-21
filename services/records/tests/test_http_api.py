@@ -252,19 +252,25 @@ def session(*, avatar: bool = False, expired: bool = False) -> SessionRecord:
 
 def _momotalk_image_controller(
     grouped: bool,
+    *,
+    animated: bool = False,
 ) -> tuple[ReadHttpController, list[str]]:
     from shittim_records.momotalk import Room
     from shittim_records.momotalk_read import MomotalkReadService
 
     slots = ("participant-a", "participant-b", "participant-c")
     order = (0, 1, 0, 2, 1, 2, 0, 1, 2)
-    subjects = [
+    subjects: list[dict[str, str | int]] = [
         {"participant": "participant-a", "mood": "happy"},
         {"participant": "participant-b", "mood": "unhappy"},
         {"participant": "participant-c", "mood": "happy"},
     ]
+    if animated:
+        subjects[0]["mood"] = "neutral"
+        for subject, score in zip(subjects, (500, 200, 800), strict=True):
+            subject["affection_score"] = score
     images = (
-        [{**subjects[0], "subjects": subjects, "state": "ready"}]
+        [{**subjects[0], "subjects": subjects, "state": "ready", "animated": animated}]
         if grouped
         else [{**subject, "state": "ready"} for subject in subjects[:2]]
     )
@@ -366,6 +372,41 @@ def test_momotalk_selfie_contract_adds_subjects_without_changing_legacy_images(
                 "thumbnailUrl",
                 "downloadUrl",
             }
+
+
+@pytest.mark.parametrize("contract", ["momotalk-selfie-v2", "momotalk-selfie-v3"])
+@pytest.mark.parametrize("animated", [False, True])
+def test_momotalk_animated_contract_projects_neutral_and_legacy_poster(
+    contract: str, animated: bool
+) -> None:
+    controller, signed = _momotalk_image_controller(True, animated=animated)
+    v3 = contract == "momotalk-selfie-v3"
+    response = controller.handle(
+        event(
+            "GET /api/v1/momotalk/weeks/{weekId}/rooms/{roomId}",
+            query=f"contract={contract}",
+            path={"weekId": "2026-08-16", "roomId": "r" * 43},
+            cookies=[f"{SESSION_COOKIE_NAME}=session-token"],
+        ),
+        now=NOW,
+    )
+    assert response["statusCode"] == 200
+    (image,) = json.loads(response["body"])["images"]
+    assert image["mood"] == ("neutral" if animated and v3 else "happy")
+    assert image["subjects"][0]["mood"] == image["mood"]
+    assert all("affectionScore" not in subject for subject in image["subjects"])
+    if v3:
+        assert image["animated"] == animated
+    else:
+        assert "animated" not in image
+    if animated and not v3:
+        assert image["url"] == image["thumbnailUrl"]
+        assert "thumbnail" in image["downloadUrl"]
+        assert len(signed) == 2
+    else:
+        assert image["url"] != image["thumbnailUrl"]
+        assert "thumbnail" not in image["downloadUrl"]
+        assert len(signed) == 3
 
 
 @pytest.mark.parametrize(

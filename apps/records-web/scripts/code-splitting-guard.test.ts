@@ -43,7 +43,7 @@ function canonicalChunks(): GuardChunk[] {
     MomotalkPage: [
       "generated/momotalk-weeks-response-validator.mjs",
       "generated/momotalk-rooms-response-validator.mjs",
-      "generated/momotalk-room-response-validator.mjs",
+      "generated/momotalk-room-v3-response-validator.mjs",
     ],
   };
   return [

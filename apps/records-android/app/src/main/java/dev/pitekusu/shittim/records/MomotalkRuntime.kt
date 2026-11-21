@@ -44,5 +44,8 @@ internal fun createMomotalkModel(context: Context, runtime: RecordsRuntime, owne
       repository.value.warmRoomAvatars(owner, week, room)
       repository.value.cachedRoom(owner, week, room)?.value },
     authenticationRequired = { if (active()) runtime.session?.onAuthenticationRequired() },
-    close = { if (repository.isInitialized()) repository.value.close() }, initial = initial)
+    close = { if (repository.isInitialized()) repository.value.close() }, initial = initial,
+    fetchAnimation = { week, room, imageKey -> authorized { repo, token ->
+      repo.loadAnimation(token, owner, week, room, imageKey)
+    } })
 }

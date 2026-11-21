@@ -59,6 +59,8 @@ async function setup(
     {
       participant: "participant-a",
       mood: "happy",
+      subjects: [{ participant: "participant-a", mood: "happy" }],
+      animated: false,
       state: "ready",
       url: "/test-selfie.svg",
       thumbnailUrl: "/test-selfie.svg",
@@ -103,7 +105,7 @@ async function setup(
     );
   }
   await page.route(
-    `**/api/v1/momotalk/weeks/${week.weekId}/rooms/${roomId}?contract=momotalk-selfie-v2`,
+    `**/api/v1/momotalk/weeks/${week.weekId}/rooms/${roomId}?contract=momotalk-selfie-v3`,
     (route) =>
       route.fulfill({
         json: {
@@ -172,6 +174,7 @@ test("keeps all qualifying people and their expressions in one selfie", async ({
   const image: MomotalkImage = {
     participant: "participant-a",
     mood: "happy",
+    animated: false,
     state: "ready",
     subjects: [
       { participant: "participant-a", mood: "happy" },
@@ -206,7 +209,7 @@ test("keeps all qualifying people and their expressions in one selfie", async ({
 
   for (const state of ["failed", "pending"] as const) {
     await page.route(
-      `**/api/v1/momotalk/weeks/${week.weekId}/rooms/${roomId}?contract=momotalk-selfie-v2`,
+      `**/api/v1/momotalk/weeks/${week.weekId}/rooms/${roomId}?contract=momotalk-selfie-v3`,
       (route) =>
         route.fulfill({
           json: {
@@ -230,16 +233,82 @@ test("keeps all qualifying people and their expressions in one selfie", async ({
   }
 });
 
+test("opens the animated selfie with the motion preference and can start or stop it", async ({
+  page,
+}, testInfo) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const image: MomotalkImage = {
+    participant: "participant-a",
+    mood: "neutral",
+    subjects: [
+      { participant: "participant-a", mood: "neutral" },
+      { participant: "participant-b", mood: "unhappy" },
+      { participant: "participant-c", mood: "happy" },
+    ],
+    animated: true,
+    state: "ready",
+    url: "/test-selfie.gif",
+    thumbnailUrl: "/test-selfie-group.svg",
+    downloadUrl: "/test-selfie.gif?download=1",
+  };
+  let gifRequests = 0;
+  await page.route("**/test-selfie.gif*", (route) => {
+    gifRequests++;
+    return route.fulfill({
+      contentType: "image/gif",
+      body: Buffer.from(
+        "R0lGODlhEAAYAIEAAIrW5SAoWQAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQAMgAAACwAAAAAEAAYAAAINAABCBxIsKDBgwgTKlzIsKHDhxAdBpgYYCFFigkvXkSoEePBjhM5gsyo0aLHiChTqly5MiAAIfkEATIAAgAsBAAJAAgACACB+7i+itblAAAAAAAACBkABQgAQBCAwIEFCSJMyLChw4cLCx5MKDAgADs=",
+        "base64",
+      ),
+    });
+  });
+  await setup(page, [week], [image]);
+  const trigger = page.getByRole("button", { name: /タップして拡大・保存/ });
+  await expect(trigger.getByRole("img")).toHaveAttribute("src", image.thumbnailUrl!);
+  await expect(
+    page.getByText("アロナ：自然体 / プラナ：嫌そう / 安倍晋三AI：楽しそう"),
+  ).toBeVisible();
+  await trigger.click();
+
+  const dialog = page.getByRole("dialog", { name: "モモトークの画像" });
+  const artwork = dialog.getByRole("img");
+  await expect(artwork).toHaveAttribute("src", image.thumbnailUrl!);
+  expect(gifRequests).toBe(0);
+  await expect(dialog.getByRole("link", { name: "画像を保存" })).toHaveAttribute(
+    "href",
+    image.downloadUrl!,
+  );
+  await dialog.screenshot({ path: testInfo.outputPath("momotalk-animation-poster.png") });
+  await dialog.getByRole("button", { name: "アニメーションを再生" }).click();
+  await expect(artwork).toHaveAttribute("src", image.url!);
+  await expect(artwork).toHaveJSProperty("naturalWidth", 16);
+  await dialog.getByRole("button", { name: "アニメーションを停止" }).click();
+  await expect(artwork).toHaveAttribute("src", image.thumbnailUrl!);
+  await dialog.getByRole("button", { name: "閉じる" }).click();
+
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.getByRole("button", { name: "すべて表示" }).click();
+  await trigger.click();
+  await expect(artwork).toHaveAttribute("src", image.url!);
+  await expect(dialog.getByRole("button", { name: "アニメーションを停止" })).toBeVisible();
+});
+
 test("preserves both old single-person photos and their own save targets", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
-  const images: MomotalkImage[] = participants.slice(0, 2).map((person, index) => ({
-    participant: person.slot as MomotalkImage["participant"],
-    mood: index === 0 ? "happy" : "unhappy",
-    state: "ready",
-    url: `/test-selfie-${person.slot}.svg`,
-    thumbnailUrl: `/test-selfie-${person.slot}.svg`,
-    downloadUrl: `/test-selfie-${person.slot}.svg?download=1`,
-  }));
+  const images: MomotalkImage[] = participants.slice(0, 2).map((person, index) => {
+    const participant = person.slot as MomotalkImage["participant"];
+    const mood = index === 0 ? "happy" : "unhappy";
+    return {
+      participant,
+      mood,
+      subjects: [{ participant, mood }],
+      animated: false,
+      state: "ready",
+      url: `/test-selfie-${participant}.svg`,
+      thumbnailUrl: `/test-selfie-${participant}.svg`,
+      downloadUrl: `/test-selfie-${participant}.svg?download=1`,
+    };
+  });
   await setup(page, [week], images);
   await expect(
     page.getByRole("list", { name: "チャットの発言" }).getByRole("listitem"),
@@ -373,7 +442,7 @@ for (const boundary of ["rooms", "room"] as const) {
     const pattern =
       boundary === "rooms"
         ? `**/api/v1/momotalk/weeks/${week.weekId}/rooms?*`
-        : `**/api/v1/momotalk/weeks/${week.weekId}/rooms/${roomId}?contract=momotalk-selfie-v2`;
+        : `**/api/v1/momotalk/weeks/${week.weekId}/rooms/${roomId}?contract=momotalk-selfie-v3`;
     await page.route(pattern, (route) => (failed ? route.abort("failed") : route.fallback()));
     await page.clock.fastForward(60_001);
     await expect(

@@ -169,9 +169,13 @@ def test_momotalk_detail_documents_opt_in_selfie_subjects() -> None:
         "name": "contract",
         "in": "query",
         "required": False,
-        "schema": {"type": "string", "enum": ["momotalk-selfie-v2"]},
+        "schema": {"type": "string", "enum": ["momotalk-selfie-v2", "momotalk-selfie-v3"]},
     }
     assert "全人格を1枚" in detail["description"] and "既存の最大2画像" in detail["description"]
+    assert detail["responses"]["200"]["content"]["application/json"]["schema"]["anyOf"] == [
+        {"$ref": "#/components/schemas/MomotalkRoomResponse"},
+        {"$ref": "#/components/schemas/MomotalkRoomV3Response"},
+    ]
     for path in ("/api/v1/momotalk/weeks", "/api/v1/momotalk/weeks/{weekId}/rooms"):
         parameters = openapi["paths"][path]["get"]["parameters"]
         assert "contract" not in {item["name"] for item in parameters}

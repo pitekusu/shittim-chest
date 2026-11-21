@@ -3773,9 +3773,9 @@
           }
         },
         "required": [
+          "state",
           "participant",
-          "mood",
-          "state"
+          "mood"
         ],
         "title": "MomotalkImage",
         "type": "object"
@@ -3806,6 +3806,172 @@
           "mood"
         ],
         "title": "MomotalkImageSubject",
+        "type": "object"
+      },
+      "MomotalkImageV3": {
+        "additionalProperties": false,
+        "properties": {
+          "animated": {
+            "title": "Animated",
+            "type": "boolean"
+          },
+          "downloadUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Downloadurl"
+          },
+          "mood": {
+            "enum": [
+              "happy",
+              "neutral",
+              "unhappy"
+            ],
+            "title": "Mood",
+            "type": "string"
+          },
+          "participant": {
+            "enum": [
+              "participant-a",
+              "participant-b",
+              "participant-c"
+            ],
+            "title": "Participant",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "ready",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "subjects": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "participant": {
+                      "const": "participant-a"
+                    }
+                  },
+                  "required": [
+                    "participant"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 0
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "participant": {
+                      "const": "participant-b"
+                    }
+                  },
+                  "required": [
+                    "participant"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 0
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "participant": {
+                      "const": "participant-c"
+                    }
+                  },
+                  "required": [
+                    "participant"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 0
+              }
+            ],
+            "items": {
+              "$ref": "#/components/schemas/MomotalkImageV3Subject"
+            },
+            "maxItems": 3,
+            "minItems": 1,
+            "title": "Subjects",
+            "type": "array"
+          },
+          "thumbnailUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Thumbnailurl"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Url"
+          }
+        },
+        "required": [
+          "state",
+          "participant",
+          "mood",
+          "subjects",
+          "animated"
+        ],
+        "title": "MomotalkImageV3",
+        "type": "object"
+      },
+      "MomotalkImageV3Subject": {
+        "additionalProperties": false,
+        "properties": {
+          "mood": {
+            "enum": [
+              "happy",
+              "neutral",
+              "unhappy"
+            ],
+            "title": "Mood",
+            "type": "string"
+          },
+          "participant": {
+            "enum": [
+              "participant-a",
+              "participant-b",
+              "participant-c"
+            ],
+            "title": "Participant",
+            "type": "string"
+          }
+        },
+        "required": [
+          "participant",
+          "mood"
+        ],
+        "title": "MomotalkImageV3Subject",
         "type": "object"
       },
       "MomotalkMessage": {
@@ -3980,6 +4146,112 @@
           "state"
         ],
         "title": "MomotalkRoomSummary",
+        "type": "object"
+      },
+      "MomotalkRoomV3Response": {
+        "additionalProperties": false,
+        "properties": {
+          "images": {
+            "items": {
+              "$ref": "#/components/schemas/MomotalkImageV3"
+            },
+            "maxItems": 2,
+            "title": "Images",
+            "type": "array"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/MomotalkMessage"
+            },
+            "maxItems": 15,
+            "title": "Messages",
+            "type": "array"
+          },
+          "participants": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "slot": {
+                      "const": "participant-a"
+                    }
+                  },
+                  "required": [
+                    "slot"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "slot": {
+                      "const": "participant-b"
+                    }
+                  },
+                  "required": [
+                    "slot"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "slot": {
+                      "const": "participant-c"
+                    }
+                  },
+                  "required": [
+                    "slot"
+                  ],
+                  "type": "object"
+                },
+                "maxContains": 1,
+                "minContains": 1
+              }
+            ],
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "$ref": "#/components/schemas/ParticipantSummary"
+              },
+              {
+                "$ref": "#/components/schemas/ParticipantSummary"
+              },
+              {
+                "$ref": "#/components/schemas/ParticipantSummary"
+              }
+            ],
+            "title": "Participants",
+            "type": "array"
+          },
+          "room": {
+            "$ref": "#/components/schemas/MomotalkRoomSummary"
+          },
+          "schemaVersion": {
+            "const": 1,
+            "default": 1,
+            "title": "Schemaversion",
+            "type": "integer"
+          },
+          "week": {
+            "$ref": "#/components/schemas/MomotalkWeek"
+          }
+        },
+        "required": [
+          "week",
+          "room",
+          "participants",
+          "messages",
+          "images"
+        ],
+        "title": "MomotalkRoomV3Response",
         "type": "object"
       },
       "MomotalkRoomsResponse": {
@@ -10045,7 +10317,7 @@
     },
     "/api/v1/momotalk/weeks/{weekId}/rooms/{roomId}": {
       "get": {
-        "description": "Web CookieまたはモバイルBearer認証必須。日曜20時以降のモモトークを返す。CookieとAuthorizationの混在を拒否。private, no-store。contract=momotalk-selfie-v2で各画像のsubjectsに登場人格と個別の表情を返す。新しい会話は条件を満たす全人格を1枚に含める。既存の最大2画像も保持する。未指定時はsubjectsを省略し、従来の応答fieldを維持する。",
+        "description": "Web CookieまたはモバイルBearer認証必須。日曜20時以降のモモトークを返す。CookieとAuthorizationの混在を拒否。private, no-store。contract=momotalk-selfie-v2で各画像のsubjectsに登場人格と個別の表情を返す。contract=momotalk-selfie-v3では中立の表情とアニメーションの有無も返す。週内の完了済み依頼がある新しい部屋は全人格を1枚に含める。既存の最大2画像も保持する。未指定時はsubjectsを省略し、従来の応答fieldを維持する。",
         "operationId": "getMomotalkRoom",
         "parameters": [
           {
@@ -10072,7 +10344,8 @@
             "required": false,
             "schema": {
               "enum": [
-                "momotalk-selfie-v2"
+                "momotalk-selfie-v2",
+                "momotalk-selfie-v3"
               ],
               "type": "string"
             }
@@ -10083,7 +10356,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MomotalkRoomResponse"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MomotalkRoomResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/MomotalkRoomV3Response"
+                    }
+                  ]
                 }
               }
             },

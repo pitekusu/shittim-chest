@@ -719,7 +719,7 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     if (!validMomotalkWeekId(weekId) || !validMomotalkRoomId(roomId))
       throw MomotalkException(MomotalkFailure.INVALID_RESPONSE)
     return momotalkRead("/api/v1/momotalk/weeks/$weekId/rooms/$roomId", accessToken,
-      contract = "momotalk-selfie-v2") {
+      contract = "momotalk-selfie-v3") {
       it.validate(requireUrls = true); check(it.week.weekId == weekId && it.room.roomId == roomId)
     }
   }
@@ -741,21 +741,40 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     } catch (_: Exception) { throw MomotalkException(MomotalkFailure.INVALID_RESPONSE) }
   }
 
-  suspend fun momotalkImage(url: String, weekId: String, roomId: String): ByteArray {
-    if (!validMomotalkImageUrl(url, weekId, roomId)) throw MomotalkException(MomotalkFailure.INVALID_RESPONSE)
+  suspend fun momotalkImage(url: String, weekId: String, roomId: String, animated: Boolean = false): ByteArray {
+    if (!validMomotalkImageUrl(url, weekId, roomId, animated))
+      throw MomotalkException(MomotalkFailure.INVALID_RESPONSE)
+    val expectedType = if (animated) "image/gif" else "image/webp"
     try {
       // The presigned S3 URL is a separate transport; it never receives the mobile session.
       return client.prepareGet(url) { header(HttpHeaders.CacheControl, "no-store") }.execute { response ->
         if (response.status.value != 200) throw MomotalkException(MomotalkFailure.UNAVAILABLE)
-        if (response.contentType()?.withoutParameters()?.toString() != "image/webp")
+        if (response.contentType()?.withoutParameters()?.toString() != expectedType)
           throw MomotalkException(MomotalkFailure.INVALID_RESPONSE)
         val bytes = response.bodyAsChannel().readBuffer((MAX_ATTACHMENT_BYTES + 1).toLong()).readByteArray()
-        try { validateAttachmentBytes(bytes); bytes }
-        catch (_: Exception) { bytes.fill(0); throw MomotalkException(MomotalkFailure.INVALID_RESPONSE) }
+        try {
+          withContext(Dispatchers.Default) {
+            if (animated) validateMomotalkGif(bytes) else validateAttachmentBytes(bytes)
+          }
+          bytes
+        } catch (error: CancellationException) {
+          bytes.fill(0)
+          throw error
+        } catch (_: Exception) {
+          bytes.fill(0)
+          throw MomotalkException(MomotalkFailure.INVALID_RESPONSE)
+        }
       }
     } catch (error: CancellationException) { throw error }
     catch (error: MomotalkException) { throw error }
     catch (_: Exception) { throw MomotalkException(MomotalkFailure.UNAVAILABLE) }
+  }
+
+  private fun validateMomotalkGif(bytes: ByteArray) {
+    check(bytes.size in 1..MAX_ATTACHMENT_BYTES && bytes.last() == ';'.code.toByte())
+    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    check(bounds.outMimeType == "image/gif" && bounds.outWidth in 1..1024 && bounds.outHeight in 1..1536)
   }
 
   private suspend inline fun <reified T> insightRead(path: String, token: String, cursor: String? = null,

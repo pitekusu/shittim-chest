@@ -3500,9 +3500,9 @@
         }
       },
       "required": [
+        "state",
         "participant",
-        "mood",
-        "state"
+        "mood"
       ],
       "title": "MomotalkImage",
       "type": "object"
@@ -3533,6 +3533,172 @@
         "mood"
       ],
       "title": "MomotalkImageSubject",
+      "type": "object"
+    },
+    "MomotalkImageV3": {
+      "additionalProperties": false,
+      "properties": {
+        "animated": {
+          "title": "Animated",
+          "type": "boolean"
+        },
+        "downloadUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Downloadurl"
+        },
+        "mood": {
+          "enum": [
+            "happy",
+            "neutral",
+            "unhappy"
+          ],
+          "title": "Mood",
+          "type": "string"
+        },
+        "participant": {
+          "enum": [
+            "participant-a",
+            "participant-b",
+            "participant-c"
+          ],
+          "title": "Participant",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "pending",
+            "ready",
+            "failed"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "subjects": {
+          "allOf": [
+            {
+              "contains": {
+                "properties": {
+                  "participant": {
+                    "const": "participant-a"
+                  }
+                },
+                "required": [
+                  "participant"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 0
+            },
+            {
+              "contains": {
+                "properties": {
+                  "participant": {
+                    "const": "participant-b"
+                  }
+                },
+                "required": [
+                  "participant"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 0
+            },
+            {
+              "contains": {
+                "properties": {
+                  "participant": {
+                    "const": "participant-c"
+                  }
+                },
+                "required": [
+                  "participant"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 0
+            }
+          ],
+          "items": {
+            "$ref": "#/$defs/MomotalkImageV3Subject"
+          },
+          "maxItems": 3,
+          "minItems": 1,
+          "title": "Subjects",
+          "type": "array"
+        },
+        "thumbnailUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thumbnailurl"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        }
+      },
+      "required": [
+        "state",
+        "participant",
+        "mood",
+        "subjects",
+        "animated"
+      ],
+      "title": "MomotalkImageV3",
+      "type": "object"
+    },
+    "MomotalkImageV3Subject": {
+      "additionalProperties": false,
+      "properties": {
+        "mood": {
+          "enum": [
+            "happy",
+            "neutral",
+            "unhappy"
+          ],
+          "title": "Mood",
+          "type": "string"
+        },
+        "participant": {
+          "enum": [
+            "participant-a",
+            "participant-b",
+            "participant-c"
+          ],
+          "title": "Participant",
+          "type": "string"
+        }
+      },
+      "required": [
+        "participant",
+        "mood"
+      ],
+      "title": "MomotalkImageV3Subject",
       "type": "object"
     },
     "MomotalkMessage": {
@@ -3707,6 +3873,112 @@
         "state"
       ],
       "title": "MomotalkRoomSummary",
+      "type": "object"
+    },
+    "MomotalkRoomV3Response": {
+      "additionalProperties": false,
+      "properties": {
+        "images": {
+          "items": {
+            "$ref": "#/$defs/MomotalkImageV3"
+          },
+          "maxItems": 2,
+          "title": "Images",
+          "type": "array"
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/MomotalkMessage"
+          },
+          "maxItems": 15,
+          "title": "Messages",
+          "type": "array"
+        },
+        "participants": {
+          "allOf": [
+            {
+              "contains": {
+                "properties": {
+                  "slot": {
+                    "const": "participant-a"
+                  }
+                },
+                "required": [
+                  "slot"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "slot": {
+                    "const": "participant-b"
+                  }
+                },
+                "required": [
+                  "slot"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "slot": {
+                    "const": "participant-c"
+                  }
+                },
+                "required": [
+                  "slot"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            }
+          ],
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/ParticipantSummary"
+            },
+            {
+              "$ref": "#/$defs/ParticipantSummary"
+            },
+            {
+              "$ref": "#/$defs/ParticipantSummary"
+            }
+          ],
+          "title": "Participants",
+          "type": "array"
+        },
+        "room": {
+          "$ref": "#/$defs/MomotalkRoomSummary"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "default": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "week": {
+          "$ref": "#/$defs/MomotalkWeek"
+        }
+      },
+      "required": [
+        "week",
+        "room",
+        "participants",
+        "messages",
+        "images"
+      ],
+      "title": "MomotalkRoomV3Response",
       "type": "object"
     },
     "MomotalkRoomsResponse": {
@@ -5536,9 +5808,6 @@
       "$ref": "#/$defs/MomotalkRoomsResponse"
     },
     {
-      "$ref": "#/$defs/MomotalkRoomResponse"
-    },
-    {
       "$ref": "#/$defs/SessionResponse"
     },
     {
@@ -5579,6 +5848,16 @@
     },
     {
       "$ref": "#/$defs/GallerySchoolLogosResponse"
+    },
+    {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MomotalkRoomResponse"
+        },
+        {
+          "$ref": "#/$defs/MomotalkRoomV3Response"
+        }
+      ]
     }
   ],
   "title": "Shittim Chest Records API v1"

@@ -23,8 +23,22 @@ MAX_CHARACTERS = 100
 MAX_ATTEMPTS = 3
 MAX_CHAIN_STEPS = 8
 QUESTION_CHUNK_BYTES = 24_000
+ANIMATION_FIRST_WEEK = date(2026, 11, 22)
+ANIMATION_SIZE = (480, 720)
+ANIMATION_FRAME_COUNT = 12
+ANIMATION_FRAME_MS = 150
+ANIMATION_MAX_BYTES = 10 * 1024 * 1024
 OpaqueId = Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{43}$")]
 Score = Annotated[int, Field(strict=True, ge=0, le=1000)]
+ImageMood = Literal["happy", "neutral", "unhappy"]
+
+
+def image_mood(score: int) -> ImageMood:
+    if score < 400:
+        return "unhappy"
+    if score < 600:
+        return "neutral"
+    return "happy"
 
 
 class MomotalkFailure(RuntimeError):
@@ -90,7 +104,7 @@ class Turn(StoredModel):
 
 
 class ImageChoice(StoredModel):
-    mood: Literal["happy", "unhappy"]
+    mood: ImageMood
     record_id: OpaqueId
     brief: str = Field(min_length=1, max_length=1200, repr=False)
 
@@ -145,13 +159,15 @@ class SavedMessage(Utterance):
 
 class ImageSubject(StoredModel):
     participant: ParticipantSlot
-    mood: Literal["happy", "unhappy"]
+    mood: ImageMood
+    affection_score: Score | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class SavedImage(ImageSubject):
     # None identifies pre-group checkpoints, whose original image keys remain valid.
     subjects: list[ImageSubject] | None = Field(default=None, min_length=1, max_length=3)
     state: Literal["pending", "ready", "failed"] = "pending"
+    animated: bool = False
     # Persist the switch so SQS redelivery never resubmits the rejected subject.
     moderation_blocked: bool = False
     alternate_topic_used: bool = False
@@ -166,6 +182,17 @@ class SavedImage(ImageSubject):
                 self.subjects[0].mood,
             ):
                 raise ValueError("image lead does not match its subjects")
+        if self.animated:
+            if self.subjects is None or len(self.subjects) != len(PARTICIPANTS):
+                raise ValueError("an animated selfie requires all participants")
+            if any(
+                subject.affection_score is None
+                or subject.mood != image_mood(subject.affection_score)
+                for subject in self.subjects
+            ):
+                raise ValueError("invalid frozen affection for animated selfie")
+        elif any(subject.mood == "neutral" for subject in self.image_subjects):
+            raise ValueError("unknown mood for still selfie")
         return self
 
     @property
@@ -250,7 +277,23 @@ def image_targets(requester: RequesterInput, week_id: date) -> list[SavedImage]:
         return []
     rotation = (week_id - date(2026, 1, 4)).days // 7 % 3
     order = (*PARTICIPANTS[rotation:], *PARTICIPANTS[:rotation])
-    # Keep deterministic subject order; expressions belong to individual subjects.
+    if week_id >= ANIMATION_FIRST_WEEK:
+        subjects = []
+        for slot in sorted(order, key=lambda slot: -requester.scores[slot]):
+            score = requester.scores[slot]
+            subjects.append(
+                ImageSubject(participant=slot, mood=image_mood(score), affection_score=score)
+            )
+        lead = subjects[0]
+        return [
+            SavedImage(
+                participant=lead.participant,
+                mood=lead.mood,
+                subjects=subjects,
+                animated=True,
+            )
+        ]
+    # Keep the original selection for pre-cutover rooms that have yet to be created.
     subjects = [
         *(
             ImageSubject(participant=slot, mood="happy")
@@ -305,7 +348,8 @@ def image_key(room: Room, image: SavedImage, *, thumbnail: bool = False) -> str:
     # published images and interrupted checkpoints need no migration or regeneration.
     name = "selfie" if image.subjects is not None else image.mood
     suffix = "-thumb" if thumbnail else ""
-    return f"momotalk/images/{room.week_id}/{room.room_id}/{name}{suffix}.webp"
+    extension = "gif" if image.animated and not thumbnail else "webp"
+    return f"momotalk/images/{room.week_id}/{room.room_id}/{name}{suffix}.{extension}"
 
 
 def persona_checksum(personas: dict[ParticipantSlot, str]) -> str:

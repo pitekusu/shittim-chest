@@ -107,6 +107,23 @@ internal class MomotalkRepository(private val remote: RecordsReadClient, private
     }
   }
 
+  suspend fun loadAnimation(token: String, owner: String, weekId: String, roomId: String, imageKey: String): ByteArray? {
+    requireActive(owner)
+    // The viewer can open after the original room response's media URLs have expired.
+    val image = remote.momotalkRoom(token, weekId, roomId).images.singleOrNull {
+      it.key == imageKey && it.animated == true && it.state == "ready"
+    } ?: return null
+    requireActive(owner)
+    val bytes = remote.momotalkImage(requireNotNull(image.url), weekId, roomId, animated = true)
+    try {
+      requireActive(owner)
+      return bytes
+    } catch (error: MomotalkException) {
+      bytes.fill(0)
+      throw error
+    }
+  }
+
   /** Optional media never delays the saved conversation or converts an image failure into a text failure. */
   suspend fun warmRoomImages(owner: String, weekId: String, roomId: String) {
     val detail = locked(owner) { roomSources[sourceKey(owner, weekId, roomId)] } ?: return

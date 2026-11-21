@@ -8,6 +8,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import java.io.ByteArrayOutputStream
+import java.util.Base64
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -43,7 +44,7 @@ class MomotalkReadClientTest {
     }
     assertEquals(listOf("/api/v1/momotalk/weeks?limit=20",
       "/api/v1/momotalk/weeks/2026-10-18/rooms?limit=20",
-      "/api/v1/momotalk/weeks/2026-10-18/rooms/$MOMOTALK_DATA_ROOM?contract=momotalk-selfie-v2"), paths)
+      "/api/v1/momotalk/weeks/2026-10-18/rooms/$MOMOTALK_DATA_ROOM?contract=momotalk-selfie-v3"), paths)
   }
 
   @Test fun rejectsWrongIdentityUntrustedMediaDuplicateSpeakersAndUnnegotiatedSubjects() = runBlocking {
@@ -55,6 +56,7 @@ class MomotalkReadClientTest {
       payload.replace(MOMOTALK_DATA_HOST, "example.invalid"),
       payload.replace("\"id\":1", "\"id\":2"),
       payload.replace("\"schemaVersion\":1,", ""),
+      payload.replace(",\"animated\":false", ""),
       json.encodeToString(detail.copy(images = listOf(detail.images.single().copy(subjects = emptyList())))),
     ).forEach { candidate ->
       RecordsReadClient(MockEngine { respond(candidate, headers = header) }).use { client ->
@@ -89,6 +91,41 @@ class MomotalkReadClientTest {
     }
   }
 
+  @Test fun v3AcceptsNeutralAnimationWithSeparatePosterAndRejectsSwappedMedia() = runBlocking {
+    val detail = momotalkDataDetail()
+    val still = detail.images.single()
+    val gif = still.copy(mood = "neutral",
+      subjects = listOf(MomotalkImageSubject("participant-a", "neutral")) + still.subjects.drop(1),
+      url = MOMOTALK_DATA_GIF, downloadUrl = MOMOTALK_DATA_GIF, animated = true)
+    RecordsReadClient(MockEngine { respond(json.encodeToString(detail.copy(images = listOf(gif))), headers = header) })
+      .use { client ->
+        val image = client.momotalkRoom(token, "2026-10-18", MOMOTALK_DATA_ROOM).images.single()
+        assertEquals("neutral", image.mood)
+        assertEquals(true, image.animated)
+      }
+    listOf(gif.copy(url = still.url), gif.copy(thumbnailUrl = gif.url), gif.copy(animated = false)).forEach { swapped ->
+      RecordsReadClient(MockEngine { respond(json.encodeToString(detail.copy(images = listOf(swapped))), headers = header) })
+        .use { client ->
+          assertMomotalkFailure(MomotalkFailure.INVALID_RESPONSE) { client.momotalkRoom(token, "2026-10-18", MOMOTALK_DATA_ROOM) }
+        }
+    }
+  }
+
+  @Test fun onlyValidGifBytesFromTheSignedFullImagePathCanPlay() = runBlocking {
+    val gif = Base64.getDecoder().decode(syntheticGif)
+    val type = headersOf(HttpHeaders.ContentType, "image/gif")
+    RecordsReadClient(MockEngine { request ->
+      assertFalse(request.headers.contains(HttpHeaders.Authorization)); assertFalse(request.headers.contains(HttpHeaders.Cookie))
+      respond(gif, headers = type)
+    }).use { client ->
+      assertTrue(client.momotalkImage(MOMOTALK_DATA_GIF, "2026-10-18", MOMOTALK_DATA_ROOM, animated = true).contentEquals(gif))
+      assertMomotalkFailure(MomotalkFailure.INVALID_RESPONSE) { client.momotalkImage(MOMOTALK_DATA_IMAGE, "2026-10-18", MOMOTALK_DATA_ROOM, animated = true) }
+    }
+    RecordsReadClient(MockEngine { respond(gif.dropLast(1).toByteArray(), headers = type) }).use { client ->
+      assertMomotalkFailure(MomotalkFailure.INVALID_RESPONSE) { client.momotalkImage(MOMOTALK_DATA_GIF, "2026-10-18", MOMOTALK_DATA_ROOM, animated = true) }
+    }
+  }
+
   @Test fun s3PicturesNeverReceiveSessionAndRejectRedirectOrWrongRoom() = runBlocking {
     val bytes = momotalkDataWebp()
     RecordsReadClient(MockEngine { request ->
@@ -108,6 +145,7 @@ class MomotalkReadClientTest {
 internal val MOMOTALK_DATA_ROOM = "a".repeat(43)
 internal val MOMOTALK_DATA_HOST = "shittim-chest-production-records-media-${"123456" + "789012"}.s3.ap-northeast-1.amazonaws.com"
 internal val MOMOTALK_DATA_IMAGE = "https://$MOMOTALK_DATA_HOST/momotalk/images/2026-10-18/$MOMOTALK_DATA_ROOM/selfie.webp?signature=synthetic"
+private val MOMOTALK_DATA_GIF = MOMOTALK_DATA_IMAGE.replace("selfie.webp", "selfie.gif")
 internal fun momotalkDataWeek(id: String = "2026-10-18") = MomotalkWeek(id,
   "2026-10-11T09:00:00Z", "2026-10-18T09:00:00Z", "2026-10-18T11:00:00Z")
 internal fun momotalkDataRoom(id: String = MOMOTALK_DATA_ROOM) = MomotalkRoomSummary(id,
@@ -116,7 +154,8 @@ internal fun momotalkDataDetail() = MomotalkRoomDetail(week = momotalkDataWeek()
   participants = MOMOTALK_PARTICIPANTS.map { MomotalkParticipant(it, it, RecordAvatar(null, "cyan")) },
   messages = listOf(MomotalkMessage(1, "participant-a", "架空の会話です。")),
   images = listOf(MomotalkImage("participant-a", "happy", MOMOTALK_PARTICIPANTS.map { MomotalkImageSubject(it, "happy") },
-    "ready", MOMOTALK_DATA_IMAGE, MOMOTALK_DATA_IMAGE.replace("selfie.webp", "selfie-thumb.webp"), MOMOTALK_DATA_IMAGE)))
+    "ready", MOMOTALK_DATA_IMAGE, MOMOTALK_DATA_IMAGE.replace("selfie.webp", "selfie-thumb.webp"), MOMOTALK_DATA_IMAGE,
+    animated = false)))
 internal fun momotalkDataWebp(): ByteArray {
   val bitmap = Bitmap.createBitmap(12, 18, Bitmap.Config.ARGB_8888)
   return try { ByteArrayOutputStream().use { bitmap.compress(Bitmap.CompressFormat.WEBP_LOSSLESS, 100, it); it.toByteArray() } }

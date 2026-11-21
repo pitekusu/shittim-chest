@@ -30,6 +30,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.pitekusu.shittim.records.ui.ShittimTheme
 import java.io.File
+import java.util.Base64
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -134,6 +135,37 @@ class MomotalkScreenUiTest {
     compose.onNodeWithTag("momotalk-selfie-close").performClick()
   }
 
+  @Test fun reducedMotionKeepsThePosterUntilTheViewerExplicitlyPlays() {
+    val sample = momotalkSampleState(openRoom = true)
+    val detail = requireNotNull(sample.detail.data)
+    val image = detail.images.single().copy(animated = true)
+    val state = mutableStateOf(sample.copy(detail = MomotalkResource(detail.copy(images = listOf(image)))))
+    var loads = 0
+    show(state, loadAnimation = { key ->
+      assertEquals(image.key, key)
+      loads++
+      Base64.getDecoder().decode(syntheticGif)
+    })
+    compose.onNodeWithTag("momotalk-content").performScrollToNode(hasTestTag("momotalk-selfie-0"))
+    compose.onNodeWithTag("momotalk-selfie-0").performClick()
+    val play = compose.onNodeWithTag("momotalk-animation-toggle")
+    val animation = compose.onNodeWithTag("momotalk-selfie-animation")
+    play.assertIsDisplayed()
+    animation.assertDoesNotExist()
+    compose.runOnIdle { assertEquals(0, loads) }
+    play.performClick()
+    compose.waitUntil(5_000) {
+      compose.onAllNodes(hasTestTag("momotalk-selfie-animation")).fetchSemanticsNodes().isNotEmpty()
+    }
+    animation.assertIsDisplayed()
+    play.performClick()
+    animation.assertDoesNotExist()
+    compose.runOnIdle { assertEquals(1, loads) }
+    compose.runOnIdle { state.value = state.value.copy(online = false) }
+    play.assertDoesNotExist()
+    compose.onNodeWithTag("momotalk-selfie-viewer").assertIsDisplayed()
+  }
+
   /** Screenshots are opt-in evidence; normal CI does not compare pixels. */
   @Test fun captureNativeMomotalkLayouts() {
     if (InstrumentationRegistry.getArguments().getString("shittimCaptureMomotalk") != "true") return
@@ -155,14 +187,15 @@ class MomotalkScreenUiTest {
   }
 
   private fun show(state: MutableState<MomotalkUiState>, onEvent: (MomotalkEvent) -> Unit = {},
-    width: Int = 360, fontScale: Float = 1f, dark: Boolean = false) {
+    width: Int = 360, fontScale: Float = 1f, dark: Boolean = false,
+    loadAnimation: suspend (String) -> ByteArray? = { null }) {
     compose.activityRule.scenario.onActivity { activity ->
       activity.setContent {
         val density = LocalDensity.current
         val viewportDensity = density.density * minOf(1f, LocalConfiguration.current.screenWidthDp.toFloat() / width)
         CompositionLocalProvider(LocalDensity provides Density(viewportDensity, fontScale)) {
           ShittimTheme(dark) { Box(Modifier.width(width.dp).fillMaxHeight()) {
-            MomotalkScreen(state.value, onEvent, animationsEnabled = false)
+            MomotalkScreen(state.value, onEvent, animationsEnabled = false, loadAnimation = loadAnimation)
           } }
         }
       }
