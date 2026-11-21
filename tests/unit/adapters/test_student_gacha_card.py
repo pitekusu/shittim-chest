@@ -90,7 +90,7 @@ def _gif(
         draw.rectangle((747, 160, 785, 180), fill=color)
         if split_sheet:
             draw.ellipse((470, 18, 580, 35), fill="black")
-            draw.line((0, size[1] - 1, size[0] - 1, size[1] - 1), fill="black")
+            draw.line((0, size[1] - 1, size[0] - 65, size[1] - 1), fill=(8, 12, 16))
             frame = ImageChops.offset(frame, 0, 96 * (index // 3))
         frames.append(frame)
     with BytesIO() as output:

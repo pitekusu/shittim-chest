@@ -27,7 +27,7 @@ _MAX_BACKGROUND_FRACTION: Final = 0.98
 _MIN_BORDER_COVERAGE: Final = 0.65
 _FRAME_DIVIDER: Final = "gacha_provider_frame_divider"
 _DARK_PIXEL_MASK: Final = [255] * 17 + [0] * 239
-_MIN_DIVIDER_COVERAGE: Final = 0.95
+_MIN_DIVIDER_COVERAGE: Final = 0.90
 _LOGGER = logging.getLogger(__name__)
 
 type _RGB = tuple[int, int, int]
@@ -134,10 +134,11 @@ def _replay_usable_segment(cutouts: dict[int, Image.Image], frame_count: int) ->
     runs = (list(run) for usable, run in groupby(indices, key=cutouts.__contains__) if usable)
     segment = max(runs, key=len)
     half_loop = frame_count // 2
-    return [
-        cutouts[segment[round(min(index, frame_count - index) * (len(segment) - 1) / half_loop)]]
-        for index in range(frame_count)
-    ]
+    replay = []
+    for index in range(frame_count):
+        phase = min(index, frame_count - index) / half_loop
+        replay.append(cutouts[segment[round(phase * (len(segment) - 1))]])
+    return replay
 
 
 def _loop_distance(index: int, frame_count: int, candidate: int) -> tuple[int, int]:
