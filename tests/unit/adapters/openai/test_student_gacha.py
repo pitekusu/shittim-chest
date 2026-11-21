@@ -274,6 +274,10 @@ async def test_render_requests_sunburst_gif_and_composes_the_apng_locally() -> N
     assert "Keep the same background color in every frame" in payload["prompt"]
     assert "draw shadows, gradients, reflections, scenery, lights or particles" in payload["prompt"]
     assert "seamless looping animation" in payload["prompt"]
+    assert "composition from the first frame" in payload["prompt"]
+    assert "anchored at the same screen positions" in payload["prompt"]
+    assert "No entrances, exits, vertical or horizontal translation, fades" in payload["prompt"]
+    assert "frame separators or borders" in payload["prompt"]
     assert "Keep the specified facial expression." in payload["prompt"]
     assert "Give the live-action cosplay a cute, natural motion" in payload["prompt"]
     assert _TEACHER not in repr(payload)
