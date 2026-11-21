@@ -9,11 +9,14 @@ import android.graphics.Shader
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
@@ -94,6 +97,31 @@ class StudentCollectionScreenTest {
     compose.onNodeWithTag("gallery-search").performImeAction()
     scrollTo("gallery-grid", "gallery-card-legacy")
     compose.onNodeWithTag("gallery-card-legacy").assertIsDisplayed()
+  }
+
+  @Test fun inlineFiltersClearSearchAndConditionsWhileKeepingSort() {
+    show(FixtureGallery())
+    waitFor("gallery-search")
+    compose.onNodeWithTag("gallery-sort")
+      .assert(hasText(compose.activity.getString(R.string.gallery_common)))
+      .performClick()
+    compose.onNodeWithText(compose.activity.getString(R.string.gallery_first_oldest)).performClick()
+    compose.onNodeWithTag("gallery-school-filter").performClick()
+    compose.onNode(hasText("架空学園") and hasAnyAncestor(hasTestTag("gallery-school-filter-menu")))
+      .performClick()
+    compose.onNodeWithTag("gallery-rarity-filter").performClick()
+    compose.onNode(hasContentDescription(compose.activity.getString(R.string.gallery_stars, 2)) and
+      hasAnyAncestor(hasTestTag("gallery-rarity-filter-menu"))).performClick()
+    compose.onNodeWithTag("gallery-acquired-only").performClick().assertIsOn()
+    compose.onNodeWithTag("gallery-search").performTextInput("サンプル(制服)")
+    compose.onNodeWithTag("gallery-search").performImeAction()
+    compose.onNodeWithTag("gallery-entry-secret").assertDoesNotExist()
+    compose.onNodeWithTag("gallery-clear-filters").performClick()
+    compose.onNodeWithTag("gallery-clear-filters").assertDoesNotExist()
+    compose.onNodeWithTag("gallery-sort")
+      .assert(hasText(compose.activity.getString(R.string.gallery_first_oldest)))
+    scrollTo("gallery-grid", "gallery-entry-secret")
+    compose.onNodeWithTag("gallery-entry-secret").assertIsDisplayed()
   }
 
   @Test fun originalsUseSavedImagesOfflineAndRetryMissesWhenConnectionReturns() {
