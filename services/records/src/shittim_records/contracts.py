@@ -1218,57 +1218,93 @@ class MomotalkImageSubject(PublicModel):
     mood: Literal["happy", "unhappy"]
 
 
-class MomotalkImage(PublicModel):
+class MomotalkImageV3Subject(PublicModel):
     participant: ParticipantSlot
-    mood: Literal["happy", "unhappy"]
-    subjects: (
-        Annotated[
-            list[MomotalkImageSubject],
-            Field(
-                min_length=1,
-                max_length=3,
-                json_schema_extra={
-                    "allOf": [
-                        {
-                            "contains": {
-                                "properties": {"participant": {"const": slot}},
-                                "required": ["participant"],
-                                "type": "object",
-                            },
-                            "maxContains": 1,
-                            "minContains": 0,
-                        }
-                        for slot in sorted(_ALL_PARTICIPANT_SLOTS)
-                    ]
-                },
-            ),
-        ]
-        | None
-    ) = Field(default=None, exclude_if=lambda value: value is None)
+    mood: Literal["happy", "neutral", "unhappy"]
+
+
+_MOMOTALK_SUBJECTS_SCHEMA: dict[str, JsonValue] = {
+    "allOf": [
+        {
+            "contains": {
+                "properties": {"participant": {"const": slot}},
+                "required": ["participant"],
+                "type": "object",
+            },
+            "maxContains": 1,
+            "minContains": 0,
+        }
+        for slot in sorted(_ALL_PARTICIPANT_SLOTS)
+    ]
+}
+
+
+class _MomotalkImageMedia(PublicModel):
     state: Literal["pending", "ready", "failed"]
     url: str | None = None
     thumbnail_url: str | None = None
     download_url: str | None = None
 
+    def _validate_subjects(
+        self,
+        participant: ParticipantSlot,
+        mood: str,
+        subjects: list[MomotalkImageSubject] | list[MomotalkImageV3Subject],
+    ) -> None:
+        if len({subject.participant for subject in subjects}) != len(subjects):
+            raise ValueError("selfie subjects must contain each participant at most once")
+        lead = subjects[0]
+        if (lead.participant, lead.mood) != (participant, mood):
+            raise ValueError("selfie lead must match its first subject")
+
+
+class MomotalkImage(_MomotalkImageMedia):
+    participant: ParticipantSlot
+    mood: Literal["happy", "unhappy"]
+    subjects: (
+        Annotated[
+            list[MomotalkImageSubject],
+            Field(min_length=1, max_length=3, json_schema_extra=_MOMOTALK_SUBJECTS_SCHEMA),
+        ]
+        | None
+    ) = Field(default=None, exclude_if=lambda value: value is None)
+
     @model_validator(mode="after")
     def valid_subjects(self) -> MomotalkImage:
         if self.subjects is not None:
-            if len({subject.participant for subject in self.subjects}) != len(self.subjects):
-                raise ValueError("selfie subjects must contain each participant at most once")
-            lead = self.subjects[0]
-            if (lead.participant, lead.mood) != (self.participant, self.mood):
-                raise ValueError("selfie lead must match its first subject")
+            self._validate_subjects(self.participant, self.mood, self.subjects)
         return self
 
 
-class MomotalkRoomResponse(PublicModel):
+class MomotalkImageV3(_MomotalkImageMedia):
+    participant: ParticipantSlot
+    mood: Literal["happy", "neutral", "unhappy"]
+    subjects: list[MomotalkImageV3Subject] = Field(
+        min_length=1, max_length=3, json_schema_extra=_MOMOTALK_SUBJECTS_SCHEMA
+    )
+    animated: bool
+
+    @model_validator(mode="after")
+    def valid_subjects(self) -> MomotalkImageV3:
+        self._validate_subjects(self.participant, self.mood, self.subjects)
+        return self
+
+
+class _MomotalkConversation(PublicModel):
     schema_version: Literal[1] = 1
     week: MomotalkWeek
     room: MomotalkRoomSummary
     participants: ParticipantCollection
     messages: list[MomotalkMessage] = Field(max_length=15)
+
+
+class MomotalkRoomResponse(_MomotalkConversation):
     # Existing rooms may contain one single-person photo for each mood.
     images: list[MomotalkImage] = Field(max_length=2)
+
+
+class MomotalkRoomV3Response(_MomotalkConversation):
+    images: list[MomotalkImageV3] = Field(max_length=2)
 
 
 class GalleryCollector(PublicModel):
@@ -1378,6 +1414,7 @@ PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
     MomotalkWeeksResponse,
     MomotalkRoomsResponse,
     MomotalkRoomResponse,
+    MomotalkRoomV3Response,
     SessionResponse,
     AdminPromptsResponse,
     AdminPromptApplyResponse,

@@ -12,6 +12,7 @@ internal enum class MomotalkFailure { AUTH_REQUIRED, NOT_FOUND, UNAVAILABLE, CUR
 internal class MomotalkException(val failure: MomotalkFailure) : Exception("momotalk_${failure.name.lowercase()}")
 internal data class MomotalkSaved<T>(val value: T, val fetchedAt: Instant)
 internal val MOMOTALK_PARTICIPANTS = listOf("participant-a", "participant-b", "participant-c")
+private val momotalkMoods = setOf("happy", "neutral", "unhappy")
 internal fun validMomotalkWeekId(value: String): Boolean = runCatching {
   Regex("[0-9]{4}-[0-9]{2}-[0-9]{2}").matches(value) && LocalDate.parse(value).toString() == value
 }.getOrDefault(false)
@@ -69,7 +70,9 @@ internal data class MomotalkImageSubject(val participant: String, val mood: Stri
 @Serializable
 internal data class MomotalkImage(val participant: String, val mood: String, val subjects: List<MomotalkImageSubject>,
   val state: String, val url: String? = null, val thumbnailUrl: String? = null, val downloadUrl: String? = null,
-  @Transient val bytes: ByteArray? = null) {
+  @Transient val bytes: ByteArray? = null,
+  // Older encrypted room details predate the v3 animation flag.
+  val animated: Boolean? = null) {
   val key: String get() = "$participant-$mood"
   fun cached() = copy(url = null, thumbnailUrl = null, downloadUrl = null, bytes = null)
   override fun toString(): String = "MomotalkImage(<redacted>)"
@@ -87,15 +90,20 @@ internal data class MomotalkRoomDetail(@Required val schemaVersion: Int = 1, val
     check(images.size <= 2 && images.map { it.key }.distinct().size == images.size)
     check(room.state == "ready" || (messages.isEmpty() && images.isEmpty()))
     images.forEach { image ->
-      check(image.participant in MOMOTALK_PARTICIPANTS && image.mood in setOf("happy", "unhappy"))
+      check(image.participant in MOMOTALK_PARTICIPANTS && image.mood in momotalkMoods)
+      check(!requireUrls || image.animated != null)
       check(image.state in setOf("pending", "ready", "failed"))
       check(image.subjects.size in 1..3 && image.subjects.map { it.participant }.distinct().size == image.subjects.size)
       check(image.subjects.first() == MomotalkImageSubject(image.participant, image.mood))
-      check(image.subjects.all { it.participant in MOMOTALK_PARTICIPANTS && it.mood in setOf("happy", "unhappy") })
+      check(image.subjects.all { it.participant in MOMOTALK_PARTICIPANTS && it.mood in momotalkMoods })
+      if (image.animated == true) check(images.size == 1 && image.subjects.size == MOMOTALK_PARTICIPANTS.size)
       val urls = listOf(image.url, image.thumbnailUrl, image.downloadUrl)
       if (image.state == "ready") {
         check(!requireUrls || urls.all { it != null })
-        urls.filterNotNull().forEach { check(validMomotalkImageUrl(it, week.weekId, room.roomId)) }
+        listOf(image.url, image.downloadUrl).filterNotNull().forEach {
+          check(validMomotalkImageUrl(it, week.weekId, room.roomId, animated = image.animated == true))
+        }
+        image.thumbnailUrl?.let { check(validMomotalkImageUrl(it, week.weekId, room.roomId)) }
       } else check(urls.all { it == null })
     }
   }
@@ -109,11 +117,12 @@ private fun validateMomotalkAvatar(avatar: RecordAvatar) {
 }
 
 /** Reuse the attachment bucket boundary, with the exact published MomoTalk image namespace. */
-internal fun validMomotalkImageUrl(raw: String, weekId: String, roomId: String): Boolean = try {
+internal fun validMomotalkImageUrl(raw: String, weekId: String, roomId: String, animated: Boolean = false): Boolean = try {
   val uri = URI(raw)
+  val filename = if (animated) "selfie\\.gif" else "(selfie|happy|unhappy)(-thumb)?\\.webp"
   validMomotalkWeekId(weekId) && validMomotalkRoomId(roomId) && raw.length <= 8192 &&
     uri.scheme == "https" && uri.port in listOf(-1, 443) && uri.userInfo == null && uri.fragment == null &&
     Regex("shittim-chest-production-records-media-[0-9]{12}\\.s3\\.[a-z0-9-]+\\.amazonaws\\.com").matches(uri.host.orEmpty()) &&
     uri.normalize().rawPath == uri.rawPath &&
-    uri.rawPath.matches(Regex("/momotalk/images/$weekId/$roomId/(selfie|happy|unhappy)(-thumb)?\\.webp"))
+    uri.rawPath.matches(Regex("/momotalk/images/$weekId/$roomId/$filename"))
 } catch (_: Exception) { false }

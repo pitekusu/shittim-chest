@@ -74,7 +74,19 @@ def build_json_schema() -> dict[str, Any]:
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": SCHEMA_ID,
         "title": "Shittim Chest Records API v1",
-        "oneOf": [{"$ref": f"#/$defs/{model.__name__}"} for model in PUBLIC_RESPONSE_MODELS],
+        "oneOf": [
+            *[
+                {"$ref": f"#/$defs/{model.__name__}"}
+                for model in PUBLIC_RESPONSE_MODELS
+                if model.__name__ not in {"MomotalkRoomResponse", "MomotalkRoomV3Response"}
+            ],
+            {
+                "anyOf": [
+                    {"$ref": "#/$defs/MomotalkRoomResponse"},
+                    {"$ref": "#/$defs/MomotalkRoomV3Response"},
+                ]
+            },
+        ],
         "$defs": definitions,
     }
 
@@ -212,6 +224,7 @@ def _momotalk_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
             )
             for name in path_names
         ]
+        success = _response(schema, "モモトーク")
         if "roomId" not in path_names:
             parameters.extend(
                 [
@@ -221,8 +234,19 @@ def _momotalk_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
             )
         else:
             parameters.append(
-                _parameter("contract", "query", {"type": "string", "enum": ["momotalk-selfie-v2"]})
+                _parameter(
+                    "contract",
+                    "query",
+                    {"type": "string", "enum": ["momotalk-selfie-v2", "momotalk-selfie-v3"]},
+                )
             )
+            old_schema = success["content"]["application/json"]["schema"]
+            success["content"]["application/json"]["schema"] = {
+                "anyOf": [
+                    old_schema,
+                    {"$ref": "#/components/schemas/MomotalkRoomV3Response"},
+                ],
+            }
         result[path] = {
             "get": {
                 "operationId": operation,
@@ -233,13 +257,15 @@ def _momotalk_paths(error_responses: dict[str, Any]) -> dict[str, Any]:
                     "CookieとAuthorizationの混在を拒否。private, no-store。"
                     + (
                         "contract=momotalk-selfie-v2で各画像のsubjectsに登場人格と個別の表情を返す。"
-                        "新しい会話は条件を満たす全人格を1枚に含める。既存の最大2画像も保持する。"
+                        "contract=momotalk-selfie-v3では中立の表情とアニメーションの有無も返す。"
+                        "週内の完了済み依頼がある新しい部屋は全人格を1枚に含める。"
+                        "既存の最大2画像も保持する。"
                         "未指定時はsubjectsを省略し、従来の応答fieldを維持する。"
                         if "roomId" in path_names
                         else ""
                     )
                 ),
-                "responses": {"200": _response(schema, "モモトーク"), **error_responses},
+                "responses": {"200": success, **error_responses},
             }
         }
     return result

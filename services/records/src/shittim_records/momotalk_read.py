@@ -9,10 +9,13 @@ from shittim_records.contracts import (
     ImageAvatarRef,
     MomotalkImage,
     MomotalkImageSubject,
+    MomotalkImageV3,
+    MomotalkImageV3Subject,
     MomotalkMessage,
     MomotalkRoomResponse,
     MomotalkRoomsResponse,
     MomotalkRoomSummary,
+    MomotalkRoomV3Response,
     MomotalkWeek,
     MomotalkWeeksResponse,
     ParticipantSummary,
@@ -25,6 +28,7 @@ from shittim_records.momotalk import (
     TOKYO,
     MomotalkFailure,
     Room,
+    SavedImage,
     validate_week_id,
 )
 
@@ -83,8 +87,14 @@ class MomotalkReadService:
         )
 
     def get_room(
-        self, *, week_id: str, room_id: str, now: datetime, include_image_subjects: bool = False
-    ) -> MomotalkRoomResponse:
+        self,
+        *,
+        week_id: str,
+        room_id: str,
+        now: datetime,
+        include_image_subjects: bool = False,
+        include_animation: bool = False,
+    ) -> MomotalkRoomResponse | MomotalkRoomV3Response:
         # Gate before reading private state or signing a single media URL.
         week = self._week(week_id, now)
         self._room_id(room_id)
@@ -103,33 +113,22 @@ class MomotalkReadService:
             )
             for slot, variant in zip(PARTICIPANTS, variants, strict=True)
         )
-        images = []
-        if summary.state == "ready":
-            for image in room.images:
-                state = image.state
-                if state == "pending" and now >= week.publish_at + timedelta(days=1):
-                    state = "failed"
-                images.append(
-                    MomotalkImage(
-                        participant=image.participant,
-                        mood=image.mood,
-                        subjects=[
-                            MomotalkImageSubject(participant=subject.participant, mood=subject.mood)
-                            for subject in image.image_subjects
-                        ]
-                        if include_image_subjects
-                        else None,
-                        state=state,
-                        url=self.assets.image_url(room, image) if state == "ready" else None,
-                        thumbnail_url=self.assets.image_url(room, image, thumbnail=True)
-                        if state == "ready"
-                        else None,
-                        download_url=self.assets.image_url(room, image, download=True)
-                        if state == "ready"
-                        else None,
-                    )
+        images = (
+            [
+                self._image(
+                    room,
+                    image,
+                    expired=now >= week.publish_at + timedelta(days=1),
+                    include_subjects=include_image_subjects,
+                    include_animation=include_animation,
                 )
-        return MomotalkRoomResponse.model_validate(
+                for image in room.images
+            ]
+            if summary.state == "ready"
+            else []
+        )
+        response = MomotalkRoomV3Response if include_animation else MomotalkRoomResponse
+        return response.model_validate(
             {
                 "week": week,
                 "room": summary,
@@ -144,6 +143,58 @@ class MomotalkReadService:
                 else [],
                 "images": images,
             }
+        )
+
+    def _image(
+        self,
+        room: Room,
+        image: SavedImage,
+        *,
+        expired: bool,
+        include_subjects: bool,
+        include_animation: bool,
+    ) -> MomotalkImage | MomotalkImageV3:
+        state = "failed" if image.state == "pending" and expired else image.state
+        url = thumbnail_url = download_url = None
+        if state == "ready":
+            thumbnail_url = self.assets.image_url(room, image, thumbnail=True)
+            if image.animated and not include_animation:
+                url = thumbnail_url
+                download_url = self.assets.image_url(room, image, thumbnail=True, download=True)
+            else:
+                url = self.assets.image_url(room, image)
+                download_url = self.assets.image_url(room, image, download=True)
+
+        if include_animation:
+            return MomotalkImageV3(
+                participant=image.participant,
+                mood=image.mood,
+                subjects=[
+                    MomotalkImageV3Subject(participant=subject.participant, mood=subject.mood)
+                    for subject in image.image_subjects
+                ],
+                animated=image.animated,
+                state=state,
+                url=url,
+                thumbnail_url=thumbnail_url,
+                download_url=download_url,
+            )
+        return MomotalkImage(
+            participant=image.participant,
+            mood="unhappy" if image.mood == "unhappy" else "happy",
+            subjects=[
+                MomotalkImageSubject(
+                    participant=subject.participant,
+                    mood="unhappy" if subject.mood == "unhappy" else "happy",
+                )
+                for subject in image.image_subjects
+            ]
+            if include_subjects
+            else None,
+            state=state,
+            url=url,
+            thumbnail_url=thumbnail_url,
+            download_url=download_url,
         )
 
     def _summary(self, room: Room, week: MomotalkWeek, now: datetime) -> MomotalkRoomSummary:

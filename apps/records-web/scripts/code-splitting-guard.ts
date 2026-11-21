@@ -37,7 +37,7 @@ const ROUTES = {
     ownedModules: [
       "/src/generated/momotalk-weeks-response-validator.mjs",
       "/src/generated/momotalk-rooms-response-validator.mjs",
-      "/src/generated/momotalk-room-response-validator.mjs",
+      "/src/generated/momotalk-room-v3-response-validator.mjs",
     ],
   },
   RecordsHome: {

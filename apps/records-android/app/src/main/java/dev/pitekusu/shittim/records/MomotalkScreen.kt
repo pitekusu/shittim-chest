@@ -109,7 +109,8 @@ private val momotalkZone = ZoneId.of("Asia/Tokyo")
 @Composable
 internal fun MomotalkScreen(state: MomotalkUiState, onEvent: (MomotalkEvent) -> Unit,
   modifier: Modifier = Modifier, showAppBar: Boolean = true,
-  animationsEnabled: Boolean = ValueAnimator.areAnimatorsEnabled()) {
+  animationsEnabled: Boolean = ValueAnimator.areAnimatorsEnabled(),
+  loadAnimation: suspend (String) -> ByteArray? = { null }) {
   val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
   val active = lifecycle.isAtLeast(Lifecycle.State.RESUMED) && LocalWindowInfo.current.isWindowFocused
   val scale = rememberCoroutineScope().coroutineContext[MotionDurationScale]?.scaleFactor ?: 1f
@@ -132,12 +133,13 @@ internal fun MomotalkScreen(state: MomotalkUiState, onEvent: (MomotalkEvent) -> 
         if (twoPane) {
           Row(Modifier.fillMaxSize()) {
             MomotalkList(state, onEvent, Modifier.width(300.dp), null, active, {}, roomPane = true)
-            MomotalkList(state, onEvent, Modifier.weight(1f), playback, active, { replay++ }, listState = conversationList)
+            MomotalkList(state, onEvent, Modifier.weight(1f), playback, active, { replay++ },
+              listState = conversationList, loadAnimation = loadAnimation)
           }
         } else {
           Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
             MomotalkList(state, onEvent, Modifier.widthIn(max = 840.dp).fillMaxWidth(), playback, active,
-              { replay++ }, listState = conversationList)
+              { replay++ }, listState = conversationList, loadAnimation = loadAnimation)
           }
         }
       }
@@ -173,7 +175,8 @@ private fun MomotalkUiState.activeResource(): MomotalkResource<*> = when {
 @Composable
 private fun MomotalkList(state: MomotalkUiState, onEvent: (MomotalkEvent) -> Unit,
   modifier: Modifier, playback: MomotalkPlayback?, active: Boolean, onReplay: () -> Unit,
-  roomPane: Boolean = false, listState: LazyListState? = null) {
+  roomPane: Boolean = false, listState: LazyListState? = null,
+  loadAnimation: suspend (String) -> ByteArray? = { null }) {
   // Conversation text, names, image keys and API cursors never enter saved UI state.
   // A new room starts at its heading; refreshing the same room keeps the reading position.
   androidx.compose.runtime.key(state.selectedWeek, if (roomPane) "rooms" else state.selectedRoom) {
@@ -223,7 +226,7 @@ private fun MomotalkList(state: MomotalkUiState, onEvent: (MomotalkEvent) -> Uni
         state = list, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         if (roomPane || state.selectedRoom == null) {
           if (state.selectedWeek == null) weeksContent(state, onEvent) else roomsContent(state, onEvent, roomPane)
-        } else conversationContent(state, onEvent, playback, active)
+        } else conversationContent(state, onEvent, playback, active, loadAnimation)
       }
     }
   }
@@ -364,7 +367,7 @@ private fun MomotalkRoomSummary.stateTitle(): Int = when (state) {
 }
 
 private fun LazyListScope.conversationContent(state: MomotalkUiState, onEvent: (MomotalkEvent) -> Unit,
-  playback: MomotalkPlayback?, active: Boolean) {
+  playback: MomotalkPlayback?, active: Boolean, loadAnimation: suspend (String) -> ByteArray?) {
   val detail = state.detail.data
   item {
     if (detail != null) {
@@ -392,7 +395,8 @@ private fun LazyListScope.conversationContent(state: MomotalkUiState, onEvent: (
     item { ShittimSectionHeading(stringResource(R.string.momotalk_selfies_title), Modifier.padding(top = 8.dp)) }
     items(detail.images, key = { "image-${it.participant}-${it.mood}" }) { image ->
       MomotalkSelfieCard(image, detail, state.online, state.detail.loading,
-        onRetry = { onEvent(MomotalkEvent.Refresh) })
+        onRetry = { onEvent(MomotalkEvent.Refresh) }, autoPlay = playback?.motionAllowed == true,
+        loadAnimation = loadAnimation)
     }
   }
 }
@@ -489,7 +493,7 @@ private fun MomotalkTyping(active: Boolean) {
 
 @Composable
 private fun MomotalkSelfieCard(image: MomotalkImage, detail: MomotalkRoomDetail, online: Boolean,
-  loading: Boolean, onRetry: () -> Unit) {
+  loading: Boolean, onRetry: () -> Unit, autoPlay: Boolean, loadAnimation: suspend (String) -> ByteArray?) {
   var open by remember(detail.week.weekId, detail.room.roomId, image.participant, image.mood) { mutableStateOf(false) }
   val index = detail.images.indexOf(image)
   val people = image.subjects.ifEmpty { listOf(MomotalkImageSubject(image.participant, image.mood)) }
@@ -500,8 +504,13 @@ private fun MomotalkSelfieCard(image: MomotalkImage, detail: MomotalkRoomDetail,
     FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
       people.forEach { subject ->
         val name = detail.participants.firstOrNull { it.slot == subject.participant }?.displayName ?: ""
-        Text("$name：" + stringResource(if (subject.mood == "happy") R.string.momotalk_mood_happy else R.string.momotalk_mood_unhappy),
-          style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        val mood = stringResource(when (subject.mood) {
+          "happy" -> R.string.momotalk_mood_happy
+          "neutral" -> R.string.momotalk_mood_neutral
+          else -> R.string.momotalk_mood_unhappy
+        })
+        Text("$name：$mood", style = MaterialTheme.typography.labelMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant)
       }
     }
     val openDescription = stringResource(R.string.momotalk_selfie_open, index + 1)
@@ -514,12 +523,13 @@ private fun MomotalkSelfieCard(image: MomotalkImage, detail: MomotalkRoomDetail,
       }
     }
   }
-  if (open) MomotalkSelfieViewer(detail, index, online, loading, onClose = { open = false }, onRetry = onRetry)
+  if (open) MomotalkSelfieViewer(detail, index, online, loading, onClose = { open = false }, onRetry = onRetry,
+    autoPlay = autoPlay, loadAnimation = loadAnimation)
 }
 
 @Composable
 private fun MomotalkSelfieViewer(detail: MomotalkRoomDetail, initial: Int, online: Boolean, loading: Boolean,
-  onClose: () -> Unit, onRetry: () -> Unit) {
+  onClose: () -> Unit, onRetry: () -> Unit, autoPlay: Boolean, loadAnimation: suspend (String) -> ByteArray?) {
   val images = detail.images
   if (images.isEmpty()) return
   val pager = rememberPagerState(initialPage = initial.coerceIn(images.indices), pageCount = { images.size })
@@ -543,7 +553,13 @@ private fun MomotalkSelfieViewer(detail: MomotalkRoomDetail, initial: Int, onlin
           val names = people.mapNotNull { subject -> detail.participants.firstOrNull { it.slot == subject.participant }?.displayName }
             .joinToString("・")
           Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            MomotalkSelfieContent(image, names, online, loading, onRetry, zoomable = true)
+            if (image.animated == true && image.state == "ready") {
+              MomotalkAnimatedSelfie(image.key, names, online && page == selected, autoPlay, loadAnimation) {
+                MomotalkSelfieContent(image, names, online, loading, onRetry, zoomable = true)
+              }
+            } else {
+              MomotalkSelfieContent(image, names, online, loading, onRetry, zoomable = true)
+            }
           }
         }
         if (images.size > 1) FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {

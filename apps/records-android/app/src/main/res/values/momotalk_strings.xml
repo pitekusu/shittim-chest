@@ -35,6 +35,11 @@
     <string name="momotalk_selfie_close">写真を閉じる</string>
     <string name="momotalk_selfie_previous">前の写真</string>
     <string name="momotalk_selfie_next">次の写真</string>
+    <string name="momotalk_animation_play">アニメーションを再生</string>
+    <string name="momotalk_animation_pause">アニメーションを停止</string>
+    <string name="momotalk_animation_loading">アニメーションを読み込み中</string>
+    <string name="momotalk_animation_failed">アニメーションを読み込めませんでした。</string>
+    <string name="momotalk_mood_neutral">落ち着いた気分</string>
     <string name="momotalk_mood_happy">うれしい気分</string>
     <string name="momotalk_mood_unhappy">残念な気分</string>
     <string name="momotalk_loading">モモトークを読み込み中</string>

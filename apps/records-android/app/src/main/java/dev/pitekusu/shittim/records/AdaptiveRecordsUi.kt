@@ -310,7 +310,9 @@ internal fun AdaptiveRecordsUi(
                 (it.data.week.weekId == route.weekId && it.data.room.roomId == route.roomId) } ?: MomotalkResource()
               MomotalkScreen(value.copy(selectedWeek = route.weekId, selectedRoom = route.roomId, detail = detail), { event ->
                 currentState.value.eventSink(BootstrapScreen.Event.MomotalkAction(event))
-              }, Modifier.fillMaxSize(), showAppBar = false)
+              }, Modifier.fillMaxSize(), showAppBar = false, loadAnimation = { imageKey ->
+                currentState.value.loadMomotalkAnimation(route.weekId, route.roomId, imageKey)
+              })
             }
           }
           entry<DebateRequests> { requestsContent.value() }

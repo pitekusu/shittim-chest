@@ -30,7 +30,7 @@ const validators = [
   ["MemorialMemoryResponse", "memorial-memory-response-validator.mjs"],
   ["MomotalkWeeksResponse", "momotalk-weeks-response-validator.mjs"],
   ["MomotalkRoomsResponse", "momotalk-rooms-response-validator.mjs"],
-  ["MomotalkRoomResponse", "momotalk-room-response-validator.mjs"],
+  ["MomotalkRoomV3Response", "momotalk-room-v3-response-validator.mjs"],
   ["GalleryListResponse", "gallery-list-response-validator.mjs"],
   ["GalleryCollectionListResponse", "gallery-collection-list-response-validator.mjs"],
   ["GalleryRosterResponse", "gallery-roster-response-validator.mjs"],

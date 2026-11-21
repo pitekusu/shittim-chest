@@ -23,16 +23,17 @@ function roomResponse(): MomotalkRoomResponse {
     images: [
       {
         participant: "participant-a",
-        mood: "happy",
+        mood: "neutral",
+        animated: true,
         subjects: [
-          { participant: "participant-a", mood: "happy" },
+          { participant: "participant-a", mood: "neutral" },
           { participant: "participant-b", mood: "unhappy" },
           { participant: "participant-c", mood: "happy" },
         ],
         state: "ready",
-        url: "/images/selfie.webp",
+        url: "/images/selfie.gif",
         thumbnailUrl: "/images/selfie-thumbnail.webp",
-        downloadUrl: "/images/selfie.webp?download=1",
+        downloadUrl: "/images/selfie.gif?download=1",
       },
     ],
   };
@@ -50,15 +51,24 @@ describe("Momotalk image contract", () => {
       payload,
     );
     expect(fetchMock.mock.calls[0]![0]).toBe(
-      `/api/v1/momotalk/weeks/${payload.week.weekId}/rooms/${payload.room.roomId}?contract=momotalk-selfie-v2`,
+      `/api/v1/momotalk/weeks/${payload.week.weekId}/rooms/${payload.room.roomId}?contract=momotalk-selfie-v3`,
     );
   });
 
-  it("still accepts existing two-photo rooms without subject metadata", async () => {
+  it("accepts static two-photo rooms with one subject per photo", async () => {
     const payload = roomResponse();
-    const first = payload.images[0]!;
-    const { subjects: _subjects, ...legacy } = first;
-    const images = [legacy, { ...legacy, participant: "participant-b", mood: "unhappy" }];
+    const legacy = {
+      animated: false,
+      state: "ready",
+      url: "/images/legacy.webp",
+      thumbnailUrl: "/images/legacy-thumb.webp",
+      downloadUrl: "/images/legacy.webp?download=1",
+    } as const;
+    const subjects = [
+      { participant: "participant-a", mood: "happy" },
+      { participant: "participant-b", mood: "unhappy" },
+    ];
+    const images = subjects.map((subject) => ({ ...legacy, ...subject, subjects: [subject] }));
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ ...payload, images }))),

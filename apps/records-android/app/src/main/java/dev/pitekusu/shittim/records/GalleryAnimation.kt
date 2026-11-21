@@ -110,25 +110,8 @@ internal fun GalleryOriginalImage(bytes: ByteArray, onError: () -> Unit,
     horizontalAlignment = Alignment.CenterHorizontally) {
     Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
       val imageDescription = stringResource(R.string.gallery_card_image)
-      // ImageView owns the drawable callback used to schedule and invalidate animation frames.
-      AndroidView(factory = { viewContext ->
-        ImageView(viewContext).apply {
-          scaleType = ImageView.ScaleType.CENTER_INSIDE
-          importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }
-      }, modifier = Modifier.fillMaxSize().zoomable(zoom).testTag("gallery-original-image")
-        .semantics { contentDescription = imageDescription },
-        update = { view ->
-          if (view.drawable !== drawable) {
-            (view.drawable as? Animatable)?.stop()
-            view.setImageDrawable(drawable)
-            (drawable as? Animatable)?.start()
-          }
-        },
-        onRelease = { view ->
-          (view.drawable as? Animatable)?.stop()
-          view.setImageDrawable(null)
-        })
+      RecordMediaDrawable(drawable, Modifier.fillMaxSize().zoomable(zoom).testTag("gallery-original-image")
+        .semantics { contentDescription = imageDescription })
     }
     if (animationFailed) Text(stringResource(R.string.gallery_animation_failed),
       color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
@@ -142,10 +125,7 @@ internal fun GalleryOriginalImage(bytes: ByteArray, onError: () -> Unit,
 private suspend fun decodeGalleryAnimation(context: Context, bytes: ByteArray,
   format: GalleryAnimationFormat): Drawable? {
   return when (format) {
-    GalleryAnimationFormat.Gif -> {
-      val factory = if (Build.VERSION.SDK_INT >= 28) AnimatedImageDecoder.Factory() else GifDecoder.Factory()
-      decodeGalleryDrawable(context, bytes, factory)?.takeIf { it is Animatable }
-    }
+    GalleryAnimationFormat.Gif -> decodeRecordGif(context, bytes)
     GalleryAnimationFormat.Apng -> withContext(Dispatchers.Default) {
       try {
         APNGDrawable(object : ByteBufferLoader() {
@@ -162,6 +142,31 @@ private suspend fun decodeGalleryAnimation(context: Context, bytes: ByteArray,
       }
     }
   }
+}
+
+@Composable
+internal fun RecordMediaDrawable(drawable: Drawable, modifier: Modifier) {
+  // ImageView owns the drawable callback used to schedule and invalidate animation frames.
+  AndroidView(factory = { context ->
+    ImageView(context).apply {
+      scaleType = ImageView.ScaleType.CENTER_INSIDE
+      importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
+  }, modifier = modifier, update = { view ->
+    if (view.drawable !== drawable) {
+      (view.drawable as? Animatable)?.stop()
+      view.setImageDrawable(drawable)
+      (drawable as? Animatable)?.start()
+    }
+  }, onRelease = { view ->
+    (view.drawable as? Animatable)?.stop()
+    view.setImageDrawable(null)
+  })
+}
+
+internal suspend fun decodeRecordGif(context: Context, bytes: ByteArray): Drawable? {
+  val factory = if (Build.VERSION.SDK_INT >= 28) AnimatedImageDecoder.Factory() else GifDecoder.Factory()
+  return decodeGalleryDrawable(context, bytes, factory)?.takeIf { it is Animatable }
 }
 
 private suspend fun decodeGalleryDrawable(context: Context, bytes: ByteArray, factory: Decoder.Factory): Drawable? {
