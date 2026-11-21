@@ -24,6 +24,7 @@ from shittim_chest.domain import ParticipantSlot
 _ART_COLOR = (184, 176, 212)
 _GOLD = (248, 206, 97)
 _KEY_COLOR = "#00FF00"
+_DARK_ART_COLOR = (8, 12, 16)
 
 
 @pytest.fixture(scope="module")
@@ -89,8 +90,8 @@ def _gif(
         draw.rectangle((180, 395, 210, 425), fill=color)
         draw.rectangle((747, 160, 785, 180), fill=color)
         if split_sheet:
-            draw.ellipse((470, 18, 580, 35), fill="black")
-            draw.line((0, size[1] - 1, size[0] - 65, size[1] - 1), fill=(8, 12, 16))
+            draw.ellipse((470, 18, 580, 35), fill=_DARK_ART_COLOR)
+            draw.line((0, size[1] - 1, size[0] - 65, size[1] - 1), fill=_DARK_ART_COLOR)
             frame = ImageChops.offset(frame, 0, 96 * (index // 3))
         frames.append(frame)
     with BytesIO() as output:
@@ -250,7 +251,7 @@ def test_card_recovers_an_animation_cut_across_sheet_rows(transparent_background
             assert image.info["duration"] == GACHA_APNG_FRAME_DURATIONS[index]
             with image.convert("RGB") as frame:
                 assert frame.getpixel((525, 200)) == (19 + 19 * pose, 105, 175)
-                assert frame.getpixel((525, 20)) == (0, 0, 0)  # Real dark halo.
+                assert frame.getpixel((525, 20)) == _DARK_ART_COLOR  # Real dark halo.
                 assert (
                     frame.crop((0, 0, 60, 473)).tobytes()
                     == background.crop((0, 0, 60, 473)).tobytes()
