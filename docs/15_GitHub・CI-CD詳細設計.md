@@ -1051,6 +1051,14 @@ Coreの有効期間の上限は90日なので、`approved_on` はUTC日付の `2
 `expires_on` は `2027-02-18` とし、日本時間の2027-02-19 09:00に失効する。
 対象configはPR #763で実測した1件とし、従来の承認を他のconfigに引き継がない。
 
+2026-11-22 JST、PR #768の完成ARM64 production config
+`sha256:64dd6b8ee84aee203ed3be71c8903ad813d6b986dab5bef4c0ffc150056b0353`を検査した。
+raw High 45組、署名付きDHI VEX適用後のHigh 31組が現行本番とCVE・パッケージ・版・修正状態で一致した。
+新規High、Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは60/60成功した。
+[完成ARM64 SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44923899527/artifacts/14715161663)と[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44923899527/artifacts/14715440862)を照合した。
+所有者はこのconfigと同一31組に限り、既存と同じ2027-02-19 09:00 JSTまでの受容と必須CI成功後の配信を承認した。
+本番の既承認configを保持したまま今回の実測configを追加し、受容の有効期限を維持する。
+
 ## 5. 本番配信
 
 ### 共通の工程
