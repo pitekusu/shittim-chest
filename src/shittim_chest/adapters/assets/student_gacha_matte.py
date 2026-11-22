@@ -175,7 +175,8 @@ def key_gacha_frame(frame: Image.Image, key_color: str) -> Image.Image:
             if residual is None:
                 cutout = Image.new("RGBA", rgba.size)
                 cutout.paste(rgba, mask=source_alpha)
-                return cutout
+                cutout = _despill_transparent_edge(cutout, key_color)
+                return _feather_cutout_edge(cutout)
 
     screen, tolerance = residual or _measure_screen(rgb, key_color, source_clear)
     green_key = key_color == _GREEN
@@ -220,8 +221,7 @@ def key_gacha_frame(frame: Image.Image, key_color: str) -> Image.Image:
     strong = Image.frombytes(
         "L", rgb.size, bytes(255 if color in strong_spill else 0 for color in pixels)
     )
-    solid_colors = strong.filter(ImageFilter.MinFilter(5)).filter(ImageFilter.MaxFilter(5))
-    edges = ImageChops.lighter(fringe, ImageChops.subtract(strong, solid_colors)).tobytes()
+    edges = ImageChops.lighter(fringe, _thin_key_colors(strong)).tobytes()
     despill: dict[_RGB, _RGBA] = {}
     output = bytearray()
     for color, near_screen, opacity in zip(pixels, edges, source_alpha.tobytes(), strict=True):
@@ -234,8 +234,43 @@ def key_gacha_frame(frame: Image.Image, key_color: str) -> Image.Image:
         else:
             output.extend((*color, 255))
     cutout = Image.frombytes("RGBA", rgb.size, bytes(output))
+    return _feather_cutout_edge(cutout)
+
+
+def _thin_key_colors(colors: Image.Image) -> Image.Image:
+    solid = colors.filter(ImageFilter.MinFilter(5)).filter(ImageFilter.MaxFilter(5))
+    return ImageChops.subtract(colors, solid)
+
+
+def _despill_transparent_edge(cutout: Image.Image, key_color: str) -> Image.Image:
+    # A transparent GIF can still carry key color in thin strips next to the actor.
+    # Use neighbors to protect solid costume colors and isolated colored details.
+    red, green, blue, alpha = cutout.split()
+    green_key = key_color == _GREEN
+    excess = (
+        ImageChops.subtract(green, ImageChops.lighter(red, blue))
+        if green_key
+        else ImageChops.subtract(ImageChops.darker(red, blue), green)
+    )
+    colored = ImageChops.darker(excess.point(lambda value: 255 if value > 7 else 0), alpha)
+    near_background = ImageChops.invert(alpha).filter(ImageFilter.MaxFilter(5))
+    near_subject = ImageChops.subtract(alpha, colored).filter(ImageFilter.MaxFilter(5))
+    fringe = ImageChops.darker(_thin_key_colors(colored), near_background)
+    fringe = ImageChops.darker(fringe, near_subject)
+    if fringe.getbbox() is None:
+        return cutout
+
+    if green_key:
+        green = Image.composite(ImageChops.subtract(green, excess), green, fringe)
+    else:
+        red = Image.composite(ImageChops.subtract(red, excess), red, fringe)
+        blue = Image.composite(ImageChops.subtract(blue, excess), blue, fringe)
+    return Image.merge("RGBA", (red, green, blue, alpha))
+
+
+def _feather_cutout_edge(cutout: Image.Image) -> Image.Image:
     alpha = cutout.getchannel("A")
-    # Soften abrupt indexed-GIF edges toward the actor, without adding screen pixels.
+    # Soften indexed GIF contours inward without making background pixels visible.
     softened = Image.blend(alpha, alpha.filter(ImageFilter.GaussianBlur(0.6)), 0.45)
     cutout.putalpha(ImageChops.darker(alpha, softened))
     return cutout
