@@ -241,11 +241,15 @@ def _selfie_contrast_seam_start(gray: Image.Image, *, minimum_x: int | None = No
     edges = ImageChops.difference(
         gray.crop((start - 1, 0, width - 1, height)), gray.crop((start, 0, width, height))
     )
+    count = edges.width - 4 if minimum_x is None else edges.width
     columns = [
         start + x
-        for x in range(edges.width - 4)
+        for x in range(count)
         if sum(edges.crop((x, 0, x + 1, height)).histogram()[32:]) >= height * 0.6
     ]
+    if minimum_x is not None:
+        # An outer-edge artifact must not hide an established interior divider.
+        columns = [x for x in columns if x < width - 4] or columns
     if columns and columns[-1] - columns[0] <= 2:
         if minimum_x is not None:
             # For a strip cut, use the strongest boundary rather than its
@@ -344,13 +348,11 @@ def _repair_selfie_panel_strips(frames: list[Image.Image]) -> list[Image.Image] 
     right_edges = []
     pitches = []
     for row in rows:
-        edges = [
-            index * width + seam
-            for index, frame in enumerate(row)
-            if (seam := _selfie_contrast_seam_start(frame, minimum_x=width * 3 // 4)) is not None
-        ]
-        if len(edges) != strip_size:
+        seams = [_selfie_contrast_seam_start(frame, minimum_x=width * 3 // 4) for frame in row]
+        # The last tile can run to the end of the strip without a visible divider.
+        if any(seam is None for seam in seams[:-1]):
             return None
+        edges = [index * width + seam for index, seam in enumerate(seams) if seam is not None]
         right_edges.append(edges)
         pitches.extend(right - left for left, right in pairwise(edges))
         # The edges of adjacent GIF windows must be contiguous image content.
@@ -362,9 +364,12 @@ def _repair_selfie_panel_strips(frames: list[Image.Image]) -> list[Image.Image] 
                 return None
 
     pitch = round(fmean(pitches))
+    has_end_divider = len(right_edges[0]) == strip_size
+    min_overhang = 8 if has_end_divider else 6
     if (
-        not width * 7 // 8 <= pitch <= width - 8
+        not width * 7 // 8 <= pitch <= width - min_overhang
         or max(pitches) - min(pitches) > 4
+        or len({len(edges) for edges in right_edges}) != 1
         or any(max(column) - min(column) > 3 for column in zip(*right_edges, strict=True))
     ):
         return None
@@ -375,6 +380,10 @@ def _repair_selfie_panel_strips(frames: list[Image.Image]) -> list[Image.Image] 
 
     inset = 4
     crop_width = min(pitch, min(pitches)) - inset * 2
+    if any(
+        edges[strip_size - 2] + inset + crop_width > width * strip_size for edges in right_edges
+    ):
+        return None
     crop_height = round(crop_width * height / width)
     top = (height - crop_height) // 2
     repaired = []
@@ -384,7 +393,7 @@ def _repair_selfie_panel_strips(frames: list[Image.Image]) -> list[Image.Image] 
         strip = Image.new("RGB", (width * strip_size, height))
         for i, frame in enumerate(row):
             strip.paste(frame, (i * width, 0))
-        for edge in [start, *edges[:-1]]:
+        for edge in [start, *edges[: strip_size - 1]]:
             x = edge + inset
             tile = strip.crop((x, top, x + crop_width, top + crop_height))
             # Smooth only the two pixels where an extracted tile crosses an
@@ -400,10 +409,14 @@ def _repair_selfie_panel_strips(frames: list[Image.Image]) -> list[Image.Image] 
     if _selfie_frame_change(repaired) >= _selfie_frame_change(frames) * 0.75:
         return None
     aligned = [frame.convert("L") for frame in repaired]
-    for y in (0, height - height // 5):
-        offsets = _selfie_band_offsets(aligned, y)
-        if offsets is None or max(map(abs, offsets)) > 3:
-            return None
+    band_tops = [0, height - height // 5]
+    if not has_end_divider:
+        # Moving arms or the foreground need not follow the static background.
+        band_tops.append(height // 5)
+    band_offsets = [_selfie_band_offsets(aligned, y) for y in band_tops]
+    matched = sum(offsets is not None and max(map(abs, offsets)) <= 3 for offsets in band_offsets)
+    if matched < 2:
+        return None
     return repaired
 
 
@@ -411,9 +424,12 @@ def _repair_slipping_selfie(frames: list[Image.Image]) -> list[Image.Image] | No
     seams = [_selfie_seam_start(frame) for frame in frames]
     boundaries = [seam for seam in seams if seam is not None]
     if len(boundaries) != len(frames) or max(boundaries) - min(boundaries) < 8:
+        recut = _repair_selfie_panel_strips(frames)
+        if recut is not None:
+            return recut
         inferred = _selfie_wrap_boundaries(frames)
         if inferred is None:
-            return _repair_selfie_panel_strips(frames)
+            return None
         boundaries = inferred
 
     # Keep the shared region of the primary panel to the left of each seam.
