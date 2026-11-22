@@ -96,15 +96,53 @@ def test_removes_magenta_without_losing_green_or_preserving_magenta_spill() -> N
             assert min(red, blue) <= green + 7
 
 
-def test_keeps_an_already_transparent_cutout_including_key_colored_costume() -> None:
+def test_feathers_a_transparent_cutout_without_erasing_key_colored_details() -> None:
     with Image.new("RGBA", (64, 64), (16, 245, 128, 0)) as image:
-        ImageDraw.Draw(image).rectangle((20, 8, 43, 53), fill=(0, 255, 0, 255))
-        ImageDraw.Draw(image).line((32, 53, 32, 63), fill=(0, 255, 0, 255))
+        draw = ImageDraw.Draw(image)
+        draw.polygon(((20, 8), (43, 16), (43, 53), (20, 53)), fill=(0, 255, 0, 255))
+        draw.line((32, 53, 32, 63), fill=(0, 255, 0, 255))
 
         with key_gacha_frame(image, "#00FF00") as keyed:
             assert keyed.getpixel((32, 32)) == (0, 255, 0, 255)
-            assert keyed.getpixel((32, 63)) == (0, 255, 0, 255)
             assert keyed.getpixel((4, 4)) == (0, 0, 0, 0)
+            assert keyed.getpixel((30, 11)) == (0, 0, 0, 0)
+            assert keyed.getbbox() == image.getbbox()
+            for point in ((30, 12), (32, 63)):
+                edge = keyed.getpixel(point)
+                assert isinstance(edge, tuple)
+                assert edge[:3] == (0, 255, 0) and 128 < edge[3] < 255
+
+
+@pytest.mark.parametrize(
+    ("key_color", "spill", "corrected"),
+    [
+        ("#00FF00", (43, 95, 85), (43, 85, 85)),
+        ("#FF00FF", (113, 72, 101), (84, 72, 72)),
+    ],
+)
+def test_despills_a_transparent_edge_without_recoloring_costume_details(
+    key_color: str, spill: tuple[int, int, int], corrected: tuple[int, int, int]
+) -> None:
+    cyan = (45, 180, 216)
+    with Image.new("RGBA", (64, 64)) as image:
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((21, 12, 44, 54), fill="#18263e")
+        draw.rectangle((31, 12, 44, 26), fill=key_color)
+        draw.line((20, 29, 20, 40), fill=spill)
+        draw.line((44, 33, 44, 42), fill=cyan)
+        # Keep a detached detail in the key hue as well as the larger costume accent.
+        draw.line((28, 7, 39, 7), fill=key_color)
+
+        with key_gacha_frame(image, key_color) as cutout:
+            fringe = cutout.getpixel((20, 35))
+            assert isinstance(fringe, tuple)
+            assert fringe[:3] == corrected and 128 < fringe[3] < 255
+            assert cutout.getpixel((29, 35)) == (24, 38, 62, 255)
+            for point in ((37, 12), (32, 7), (44, 37)):
+                actual, original = cutout.getpixel(point), image.getpixel(point)
+                assert isinstance(actual, tuple) and isinstance(original, tuple)
+                assert actual[:3] == original[:3] and actual[3] > 128
+            assert cutout.getpixel((19, 35)) == (0, 0, 0, 0)
 
 
 @pytest.mark.parametrize("clear_through", [31, 47])

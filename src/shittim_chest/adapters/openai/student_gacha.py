@@ -162,7 +162,7 @@ _MNC_COSTUME_GUIDANCE: Final = {
     "Grus": (
         "For clothing and jewelry, match the white long-sleeve shirt, blue jeans and jewelry"
         " from image 3."
-        " Image 3 has no hat, hood or costume headwear. Use a relaxed pose,"
+        " Image 3 has no hat, hood or costume headwear. Start in a relaxed pose,"
         " with no need to match the reference pose."
     ),
 }
@@ -173,23 +173,26 @@ eye shape or eye color from image 1. If image 3 shows no hairstyle, keep the hai
 Match the halo's shape and color and the headwear and hair ornaments visible in image 3.
 If image 3 has no halo, do not add one. If it has no head accessories, do not add any.
 Do not borrow a halo or head accessories from image 1 or image 2."""
-_IMAGE_MOTION = """Make a seamless looping animation. The performer is already in the final
-composition from the first frame. Hold the chosen pose throughout the loop, with the face, torso
-and waist anchored at the same screen positions. Keep the camera, scale, framing, face identity,
-outfit and head accessories consistent in every frame. Keep the specified facial expression.
+_IMAGE_MOTION = """Make a seamless looping animation. Keep the camera and framing fixed.
+The same performer is visible from the first frame through the last.
+Keep the face identity, outfit and head accessories consistent in every frame.
+Keep the specified facial expression.
 Keep the costume from image 3 visible in every frame, including its neckline and outer layers.
-Use only small local movements such as blinking, breathing and slight hair or fabric movement.
-Return smoothly to the starting state. Keep motion out of the reserved dialogue and dossier areas.
-No entrances, exits, vertical or horizontal translation, fades, camera moves, cuts or flashes."""
+Keep every frame subtly distinct with natural movement by the performer.
+During the final frames, naturally bring the performer back toward the starting body position,
+orientation and pose. The last frame should flow into the first like any two adjacent frames.
+Avoid duplicating the first frame at the end, pausing or jumping at the loop boundary.
+Keep motion out of the reserved dialogue and dossier areas.
+No entrances, exits or fades. Avoid cuts, flashes or abrupt changes."""
 _ANIME_MOTION = """Animate with a Live2D-like gentle blink, breathing and subtle motion in the hair
 and costume."""
 _COSPLAY_MOTION = """Give the live-action cosplay a cute, natural motion that suits the costume.
 Preserve the chosen facial expression throughout."""
 _COSPLAY_POSES = (
-    "Choose a natural weight distribution and hold it throughout the loop.",
-    "Choose a slight upper-body angle and hold it throughout the loop.",
+    "Vary how the performer balances their body weight, as the costume allows.",
+    "Vary the upper-body orientation slightly, as the costume allows.",
     "Choose a natural arm placement that showcases the costume within the framing.",
-    "Choose a relaxed shoulder alignment and hold it throughout the loop.",
+    "Vary the alignment of the shoulders gently while keeping the costume visible.",
 )
 
 

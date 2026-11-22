@@ -1059,6 +1059,14 @@ raw High 45組、署名付きDHI VEX適用後のHigh 31組が現行本番とCVE�
 所有者はこのconfigと同一31組に限り、既存と同じ2027-02-19 09:00 JSTまでの受容と必須CI成功後の配信を承認した。
 本番の既承認configを保持したまま今回の実測configを追加し、受容の有効期限を維持する。
 
+2026-11-22 JST、PR #769の完成ARM64 production config
+`sha256:1c6287b8ea870a49e736cf94762c0a4587cfd91aa935ecb36f9f376666d37bcd`を検査した。
+raw High 45組、署名付きDHI VEX適用後のHigh 31組が現行本番とCVE・パッケージ・版・修正状態で一致した。
+新規High、Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは60/60成功した。
+[完成ARM64 SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44981673738/artifacts/14738470019)と[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44981673738/artifacts/14737304576)を照合した。
+所有者はこのconfigと同一31組に限り、既存と同じ2027-02-19 09:00 JSTまでの受容と必須CI成功後の配信を承認した。
+既承認のconfigを保持し、今回の実測configを追加した。受容の有効期限は維持する。
+
 ## 5. 本番配信
 
 ### 共通の工程
