@@ -1067,6 +1067,11 @@ raw High 45組、署名付きDHI VEX適用後のHigh 31組が現行本番とCVE�
 所有者はこのconfigと同一31組に限り、既存と同じ2027-02-19 09:00 JSTまでの受容と必須CI成功後の配信を承認した。
 既承認のconfigを保持し、今回の実測configを追加した。受容の有効期限は維持する。
 
+PR #769のCore配信計画で、ECRが`CVE-2026-5435`の修正版としてglibc `2.41-12+deb13u5`を検出した。
+[Debianの修正情報](https://security-tracker.debian.org/tracker/CVE-2026-5435)と[同系列のDHI ARM64版](https://hub.docker.com/hardened-images/catalog/dhi/python/images/python%2Fdebian-13%2F3.14/sha256-66fb7a9294ccf35d8caece64813a5c566f26766f7242608f7cdd01f06182650b/vulnerabilities)の収録版を照合した。
+同じPython 3.14.10／Debian 13のruntimeベースを新しいindex digestに固定する。
+このベースにはOpenSSLの`CVE-2026-121482`が残る。完成ARM64イメージのSBOM、VEX、Grype、TLSとECRスキャンを確認し、残存リスクは実測のconfig digestと検出項目に結び付ける。
+
 ## 5. 本番配信
 
 ### 共通の工程
