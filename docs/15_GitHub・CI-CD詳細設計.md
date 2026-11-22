@@ -1067,6 +1067,20 @@ raw High 45組、署名付きDHI VEX適用後のHigh 31組が現行本番とCVE�
 所有者はこのconfigと同一31組に限り、既存と同じ2027-02-19 09:00 JSTまでの受容と必須CI成功後の配信を承認した。
 既承認のconfigを保持し、今回の実測configを追加した。受容の有効期限は維持する。
 
+PR #769のCore配信計画で、ECRが`CVE-2026-5435`の修正版としてglibc `2.41-12+deb13u5`を検出した。
+[Debianの修正情報](https://security-tracker.debian.org/tracker/CVE-2026-5435)と[同系列のDHI ARM64版](https://hub.docker.com/hardened-images/catalog/dhi/python/images/python%2Fdebian-13%2F3.14/sha256-66fb7a9294ccf35d8caece64813a5c566f26766f7242608f7cdd01f06182650b/vulnerabilities)の収録版を照合した。
+同じPython 3.14.10／Debian 13のruntimeベースを新しいindex digestに固定する。
+このベースにはOpenSSLの`CVE-2026-121482`が残る。完成ARM64イメージのSBOM、VEX、Grype、TLSとECRスキャンを確認し、残存リスクは実測のconfig digestと検出項目に結び付ける。
+
+PR #770の完成ARM64 config `sha256:ece549bb5e6454a43bda1994d1aa94e23b655ca213e6a453806b62aecc1f9810` では、raw High 45組、署名付きVEX適用後High 32組、修正可能なHigh/Critical 0組、TLS 60/60を確認した。
+[完成ARM64 SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44987037672/artifacts/14740286771)と[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44987037672/artifacts/14740312870)を照合した。
+GrypeのDebianデータ取得は2026年11月21日00:21 UTCで、実体で確認済みの修正20組を検出している。
+glibc `2.41-12+deb13u5` の5435・19499と、OpenSSL `3.5.9-1~deb13u1+dhi0` の107493・107496・124709・88823・95691・95692が対象である。
+[Debianの変更履歴](https://metadata.ftp-master.debian.org/changelogs/main/g/glibc/glibc_2.41-12+deb13u5_changelog)と[Dockerの固定レシピ](https://github.com/docker-hardened-images/catalog/blob/da4329c4f02dbce667e3fb6f9a4ace64afa16eb4/package/deb/main/openssl/debian-13/3.yaml#L69-L97)、署名付きAPTで取得した配布パッケージの変更履歴と実ファイルSHA-256を完成SBOMに照合した。
+所有者はこのconfigに限り、修正済み20組の検査DB例外を2026-12-29 09:00 JSTまで承認した。DB反映で検出が消えた項目は削除する。
+未修正の12組と、ECRが検出した場合のOpenSSL `CVE-2026-121482` の受容期限は2027-02-19 09:00 JSTである。
+ECR限定の承認は最新スキャンを照合した本番環境の承認記録に残す。過去のconfigの別対象や期限へ移さない。
+
 ## 5. 本番配信
 
 ### 共通の工程
