@@ -299,9 +299,18 @@ def test_realigns_nonblack_wrap_even_when_some_frames_have_no_seam(phases, wraps
     assert last[0] - first[0] >= 40
 
 
-def test_recuts_tiled_provider_rows_without_discarding_the_left_subject():
+@pytest.mark.parametrize(
+    ("tile_width", "soft_end"),
+    [
+        pytest.param(451, False, id="clear-boundaries"),
+        pytest.param(474, True, id="tiny-first-strip-with-no-final-divider"),
+        pytest.param(466, True, id="no-final-divider"),
+    ],
+)
+def test_recuts_tiled_provider_rows_without_discarding_the_left_subject(
+    tile_width: int, soft_end: bool
+):
     width, height = ANIMATION_SIZE
-    tile_width = 451
     tiles_per_strip = 4
     leading = 4
     pale = (218, 224, 211)
@@ -312,7 +321,7 @@ def test_recuts_tiled_provider_rows_without_discarding_the_left_subject():
         draw.line((x, 0, x, height - 1), fill=tone)
     for index, x in enumerate(range(22, tile_width - 22, 23)):
         ridge = x + 4 + index * 7 % 13
-        draw.rectangle((x, 0, ridge, 150), fill=(70 + index * 53 % 135, 140, 108))
+        draw.rectangle((x, 0, ridge, 253), fill=(70 + index * 53 % 135, 140, 108))
         draw.rectangle((ridge, 566, x + 20, height), fill=(150, 70 + index * 31 % 140, 112))
 
     frames = []
@@ -322,8 +331,20 @@ def test_recuts_tiled_provider_rows_without_discarding_the_left_subject():
             index = first + position
             tile = background.copy()
             subjects = ImageDraw.Draw(tile)
-            subjects.rectangle((23, 305, 52, 347), fill=(235, 52, 43))
-            subjects.rectangle((397, 305, 426, 347), fill=(39, 192, 61))
+            if soft_end and position == tiles_per_strip - 1:
+                # Feather the last tile into the end of the strip without a divider.
+                blend_width = 12
+                for offset in range(blend_width):
+                    x = tile_width - blend_width + offset
+                    original = (218 - x // 3, 224 - x // 3, 211 - x // 4)
+                    alpha = (offset + 1) / blend_width
+                    tone = tuple(
+                        round(a + (b - a) * alpha) for a, b in zip(original, pale, strict=True)
+                    )
+                    subjects.line((x, 0, x, height - 1), fill=tone)
+            subjects.rectangle((9, 305, 35, 347), fill=(235, 52, 43))
+            right_edge = tile_width - 54
+            subjects.rectangle((right_edge, 305, right_edge + 29, 347), fill=(39, 192, 61))
             center = 168 + index * 5
             subjects.rectangle((center, 304, center + 24, 350), fill=(33, 57, 234))
             strip.paste(tile, (leading + position * tile_width, 0))
@@ -361,7 +382,7 @@ def test_recuts_tiled_provider_rows_without_discarding_the_left_subject():
         for box in ((16, 25, width - 16, 110), (16, 607, width - 16, 690)):
             change = ImageChops.difference(frame.crop(box), decoded[0].crop(box))
             assert max(ImageStat.Stat(change).mean) < 6
-        strip = frame.crop((0, 200, width, 201)).convert("L")
+        strip = frame.crop((0, 280, width, 281)).convert("L")
         steps = ImageChops.difference(
             strip.crop((0, 0, width - 1, 1)), strip.crop((1, 0, width, 1))
         )
@@ -372,10 +393,8 @@ def test_recuts_tiled_provider_rows_without_discarding_the_left_subject():
         pixels = cast(tuple[tuple[int, int, int], ...], subjects.get_flattened_data())
         left = [i % width for i, (r, g, b) in enumerate(pixels) if r > 190 and g < 100 and b < 100]
         right = [i % width for i, (r, g, b) in enumerate(pixels) if g > 150 and r < 100 and b < 110]
-        center = [
-            i % width for i, (r, g, b) in enumerate(pixels) if b > 190 and r < 100 and g < 115
-        ]
-        assert len(left) >= 400 and max(left) < width // 5
+        center = [i % width for i, (r, g, b) in enumerate(pixels) if b > 150 and b - max(r, g) > 70]
+        assert len(left) >= 950 and max(left) < width // 5
         assert len(right) >= 400 and min(right) > width * 4 // 5
         assert len(center) >= 400
         motion.append(min(center))
