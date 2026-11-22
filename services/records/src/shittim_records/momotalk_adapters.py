@@ -309,7 +309,10 @@ def _selfie_wrap_boundaries(frames: list[Image.Image]) -> list[int] | None:
     boundary = min(registered)
     if max(registered) - boundary > 4:
         return None
-    boundaries = [min(width, boundary + offset) for offset in top]
+    # Limit the shared crop before reapplying each frame's offset. Clamping
+    # frames individually would leave a jump when the seam moves off-canvas.
+    boundary = min(boundary, width - max(top))
+    boundaries = [boundary + offset for offset in top]
     return boundaries if min(boundaries) >= width * 4 // 5 else None
 
 

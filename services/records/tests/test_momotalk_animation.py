@@ -218,8 +218,15 @@ def test_only_a_slipping_provider_panel_is_realigned(slips):
     assert ImageChops.difference(decoded[-1], decoded[0]).getbbox()
 
 
-@pytest.mark.parametrize("wraps", [True, False], ids=["moving-wrap", "stationary-edge"])
-def test_realigns_nonblack_wrap_even_when_some_frames_have_no_seam(wraps):
+@pytest.mark.parametrize(
+    ("phases", "wraps"),
+    [
+        pytest.param(((0, 465), (16, 448), (35, 430), (51, None)), True, id="leftward-wrap"),
+        pytest.param(((51, 438), (35, 454), (16, 473), (0, None)), True, id="off-canvas-wrap"),
+        pytest.param(((0, 448),), False, id="stationary-edge"),
+    ],
+)
+def test_realigns_nonblack_wrap_even_when_some_frames_have_no_seam(phases, wraps):
     width, height = ANIMATION_SIZE
     background = Image.new("RGB", (width + 64, height), (169, 186, 194))
     architecture = ImageDraw.Draw(background)
@@ -236,7 +243,7 @@ def test_realigns_nonblack_wrap_even_when_some_frames_have_no_seam(wraps):
 
     frames = []
     for index in range(ANIMATION_FRAME_COUNT):
-        slip, seam = ((0, 465), (16, 448), (35, 430), (51, None))[index % 4] if wraps else (0, 448)
+        slip, seam = phases[index % len(phases)]
         scene = background.copy()
         character_x = 212 + 5 * index
         ImageDraw.Draw(scene).rectangle(
