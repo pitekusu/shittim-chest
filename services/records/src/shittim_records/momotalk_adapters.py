@@ -6,6 +6,7 @@ import warnings
 from collections.abc import Iterator
 from contextlib import suppress
 from datetime import date, datetime
+from itertools import batched, pairwise
 from statistics import fmean
 from struct import error as StructError
 from typing import TYPE_CHECKING, Any, cast
@@ -232,9 +233,9 @@ def _selfie_seam_start(frame: Image.Image) -> int | None:
     return None
 
 
-def _selfie_contrast_seam_start(gray: Image.Image) -> int | None:
+def _selfie_contrast_seam_start(gray: Image.Image, *, minimum_x: int | None = None) -> int | None:
     width, height = gray.size
-    start = width * 4 // 5
+    start = width * 4 // 5 if minimum_x is None else minimum_x
     # A wrapped-in panel can have no black divider. Its boundary still changes
     # luminance sharply along most of the frame height.
     edges = ImageChops.difference(
@@ -245,7 +246,16 @@ def _selfie_contrast_seam_start(gray: Image.Image) -> int | None:
         for x in range(edges.width - 4)
         if sum(edges.crop((x, 0, x + 1, height)).histogram()[32:]) >= height * 0.6
     ]
-    if 1 <= len(columns) <= 3 and columns[-1] - columns[0] == len(columns) - 1:
+    if columns and columns[-1] - columns[0] <= 2:
+        if minimum_x is not None:
+            # For a strip cut, use the strongest boundary rather than its
+            # antialiased leading pixels, which can vary between rows.
+            return max(
+                columns,
+                key=lambda x: ImageStat.Stat(
+                    edges.crop((x - start, 0, x - start + 1, height))
+                ).mean[0],
+            )
         return columns[0]
     return None
 
@@ -324,13 +334,86 @@ def _selfie_frame_change(frames: list[Image.Image]) -> float:
     )
 
 
+def _repair_selfie_panel_strips(frames: list[Image.Image]) -> list[Image.Image] | None:
+    width, height = ANIMATION_SIZE
+    gray = [frame.convert("L") for frame in frames]
+    # Some provider GIFs divide each four-panel strip into equal GIF windows
+    # even though the original panels are narrower than those windows.
+    strip_size = 4
+    rows = list(batched(gray, strip_size, strict=True))
+    right_edges = []
+    pitches = []
+    for row in rows:
+        edges = [
+            index * width + seam
+            for index, frame in enumerate(row)
+            if (seam := _selfie_contrast_seam_start(frame, minimum_x=width * 3 // 4)) is not None
+        ]
+        if len(edges) != strip_size:
+            return None
+        right_edges.append(edges)
+        pitches.extend(right - left for left, right in pairwise(edges))
+        # The edges of adjacent GIF windows must be contiguous image content.
+        for before, after in pairwise(row):
+            join = ImageChops.difference(
+                before.crop((width - 1, 0, width, height)), after.crop((0, 0, 1, height))
+            )
+            if ImageStat.Stat(join).mean[0] > 36:
+                return None
+
+    pitch = round(fmean(pitches))
+    if (
+        not width * 7 // 8 <= pitch <= width - 8
+        or max(pitches) - min(pitches) > 4
+        or any(max(column) - min(column) > 3 for column in zip(*right_edges, strict=True))
+    ):
+        return None
+
+    starts = [edges[0] - pitch for edges in right_edges]
+    if any(not 0 <= start <= 12 for start in starts):
+        return None
+
+    inset = 4
+    crop_width = min(pitch, min(pitches)) - inset * 2
+    crop_height = round(crop_width * height / width)
+    top = (height - crop_height) // 2
+    repaired = []
+    for row, start, edges in zip(
+        batched(frames, strip_size, strict=True), starts, right_edges, strict=True
+    ):
+        strip = Image.new("RGB", (width * strip_size, height))
+        for i, frame in enumerate(row):
+            strip.paste(frame, (i * width, 0))
+        for edge in [start, *edges[:-1]]:
+            x = edge + inset
+            tile = strip.crop((x, top, x + crop_width, top + crop_height))
+            # Smooth only the two pixels where an extracted tile crosses an
+            # original GIF window boundary, using pixels of that same tile.
+            join = width - x % width
+            if 2 <= join <= crop_width - 2:
+                left = tile.crop((join - 2, 0, join - 1, crop_height))
+                right = tile.crop((join + 1, 0, join + 2, crop_height))
+                tile.paste(Image.blend(left, right, 1 / 3), (join - 1, 0))
+                tile.paste(Image.blend(left, right, 2 / 3), (join, 0))
+            repaired.append(tile.resize(ANIMATION_SIZE, Image.Resampling.LANCZOS))
+
+    if _selfie_frame_change(repaired) >= _selfie_frame_change(frames) * 0.75:
+        return None
+    aligned = [frame.convert("L") for frame in repaired]
+    for y in (0, height - height // 5):
+        offsets = _selfie_band_offsets(aligned, y)
+        if offsets is None or max(map(abs, offsets)) > 3:
+            return None
+    return repaired
+
+
 def _repair_slipping_selfie(frames: list[Image.Image]) -> list[Image.Image] | None:
     seams = [_selfie_seam_start(frame) for frame in frames]
     boundaries = [seam for seam in seams if seam is not None]
     if len(boundaries) != len(frames) or max(boundaries) - min(boundaries) < 8:
         inferred = _selfie_wrap_boundaries(frames)
         if inferred is None:
-            return None
+            return _repair_selfie_panel_strips(frames)
         boundaries = inferred
 
     # Keep the shared region of the primary panel to the left of each seam.
