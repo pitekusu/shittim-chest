@@ -3,6 +3,7 @@
 import base64
 import io
 from datetime import timedelta
+from itertools import pairwise
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -296,3 +297,86 @@ def test_realigns_nonblack_wrap_even_when_some_frames_have_no_seam(phases, wraps
     assert first is not None and last is not None
     assert first[2] - first[0] >= 20 and last[2] - last[0] >= 20
     assert last[0] - first[0] >= 40
+
+
+def test_recuts_tiled_provider_rows_without_discarding_the_left_subject():
+    width, height = ANIMATION_SIZE
+    tile_width = 451
+    tiles_per_strip = 4
+    leading = 4
+    pale = (218, 224, 211)
+    background = Image.new("RGB", (tile_width, height))
+    draw = ImageDraw.Draw(background)
+    for x in range(tile_width):
+        tone = (218 - x // 3, 224 - x // 3, 211 - x // 4)
+        draw.line((x, 0, x, height - 1), fill=tone)
+    for index, x in enumerate(range(22, tile_width - 22, 23)):
+        ridge = x + 4 + index * 7 % 13
+        draw.rectangle((x, 0, ridge, 150), fill=(70 + index * 53 % 135, 140, 108))
+        draw.rectangle((ridge, 566, x + 20, height), fill=(150, 70 + index * 31 % 140, 112))
+
+    frames = []
+    for first in range(0, ANIMATION_FRAME_COUNT, tiles_per_strip):
+        strip = Image.new("RGB", (width * tiles_per_strip, height), pale)
+        for position in range(tiles_per_strip):
+            index = first + position
+            tile = background.copy()
+            subjects = ImageDraw.Draw(tile)
+            subjects.rectangle((23, 305, 52, 347), fill=(235, 52, 43))
+            subjects.rectangle((397, 305, 426, 347), fill=(39, 192, 61))
+            center = 168 + index * 5
+            subjects.rectangle((center, 304, center + 24, 350), fill=(33, 57, 234))
+            strip.paste(tile, (leading + position * tile_width, 0))
+        # The provider sliced the full strip at the requested window width
+        # even though the actual panels were narrower, so a frame can borrow
+        # the next tile's left side and lose part of its own left subject.
+        for position in range(tiles_per_strip):
+            left = position * width
+            frames.append(strip.crop((left, 0, left + width, height)))
+
+    with io.BytesIO() as buffer:
+        frames[0].save(
+            buffer,
+            format="GIF",
+            save_all=True,
+            append_images=frames[1:],
+            duration=ANIMATION_FRAME_MS,
+            loop=0,
+            disposal=2,
+        )
+        raw = buffer.getvalue()
+
+    encoded, poster = decode_selfie_animation(raw)
+    assert encoded != raw and poster.size == ANIMATION_SIZE
+    with Image.open(io.BytesIO(encoded)) as image:
+        assert image.size == ANIMATION_SIZE and image.info["loop"] == 0
+        decoded = []
+        for frame in ImageSequence.Iterator(image):
+            assert frame.info["duration"] == ANIMATION_FRAME_MS
+            decoded.append(frame.convert("RGB"))
+    assert len(decoded) == ANIMATION_FRAME_COUNT
+
+    motion = []
+    for frame in decoded:
+        for box in ((16, 25, width - 16, 110), (16, 607, width - 16, 690)):
+            change = ImageChops.difference(frame.crop(box), decoded[0].crop(box))
+            assert max(ImageStat.Stat(change).mean) < 6
+        strip = frame.crop((0, 200, width, 201)).convert("L")
+        steps = ImageChops.difference(
+            strip.crop((0, 0, width - 1, 1)), strip.crop((1, 0, width, 1))
+        )
+        _, high = cast(tuple[int, int], steps.getextrema())
+        assert high < 32
+
+        subjects = frame.crop((0, 265, width, 400))
+        pixels = cast(tuple[tuple[int, int, int], ...], subjects.get_flattened_data())
+        left = [i % width for i, (r, g, b) in enumerate(pixels) if r > 190 and g < 100 and b < 100]
+        right = [i % width for i, (r, g, b) in enumerate(pixels) if g > 150 and r < 100 and b < 110]
+        center = [
+            i % width for i, (r, g, b) in enumerate(pixels) if b > 190 and r < 100 and g < 115
+        ]
+        assert len(left) >= 400 and max(left) < width // 5
+        assert len(right) >= 400 and min(right) > width * 4 // 5
+        assert len(center) >= 400
+        motion.append(min(center))
+    assert all(a < b for a, b in pairwise(motion))
