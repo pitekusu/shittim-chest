@@ -232,6 +232,90 @@ def _selfie_seam_start(frame: Image.Image) -> int | None:
     return None
 
 
+def _selfie_contrast_seam_start(gray: Image.Image) -> int | None:
+    width, height = gray.size
+    start = width * 4 // 5
+    # A wrapped-in panel can have no black divider. Its boundary still changes
+    # luminance sharply along most of the frame height.
+    edges = ImageChops.difference(
+        gray.crop((start - 1, 0, width - 1, height)), gray.crop((start, 0, width, height))
+    )
+    columns = [
+        start + x
+        for x in range(edges.width - 4)
+        if sum(edges.crop((x, 0, x + 1, height)).histogram()[32:]) >= height * 0.6
+    ]
+    if 1 <= len(columns) <= 3 and columns[-1] - columns[0] == len(columns) - 1:
+        return columns[0]
+    return None
+
+
+def _selfie_band_offsets(frames: list[Image.Image], top: int) -> list[int] | None:
+    width, height = frames[0].size
+    band_height = height // 5
+    max_shift = width // 6
+    bands = [
+        frame.crop((0, top, width, top + band_height)).resize(
+            (width, band_height // 6), Image.Resampling.BOX
+        )
+        for frame in frames
+    ]
+    bottom = bands[0].height
+    reference = bands[0].crop((max_shift, 0, width - max_shift, bottom))
+    if ImageStat.Stat(reference).stddev[0] < 10:
+        return None
+
+    offsets = [0]
+    for band in bands[1:]:
+        errors = {
+            offset: ImageStat.Stat(
+                ImageChops.difference(
+                    reference,
+                    band.crop((max_shift + offset, 0, width - max_shift + offset, bottom)),
+                )
+            ).mean[0]
+            for offset in range(-max_shift, max_shift + 1)
+        }
+        offset = min(errors, key=lambda x: (errors[x], abs(x)))
+        if abs(offset) >= 8 and errors[offset] >= errors[0] * 0.8:
+            return None
+        offsets.append(offset)
+    return offsets
+
+
+def _selfie_wrap_boundaries(frames: list[Image.Image]) -> list[int] | None:
+    gray = [frame.convert("L") for frame in frames]
+    seams = {
+        i: seam
+        for i, frame in enumerate(gray)
+        if (seam := _selfie_contrast_seam_start(frame)) is not None
+    }
+    if len(seams) * 2 < len(frames) or max(seams.values()) - min(seams.values()) < 8:
+        return None
+
+    width, height = frames[0].size
+    top = _selfie_band_offsets(gray, 0)
+    bottom = _selfie_band_offsets(gray, height - height // 5)
+    if (
+        top is None
+        or bottom is None
+        or any(abs(a - b) > 3 for a, b in zip(top, bottom, strict=True))
+    ):
+        return None
+
+    # Confirm the visible boundaries move with the scene. This also provides
+    # a safe crop limit for frames where the panel edge is outside the picture.
+    registered = [seam - top[i] for i, seam in seams.items()]
+    boundary = min(registered)
+    if max(registered) - boundary > 4:
+        return None
+    # Limit the shared crop before reapplying each frame's offset. Clamping
+    # frames individually would leave a jump when the seam moves off-canvas.
+    boundary = min(boundary, width - max(top))
+    boundaries = [boundary + offset for offset in top]
+    return boundaries if min(boundaries) >= width * 4 // 5 else None
+
+
 def _selfie_frame_change(frames: list[Image.Image]) -> float:
     samples = [frame.resize((120, 180), Image.Resampling.BOX).convert("L") for frame in frames]
     return fmean(
@@ -244,7 +328,10 @@ def _repair_slipping_selfie(frames: list[Image.Image]) -> list[Image.Image] | No
     seams = [_selfie_seam_start(frame) for frame in frames]
     boundaries = [seam for seam in seams if seam is not None]
     if len(boundaries) != len(frames) or max(boundaries) - min(boundaries) < 8:
-        return None
+        inferred = _selfie_wrap_boundaries(frames)
+        if inferred is None:
+            return None
+        boundaries = inferred
 
     # Keep the shared region of the primary panel to the left of each seam.
     # The right strip may be another panel, so wrapping it back adds a second seam.

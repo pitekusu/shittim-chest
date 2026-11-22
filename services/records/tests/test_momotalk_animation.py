@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from PIL import Image, ImageChops, ImageDraw, ImageSequence
+from PIL import Image, ImageChops, ImageDraw, ImageSequence, ImageStat
 from tests.test_momotalk import snapshot
 
 from shittim_records.momotalk import (
@@ -216,3 +216,83 @@ def test_only_a_slipping_provider_panel_is_realigned(slips):
         if moving_area:
             assert 230 < moving_area[1] < 360 and moving_area[3] < 390
     assert ImageChops.difference(decoded[-1], decoded[0]).getbbox()
+
+
+@pytest.mark.parametrize(
+    ("phases", "wraps"),
+    [
+        pytest.param(((0, 465), (16, 448), (35, 430), (51, None)), True, id="leftward-wrap"),
+        pytest.param(((51, 438), (35, 454), (16, 473), (0, None)), True, id="off-canvas-wrap"),
+        pytest.param(((0, 448),), False, id="stationary-edge"),
+    ],
+)
+def test_realigns_nonblack_wrap_even_when_some_frames_have_no_seam(phases, wraps):
+    width, height = ANIMATION_SIZE
+    background = Image.new("RGB", (width + 64, height), (169, 186, 194))
+    architecture = ImageDraw.Draw(background)
+    for index, x in enumerate(range(0, background.width, 23)):
+        ridge = x + 4 + index * 7 % 13
+        architecture.rectangle(
+            (x, 0, ridge, 180), fill=(75 + index * 73 % 135, 79 + index * 19 % 140, 100)
+        )
+        architecture.rectangle(
+            (ridge, 550, x + 22, height), fill=(115, 65 + index * 29 % 172, 78 + index * 61 % 140)
+        )
+    architecture.rectangle((0, 210, background.width, 510), fill=(169, 190, 205))
+    architecture.rectangle((0, 525, background.width, 548), fill=(193, 164, 132))
+
+    frames = []
+    for index in range(ANIMATION_FRAME_COUNT):
+        slip, seam = phases[index % len(phases)]
+        scene = background.copy()
+        character_x = 212 + 5 * index
+        ImageDraw.Draw(scene).rectangle(
+            (character_x, 322, character_x + 23, 347), fill=(209, 57, 56)
+        )
+        frame = scene.crop((slip, 0, width + slip, height))
+        if seam is not None:
+            ImageDraw.Draw(frame).rectangle((seam, 0, width - 1, height - 1), fill=(65, 69, 185))
+        frames.append(frame)
+
+    with io.BytesIO() as buffer:
+        frames[0].save(
+            buffer,
+            format="GIF",
+            save_all=True,
+            append_images=frames[1:],
+            duration=ANIMATION_FRAME_MS,
+            loop=0,
+            disposal=2,
+        )
+        raw = buffer.getvalue()
+
+    encoded, poster = decode_selfie_animation(raw)
+    if not wraps:
+        assert encoded == raw
+        return
+
+    assert encoded != raw
+    assert poster.size == ANIMATION_SIZE
+    with Image.open(io.BytesIO(encoded)) as animation:
+        assert animation.size == ANIMATION_SIZE
+        assert animation.info["loop"] == 0
+        decoded = []
+        for frame in ImageSequence.Iterator(animation):
+            assert frame.info["duration"] == ANIMATION_FRAME_MS
+            decoded.append(frame.convert("RGB"))
+    assert len(decoded) == ANIMATION_FRAME_COUNT
+
+    band_boxes = ((16, 25, width - 16, 110), (16, 607, width - 16, 690))
+    for frame in decoded:
+        pixels = cast(tuple[tuple[int, int, int], ...], frame.get_flattened_data())
+        assert not any(r < 100 and g < 100 and b > 160 for r, g, b in pixels)
+        for box in band_boxes:
+            change = ImageChops.difference(frame.crop(box), decoded[0].crop(box))
+            assert max(ImageStat.Stat(change).mean) < 6
+    foreground = (0, 260, width, 400)
+    red_mask = [0] * 195 + [255] * 61
+    first = decoded[0].crop(foreground).getchannel("R").point(red_mask).getbbox()
+    last = decoded[-1].crop(foreground).getchannel("R").point(red_mask).getbbox()
+    assert first is not None and last is not None
+    assert first[2] - first[0] >= 20 and last[2] - last[0] >= 20
+    assert last[0] - first[0] >= 40
