@@ -276,7 +276,7 @@ Python 3.15へ移行する。Web本体はTypeScript、Android本体はKotlin/Com
 |---|---|---|
 | UTF-8既定化 | 日本語の更新情報、契約生成、CI/CDのファイル入出力 | **移行時に採用**。localeによる差を減らせる。公開JSON・状態ファイルでは引き続き`encoding="utf-8"`を明示する |
 | `profiling.sampling`（Tachyon） | RecordsのOGPレンダラと配布ZIPの性能調査 | **必要時のローカル調査に採用**。固定入力で初回と再実行を計り、標準機能でCPU処理と待機を切り分ける。計測結果から改善箇所を選ぶ |
-| 明示的なlazy import | `services/records/src/shittim_records/lambda_handlers.py`のhandler固有依存、`tools/android_release.py`のGoogle API依存 | **起動時間を計測してから限定導入**。不要な依存の読み込みを遅らせられる。import時の副作用、例外発生時点、初回呼び出し時間を確認する |
+| 明示的なlazy import | CoreのDiscordアダプターの公開名とOpenAI計測型、Recordsの共有Lambdaの処理固有依存 | **計測した範囲で採用**。公開名を維持し、他の経路で不要な依存を初回利用まで読み込まない |
 | `frozendict` | `admin_status_adapters.py`の固定対応表、Coreの`ParticipantProfiles`の設定snapshot | **小さな保守改善の候補**。既存の`MappingProxyType(dict(...))`を標準の不変辞書で表せる。既存実装も保護されており優先度は低い。深い不変性や`dict`との型互換性は仮定しない |
 | `sentinel` | `src/shittim_chest/adapters/openai/evidence.py`の`_MISSING = object()` | **低優先候補**。欠落値の名前・型を明確にできる。現状に不具合はなく、移行必須の置換にはしない |
 | `TypedDict`の`closed`／`extra_items` | CI/CDツールの状態辞書など、必要な箇所の型境界 | **必要箇所だけ検討**。実行時の入力検証は提供しない。公開契約は既存のPydanticと生成TypeScript/Kotlinを維持する |
@@ -286,13 +286,38 @@ Python 3.15へ移行する。Web本体はTypeScript、Android本体はKotlin/Com
 独立した3.15標準ライブラリtoolのローカル調査手順へ採用した。
 運用は[CI/CD設計の標準プロファイラ](15_GitHub・CI-CD詳細設計.md#標準プロファイラによるローカル計測)を参照する。
 
-移行前の比較では、限定した`__lazy_modules__`候補のZIP出力とhelpが3.14／3.15で一致した。
-既存の関数内importと`TYPE_CHECKING`を使う箇所は、初回応答と例外発生時点を含めて計測し、
-効果を確認できた依存だけを遅延読み込みの候補にする。
+### CoreとRecordsの起動・初回処理の計測
 
-UTF-8の既定化と、標準profilerを使った必要時の調査を優先する。
-一括の`PYTHON_LAZY_IMPORTS=all`、JIT、free-threaded buildを検討する場合は、
-既存SDKとの互換性とARM64 Linuxでの効果を個別に確認する。
+2026年11月23日に、Python 3.15.2のLinux x86-64で、同じ入力を使う変更前後の実行順をペアごとに入れ替えて計測した。
+各試行を新しいPythonプロセスで始め、外部サービスには接続せず、完了した初回処理の結果も照合した。
+計測時は`PYTHON_LAZY_IMPORTS=normal`と`PYTHON_JIT=0`を指定した。
+
+Core Lambdaは、Discordアダプターの公開名とOpenAI計測の型を必要になった時点で読み込む。
+統合差分の16ペアで、署名付きDiscord受付から永続化までの初回中央値は547→371 ms、
+ステータス確認から投稿までは579→397 msだった。ローカルの受付処理ではSnapStart用の初期化を通したが、
+AWS上でのスナップショット復元時間は計測していない。
+モバイル受付で使うDiscordの日時変換は、遅延候補で初回処理時間とピークメモリが増えたため、起動時の読み込みを維持する。
+
+Recordsの共有ハンドラーでは、設定用プロンプト、Inspector、メモリアル、通知の依存を遅延させた。
+統合差分の14ペアでプロセス起動から初回の結果までを計り、中央値はランキング生成が850→545 ms、
+親愛度の投影が845→549 ms、Inspectorのキャッシュ読み取りが844→755 ms、メモリアルの再処理確認が843→775 msだった。
+Inspectorとメモリアルは初回ハンドラーへ約218〜230 msの読み込みが移るため、再実行と初回処理は別々に評価する。
+Galleryの画像検証とメモリアルのデコード制限は既存経路で維持する。
+
+Core Fargateの候補は、画像・生徒ガチャ関連の6 importを遅延させる変更だった。
+本番相当の生徒ガチャ有効設定で、実際の構成から依存を組み立て、外部サービスをテスト代替にした討論が完了するまでを20ペア計測した。
+中央値は変更前864.8 ms、変更後864.7 msで、有意な改善は確認できなかった。
+生徒ガチャ無効では870.2 msから835.8 msへ改善した。現行の本番設定では起動時に候補の依存を使用するため、この変更は保留する。
+
+### JITの採用判断
+
+管理LambdaのPythonはJITが無効で、現在のCore Fargate向けDHIのARM64 CPythonもJITを組み込んでいない。
+JITを切り替えられる同一のPython 3.15.2 x86-64バイナリで、無効→有効の初回中央値は、Coreの討論完了が873.0→877.3 ms（8ペア）、
+RecordsのOGP画像3枚が928.1→931.3 ms（3ペア）だった。Coreのウォーム処理では約0.05 msの差に留まり、現段階の本番採用は保留する。
+ARM64で採用を検討する際は、JITを利用できる同一ビルド上で無効／有効を比較し、初回処理の時間、反復処理の時間、メモリを確認する。
+別のPythonビルドを配布する場合は、既存の依存・署名・TLSとイメージ監査を新しい成果物で検証する。
+[Lambdaのランタイム仕様](https://docs.aws.amazon.com/lambda/latest/dg/lambda-python.html#python-disabled-features)と
+[CPythonのJITビルド条件](https://docs.python.org/3.15/using/configure.html#cmdoption-enable-experimental-jit)を参照する。
 
 機能仕様は[Python 3.15の変更点](https://docs.python.org/3.15/whatsnew/3.15.html)、
 計測方法は[標準sampling profiler](https://docs.python.org/3.15/library/profiling.sampling.html)を参照する。

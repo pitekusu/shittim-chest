@@ -12,19 +12,21 @@ from shittim_chest.adapters.discord.errors import (
     DiscordThreadUnavailable,
     DiscordUnavailable,
 )
-from shittim_chest.adapters.discord.farewell import (
+
+# REST-only consumers can use the package without loading gateway adapters.
+lazy from shittim_chest.adapters.discord.farewell import (
     DiscordFarewellSender,
     FarewellDeliveryError,
 )
-from shittim_chest.adapters.discord.gateway import (
+lazy from shittim_chest.adapters.discord.gateway import (
     DiscordClientSupervisor,
     DiscordPyGateway,
     build_discord_clients,
 )
-from shittim_chest.adapters.discord.interactions import DiscordInteractionController
-from shittim_chest.adapters.discord.publisher import DiscordPyPublisher
-from shittim_chest.adapters.discord.recovery import DiscordOutboxRecovery
-from shittim_chest.adapters.discord.status import (
+lazy from shittim_chest.adapters.discord.interactions import DiscordInteractionController
+lazy from shittim_chest.adapters.discord.publisher import DiscordPyPublisher
+lazy from shittim_chest.adapters.discord.recovery import DiscordOutboxRecovery
+lazy from shittim_chest.adapters.discord.status import (
     DiscordRestStatusGateway,
     create_discord_status_http_client,
 )

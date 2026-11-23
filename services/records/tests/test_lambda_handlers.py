@@ -71,8 +71,8 @@ import shittim_records.read_handler
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize("handler", ("auth_handler", "read_handler"))
-def test_http_lambda_entry_points_avoid_unrelated_imports(handler: str) -> None:
+@pytest.mark.parametrize("handler", ("auth_handler", "lambda_handlers", "read_handler"))
+def test_lambda_entry_points_avoid_unrelated_imports(handler: str) -> None:
     script = """
 import importlib
 import sys
@@ -82,13 +82,14 @@ unrelated = {
     "firebase_admin",
     "openai",
     "PIL",
-    "shittim_records.lambda_handlers",
     "shittim_records.momotalk_adapters",
 }
+if sys.argv[1] != "lambda_handlers":
+    unrelated.add("shittim_records.lambda_handlers")
 assert not unrelated.intersection(sys.modules), unrelated.intersection(sys.modules)
 """
     result = subprocess.run(  # noqa: S603 - fixed interpreter and local script.
-        [sys.executable, "-c", script, handler],
+        [sys.executable, "-X", "lazy_imports=normal", "-c", script, handler],
         check=False,
         capture_output=True,
         text=True,
