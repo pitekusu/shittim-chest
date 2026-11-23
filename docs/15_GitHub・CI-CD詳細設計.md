@@ -283,6 +283,9 @@ Action標準のpnpm依存キャッシュと`cache-toolchain: true`を使う。No
 `--continue-on-error`で残りの整形・lint・型診断を表示してから失敗を返す。
 IaCのローカル再確認では`npm run test:infra:failed`で直前の失敗だけを再実行できる。
 直前に失敗がなければ成功で終了する。CIとReleaseからは全件を実行する。
+`npm run synth`または`npm run synth:records`の後に
+`npm run cdk -- explore --output cdk.out`を実行すると、ローカルのブラウザーで
+synth結果のconstruct構成とCloudFormationテンプレートを確認できる。
 
 React Compilerは2026年11月16日にランキングの5コンポーネントをアノテーションで選んで計測した。
 Viteの本番ビルド各6回の中央値は、現行0.877秒、Compiler直列1.275秒、Babelワーカー並列1.325秒だった。
@@ -362,6 +365,10 @@ Web／Discord入力からglobへ渡す経路や既定値を書き換える設定
 2026-11-21、PR #763で期限切れを検出した。公式npm配布のaws-cdk-lib 2.276.0と2.277.0も
 minimatch 10.2.6を同梱していることを照合した。所有者は同じModerate 1件を1年間受容した。
 新しい失効時刻は2027-11-21 00:00 UTC（09:00 JST）である。
+[aws-cdk-lib 2.278.0](https://github.com/aws/aws-cdk/releases/tag/v2.278.0)の公式npm配布物で
+同梱minimatch 11.0.9を確認し、この例外を削除した。Records Lambdaは配布バンドルと試験の対象である
+Python 3.14を使用する。CDKへの3.15追加に伴う最新バージョンの指摘は、対象関数の
+`AwsSolutions-L1`だけを理由付きで承認する。
 2026-10-03に受容したbrace-expansionの旧3件は、CDK 2.273.0での上流修正採用時に削除済みである。
 
 ## 3. 依存と配信ツールの更新
@@ -431,7 +438,10 @@ CoreのDHIは別の採用条件を持つ。2026年10月22日、認証済みregis
 
 ### Python 3.15への移行評価（2026年10月14日）
 
-2026年11月5日に配布・依存の状況を再確認した。
+2026年11月20日に[AWSがLambda Event FunctionsのPython 3.15正式対応と、
+Web FunctionsのPython 3.15プレビューを発表した](https://aws.amazon.com/about-aws/whats-new/2026/11/aws-lambda-python-315/)。
+CDKも`Runtime.PYTHON_3_15`を提供している。Core／Recordsは3.14向けに依存と配布物を固定しており、
+バンドルと完成ARM64イメージの検証が移行条件に残る。以下の表は2026年11月5日時点の記録である。
 [Issue #599](https://github.com/pitekusu/shittim-chest/issues/599)の更新要求は未完了。
 [Python 3.15.2](https://www.python.org/downloads/release/python-3152/)は10月25日公開済みで、
 侵害中間CA鍵の拒否などのセキュリティ修正を含む。下記の配布・互換性条件を満たすまで現行3.14系列を維持する。
