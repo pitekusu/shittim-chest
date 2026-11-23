@@ -25,6 +25,7 @@ from shittim_records.contracts import (
     CostPeriod,
     CostsResponse,
     ImageAvatarRef,
+    NextOpenAISubscriptionCredit,
     ParticipantAffectionRanking,
     ParticipantSlot,
     PlaceholderAvatarRef,
@@ -46,6 +47,7 @@ from shittim_records.contracts import (
 )
 from shittim_records.costs import (
     CostDataInvalid,
+    OpenAISubscription,
     StoredDailyCost,
     StoredDailyRate,
     build_cost_view,
@@ -149,6 +151,8 @@ class RecordsReader(Protocol):
     def load_cost_ledger(
         self,
     ) -> tuple[tuple[StoredDailyCost, ...], tuple[StoredDailyRate, ...]]: ...
+
+    def load_openai_subscription(self) -> OpenAISubscription | None: ...
 
     def load_profiles(self, *, requester_keys: tuple[str, ...]) -> dict[str, RequesterProfile]: ...
 
@@ -1089,7 +1093,9 @@ class RecordsReadService:
             generated_at=generated_at,
         )
 
-    def get_costs(self, *, period: CostPeriod, now: datetime) -> CostsResponse:
+    def get_costs(
+        self, *, period: CostPeriod, now: datetime, include_subscription_credits: bool = False
+    ) -> CostsResponse:
         if now.tzinfo is None or now.utcoffset() is None:
             raise ReadFailure("REQUEST_INVALID", 400)
         try:
@@ -1099,7 +1105,9 @@ class RecordsReadService:
                 rates=rates,
                 period=period,
                 now=now,
+                openai_subscription=self._reader.load_openai_subscription(),
             )
+            next_credit = view.openai_next_subscription_credit
             return CostsResponse(
                 schema_version=1,
                 period=view.period,
@@ -1122,6 +1130,17 @@ class RecordsReadService:
                 ),
                 updated_at=view.updated_at,
                 status=view.status,
+                openai_subscription_credit=(
+                    view.openai_subscription_credit_jpy if include_subscription_credits else None
+                ),
+                openai_next_subscription_credit=(
+                    NextOpenAISubscriptionCredit(
+                        date=next_credit.start_date,
+                        amount_usd=f"{next_credit.amount_usd:.2f}",
+                    )
+                    if include_subscription_credits and next_credit is not None
+                    else None
+                ),
             )
         except (CostDataInvalid, ValidationError) as error:
             raise ReadFailure("INSIGHTS_UNAVAILABLE", 503) from error

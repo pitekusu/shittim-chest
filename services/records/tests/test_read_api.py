@@ -21,7 +21,7 @@ from tests.factories import NOW, completed_snapshot, presentation
 
 from shittim_records.archive import project_completed_debate
 from shittim_records.contracts import RecordSearchRequest
-from shittim_records.costs import CostCategory, StoredDailyCost, StoredDailyRate
+from shittim_records.costs import CostCategory, OpenAISubscription, StoredDailyCost, StoredDailyRate
 from shittim_records.read_api import (
     AffectionRankingQuery,
     ArchivePage,
@@ -76,6 +76,7 @@ class FakeReader:
                 collected_at=NOW,
             ),
         )
+        self.openai_subscription: OpenAISubscription | None = None
 
     def list_meta(self, **kwargs: Any) -> ArchivePage:
         self.list_calls.append(kwargs)
@@ -142,6 +143,9 @@ class FakeReader:
         self,
     ) -> tuple[tuple[StoredDailyCost, ...], tuple[StoredDailyRate, ...]]:
         return self.costs, self.rates
+
+    def load_openai_subscription(self) -> OpenAISubscription | None:
+        return self.openai_subscription
 
     def load_profiles(
         self,
@@ -951,6 +955,32 @@ def test_costs_fail_closed_on_duplicate_stored_daily_record() -> None:
         records.get_costs(period="week", now=NOW)
 
     assert (caught.value.code, caught.value.status) == ("INSIGHTS_UNAVAILABLE", 503)
+
+
+def test_subscription_credits_adjust_both_contracts_and_only_new_contract_reports_details() -> None:
+    records, reader = service()
+    reader.openai_subscription = OpenAISubscription.model_validate(
+        {
+            "grants": [
+                {"start_date": "2026-08-14", "end_date": "2026-08-15", "amount_usd": "2.50"}
+            ],
+            "monthly_renewal": {"start_date": "2026-08-26", "amount_usd": "10.00"},
+        }
+    )
+
+    legacy = records.get_costs(period="all", now=NOW).model_dump(by_alias=True, mode="json")
+    current = records.get_costs(
+        period="all", now=NOW, include_subscription_credits=True
+    ).model_dump(by_alias=True, mode="json")
+
+    assert current.pop("openaiSubscriptionCredit") == "375.000000"
+    assert current.pop("openaiNextSubscriptionCredit") == {
+        "date": "2026-08-26",
+        "amountUsd": "10.00",
+    }
+    assert current == legacy
+    assert legacy["breakdown"]["openai"] == "75.000000"
+    assert legacy["total"] == "1125.000000"
 
 
 @pytest.mark.parametrize(

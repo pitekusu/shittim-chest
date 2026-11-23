@@ -107,10 +107,22 @@ class InsightsScreenUiTest {
     compose.onNodeWithText("131 円").assertIsDisplayed()
     compose.onNodeWithText(compose.activity.getString(R.string.insights_cost_partial)).assertIsDisplayed()
     capture("insights-costs-light")
+    val creditText = compose.activity.getString(R.string.insights_cost_openai_subscription_credit, "2")
+    val nextCreditText = compose.activity.getString(R.string.insights_cost_openai_next_subscription_credit,
+      "2026/12/04", "80.00")
     compose.runOnIdle {
       assertEquals("0", formatInsightsYen(BigDecimal("0.000000")))
       assertEquals("1", formatInsightsYen(BigDecimal("0.000001")))
       assertEquals("1,001", formatInsightsYen(BigDecimal("1000.000001")))
+      state.value = state.value.copy(costs = mapOf(InsightsPeriod.Today to InsightsResource(
+        data = costs.copy(openaiSubscriptionCredit = BigDecimal("1.000001"),
+          openaiNextSubscriptionCredit = InsightsNextSubscriptionCredit("2026-12-04", "80.00")))))
+    }
+    compose.onNodeWithTag("insights-content").performScrollToNode(hasText(creditText))
+    compose.onNodeWithText(creditText).assertIsDisplayed()
+    compose.onNodeWithTag("insights-content").performScrollToNode(hasText(nextCreditText))
+    compose.onNodeWithText(nextCreditText).assertIsDisplayed()
+    compose.runOnIdle {
       state.value = state.value.copy(costs = mapOf(InsightsPeriod.Today to InsightsResource(
         data = costs.copy(status = "unavailable", total = BigDecimal.ZERO))))
     }

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+from decimal import Decimal
 from typing import Any, cast
 
 import pytest
@@ -241,6 +243,37 @@ def test_cost_ledger_queries_cost_and_fx_partitions_strongly_consistently() -> N
         marshal_item({":pk": "COST#DAILY"}),
         marshal_item({":pk": "FX#DAILY"}),
     ]
+
+
+def test_openai_subscription_reads_private_configuration_and_allows_absence() -> None:
+    key = {"PK": "COST#OPENAI_SUBSCRIPTION", "SK": "CONFIG"}
+    client = FakeDynamo(
+        [
+            {},
+            {
+                "Item": marshal_item(
+                    {
+                        **key,
+                        "configuration": {
+                            "monthly_renewal": {"start_date": "2026-08-27", "amount_usd": "50.00"}
+                        },
+                    }
+                )
+            },
+        ]
+    )
+    adapter = reader(client)
+
+    assert adapter.load_openai_subscription() is None
+    configuration = adapter.load_openai_subscription()
+
+    assert configuration is not None and configuration.monthly_renewal is not None
+    assert configuration.monthly_renewal.start_date == date(2026, 8, 27)
+    assert configuration.monthly_renewal.amount_usd == Decimal("50.00")
+    assert (
+        client.get_calls
+        == [{"TableName": "statistics", "Key": marshal_item(key), "ConsistentRead": True}] * 2
+    )
 
 
 @pytest.mark.parametrize(("sort", "scan_forward"), (("newest", False), ("oldest", True)))

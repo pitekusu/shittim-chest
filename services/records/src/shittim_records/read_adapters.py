@@ -24,7 +24,7 @@ from shittim_records.read_api import (
 )
 
 if TYPE_CHECKING:
-    from shittim_records.costs import StoredDailyCost, StoredDailyRate
+    from shittim_records.costs import OpenAISubscription, StoredDailyCost, StoredDailyRate
 
 MAX_BATCH_GET_ATTEMPTS = 5
 
@@ -306,6 +306,19 @@ class DynamoRecordsReader:
                     break
         raw_items = tuple(items)
         return parse_stored_costs(raw_items), parse_stored_rates(raw_items)
+
+    def load_openai_subscription(self) -> OpenAISubscription | None:
+        from shittim_records.costs import OpenAISubscription
+
+        response = self._client.get_item(
+            TableName=self._statistics_table,
+            Key=marshal_item({"PK": "COST#OPENAI_SUBSCRIPTION", "SK": "CONFIG"}),
+            ConsistentRead=True,
+        )
+        raw_item = response.get("Item")
+        if raw_item is None:
+            return None
+        return OpenAISubscription.model_validate(unmarshal_item(raw_item).get("configuration"))
 
     def load_profiles(self, *, requester_keys: tuple[str, ...]) -> dict[str, RequesterProfile]:
         if not requester_keys:

@@ -279,7 +279,11 @@ describe("RankingsPage", () => {
     await screen.findByText("¥124");
     fireEvent.click(screen.getByRole("radio", { name: "今日" }));
 
-    await waitFor(() => expect(requests).toContain("/api/v1/insights/costs?period=today"));
+    await waitFor(() =>
+      expect(requests).toContain(
+        "/api/v1/insights/costs?period=today&contract=subscription-credits-v1",
+      ),
+    );
     expect(requests.filter((request) => request === "/api/v1/insights/rankings")).toHaveLength(1);
   });
 

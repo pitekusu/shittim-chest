@@ -614,7 +614,8 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
     }
 
   suspend fun insightsCosts(accessToken: String, period: InsightsPeriod): InsightsCosts =
-    insightRead("/api/v1/insights/costs?period=${period.wireValue}", accessToken) {
+    insightRead("/api/v1/insights/costs?period=${period.wireValue}", accessToken,
+      contract = "subscription-credits-v1") {
       it.validate(); check(it.period == period)
     }
 
@@ -778,11 +779,11 @@ internal class RecordsReadClient(private val engine: HttpClientEngine = OkHttp.c
   }
 
   private suspend inline fun <reified T> insightRead(path: String, token: String, cursor: String? = null,
-    validate: (T) -> Unit): T {
+    contract: String? = null, validate: (T) -> Unit): T {
     if (!mobileOpaqueValue.matches(token)) throw InsightsException(InsightsFailure.AUTH_REQUIRED)
     if (cursor != null && !validInsightCursor(cursor)) throw InsightsException(InsightsFailure.INVALID_RESPONSE)
     try {
-      return read<T>(path, token, cursor, insights = true).also(validate)
+      return read<T>(path, token, cursor, contract, insights = true).also(validate)
     } catch (error: CancellationException) { throw error }
     catch (error: InsightsException) { throw error }
     catch (error: RecordReadException) {

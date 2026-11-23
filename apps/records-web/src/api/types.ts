@@ -276,6 +276,11 @@ export interface CostsResponse {
   readonly endDate: string;
   readonly currency: "JPY";
   readonly total: string;
+  readonly openaiSubscriptionCredit?: string;
+  readonly openaiNextSubscriptionCredit?: {
+    readonly date: string;
+    readonly amountUsd: string;
+  };
   readonly breakdown: {
     readonly fargate: string;
     readonly lambda: string;

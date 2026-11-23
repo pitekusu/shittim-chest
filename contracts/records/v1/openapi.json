@@ -1629,6 +1629,30 @@
             "title": "Enddate",
             "type": "string"
           },
+          "openaiNextSubscriptionCredit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NextOpenAISubscriptionCredit"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "openaiSubscriptionCredit": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9]+\\.[0-9]{6}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Openaisubscriptioncredit"
+          },
           "period": {
             "enum": [
               "today",
@@ -4359,6 +4383,27 @@
           "weeks"
         ],
         "title": "MomotalkWeeksResponse",
+        "type": "object"
+      },
+      "NextOpenAISubscriptionCredit": {
+        "additionalProperties": false,
+        "properties": {
+          "amountUsd": {
+            "pattern": "^[0-9]+\\.[0-9]{2}$",
+            "title": "Amountusd",
+            "type": "string"
+          },
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "amountUsd"
+        ],
+        "title": "NextOpenAISubscriptionCredit",
         "type": "object"
       },
       "ParticipantAffectionRanking": {
@@ -9222,6 +9267,17 @@
                 "week",
                 "month",
                 "all"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "contract",
+            "required": false,
+            "schema": {
+              "enum": [
+                "subscription-credits-v1"
               ],
               "type": "string"
             }
