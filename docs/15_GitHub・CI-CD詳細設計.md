@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-11-16
+updated: 2026-11-23
 ---
 
 # GitHub・CI-CD詳細設計
@@ -102,10 +102,8 @@ Coreの非同期試験は`pytest-asyncio`を使い、既存のfunction単位のf
 
 ### 標準プロファイラによるローカル計測
 
-本番Core／RecordsのPython 3.14は維持する。標準sampling profiler（Tachyon）はprofilerと対象processの
-Python minor一致が必要なので、3.15から3.14アプリへattachしない。
-純粋な標準ライブラリで動く公開面検査は、project環境から分離した3.15で現在計測できる。
-リポジトリrootから、採用済みuvと既存の3.15 interpreterを使って次を実行する。
+標準sampling profiler（Tachyon）で実行中のprocessを計測する場合は、対象と同じPython minorを使う。
+標準ライブラリで動く公開面検査は、リポジトリrootからproject環境を分離して計測できる。
 
 ```bash
 PROFILE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/shittim-chest/profiles"
@@ -118,9 +116,9 @@ install -d -m 700 "$PROFILE_DIR"
 )
 ```
 
-`--no-project`で3.14 projectのvenv・依存・lockを取り込まず、計測のための追加依存や本番移行を行わない。
-3.14アプリの固定fixtureには同じ3.14の標準`cProfile`を使い、raw結果の読出しも取得時と同じminorの`pstats`を使う。
-2026-11-02に公開面検査とdomainの固定fixtureで両方の標準CLIを実行し、取得と読出しの成功を確認した。
+`--no-project`はprojectのvenv・依存・lockから切り離して実行する。
+固定fixtureを`cProfile`で計測する場合は、取得時と同じPython minorの`pstats`で結果を読む。
+2026-11-02には公開面検査を3.15のTachyon、domainの固定fixtureを3.14の`cProfile`で計測し、取得と読出しを確認した。
 
 CPU処理と待機を切り分ける場合は、同じ固定入力を`--mode wall`と`--mode cpu`で別々に実行する。
 `wall`はI/O・lock・sleepの待機も含め、`cpu`はCPU上で実行しているsampleだけを残す。
@@ -366,9 +364,8 @@ Web／Discord入力からglobへ渡す経路や既定値を書き換える設定
 minimatch 10.2.6を同梱していることを照合した。所有者は同じModerate 1件を1年間受容した。
 新しい失効時刻は2027-11-21 00:00 UTC（09:00 JST）である。
 [aws-cdk-lib 2.278.0](https://github.com/aws/aws-cdk/releases/tag/v2.278.0)の公式npm配布物で
-同梱minimatch 11.0.9を確認し、この例外を削除した。Records Lambdaは配布バンドルと試験の対象である
-Python 3.14を使用する。CDKへの3.15追加に伴う最新バージョンの指摘は、対象関数の
-`AwsSolutions-L1`だけを理由付きで承認する。
+同梱minimatch 11.0.9を確認し、この例外を削除した。その時点ではRecords LambdaにPython 3.14を使い、
+CDKへの3.15追加に伴う最新バージョンの指摘は、対象関数の`AwsSolutions-L1`だけを理由付きで承認した。
 2026-10-03に受容したbrace-expansionの旧3件は、CDK 2.273.0での上流修正採用時に削除済みである。
 
 ## 3. 依存と配信ツールの更新
@@ -438,15 +435,19 @@ CoreのDHIは別の採用条件を持つ。2026年10月22日、認証済みregis
 
 ### Python 3.15への移行評価（2026年10月14日）
 
+[Issue #599](https://github.com/pitekusu/shittim-chest/issues/599)の対応ではCore／Recordsと配布・検証ツールを
+[Python 3.15](https://www.python.org/downloads/release/python-3152/)へ移行する。開発環境・CIの実行版は
+`.python-version`と各workflow、依存は両projectのlock、CoreのDHIはDockerfileの固定digestを正とする。
+両lockの`jiter`は3.15向けのARM64 wheelがある版を使う。
+
 2026年11月20日に[AWSがLambda Event FunctionsのPython 3.15正式対応と、
 Web FunctionsのPython 3.15プレビューを発表した](https://aws.amazon.com/about-aws/whats-new/2026/11/aws-lambda-python-315/)。
-CDKも`Runtime.PYTHON_3_15`を提供している。Core／Recordsは3.14向けに依存と配布物を固定しており、
-バンドルと完成ARM64イメージの検証が移行条件に残る。以下の表は2026年11月5日時点の記録である。
-[Issue #599](https://github.com/pitekusu/shittim-chest/issues/599)の更新要求は未完了。
-[Python 3.15.2](https://www.python.org/downloads/release/python-3152/)は10月25日公開済みで、
-侵害中間CA鍵の拒否などのセキュリティ修正を含む。下記の配布・互換性条件を満たすまで現行3.14系列を維持する。
+Core／Recordsの対象LambdaはCDKの`Runtime.PYTHON_3_15`を使う。Lambdaのmanaged runtimeはminorを指定し、
+build時のパッチ版はworkflowの固定値、配信先の実適用はLambdaのruntime情報でそれぞれ確認する。
 新機能の提案と推奨理由は
 [アプリケーション設計](10_アプリケーション・Python詳細設計.md#9-python-315の新機能の採用候補)に集約する。
+
+以下の表は2026年11月5日時点の移行前調査である。
 
 | 対象 | 2026年11月5日に確認した状態 | 移行に必要なこと |
 |---|---|---|
@@ -458,16 +459,11 @@ CDKも`Runtime.PYTHON_3_15`を提供している。Core／Recordsは3.14向け�
 
 `audioop-lts`は既存の`cp313-abi3` ARM64 wheelを利用でき、阻害要因ではない。
 lockに`cp315`が記録されていないことだけで上流未対応と判定しない。上流の配布metadataと実際の解決結果を使う。
-上記の実行依存候補は、それ以外の再調査時の依存固定値を維持し、共有Coreの依存も含めた
-`aarch64-manylinux_2_28`向け・source build禁止の解決で確認した。lockへの3.15移行変更は適用していない。
-ここまでの3.15検証は標準機能の合成データsmokeと依存解決だけであり、アプリ全体の互換性、API性能、本番動作を確認したものではない。
+移行前の調査では、共有Coreを含む依存の`aarch64-manylinux_2_28`向け・source build禁止の解決と、
+標準機能の合成データsmokeを実施した。
 
-PR #661はDockerのFROMだけを3.15.2へ更新するため、そのままではマージしない。
-Core／Recordsの`requires-python <3.15`、3.14を承認対象とするcontainer policy、
-Docker内の`/usr/bin/python3.14`、CI／Releaseのsite-packages指定と整合しない。
-既存の安全条件を外してCIを通すのではなく、移行条件が揃ってからこれらを一組で更新する。
-
-条件が揃ったら、次の順に更新・検証する。
+[PR #661](https://github.com/pitekusu/shittim-chest/pull/661)のDocker FROM更新に加え、
+実行環境・依存・配布物を次の手順でそろえる。
 
 1. Core／Recordsの`requires-python`、Ruff対象、両lock、`.python-version`、uv、各workflow、tool監視を合わせる。
    LambdaとCoreを段階移行する場合は、共有Core packageを両実行版で試験し、Lambda bundleのPython指定を実runtimeに合わせる。
@@ -476,9 +472,6 @@ Docker内の`/usr/bin/python3.14`、CI／Releaseのsite-packages指定と整合�
 3. 両projectのfrozen sync、lint・型・関連試験、警告の互換性、配布wheelのimport、ARM64 binary限定bundle、関連stackのtest／synthを確認する。
    コンテナの起動・停止、再現性、SBOM／VEX／risk gateとAndroid配布ツールの関連試験を維持する。
 4. 同一SHAの必須CI・CodeQLを確認してからマージする。本番／Play配布は、その時点で依頼された範囲だけ進める。
-
-この評価では3.15へのバージョン固定変更、必須CIの緩和、本番構成の変更を行っていない。
-更新未完了のためIssueを閉じない。失敗・未実施を成功として扱わない。
 
 AndroidのGradle Wrapper・プラグイン・ライブラリは、`.github/dependabot.yml`で毎週月曜09:15（日本時間）に確認する。
 Kotlin関連、Compose関連、Bouncy Castle関連はそれぞれ同じ更新PRにまとめ、ビルド・Lint・Android計装テストを確認して取り込む。
@@ -1161,7 +1154,7 @@ CI用の`records-code-splitting.json`はbuild出力に保持してJS予算・ル
 `index.html`を戻して再無効化する。回復はLambdaエイリアス、S3オブジェクトバージョン、
 CloudFront無効化を使い、Archiveや親愛度レコードを削除しない。
 
-Lambdaのネイティブ依存はPython 3.14の`aarch64-manylinux_2_28`向けのビルド済みwheelだけをハッシュ付きで解決する。
+Lambdaのネイティブ依存はPython 3.15の`aarch64-manylinux_2_28`向けのビルド済みwheelだけをハッシュ付きで解決する。
 x86_64の実行環境で得たPillow等のネイティブ拡張を混入させない。
 プロンプトの有効参照先の初回作成、アップロード、画像生成、親愛度リセットは配信処理では行わない。
 匿名の疎通確認では、セッションの200と`no-store`、`Set-Cookie`なし、記録一覧の401も確認する。

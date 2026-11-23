@@ -78,6 +78,10 @@ FargateはARM64のオンデマンド構成で、通常は0タスク、必要時�
 | 文書を変更する方法 | [正本と同期のルール](docs/README.md) |
 | 開発への参加・脆弱性の報告 | [CONTRIBUTING.md](CONTRIBUTING.md)・[SECURITY.md](SECURITY.md) |
 
+Pythonの開発環境はリポジトリルートからuvで準備します。
+Coreは`uv sync --frozen`、Recordsは`uv sync --project services/records --frozen`を実行します。
+開発用Pythonの固定値は`.python-version`を参照します。
+
 依存バージョンは各プロジェクトのロックファイル、実行コマンドは設定ファイルを正とします。
 READMEへバージョン表を複製せず、更新箇所を一か所に保ちます。
 
