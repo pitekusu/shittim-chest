@@ -1,4 +1,4 @@
-import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { noop, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   defaultRangeExtractor,
   useWindowVirtualizer,
@@ -177,7 +177,9 @@ function GalleryGridCard({
     setPreviewCard(undefined);
   };
   const prefetch = () => {
-    if (card && !opensGroup) void queryClient.prefetchQuery(galleryDetailQuery(scope, card.cardId));
+    if (card && !opensGroup) {
+      void queryClient.query(galleryDetailQuery(scope, card.cardId)).catch(noop);
+    }
   };
   useEffect(() => () => window.clearTimeout(hoverTimer.current), [card?.cardId, previewEnabled]);
 

@@ -10,16 +10,15 @@ from shittim_records.ogp import RecordPreview
 from shittim_records.ogp_render import PreviewRenderer
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("output", type=Path)
-    args = parser.parse_args()
-    args.output.mkdir(parents=True, exist_ok=True)
+def preview_renderer() -> PreviewRenderer:
     root = Path(__file__).resolve().parents[3]
-    renderer = PreviewRenderer(
+    return PreviewRenderer(
         assets=root / "apps/records-web/src/assets/fonts",
         emoji_path=root / "services/records/third_party/noto-emoji/NotoColorEmoji.ttf",
     )
+
+
+def fictional_previews() -> dict[str, RecordPreview]:
     examples = [
         ("normal", "ちょっと休憩。コーヒーとクッキーで、ゆっくり過ごそう!", "空色の旅人"),
         (
@@ -34,10 +33,21 @@ def main() -> None:
             "\U0001f1ef\U0001f1f5",
         ),
     ]
-    for label, question, name in examples:
-        preview = RecordPreview(
-            "a" * 43, question, name, datetime.fromisoformat("2026-09-08T12:00:00+00:00")
-        )
+    completed_at = datetime.fromisoformat("2026-09-08T12:00:00+00:00")
+    return {
+        label: RecordPreview("a" * 43, question, name, completed_at)
+        for label, question, name in examples
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("output", type=Path)
+    args = parser.parse_args()
+    args.output.mkdir(parents=True, exist_ok=True)
+    renderer = preview_renderer()
+    examples = fictional_previews()
+    for label, preview in examples.items():
         path = args.output / f"{label}.png"
         path.write_bytes(renderer.render(preview))
         with Image.open(path) as image:

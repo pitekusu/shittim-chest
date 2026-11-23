@@ -26,8 +26,10 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.clearText
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
@@ -144,9 +146,14 @@ private fun GalleryCollectionContent(collection: StudentCollection, gallery: Stu
   var cardsView by remember { mutableStateOf(false) }
   var collectionFilters by remember { mutableStateOf(GalleryFilters()) }
   var cardFilters by remember { mutableStateOf(GalleryFilters(sort = GallerySort.Newest)) }
+  // Keep each tab's search text in memory, outside SavedState.
+  val collectionSearch = remember { TextFieldState() }
+  val cardSearch = remember { TextFieldState() }
   var groupId by remember { mutableStateOf<String?>(null) }
   var cardId by remember { mutableStateOf<String?>(null) }
-  val filters = if (cardsView) cardFilters else collectionFilters
+  val search = if (cardsView) cardSearch else collectionSearch
+  val options = if (cardsView) cardFilters else collectionFilters
+  val filters = options.copy(query = search.text.toString())
   val updateFilters: (GalleryFilters) -> Unit = {
     if (cardsView) cardFilters = it else collectionFilters = it
   }
@@ -180,7 +187,7 @@ private fun GalleryCollectionContent(collection: StudentCollection, gallery: Stu
           FilterChip(selected = cardsView, onClick = { cardsView = true },
             label = { Text(stringResource(R.string.gallery_cards_tab)) }, modifier = Modifier.testTag("gallery-cards-tab"))
         }
-        GalleryFilterControls(filters, cardsView, schools, updateFilters)
+        GalleryFilterControls(options, search, cardsView, schools, updateFilters)
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
           val count = if (cardsView) stringResource(R.string.gallery_cards_count, collection.cards.size)
             else stringResource(R.string.gallery_collection_count, acquired, collection.entries.size)
@@ -189,7 +196,8 @@ private fun GalleryCollectionContent(collection: StudentCollection, gallery: Stu
               style = MaterialTheme.typography.titleMediumEmphasized)
             if (filters.hasFilters) TextButton(onClick = {
               focus.clearFocus()
-              updateFilters(filters.clearFilters())
+              search.clearText()
+              updateFilters(options.clearFilters())
             }, modifier = Modifier.testTag("gallery-clear-filters")) {
               Text(stringResource(R.string.gallery_clear_filters))
             }
@@ -230,19 +238,19 @@ private fun GalleryCollectionContent(collection: StudentCollection, gallery: Stu
 }
 
 @Composable
-private fun GalleryFilterControls(filters: GalleryFilters, cardsView: Boolean, schools: List<String>,
-  onChange: (GalleryFilters) -> Unit) {
+private fun GalleryFilterControls(filters: GalleryFilters, searchState: TextFieldState, cardsView: Boolean,
+  schools: List<String>, onChange: (GalleryFilters) -> Unit) {
   val focus = LocalFocusManager.current
   val all = stringResource(R.string.record_filter_all)
   val search: @Composable (Modifier) -> Unit = { modifier ->
-    OutlinedTextField(filters.query, { onChange(filters.copy(query = it)) },
-      modifier.testTag("gallery-search"),
+    OutlinedTextField(state = searchState, modifier = modifier.testTag("gallery-search"),
       label = { Text(stringResource(R.string.gallery_student_name)) },
-      placeholder = { Text(stringResource(R.string.gallery_search)) }, singleLine = true,
+      placeholder = { Text(stringResource(R.string.gallery_search)) },
+      lineLimits = TextFieldLineLimits.SingleLine,
       keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-      keyboardActions = KeyboardActions(onSearch = { focus.clearFocus() }),
-      trailingIcon = if (filters.query.isEmpty()) null else ({
-        IconButton(onClick = { onChange(filters.copy(query = "")) }) {
+      onKeyboardAction = { focus.clearFocus() },
+      trailingIcon = if (searchState.text.isEmpty()) null else ({
+        IconButton(onClick = { searchState.clearText() }) {
           Icon(painterResource(R.drawable.ic_close), stringResource(R.string.record_search_clear_text))
         }
       }))
