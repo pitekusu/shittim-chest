@@ -89,6 +89,9 @@ GitHub-hosted runnerはUbuntu 26.04に固定する。x64は`ubuntu-26.04`、
 | grype | 生スキャン、VEX適用、修正可能/残存リスクの判定 |
 | docs-public-safety | 文書構造、参照、公開情報、ライセンス境界 |
 
+uvを導入するworkflowは、完全SHAで固定した`setup-uv`に`require-checksums: true`を指定する。
+Actionやuvを更新するときは、使うrunnerのOS・アーキテクチャに対応するchecksumがあることを確認する。
+
 ### tyのコードスキャン連携
 
 Coreの`quality`とRecordsの`records-python`は、ty標準の`--output-format sarif`を使い、
@@ -132,6 +135,33 @@ C拡張の呼出元への帰属を分けたい場合は`--native`で`<native>` f
 CPU処理と待機の切り分けに使えることを確認した。この比較手順をローカル調査へ採用する。
 合成fixtureの結果であり、API・本番性能や速度改善率の証明には使わない。
 仕様は[標準profilerのモード比較](https://docs.python.org/3.15/library/profiling.sampling.html#comparing-wall-clock-and-cpu-profiles)を参照する。
+
+RecordsのOGPレンダラとLambda配布ZIPは、リポジトリrootで固定fixtureを使って計測できる。
+OGPは通常文・長文・絵文字を含む架空の3例、ZIPは合成JSONと固定バイト列を使う。
+各実行が出力する`first_ms`は対象のimportと初回処理の合計、`warm_median_ms`は同じprocessでの再実行の中央値。
+Python自体の起動とZIPの入力準備は計時の対象外とする。比較時は各workloadを新しいprocessで複数回実行し、
+同じ入力・Python・マシンで初回と再実行を別々に比較する。
+
+```bash
+PROFILE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/shittim-chest/profiles"
+install -d -m 700 "$PROFILE_DIR"
+(
+  umask 077
+  for workload in ogp zip; do
+    for mode in wall cpu; do
+      uv run --project services/records --frozen python -m profiling.sampling run \
+        --mode "$mode" --native --pstats -o "$PROFILE_DIR/records-$workload-$mode.pstats" \
+        -m services.records.tools.profile_workload "$workload" --runs 20
+    done
+  done
+  uv run --project services/records --frozen python -X importtime=2 \
+    -m services.records.tools.profile_workload ogp --runs 2 \
+    2>"$PROFILE_DIR/records-ogp-importtime.log"
+)
+```
+
+時間だけを比べる場合は`uv run --project services/records --frozen python -m services.records.tools.profile_workload ogp`で直接実行する。
+この計測はレンダラとZIP処理のローカル基準であり、本番Lambdaの初期化時間はCloudWatchの実行記録で評価する。
 
 profileは公開ソースと機密を含まない固定fixtureに限定する。実利用の質問・生成結果・外部I/Oを対象にしない。
 rawはprivate cacheに置き、Git・CI artifactへ公開しない。共有はlocal pathを除いた関数名・回数・時間に限定する。

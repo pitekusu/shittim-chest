@@ -1,5 +1,5 @@
 import { Dialog } from "@base-ui/react/dialog";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { noop, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import Lightbox, { NextIcon, PreviousIcon, type Slide } from "yet-another-react-lightbox";
 import Inline from "yet-another-react-lightbox/plugins/inline";
@@ -102,7 +102,7 @@ function GalleryViewerContent({
   useEffect(() => {
     if (!open || !detail.isSuccess) return;
     for (const id of [previous, next]) {
-      if (id) void queryClient.prefetchQuery(galleryDetailQuery(scope, id));
+      if (id) void queryClient.query(galleryDetailQuery(scope, id)).catch(noop);
     }
   }, [detail.isSuccess, next, open, previous, queryClient, scope]);
 
