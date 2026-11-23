@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, github, discord, operations, notifications]
 status: current
 created: 2026-07-23
-updated: 2026-09-05
+updated: 2026-11-23
 ---
 
 # GitHub・Discord通知運用設計
@@ -13,43 +13,23 @@ updated: 2026-09-05
 
 ## 1. 目的と位置付け
 
-GitHubのPR、対象ワークフロー、依存・コードスキャンの情報を、非公開Discordフォーラムの固定投稿へ通知する。
-最終判断の正本はGitHubであり、Discordは見落としを減らす補助表示である。
-配送は重複し得るため、通知を一度限りの処理台帳として使わない。
-
-通知からGitHubを操作せず、自動修正、自動マージ、AWS操作は行わない。
-討論用の4体のBotとは別のIncoming Webhookを使う。
-配信全体は[CI/CD設計](15_GitHub・CI-CD詳細設計.md)、通知後の調査は
-[運用保守設計](17_運用保守・監視・障害対応設計.md)を参照する。
-
-```mermaid
-flowchart TD
-  pr[PR・mainへのプッシュ] --> event[イベント通知]
-  run[対象ワークフローの完了] --> result[実行結果通知]
-  daily[日次・手動] --> digest[セキュリティ集約]
-  event --> format[安全な埋め込みメッセージへ整形]
-  result --> format
-  digest --> format
-  format --> webhook[専用Webhook]
-  webhook --> forum[固定フォーラム投稿]
-  forum --> github[判断・対応はGitHubへ戻る]
-```
+GitHub ActionsはPR、対象ワークフロー、セキュリティ情報を専用のIncoming Webhookで非公開Discordフォーラムへ通知する。
+通知は重複し得る。結果の確認と対応はGitHubのChecks、Security、Actionsで行う。
+配信は[CI/CD設計](15_GitHub・CI-CD詳細設計.md)、障害調査は[運用保守設計](17_運用保守・監視・障害対応設計.md)を参照する。
 
 ## 2. 通知するイベント
 
 | ワークフロー | 起動条件 | 内容・除外 |
 |---|---|---|
-| `discord-repository-events.yml` | PRの開始/再開/レビュー準備完了/終了、mainへのプッシュ | PR状態・作成者・参照先。Dependabot PRは個別通知から除外 |
-| `discord-workflow-run.yml` | 許可リスト内のワークフロー完了 | 結果、実行ID、SHA、実行者、URLを用途別投稿へ振分け |
-| `discord-security-digest.yml` | 毎日またはmainから手動実行 | Dependabot、CodeQL、シークレット検査状態の集約 |
+| [discord-repository-events.yml](https://github.com/pitekusu/shittim-chest/blob/main/.github/workflows/discord-repository-events.yml) | PRの開始・再開・レビュー準備完了・終了、`main`へのプッシュ | PR状態・作成者・参照先。Dependabot PRは個別通知から除外 |
+| [discord-workflow-run.yml](https://github.com/pitekusu/shittim-chest/blob/main/.github/workflows/discord-workflow-run.yml) | 許可リスト内のワークフロー完了 | 結果、実行ID、SHA、実行者、URLを用途別投稿へ振分け |
+| [discord-security-digest.yml](https://github.com/pitekusu/shittim-chest/blob/main/.github/workflows/discord-security-digest.yml) | 日次、または`main`から手動実行 | Dependabot、CodeQL、シークレット検査状態の集約 |
 
 PRに由来するmainへのプッシュは関連PRを調べて重複通知を抑止する。
 直接プッシュまたは由来を確認できないプッシュは、その区別を付けて通知する。
 IssueやGitHub Releaseのライフサイクルを直接通知する設定は持たない。
 
-ワークフロー完了通知の対象はYAMLの明示リストが正本であり、すべてのActionsが自動的に対象になるわけではない。
-例えばRecords CI/Records Releaseは現在そのリストに含まれないため、Actionsで直接確認する。
-全通知は`DISCORD_NOTIFICATIONS_ENABLED`が`true`の場合だけ有効になる。
+ワークフロー完了通知の対象は `workflow_run.workflows` を参照する。全通知は `DISCORD_NOTIFICATIONS_ENABLED=true` のときに実行する。
 
 ## 3. 入力と配送の保護
 
@@ -65,13 +45,12 @@ IssueやGitHub Releaseのライフサイクルを直接通知する設定は持�
 
 ## 4. 配送失敗の扱い
 
-送信は一時的な通信失敗、429、5xxだけを上限付きで再試行する。
-最大4回、1回の接続期限10秒・全体30秒とし、`Retry-After`は最大30秒まで受理する。
-取得できなければ短い指数的待機を使う。その他の失敗や上限到達は失敗として残す。
+一時的な通信失敗、HTTP 429、5xxの場合に再試行し、送信は最大4試行とする。
+各試行は接続10秒、リクエスト全体30秒が上限。待機は `Retry-After` を最大30秒まで使い、
+取得できなければ指数的に延ばす。
 
-通知失敗で元のCI/配信結果を変更したり、本体ワークフローを再実行したりしない。
+通知ワークフローは元のCI・配信を参照する読み取り権限で動かす。
 日次集約のページ取得未完了、未知スキーマ、権限不足は成功扱いしない。
-最終判断はGitHubのChecks、Security、Actionsを参照し、Discordだけを監視源にしない。
 
 ## 5. 変更と動作確認
 
@@ -85,6 +64,5 @@ IssueやGitHub Releaseのライフサイクルを直接通知する設定は持�
 
 | 対象 | 実装 |
 |---|---|
-| イベントと権限 | [通知ワークフロー](https://github.com/pitekusu/shittim-chest/tree/main/.github/workflows) |
 | 通知の整形・分類・配送 | [github_discord_notifications](https://github.com/pitekusu/shittim-chest/tree/main/tools/github_discord_notifications) |
 | ワークフロー契約検査 | [check_notification_workflows.py](https://github.com/pitekusu/shittim-chest/blob/main/tools/check_notification_workflows.py) |

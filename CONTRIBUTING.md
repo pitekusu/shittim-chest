@@ -18,10 +18,11 @@ AWS OIDC credentials. External workflow runs require maintainer approval.
 
 ## Design documents
 
-The numbered files under `docs/` mirror an external canonical source and are
-not MIT licensed. Submit design corrections and proposals as Issues. Do not
-open a documentation Pull Request unless the maintainer explicitly requests
-one.
+The [design documents under `docs/`](docs/README.md) are the canonical version
+maintained in this GitHub repository. Submit design corrections and proposals
+through GitHub Issues. Open a documentation Pull Request only if the
+maintainer explicitly requests one. See the [documentation license](docs/LICENSE.md)
+for the terms.
 
 ## Commit and review expectations
 

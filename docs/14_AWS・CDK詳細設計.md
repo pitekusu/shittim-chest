@@ -4,19 +4,15 @@ aliases:
 tags: [project, shittim-chest, aws, cdk, ecs, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-09-05
+updated: 2026-11-23
 ---
 
 # AWS・CDK詳細設計
 
 [ドキュメント索引へ戻る](00_シッテムの箱_ドキュメント索引.md)
 
-## この文書の役割
-
-AWSリソースの配置、所有スタック、保護設定、権限の分担を定義する。
-配信手順は[GitHub・CI/CD設計](15_GitHub・CI-CD詳細設計.md)、障害時の確認順は
-[運用保守設計](17_運用保守・監視・障害対応設計.md)、Web/APIの契約は
-[議事録設計](24_シッテムの箱%20議事録設計.md)を参照する。
+AWSのスタック、永続データ、実行環境、IAMを扱う。
+変更の適用順は[CI/CD設計](15_GitHub・CI-CD詳細設計.md)、調査と復旧は[運用保守設計](17_運用保守・監視・障害対応設計.md)を参照する。
 
 ## 1. 全体構成とスタックの責務
 
@@ -34,13 +30,14 @@ flowchart TD
   source --> projector[Records Projector]
   projector --> records[(議事録・統計)]
   projector --> discord
-  browser[ブラウザー] --> edge[CloudFront]
+  client[Web・Android] --> edge[CloudFront]
   edge --> web[Web用 S3]
   edge --> api[Records API]
   api --> records
   api --> queue[メモリアル生成 SQS]
   queue --> worker[生成 Worker]
   worker --> media[非公開画像 S3]
+  projector --> push[Android通知キュー]
 ```
 
 図はデータと呼出しの関係を示す。スタック間の詳細な参照はCDKを正とする。
@@ -52,8 +49,8 @@ flowchart TD
 | Runtime | 東京 | ネットワーク、受付API、4 Lambda、ECS、Scheduler、ログ | 通常のCore配信で更新 |
 | Operations | 東京 | メトリクス、アラーム、ダッシュボード、SNS、EventBridge | 通常のCore配信で更新 |
 | CostGovernance | バージニア北部 | Budgets、費用異常通知 | 通常のCore配信で更新 |
-| RecordsStateful | 東京 | Archive/Statistics/Session、画像、一時アップロード、生成キュー/DLQ | 終了保護。テーブル・画像・生成キューを保持 |
-| RecordsApplication | 東京 | 認証/閲覧API、Projector、集計、管理、メモリアルのLambda | 終了保護。アプリケーションを更新 |
+| RecordsStateful | 東京 | Archive／Statistics／Session、画像・一時アップロード、メモリアル／モモトーク生成とAndroid通知のキュー | 終了保護。テーブル・画像・生成キューを保持 |
+| RecordsApplication | 東京 | 認証・閲覧・集計・管理のAPI、Projector、メモリアル・モモトーク・Android通知の処理 | 終了保護。アプリケーションを更新 |
 | RecordsEdge | バージニア北部 | Web用S3、CloudFront、証明書、DNSレコード、セキュリティヘッダー | 終了保護。Webバケットを保持 |
 
 Core配信の変更セット実行順はStateful → Runtime → Operations → CostGovernance。
@@ -114,11 +111,21 @@ Runtimeは配信で検証された`RecordsPublicHostname`から`SHITTIM_RECORDS_
 | Status Publisher | 永続化された公開状態をDiscord RESTの表示へ反映 |
 | Runtime Reconciler | 永続状態に従いECSの希望タスク数を0/1へ収束 |
 | Image Admission | タスク定義、イメージ、署名、アテステーションを検証 |
-| Records Projector | 完了討論をArchiveへ投影し、保存後に元チャットへWeb記録リンクを投稿 |
+| Records Auth／Read | Discord認証、議事録、集計、生徒図鑑とモモトークの閲覧。公開OGPは専用Lambdaで生成 |
+| Records Projector | 完了討論をArchiveへ投影し、保存後に元チャットへWeb記録リンクを投稿。Android通知のoutboxも保存 |
 | Records Admin Status | 許可されたAWS/CloudWatch状態だけを集約。予約同時実行数2 |
 | Records Admin Config | プロンプトの参照・更新・復元・履歴保持。予約同時実行数2 |
 | Records Memorial API | 本人の状態、アップロード、生成、履歴、リセット。15秒、予約同時実行数2 |
 | Records Memorial Worker | SQSから画像・文章を生成。5分、1,024 MiB、予約同時実行数1 |
+| モモトーク | 定期集計、SQSの生成ワーカー、公開通知を別々のLambdaで処理 |
+| Android通知 | 専用FIFOと送信Lambdaで配信。定期処理が未送信outboxを回収 |
+
+Android議論通知はRecordsStatefulの専用FIFO／FIFO DLQと、RecordsApplicationの送信Lambda・1分sweepを使う。Archive保存と通知outboxを同じtransactionで確定し、送信失敗は公開処理から分離する。
+送信LambdaはARM64・1024 MiB・120秒・予約同時実行1、SQSはbatch size 1・visibility 720秒・保存1日、DLQは14日とする。
+sweepは本文を読まず未送信outboxを専用FIFOへ戻すだけとし、Firebase送信はSQSの固定groupへ集約する。
+Firebase資格情報の値はruntimeだけで取得し、未登録でも通常のRecords配信を妨げない。実通知の有効化には専用資格情報登録を先に行う。
+サービス状態確認の既存Lambda・SQS・EventBridge欄へ追加し、専用サービスカードやECSの責務は増やさない。
+詳細は[Android議論公開通知](29_Androidアプリ設計.md#android議論公開通知)を参照する。
 
 LambdaはVPC外で動かし、外部APIへの到達にNATを必要としない。
 EventBridge SchedulerがReconcilerを毎分起動する。
@@ -176,17 +183,8 @@ RecordsEdgeはOACで非公開S3へ接続し、Route 53のA/AAAAレコードを�
 `/api/*`はキャッシュせずCookieとAuthorizationをAPI Gatewayへ転送し、`/assets/*`だけを変更不能なアセットとしてキャッシュする。
 モバイル認証の5ルートは既存Auth Lambdaへ接続する。Session Table・限定SSM・アバター領域の既存権限で処理し、
 この5ルート自体は新規Lambda・Statefulリソースを追加しない。後続の通知端末登録は別途Statistics権限と環境変数を追加する。認証の境界は[Android設計](29_Androidアプリ設計.md)を参照する。
-過去のRSAからECDSAへの一度限りの変更を、今後の証明書置換への包括承認として扱わない。
 
 ## 7. 監視・費用・変更の検証
-
-Android議論通知にはRecordsStatefulの専用FIFO／FIFO DLQと、RecordsApplicationの送信Lambda・1分sweepを追加する。
-既存テーブルのschema・stream・TTL設定は変更しない。Archive保存と通知outboxを同じtransactionで確定し、送信失敗は公開処理から分離する。
-送信LambdaはARM64・1024 MiB・120秒・予約同時実行1、SQSはbatch size 1・visibility 720秒・保存1日、DLQは14日とする。
-sweepは本文を読まず未送信outboxを専用FIFOへ戻すだけとし、Firebase送信はSQSの固定groupへ集約する。
-Firebase資格情報の値はruntimeだけで取得し、未登録でも通常のRecords配信を妨げない。実通知の有効化には専用資格情報登録を先に行う。
-サービス状態確認の既存Lambda・SQS・EventBridge欄へ追加し、専用サービスカードやECSの責務は増やさない。
-詳細は[Android議論公開通知](29_Androidアプリ設計.md#android議論公開通知)を参照する。
 
 CloudWatch Logsはコンポーネント別に分け、保持期間とデータ保護ポリシーを設定する。
 EMFは固定した名前空間・ディメンション・メトリクスだけを使い、`_aws`をルートに持つ1行JSONとして出力する。

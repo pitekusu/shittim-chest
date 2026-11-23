@@ -13,26 +13,16 @@ updated: 2026-11-23
 
 ## この文書の範囲
 
-討論を動かすCoreの責務、状態遷移、並行処理、起動・終了を定義する。
-Discordへの表示は[Discord詳細設計](11_Discord詳細設計.md)、生成内容は
-[OpenAI・プロンプト詳細設計](12_OpenAI・プロンプト詳細設計.md)、保存と排他は
-[DynamoDB・データ整合性詳細設計](13_DynamoDB・データ整合性詳細設計.md)を参照する。
+Coreは司会役1体と討論者3体を1プロセスで動かす。Pythonが討論の進行、勝者の確定、保存、復旧を管理する。
 
-Coreは司会役1体と討論者3体を**1プロセス**で動かす。LLMは発言と投票を生成するが、
-進行、再試行、保存、勝者の確定はPythonが制御する。
+| 変更すること | 担当文書 |
+|---|---|
+| 討論の進行・集計・起動と停止 | この文書 |
+| 操作や投稿の表示 | [Discord詳細設計](11_Discord詳細設計.md) |
+| モデルへの入力と出力検証 | [OpenAI・プロンプト詳細設計](12_OpenAI・プロンプト詳細設計.md) |
+| スキーマと保存・排他の条件 | [DynamoDB・データ整合性詳細設計](13_DynamoDB・データ整合性詳細設計.md) |
 
 ## 1. 構成と依存方向
-
-```mermaid
-flowchart LR
-    Bootstrap[起動・依存の組み立て] --> Runtime[実行時の監督]
-    Bootstrap --> Adapters[外部接続 adapters]
-    Runtime --> Application[進行・ユースケース application]
-    Adapters --> Application
-    Application --> Domain[純粋なルール domain]
-    Adapters --> Domain
-    Config[設定の検証 config] --> Bootstrap
-```
 
 | 層・入口 | 所有する責務 | 境界 |
 |---|---|---|
@@ -44,8 +34,7 @@ flowchart LR
 | `lambda_handlers` | Lambdaイベントとユースケースの接続 | 業務ルールを置かない |
 | `bootstrap.py` | クライアント生成、依存注入、終了処理 | 外部接続の組み立て場所を集約 |
 
-依存方向は`import-linter`で検査する。HTTPレスポンスやDynamoDBの`AttributeValue`を
-`domain`／`application`へ持ち込まない。
+依存方向 `adapters → application → domain` は`import-linter`で検査する。
 
 ## 2. 値と識別子
 
@@ -53,7 +42,7 @@ flowchart LR
 - 討論ID、試行ID、リース所有者、操作IDを用途別の型で区別する。
 - 試行IDはUUIDv7。利用者による再試行では新しいIDを作り、失敗した旧試行を変更しない。
 - 保存済みの列挙値やスキーマは検証し、未知の値を既定値へ読み替えない。
-- 質問は前後の空白を除去し、1〜1,000文字の非空文字列とする。
+- 質問の前後の空白を除去し、[Discord設計の受付制限](11_Discord詳細設計.md#受付容量と起動待ちの期限)を適用する。
 
 ## 3. 討論の状態遷移
 
@@ -77,25 +66,11 @@ flowchart TD
 通常は一方向に進む。`completed`、`failed`、`cancelled`は終了状態であり、同じ試行の
 段階を戻さない。再開点は段階とは別の`recovery_state`へ記録し、終了状態には残さない。
 
-新規試行は`deliberation_version=2`とし、人格ごとの判断基準、候補選択、発言を分離する。
-独立した判断準備・候補選択の6呼び出しに加え、候補選択後と初回意見の投稿前にv2の調整を行う。
-候補調整は最大2人、初回意見の再考は最大3人を順に処理する。先頭は討論IDから決めて分散し、
-同じ討論の復旧では変えない。他者には公開相当の提案・意見だけを渡し、内部の適合理由は渡さない。
-同じ案を本当に好む場合の一致は許容する。再考では同じ結論でも書き直した意見を採用する。
-v2追加分は分類2回と、対象者の探索・選択・改稿で最大15呼び出し（通常成功時、通信再試行を除く）。
-属性のない従来0と既存1の試行は各版のフローを維持し、途中からv2へ切り替えない。
-
-```mermaid
-flowchart LR
-    Own[本人の判断準備・候補選択] --> Coordinate[候補の分類・逐次調整]
-    Coordinate --> Draft[3人の初回意見を仮保存]
-    Draft --> Reconsider[意見の分類・逐次再考]
-    Reconsider --> Publish[初回意見3件を投稿]
-    Publish --> Final[最終案・投票]
-```
-
-調整は既存の候補選択段階と初回意見段階の内部処理とし、公開する討論の段数は増やさない。
-初回意見のOutboxは再考が完了してから作成する。未完了の下書きや探索結果は公開しない。
+新規試行は`deliberation_version=2`を使う。候補選択後に最大2人の候補を調整し、下書き保存後に最大3人の初回意見を再考する。
+先頭の人格は討論IDから決め、復旧時も同じ順序を使う。再考を終えてから初回意見のOutboxを作る。
+属性のない従来0と既存1の試行は開始時の手順を引き継ぐ。
+判断準備・候補選択の6回に加え、v2の分類・探索・選択・改稿は合計最大15回。通信再試行はこの回数に含めない。
+入力と生成指示は[OpenAI設計](12_OpenAI・プロンプト詳細設計.md)を参照する。
 
 ### 1段階の処理単位
 
@@ -109,42 +84,19 @@ flowchart LR
 既存の操作パネルでは「それぞれの考えを整理中」「提案を選択中」と表示する。
 保存済みの判断・候補は同じ議論の復旧だけで再利用し、別の議論へ好みを学習・転用しない。
 
-v2は分類・探索・選択・改稿ごとに結果と次の進捗を同時保存する。成功済みの処理は再実行せず、
-中断した1要求だけを後継リースで最大1回再実行できる。利用者の明示retryでも保存済み結果を引き継ぐ。
-各要求は120秒、試行全体は既存の600秒期限に従い、各工程の開始で全体期限を延長しない。
+v2は分類・探索・選択・改稿ごとに結果と次の進捗を同時に保存する。保存済みの結果は明示的再試行でも引き継ぐ。
+中断した1要求は後継リースで最大1回再実行できる。
 
-1つの論理出力について、アプリケーション層から生成アダプターへの呼び出しは最大2回。
-保存時の比較更新（CAS）に成功した出力だけを正とし、再生成で上書きしない。
-SDK内部の通信再試行とは別の上限である。判断基準・候補選択・初回意見では、アダプター呼び出しごとに
-出力上限による未完了を確認した場合の再生成を最大1回許可する。部分出力は採用せず、
-成功済みの他者出力を再生成しない。論理段階120秒・試行全体600秒の期限は更新しない。
+アプリケーションから生成アダプターへの呼び出しは論理出力あたり最大2回。比較更新（CAS）で最初に確定した出力を使う。
+SDKの通信再試行や、[出力上限到達時のアダプター内再生成](12_OpenAI・プロンプト詳細設計.md#判断基準候補発言の分離)は別の上限に従う。
 
 最終段階では、スレッド内の結果・勝者発表と、元チャンネルへの親愛度結果を同じ送信計画に含める。
 必須表示が欠けたまま`completed`へ進めない。
 
 ### Pythonによる勝者決定
 
-3人がそれぞれ1票を投じたこと、投票者の重複・欠落がないことを検証する。
-まず得票数で選び、同票なら、その候補が受け取った票の採点を次の順に比較する。
-
-1. 合計点
-2. 正確性の点数
-3. 安全性の点数
-4. 有用性の点数
-5. すべて同じなら固定順`participant-b → participant-a → participant-c`
-
-同じ完全な投票結果からは同じ勝者になる。モデルはこの決定を変更できない。
-実装は[domain/debate_content.py](https://github.com/pitekusu/shittim-chest/blob/main/src/shittim_chest/domain/debate_content.py)の
-`select_winner`を正とする。
-
-### 品質の観測と評価専用処理
-
-#### 総合投票への移行実装（未配信）
-
-利用者承認に基づき、新ルール`entertainment-v1`を旧投票とは別の型で実装する。
-新規受付で版を固定し、採点・永続化・Discord結果・Records・Webへ引き継ぐ。
-既存attemptは版なしを`legacy-v1`として扱い、retryでも投票版を変えない。
-上記の旧ルールを過去記録へ引き続き適用し、旧3項目を新項目へ読み替えない。
+新規受付は`entertainment-v1`を固定し、採点、保存、DiscordとRecordsへの表示に引き継ぐ。
+版のない試行は`legacy-v1`を使い、再試行も同じ版を使う。どちらの版でも、投票者が3人揃い、重複がないことを検証する。
 
 | 項目 | 重み | 判定する内容 |
 |---|---:|---|
@@ -158,17 +110,15 @@ SDK内部の通信再試行とは別の上限である。判断基準・候補�
 個人内で同点なら議論キー・投票者・ルール版に基づく再現可能な抽選を使う。
 全体は3票の多数決、同票なら候補が受けた2件の総合点の和、さらに同点なら議論キーと
 ルール版に基づく抽選で決める。抽選の入力を再試行回数や候補の提示順で変えない。
-特定人格の固定優先や過去の勝率補正を行わない。安全境界は維持するが注意書きは加点しない。
-採点対象の候補・投票者の重複、不足、自己採点、範囲外点数は拒否する。
+採点対象の重複、不足、自己採点、範囲外点数は拒否する。実装は[composite_voting.py](https://github.com/pitekusu/shittim-chest/blob/main/src/shittim_chest/domain/composite_voting.py)を参照する。
 
+旧投票は得票数、同票なら合計点、正確性、安全性、有用性の順で決める。すべて同じ場合の固定順は
+`participant-b → participant-a → participant-c`。実装は[debate_content.py](https://github.com/pitekusu/shittim-chest/blob/main/src/shittim_chest/domain/debate_content.py)を参照する。
 
-投票確定後、`assess_escalation`が保存済みの票だけから品質の観測値を計算する。
-3票の分散、勝者に付いた採点軸の低さ、平均点の低さを記録するが、
-本番ではこの判定による追加のAI呼び出し・モデル切替・再討論を実行しない。
-名前に「エスカレーション」が含まれていても、現在は観測専用である。
+### 品質の観測と評価専用処理
 
-本番の生成方針と、手動比較評価用の方針は`application/generation_policy.py`で分離する。
-比較用ツールの有料実行は[試験設計](18_試験・品質保証設計.md)の独立評価として扱い、通常の配信へ含めない。
+`assess_escalation`は保存済みの票から票の分散と採点の低さを記録する観測専用の処理である。
+手動比較の条件は[試験設計](18_試験・品質保証設計.md)を参照する。
 
 ### 親愛度評価とメモリアルの解放
 
@@ -197,7 +147,7 @@ SDK内部の通信再試行とは別の上限である。判断基準・候補�
 | 投票の公開・Discord送信 | 永続化された順序に従い直列実行 |
 | 討論の生成期限 | 親愛度評価を含め、受付または明示的再試行から600秒 |
 | 1つの論理生成段階 | SDKの再試行を含め120秒 |
-| OpenAI通信の1試行 | 読み取り60秒。詳細はOpenAI設計を参照 |
+| OpenAI通信の1試行 | [OpenAI設計の通信設定](12_OpenAI・プロンプト詳細設計.md#1-接続と実行方針)を参照 |
 
 非同期タスクは取り消した後も完了を待ち、取り消しを通常エラーへ変換しない。
 試行作成日時から残り時間を計算し、途中の投稿・自動復旧で期限を計り直さない。
@@ -234,13 +184,9 @@ SDK内部の通信再試行とは別の上限である。判断基準・候補�
 
 ## 6. Recordsの非同期生成との分担
 
-メモリアルの画像・文章はCoreでは生成しない。Recordsの本人専用APIが操作を受け、SQSと生成ワーカーが
-処理する。所有者と周期をすべての書き込みで確認し、画像と文章の両方を保存してから公開する。
-
-課金処理の試行上限、部分成果からの回復、リセットの原子性は
-[DynamoDB・データ整合性詳細設計](13_DynamoDB・データ整合性詳細設計.md)に集約する。
-API・画面は[メモリアルロビー設計](27_メモリアルロビー設計.md)、生成入力は
-[OpenAI・プロンプト詳細設計](12_OpenAI・プロンプト詳細設計.md)を参照する。
+Coreは親愛度評価と解放の確定までを担当する。解放後の操作受付と画像・文章の生成はRecordsが担当する。
+生成の手順は[メモリアルロビー設計](27_メモリアルロビー設計.md)、回復とリセットの条件は
+[DynamoDBのメモリアル節](13_DynamoDB・データ整合性詳細設計.md#8-メモリアル生成とリセット)を参照する。
 
 ## 7. エラーと観測
 
@@ -268,40 +214,20 @@ API・画面は[メモリアルロビー設計](27_メモリアルロビー設�
 
 ## 9. Python 3.15の新機能の採用候補
 
-[Issue #599](https://github.com/pitekusu/shittim-chest/issues/599)では、Core、Records API、配布・検証ツールを
-Python 3.15へ移行する。Web本体はTypeScript、Android本体はKotlin/Composeを使う。
-実行環境と検証条件は[CI/CD設計の移行評価](15_GitHub・CI-CD詳細設計.md#python-315への移行評価2026年10月14日)を参照する。
+Core、Records API、配布・検証ツールはPython 3.15を使う。固定版は各`pyproject.toml`と`.python-version`を参照する。移行の判断と検証条件は[CI/CD設計](15_GitHub・CI-CD詳細設計.md#pythonの実行環境)に記録する。
 
-| 新機能・改善 | 実装上の候補 | 採用判断と理由 |
-|---|---|---|
-| UTF-8既定化 | 日本語の更新情報、契約生成、CI/CDのファイル入出力 | **移行時に採用**。localeによる差を減らせる。公開JSON・状態ファイルでは引き続き`encoding="utf-8"`を明示する |
-| `profiling.sampling`（Tachyon） | RecordsのOGPレンダラと配布ZIPの性能調査 | **必要時のローカル調査に採用**。固定入力で初回と再実行を計り、標準機能でCPU処理と待機を切り分ける。計測結果から改善箇所を選ぶ |
-| 明示的なlazy import | `services/records/src/shittim_records/lambda_handlers.py`のhandler固有依存、`tools/android_release.py`のGoogle API依存 | **起動時間を計測してから限定導入**。不要な依存の読み込みを遅らせられる。import時の副作用、例外発生時点、初回呼び出し時間を確認する |
-| `frozendict` | `admin_status_adapters.py`の固定対応表、Coreの`ParticipantProfiles`の設定snapshot | **小さな保守改善の候補**。既存の`MappingProxyType(dict(...))`を標準の不変辞書で表せる。既存実装も保護されており優先度は低い。深い不変性や`dict`との型互換性は仮定しない |
-| `sentinel` | `src/shittim_chest/adapters/openai/evidence.py`の`_MISSING = object()` | **低優先候補**。欠落値の名前・型を明確にできる。現状に不具合はなく、移行必須の置換にはしない |
-| `TypedDict`の`closed`／`extra_items` | CI/CDツールの状態辞書など、必要な箇所の型境界 | **必要箇所だけ検討**。実行時の入力検証は提供しない。公開契約は既存のPydanticと生成TypeScript/Kotlinを維持する |
-| `base64`／`binascii`の高速化 | 添付画像の変換とAPI cursor | **移行による改善候補**。既存の標準APIをそのまま使う。API全体の高速化は未計測であり、改善率を約束しない |
+- 公開JSONや状態ファイルはUTF-8を明示する。
+- 性能調査には必要時に標準の`profiling.sampling`を使い、同じ入力で初回と再実行の時間を測る。
+  手順は[標準プロファイラによるローカル計測](15_GitHub・CI-CD詳細設計.md#標準プロファイラによるローカル計測)を参照する。
+- 遅延インポートは初回呼び出しと例外の発生時点を含めて計測し、効果を確認した依存だけを採用候補にする。
 
-2026-11-05の試験では、標準profilerのwall／cpu比較で合成ZIP生成と既知の待機を切り分けられたため、
-独立した3.15標準ライブラリtoolのローカル調査手順へ採用した。
-運用は[CI/CD設計の標準プロファイラ](15_GitHub・CI-CD詳細設計.md#標準プロファイラによるローカル計測)を参照する。
-
-移行前の比較では、限定した`__lazy_modules__`候補のZIP出力とhelpが3.14／3.15で一致した。
-既存の関数内importと`TYPE_CHECKING`を使う箇所は、初回応答と例外発生時点を含めて計測し、
-効果を確認できた依存だけを遅延読み込みの候補にする。
-
-UTF-8の既定化と、標準profilerを使った必要時の調査を優先する。
-一括の`PYTHON_LAZY_IMPORTS=all`、JIT、free-threaded buildを検討する場合は、
-既存SDKとの互換性とARM64 Linuxでの効果を個別に確認する。
-
-機能仕様は[Python 3.15の変更点](https://docs.python.org/3.15/whatsnew/3.15.html)、
-計測方法は[標準sampling profiler](https://docs.python.org/3.15/library/profiling.sampling.html)を参照する。
+全依存に対する一括遅延読み込み、JIT、free-threaded buildはARM64の効果と既存SDKとの互換性を個別に確認する。移行時の候補比較は[当時の記録](https://github.com/pitekusu/shittim-chest/blob/d90665b0fc369b30f4960095bbb88dfa5bcc36ea/docs/10_アプリケーション・Python詳細設計.md)を参照する。
 
 ## 公式資料確認記録
 
 | 確認日 | 対象 | 公式資料 | 設計への反映 |
 |---|---|---|---|
-| 2026-10-14 | Python 3.15 | [正式版](https://www.python.org/downloads/release/python-3150/)、[新機能](https://docs.python.org/3.15/whatsnew/3.15.html) | 新機能の推奨と条件を整理。実行版の移行・高速化の実測は未完了 |
+| 2026-10-14 | Python 3.15 | [正式版](https://www.python.org/downloads/release/python-3150/)、[新機能](https://docs.python.org/3.15/whatsnew/3.15.html) | 移行条件と採用候補を比較 |
 | 2026-10-13 | Python 3.14の例外グループ | [TaskGroup](https://docs.python.org/3.14/library/asyncio-task.html#task-groups)、[split/subgroup](https://docs.python.org/3.14/library/exceptions.html#exception-groups) | 並列処理の保存競合を通常の復旧経路へ戻す |
 | 2026-08-14 | Python asyncio | [タスクとコルーチン](https://docs.python.org/3/library/asyncio-task.html) | 並行処理、期限、取り消し |
 | 2026-08-14 | Python typing | [型ヒント](https://docs.python.org/3/library/typing.html) | SDKに依存しないインターフェース境界 |
