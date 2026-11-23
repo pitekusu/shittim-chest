@@ -468,7 +468,7 @@ describe("Records API endpoint validation", () => {
 
     await expect(getCosts("week")).resolves.toEqual(costsResponse());
     expect(fetch).toHaveBeenCalledWith(
-      "/api/v1/insights/costs?period=week",
+      "/api/v1/insights/costs?period=week&contract=subscription-credits-v1",
       expect.objectContaining({ credentials: "same-origin" }),
     );
   });

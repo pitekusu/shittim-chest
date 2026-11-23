@@ -573,6 +573,10 @@ private fun LazyListScope.costsContent(state: InsightsUiState, wide: Boolean,
     InsightsCard {
       ShittimSectionHeading(stringResource(R.string.insights_cost_note_title))
       Text(stringResource(R.string.insights_cost_note), style = MaterialTheme.typography.bodyMedium)
+      costs.openaiNextSubscriptionCredit?.let { next ->
+        Text(stringResource(R.string.insights_cost_openai_next_subscription_credit,
+          formatInsightsDate(next.date), next.amountUsd), style = MaterialTheme.typography.bodyMedium)
+      }
       Text(stringResource(R.string.insights_cost_conversion), style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant)
       costs.conversion.updatedAt?.let { date ->
@@ -601,6 +605,7 @@ private fun CostBreakdown(costs: InsightsCosts, modifier: Modifier = Modifier) {
   val amounts = listOf(R.string.insights_cost_fargate to costs.breakdown.fargate,
     R.string.insights_cost_lambda to costs.breakdown.lambda, R.string.insights_cost_openai to costs.breakdown.openai,
     R.string.insights_cost_other to costs.breakdown.otherAws)
+  val credit = costs.openaiSubscriptionCredit?.takeIf { it.signum() > 0 }
   InsightsCard(modifier) {
     ShittimSectionHeading(stringResource(R.string.insights_cost_breakdown))
     amounts.forEach { (title, amount) ->
@@ -609,6 +614,10 @@ private fun CostBreakdown(costs: InsightsCosts, modifier: Modifier = Modifier) {
         Text(stringResource(title), style = MaterialTheme.typography.titleSmallEmphasized)
         Text("${stringResource(R.string.insights_yen, formatInsightsYen(amount))} · ${formatInsightsPercent(share)}",
           style = MaterialTheme.typography.bodyLarge)
+        if (title == R.string.insights_cost_openai && credit != null) {
+          Text(stringResource(R.string.insights_cost_openai_subscription_credit, formatInsightsYen(credit)),
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         LinearProgressIndicator(progress = { share.toFloat().coerceIn(0f, 1f) },
           modifier = Modifier.fillMaxWidth().clearAndSetSemantics {})
       }

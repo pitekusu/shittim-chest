@@ -43,7 +43,8 @@ class InsightsReadClientTest {
       assertEquals(BigDecimal("12.000001"), client.insightsCosts(token, InsightsPeriod.Week).total)
     }
     assertEquals(listOf("/api/v1/insights/rankings?", "/api/v1/insights/affection-rankings?limit=50",
-      "/api/v1/insights/affection-rankings?view=requesters&limit=10", "/api/v1/insights/costs?period=week"), paths)
+      "/api/v1/insights/affection-rankings?view=requesters&limit=10",
+      "/api/v1/insights/costs?period=week&contract=subscription-credits-v1"), paths)
   }
 
   @Test fun distinguishesPreparationAuthenticationCursorExpiryAndTransportFailure() = runBlocking {
@@ -55,6 +56,20 @@ class InsightsReadClientTest {
     ).forEach { (status, code, expected) ->
       RecordsReadClient(MockEngine { respond("""{"error":{"code":"$code"}}""", status, header) }).use { client ->
         assertInsightsFailure(expected) { client.insightsParticipants(token) }
+      }
+    }
+  }
+
+  @Test fun readsOptionalSubscriptionCreditsFromTheCostsWireFields() = runBlocking {
+    val legacyPayload = Json.encodeToString(insightTestCosts())
+    val payload = legacyPayload.dropLast(1) +
+      ",\"openaiSubscriptionCredit\":\"10.000001\",\"openaiNextSubscriptionCredit\":{\"date\":\"2026-12-04\",\"amountUsd\":\"80.00\"}}"
+    listOf(legacyPayload to false, payload to true).forEach { (data, hasCredits) ->
+      RecordsReadClient(MockEngine { respond(data, headers = header) }).use { client ->
+        val costs = client.insightsCosts(token, InsightsPeriod.Week)
+        assertEquals(BigDecimal("10.000001").takeIf { hasCredits }, costs.openaiSubscriptionCredit)
+        assertEquals(InsightsNextSubscriptionCredit("2026-12-04", "80.00").takeIf { hasCredits },
+          costs.openaiNextSubscriptionCredit)
       }
     }
   }

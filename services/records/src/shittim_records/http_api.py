@@ -404,11 +404,16 @@ class ReadHttpController:
                     result = self._records.get_affection_rankings(query=ranking_query, now=now)
             elif request.route_key == "GET /api/v1/insights/costs":
                 query = _query(request.raw_query)
-                if not set(query).issubset({"period"}):
+                contract = _optional_single(query, "contract")
+                if not set(query).issubset({"period", "contract"}) or contract not in {
+                    None,
+                    "subscription-credits-v1",
+                }:
                     raise ReadFailure("REQUEST_INVALID", 400)
                 result = self._records.get_costs(
                     period=_cost_period(_optional_single(query, "period")),
                     now=now,
+                    include_subscription_credits=contract == "subscription-credits-v1",
                 )
             else:
                 return error_response(404, "ROUTE_NOT_FOUND", request.request_id)

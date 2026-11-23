@@ -975,7 +975,12 @@ def build_openapi() -> dict[str, Any]:
                                 "enum": ["today", "week", "month", "all"],
                                 "default": "week",
                             },
-                        )
+                        ),
+                        _parameter(
+                            "contract",
+                            "query",
+                            {"type": "string", "enum": ["subscription-credits-v1"]},
+                        ),
                     ],
                     "responses": {
                         "200": _response("CostsResponse", "Estimated Records costs in JPY"),

@@ -984,6 +984,16 @@ export class RecordsApplicationStack extends Stack {
           resources: [sessionTable.tableArn],
         }),
         new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": {
+              "dynamodb:LeadingKeys": ["COST#OPENAI_SUBSCRIPTION"],
+            },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
           actions: ["dynamodb:GetItem", "dynamodb:Query"],
           resources: [statisticsTable.tableArn],
           conditions: {

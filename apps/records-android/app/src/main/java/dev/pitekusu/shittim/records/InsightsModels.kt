@@ -115,12 +115,21 @@ internal data class InsightsCostConversion(
   val source: String, val method: String, val baseCurrency: String, val updatedAt: String?,
 )
 @Serializable
+internal data class InsightsNextSubscriptionCredit(val date: String, val amountUsd: String) {
+  fun validate() {
+    check(LocalDate.parse(date).toString() == date && date.length == 10)
+    check(Regex("[0-9]+\\.[0-9]{2}").matches(amountUsd) && BigDecimal(amountUsd).signum() > 0)
+  }
+}
+@Serializable
 internal data class InsightsCosts(
   @Required val schemaVersion: Int = 1, val period: InsightsPeriod, val timeZone: String,
   val startDate: String, val endDate: String, val currency: String,
   @Serializable(with = InsightsJpySerializer::class) val total: BigDecimal,
   val breakdown: InsightsCostBreakdown, val conversion: InsightsCostConversion,
   val updatedAt: String?, val status: String,
+  @Serializable(with = InsightsJpySerializer::class) val openaiSubscriptionCredit: BigDecimal? = null,
+  val openaiNextSubscriptionCredit: InsightsNextSubscriptionCredit? = null,
 ) {
   fun validate() {
     check(schemaVersion == 1 && timeZone == "Asia/Tokyo" && currency == "JPY")
@@ -128,9 +137,11 @@ internal data class InsightsCosts(
     check(status in setOf("partial", "final", "unavailable"))
     check(conversion.source == "frankfurter-v2" && conversion.method == "daily-reference-rate" && conversion.baseCurrency == "USD")
     conversion.updatedAt?.let(::insightTimestamp); updatedAt?.let(::insightTimestamp)
-    listOf(total, breakdown.fargate, breakdown.lambda, breakdown.openai, breakdown.otherAws).forEach {
+    listOfNotNull(total, breakdown.fargate, breakdown.lambda, breakdown.openai,
+      breakdown.otherAws, openaiSubscriptionCredit).forEach {
       check(it.signum() >= 0 && it.scale() == 6)
     }
+    openaiNextSubscriptionCredit?.validate()
   }
 }
 

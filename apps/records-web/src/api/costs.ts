@@ -7,6 +7,6 @@ function isCostsResponse(value: unknown): value is CostsResponse {
 }
 
 export async function getCosts(period: CostPeriod, signal?: AbortSignal): Promise<CostsResponse> {
-  const query = new URLSearchParams({ period });
+  const query = new URLSearchParams({ period, contract: "subscription-credits-v1" });
   return requestJson(`/api/v1/insights/costs?${query.toString()}`, isCostsResponse, { signal });
 }
