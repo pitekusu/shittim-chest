@@ -7,7 +7,6 @@ import logging
 import random
 from datetime import UTC, datetime
 
-from shittim_chest.adapters.openai import OpenAIFailureRecord, OpenAIUsageRecord
 from shittim_chest.application.models import MetricEvent
 from shittim_chest.domain import (
     AttemptId,
@@ -15,6 +14,9 @@ from shittim_chest.domain import (
     FinalProposal,
     ParticipantSlot,
 )
+
+# Resolve telemetry annotations without importing the SDK on Lambda paths.
+lazy from shittim_chest.adapters.openai import OpenAIFailureRecord, OpenAIUsageRecord
 
 
 class SystemClock:

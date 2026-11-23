@@ -268,40 +268,25 @@ API・画面は[メモリアルロビー設計](27_メモリアルロビー設�
 
 ## 9. Python 3.15の新機能の採用候補
 
-[Issue #599](https://github.com/pitekusu/shittim-chest/issues/599)では、Core、Records API、配布・検証ツールを
-Python 3.15へ移行する。Web本体はTypeScript、Android本体はKotlin/Composeを使う。
-実行環境と検証条件は[CI/CD設計の移行評価](15_GitHub・CI-CD詳細設計.md#python-315への移行評価2026年10月14日)を参照する。
+Core、Records API、配布・検証ツールはPython 3.15を使う。固定版は各`pyproject.toml`と`.python-version`を参照する。
 
-| 新機能・改善 | 実装上の候補 | 採用判断と理由 |
-|---|---|---|
-| UTF-8既定化 | 日本語の更新情報、契約生成、CI/CDのファイル入出力 | **移行時に採用**。localeによる差を減らせる。公開JSON・状態ファイルでは引き続き`encoding="utf-8"`を明示する |
-| `profiling.sampling`（Tachyon） | RecordsのOGPレンダラと配布ZIPの性能調査 | **必要時のローカル調査に採用**。固定入力で初回と再実行を計り、標準機能でCPU処理と待機を切り分ける。計測結果から改善箇所を選ぶ |
-| 明示的なlazy import | `services/records/src/shittim_records/lambda_handlers.py`のhandler固有依存、`tools/android_release.py`のGoogle API依存 | **起動時間を計測してから限定導入**。不要な依存の読み込みを遅らせられる。import時の副作用、例外発生時点、初回呼び出し時間を確認する |
-| `frozendict` | `admin_status_adapters.py`の固定対応表、Coreの`ParticipantProfiles`の設定snapshot | **小さな保守改善の候補**。既存の`MappingProxyType(dict(...))`を標準の不変辞書で表せる。既存実装も保護されており優先度は低い。深い不変性や`dict`との型互換性は仮定しない |
-| `sentinel` | `src/shittim_chest/adapters/openai/evidence.py`の`_MISSING = object()` | **低優先候補**。欠落値の名前・型を明確にできる。現状に不具合はなく、移行必須の置換にはしない |
-| `TypedDict`の`closed`／`extra_items` | CI/CDツールの状態辞書など、必要な箇所の型境界 | **必要箇所だけ検討**。実行時の入力検証は提供しない。公開契約は既存のPydanticと生成TypeScript/Kotlinを維持する |
-| `base64`／`binascii`の高速化 | 添付画像の変換とAPI cursor | **移行による改善候補**。既存の標準APIをそのまま使う。API全体の高速化は未計測であり、改善率を約束しない |
+- 公開JSONや状態ファイルはUTF-8を明示する。
+- 性能調査には必要時に標準の`profiling.sampling`を使い、同じ入力で初回と再実行の時間を測る。
+  手順は[標準プロファイラによるローカル計測](15_GitHub・CI-CD詳細設計.md#標準プロファイラによるローカル計測)を参照する。
+- 遅延インポートは、Core LambdaのDiscordアダプターの公開名とOpenAI計測型、Recordsの共有Lambdaの処理固有依存に採用した。
+  起動から初回処理完了までの中央値は、CoreのDiscord受付で547→371 ms、Recordsのランキング生成で850→545 msだった。
+  Python 3.15.2のLinux x86-64で外部接続を代替した[計測記録](https://github.com/pitekusu/shittim-chest/blob/c1efb962512003bec3181c62fbd142b1780cc367/docs/10_%E3%82%A2%E3%83%97%E3%83%AA%E3%82%B1%E3%83%BC%E3%82%B7%E3%83%A7%E3%83%B3%E3%83%BBPython%E8%A9%B3%E7%B4%B0%E8%A8%AD%E8%A8%88.md#coreとrecordsの起動初回処理の計測)を参照する。
 
-2026-11-05の試験では、標準profilerのwall／cpu比較で合成ZIP生成と既知の待機を切り分けられたため、
-独立した3.15標準ライブラリtoolのローカル調査手順へ採用した。
-運用は[CI/CD設計の標準プロファイラ](15_GitHub・CI-CD詳細設計.md#標準プロファイラによるローカル計測)を参照する。
-
-移行前の比較では、限定した`__lazy_modules__`候補のZIP出力とhelpが3.14／3.15で一致した。
-既存の関数内importと`TYPE_CHECKING`を使う箇所は、初回応答と例外発生時点を含めて計測し、
-効果を確認できた依存だけを遅延読み込みの候補にする。
-
-UTF-8の既定化と、標準profilerを使った必要時の調査を優先する。
-一括の`PYTHON_LAZY_IMPORTS=all`、JIT、free-threaded buildを検討する場合は、
-既存SDKとの互換性とARM64 Linuxでの効果を個別に確認する。
-
-機能仕様は[Python 3.15の変更点](https://docs.python.org/3.15/whatsnew/3.15.html)、
-計測方法は[標準sampling profiler](https://docs.python.org/3.15/library/profiling.sampling.html)を参照する。
+Core Fargateの画像・生徒ガチャ依存の遅延読み込みは、本番相当設定で初回処理時間の改善が確認できず保留する。
+JITはLambdaで無効で、Core FargateのARM64イメージにも組み込まれていない。ローカルの比較でも初回処理の改善は確認できなかった。
+全依存への一括適用、JIT、free-threaded buildを検討するときは、ARM64で初回・反復処理時間とメモリを計測し、SDKとの互換性を確認する。
+[JITの計測記録](https://github.com/pitekusu/shittim-chest/blob/c1efb962512003bec3181c62fbd142b1780cc367/docs/10_%E3%82%A2%E3%83%97%E3%83%AA%E3%82%B1%E3%83%BC%E3%82%B7%E3%83%A7%E3%83%B3%E3%83%BBPython%E8%A9%B3%E7%B4%B0%E8%A8%AD%E8%A8%88.md#jitの採用判断)を参照する。
 
 ## 公式資料確認記録
 
 | 確認日 | 対象 | 公式資料 | 設計への反映 |
 |---|---|---|---|
-| 2026-10-14 | Python 3.15 | [正式版](https://www.python.org/downloads/release/python-3150/)、[新機能](https://docs.python.org/3.15/whatsnew/3.15.html) | 新機能の推奨と条件を整理。実行版の移行・高速化の実測は未完了 |
+| 2026-10-14 | Python 3.15 | [正式版](https://www.python.org/downloads/release/python-3150/)、[新機能](https://docs.python.org/3.15/whatsnew/3.15.html) | 移行条件と採用候補を比較 |
 | 2026-10-13 | Python 3.14の例外グループ | [TaskGroup](https://docs.python.org/3.14/library/asyncio-task.html#task-groups)、[split/subgroup](https://docs.python.org/3.14/library/exceptions.html#exception-groups) | 並列処理の保存競合を通常の復旧経路へ戻す |
 | 2026-08-14 | Python asyncio | [タスクとコルーチン](https://docs.python.org/3/library/asyncio-task.html) | 並行処理、期限、取り消し |
 | 2026-08-14 | Python typing | [型ヒント](https://docs.python.org/3/library/typing.html) | SDKに依存しないインターフェース境界 |
