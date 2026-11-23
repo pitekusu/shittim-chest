@@ -268,65 +268,25 @@ API・画面は[メモリアルロビー設計](27_メモリアルロビー設�
 
 ## 9. Python 3.15の新機能の採用候補
 
-[Issue #599](https://github.com/pitekusu/shittim-chest/issues/599)では、Core、Records API、配布・検証ツールを
-Python 3.15へ移行する。Web本体はTypeScript、Android本体はKotlin/Composeを使う。
-実行環境と検証条件は[CI/CD設計の移行評価](15_GitHub・CI-CD詳細設計.md#python-315への移行評価2026年10月14日)を参照する。
+Core、Records API、配布・検証ツールはPython 3.15を使う。固定版は各`pyproject.toml`と`.python-version`を参照する。
 
-| 新機能・改善 | 実装上の候補 | 採用判断と理由 |
-|---|---|---|
-| UTF-8既定化 | 日本語の更新情報、契約生成、CI/CDのファイル入出力 | **移行時に採用**。localeによる差を減らせる。公開JSON・状態ファイルでは引き続き`encoding="utf-8"`を明示する |
-| `profiling.sampling`（Tachyon） | RecordsのOGPレンダラと配布ZIPの性能調査 | **必要時のローカル調査に採用**。固定入力で初回と再実行を計り、標準機能でCPU処理と待機を切り分ける。計測結果から改善箇所を選ぶ |
-| 明示的なlazy import | CoreのDiscordアダプターの公開名とOpenAI計測型、Recordsの共有Lambdaの処理固有依存 | **計測した範囲で採用**。公開名を維持し、他の経路で不要な依存を初回利用まで読み込まない |
-| `frozendict` | `admin_status_adapters.py`の固定対応表、Coreの`ParticipantProfiles`の設定snapshot | **小さな保守改善の候補**。既存の`MappingProxyType(dict(...))`を標準の不変辞書で表せる。既存実装も保護されており優先度は低い。深い不変性や`dict`との型互換性は仮定しない |
-| `sentinel` | `src/shittim_chest/adapters/openai/evidence.py`の`_MISSING = object()` | **低優先候補**。欠落値の名前・型を明確にできる。現状に不具合はなく、移行必須の置換にはしない |
-| `TypedDict`の`closed`／`extra_items` | CI/CDツールの状態辞書など、必要な箇所の型境界 | **必要箇所だけ検討**。実行時の入力検証は提供しない。公開契約は既存のPydanticと生成TypeScript/Kotlinを維持する |
-| `base64`／`binascii`の高速化 | 添付画像の変換とAPI cursor | **移行による改善候補**。既存の標準APIをそのまま使う。API全体の高速化は未計測であり、改善率を約束しない |
+- 公開JSONや状態ファイルはUTF-8を明示する。
+- 性能調査には必要時に標準の`profiling.sampling`を使い、同じ入力で初回と再実行の時間を測る。
+  手順は[標準プロファイラによるローカル計測](15_GitHub・CI-CD詳細設計.md#標準プロファイラによるローカル計測)を参照する。
+- 遅延インポートは、Core LambdaのDiscordアダプターの公開名とOpenAI計測型、Recordsの共有Lambdaの処理固有依存に採用した。
+  起動から初回処理完了までの中央値は、CoreのDiscord受付で547→371 ms、Recordsのランキング生成で850→545 msだった。
+  Python 3.15.2のLinux x86-64で外部接続を代替した[計測記録](https://github.com/pitekusu/shittim-chest/blob/c1efb962512003bec3181c62fbd142b1780cc367/docs/10_%E3%82%A2%E3%83%97%E3%83%AA%E3%82%B1%E3%83%BC%E3%82%B7%E3%83%A7%E3%83%B3%E3%83%BBPython%E8%A9%B3%E7%B4%B0%E8%A8%AD%E8%A8%88.md#coreとrecordsの起動初回処理の計測)を参照する。
 
-2026-11-05の試験では、標準profilerのwall／cpu比較で合成ZIP生成と既知の待機を切り分けられたため、
-独立した3.15標準ライブラリtoolのローカル調査手順へ採用した。
-運用は[CI/CD設計の標準プロファイラ](15_GitHub・CI-CD詳細設計.md#標準プロファイラによるローカル計測)を参照する。
-
-### CoreとRecordsの起動・初回処理の計測
-
-2026年11月23日に、Python 3.15.2のLinux x86-64で、同じ入力を使う変更前後の実行順をペアごとに入れ替えて計測した。
-各試行を新しいPythonプロセスで始め、外部サービスには接続せず、完了した初回処理の結果も照合した。
-計測時は`PYTHON_LAZY_IMPORTS=normal`と`PYTHON_JIT=0`を指定した。
-
-Core Lambdaは、Discordアダプターの公開名とOpenAI計測の型を必要になった時点で読み込む。
-統合差分の16ペアで、署名付きDiscord受付から永続化までの初回中央値は547→371 ms、
-ステータス確認から投稿までは579→397 msだった。ローカルの受付処理ではSnapStart用の初期化を通したが、
-AWS上でのスナップショット復元時間は計測していない。
-モバイル受付で使うDiscordの日時変換は、遅延候補で初回処理時間とピークメモリが増えたため、起動時の読み込みを維持する。
-
-Recordsの共有ハンドラーでは、設定用プロンプト、Inspector、メモリアル、通知の依存を遅延させた。
-統合差分の14ペアでプロセス起動から初回の結果までを計り、中央値はランキング生成が850→545 ms、
-親愛度の投影が845→549 ms、Inspectorのキャッシュ読み取りが844→755 ms、メモリアルの再処理確認が843→775 msだった。
-Inspectorとメモリアルは初回ハンドラーへ約218〜230 msの読み込みが移るため、再実行と初回処理は別々に評価する。
-Galleryの画像検証とメモリアルのデコード制限は既存経路で維持する。
-
-Core Fargateの候補は、画像・生徒ガチャ関連の6 importを遅延させる変更だった。
-本番相当の生徒ガチャ有効設定で、実際の構成から依存を組み立て、外部サービスをテスト代替にした討論が完了するまでを20ペア計測した。
-中央値は変更前864.8 ms、変更後864.7 msで、有意な改善は確認できなかった。
-生徒ガチャ無効では870.2 msから835.8 msへ改善した。現行の本番設定では起動時に候補の依存を使用するため、この変更は保留する。
-
-### JITの採用判断
-
-管理LambdaのPythonはJITが無効で、現在のCore Fargate向けDHIのARM64 CPythonもJITを組み込んでいない。
-JITを切り替えられる同一のPython 3.15.2 x86-64バイナリで、無効→有効の初回中央値は、Coreの討論完了が873.0→877.3 ms（8ペア）、
-RecordsのOGP画像3枚が928.1→931.3 ms（3ペア）だった。Coreのウォーム処理では約0.05 msの差に留まり、現段階の本番採用は保留する。
-ARM64で採用を検討する際は、JITを利用できる同一ビルド上で無効／有効を比較し、初回処理の時間、反復処理の時間、メモリを確認する。
-別のPythonビルドを配布する場合は、既存の依存・署名・TLSとイメージ監査を新しい成果物で検証する。
-[Lambdaのランタイム仕様](https://docs.aws.amazon.com/lambda/latest/dg/lambda-python.html#python-disabled-features)と
-[CPythonのJITビルド条件](https://docs.python.org/3.15/using/configure.html#cmdoption-enable-experimental-jit)を参照する。
-
-機能仕様は[Python 3.15の変更点](https://docs.python.org/3.15/whatsnew/3.15.html)、
-計測方法は[標準sampling profiler](https://docs.python.org/3.15/library/profiling.sampling.html)を参照する。
+Core Fargateの画像・生徒ガチャ依存の遅延読み込みは、本番相当設定で初回処理時間の改善が確認できず保留する。
+JITはLambdaで無効で、Core FargateのARM64イメージにも組み込まれていない。ローカルの比較でも初回処理の改善は確認できなかった。
+全依存への一括適用、JIT、free-threaded buildを検討するときは、ARM64で初回・反復処理時間とメモリを計測し、SDKとの互換性を確認する。
+[JITの計測記録](https://github.com/pitekusu/shittim-chest/blob/c1efb962512003bec3181c62fbd142b1780cc367/docs/10_%E3%82%A2%E3%83%97%E3%83%AA%E3%82%B1%E3%83%BC%E3%82%B7%E3%83%A7%E3%83%B3%E3%83%BBPython%E8%A9%B3%E7%B4%B0%E8%A8%AD%E8%A8%88.md#jitの採用判断)を参照する。
 
 ## 公式資料確認記録
 
 | 確認日 | 対象 | 公式資料 | 設計への反映 |
 |---|---|---|---|
-| 2026-10-14 | Python 3.15 | [正式版](https://www.python.org/downloads/release/python-3150/)、[新機能](https://docs.python.org/3.15/whatsnew/3.15.html) | 新機能の推奨と条件を整理。実行版の移行・高速化の実測は未完了 |
+| 2026-10-14 | Python 3.15 | [正式版](https://www.python.org/downloads/release/python-3150/)、[新機能](https://docs.python.org/3.15/whatsnew/3.15.html) | 移行条件と採用候補を比較 |
 | 2026-10-13 | Python 3.14の例外グループ | [TaskGroup](https://docs.python.org/3.14/library/asyncio-task.html#task-groups)、[split/subgroup](https://docs.python.org/3.14/library/exceptions.html#exception-groups) | 並列処理の保存競合を通常の復旧経路へ戻す |
 | 2026-08-14 | Python asyncio | [タスクとコルーチン](https://docs.python.org/3/library/asyncio-task.html) | 並行処理、期限、取り消し |
 | 2026-08-14 | Python typing | [型ヒント](https://docs.python.org/3/library/typing.html) | SDKに依存しないインターフェース境界 |
