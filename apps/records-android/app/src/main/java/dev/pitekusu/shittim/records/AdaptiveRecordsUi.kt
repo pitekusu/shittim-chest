@@ -349,15 +349,21 @@ internal fun AdaptiveRecordsUi(
           })
       }
     }
-    state.followUpDraftConflict?.takeIf { state.canReadRecords && state.selectedRecordId == it }?.let { recordId ->
-      val dismiss = { state.eventSink(BootstrapScreen.Event.DismissFollowUpDraftConflict) }
+    val followUpTarget = state.followUpDraftConflict?.takeIf { state.selectedRecordId == it }
+    val startNewDebate = onList && state.newDebateDraftConflict
+    if (state.canReadRecords && (followUpTarget != null || startNewDebate)) {
+      val dismiss = { state.eventSink(if (startNewDebate) BootstrapScreen.Event.DismissNewDebateDraftConflict
+        else BootstrapScreen.Event.DismissFollowUpDraftConflict) }
+      val confirm = if (followUpTarget == null) BootstrapScreen.Event.ConfirmNewDebateDraft
+        else BootstrapScreen.Event.ComposeFollowUp(followUpTarget, replaceDraft = true)
       AlertDialog(onDismissRequest = dismiss,
         title = { Text(stringResource(R.string.record_followup_replace_title)) },
-        text = { Text(stringResource(R.string.record_followup_replace_message)) },
+        text = { Text(stringResource(if (startNewDebate) R.string.debate_replace_followup_message
+          else R.string.record_followup_replace_message)) },
         dismissButton = { TextButton(onClick = dismiss) { Text(stringResource(R.string.review_demo_cancel)) } },
         confirmButton = {
-          TextButton(onClick = { state.eventSink(BootstrapScreen.Event.ComposeFollowUp(recordId, replaceDraft = true)) }) {
-            Text(stringResource(R.string.record_followup_replace))
+          TextButton(onClick = { state.eventSink(confirm) }) {
+            Text(stringResource(if (startNewDebate) R.string.debate_replace_followup else R.string.record_followup_replace))
           }
         })
     }
