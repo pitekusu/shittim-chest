@@ -45,7 +45,7 @@ GitHubへ書き込む前に`gh auth status`と`gh api user --jq '.login'`で操�
 
 配信とCIの範囲は[変更パス分類](https://github.com/pitekusu/shittim-chest/blob/main/tools/classify_ci_paths.py)と
 実際の差分で決める。「Webだけ」「文書だけ」という呼び名だけでは判定しない。
-例えばREADMEはイメージのビルド対象なので、その変更は現在の分類ではコンテナ検証対象になる。
+Pythonの配布パッケージの説明は `PACKAGE_DESCRIPTION.md` で管理し、コンテナとRecordsの検証入力に含める。ルートの `README.md` は文書検査の対象とする。
 Recordsだけの変更でFargateイメージを変更しない場合は、Core配信を追加しない。
 Core配信を行う場合は、変更内容にかかわらず同じSHAのRecords配信成功が必要である。
 

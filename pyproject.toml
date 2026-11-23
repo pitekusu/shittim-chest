@@ -2,7 +2,8 @@
 name = "shittim-chest"
 version = "1.0.0"
 description = "Discord multi-agent debate bot"
-readme = "README.md"
+# Keep the published package description independent of the repository landing page.
+readme = "PACKAGE_DESCRIPTION.md"
 requires-python = ">=3.15,<3.16"
 license = "MIT"
 license-files = ["LICENSE"]
