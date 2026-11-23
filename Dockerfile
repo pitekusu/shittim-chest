@@ -27,7 +27,7 @@ COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     uv sync --frozen --no-dev --no-install-project --no-editable
 
-COPY README.md LICENSE ./
+COPY PACKAGE_DESCRIPTION.md LICENSE ./
 COPY src ./src
 COPY tools/canonicalize_wheel_records.py /tmp/canonicalize_wheel_records.py
 COPY tools/transfer_tree_deterministically.py /tmp/transfer_tree_deterministically.py
