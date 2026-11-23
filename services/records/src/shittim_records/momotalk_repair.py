@@ -20,7 +20,7 @@ def main() -> int:
     parser.add_argument(
         "--participant", required=True, choices=("participant-a", "participant-b", "participant-c")
     )
-    parser.add_argument("--mood", required=True, choices=("happy", "unhappy"))
+    parser.add_argument("--mood", required=True, choices=("happy", "neutral", "unhappy"))
     parser.add_argument(
         "--execute", action="store_true", help="allow generation with one moderation fallback"
     )

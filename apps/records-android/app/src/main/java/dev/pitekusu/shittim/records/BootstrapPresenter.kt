@@ -1,6 +1,7 @@
 package dev.pitekusu.shittim.records
 
 import android.content.ActivityNotFoundException
+import android.content.Context
 import android.net.Uri
 import kotlin.coroutines.cancellation.CancellationException
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -33,6 +34,7 @@ import dev.pitekusu.shittim.records.auth.SessionState
 import dev.zacsweers.metro.Inject
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.lifecycle.viewmodel.initializer
@@ -73,6 +75,13 @@ internal data object BootstrapScreen : Screen {
     val publicPageError: Boolean = false,
     val insights: InsightsUiState = InsightsUiState(),
     val momotalk: MomotalkUiState = MomotalkUiState(),
+    val loadMomotalkAnimation: suspend (String, String, String) -> ByteArray? = { _, _, _ -> null },
+    val studentGallery: StudentGallery? = null,
+    val related: RecordRelatedState = RecordRelatedState(),
+    val showFollowUpsFor: String? = null,
+    val followUpDraftConflict: String? = null,
+    val newDebateDraftConflict: Boolean = false,
+    val followUpParent: RecordPreview? = null,
     val eventSink: (Event) -> Unit,
   ) : CircuitUiState
 
@@ -91,6 +100,11 @@ internal data object BootstrapScreen : Screen {
     data object RefreshRecords : Event
     data object RecordsAuthRequired : Event
     data class OpenRecord(val recordId: String) : Event
+    data class OpenRelatedRecord(val sourceId: String, val targetId: String, val fromList: Boolean = false) : Event
+    data class OpenRecordFollowUps(val recordId: String) : Event
+    data class LoadRecordFollowUps(val recordId: String, val more: Boolean = false) : Event
+    data class ComposeFollowUp(val recordId: String, val replaceDraft: Boolean = false) : Event
+    data object DismissFollowUpDraftConflict : Event
     data object CloseRecord : Event
     data class SearchRecords(val text: String) : Event
     data class SelectWinner(val winner: RecordWinner) : Event
@@ -98,12 +112,15 @@ internal data object BootstrapScreen : Screen {
     data class SelectOrder(val order: RecordOrder) : Event
     data object ClearRecordQuery : Event
     data object ComposeDebate : Event
+    data object DismissNewDebateDraftConflict : Event
+    data object ConfirmNewDebateDraft : Event
     class EditDebate(val question: String) : Event {
       override fun toString(): String = "EditDebate(<redacted>)"
     }
     class AddDebateImages(val uris: List<Uri>) : Event { override fun toString() = "AddDebateImages(<redacted>)" }
     class RemoveDebateImage(val attachmentId: String) : Event
     data object DiscardMissingDebate : Event
+    data class EditUnavailableFollowUp(val requestId: String) : Event
     data object SubmitDebate : Event
     data object CheckDebate : Event
     data object RetryDebate : Event
@@ -114,6 +131,7 @@ internal data object BootstrapScreen : Screen {
     data object NewDebateDraft : Event
     data object ShowInsights : Event
     data class InsightsAction(val action: InsightsEvent) : Event
+    data object ShowStudentCollection : Event
     data object ShowMomotalk : Event
     data class MomotalkAction(val action: MomotalkEvent) : Event
     data object ShowDebateRequests : Event
@@ -124,11 +142,22 @@ internal data object BootstrapScreen : Screen {
   }
 }
 
-@Inject
-internal class BootstrapPresenter(
+private class StartupSeedDenial {
+  var accountId: String? = null
+}
+
+internal class BootstrapPresenter private constructor(
   private val runtime: RecordsRuntime,
+  private val openRecords: (Context, (String) -> Boolean) -> RecordsRepository,
 ) : Presenter<BootstrapScreen.State> {
+  @Inject constructor(runtime: RecordsRuntime) : this(runtime, { context, isActive ->
+    RecordsRepository.open(context, isActive)
+  })
+
   constructor(session: MobileSessionModel) : this(RecordsRuntime(session = session))
+
+  constructor(session: MobileSessionModel, openRecords: (Context, (String) -> Boolean) -> RecordsRepository) :
+    this(RecordsRuntime(session = session), openRecords)
   @Composable
   override fun present(): BootstrapScreen.State {
     // Restore the presentation state, without persisting a device/account preference.
@@ -178,12 +207,20 @@ internal class BootstrapPresenter(
     RecordNotificationPermissionEffect(authorized = cacheAccountId != null && (signedIn || demo != null),
       demoEntryId = runtime.demoEntryId)
     val currentSignedIn by rememberUpdatedState(signedIn)
+    val currentNetworkAvailable by rememberUpdatedState(networkAvailable)
     val currentSessionState by rememberUpdatedState(sessionState)
     DisposableEffect(cacheAccountId) {
       // Restored offline access can show decoded avatars before SignedIn exists.
       onDispose { if (cacheAccountId != null) SingletonImageLoader.get(context).memoryCache?.clear() }
     }
     val launcher = rememberLauncherForActivityResult(MobileLoginContract()) { session?.loginResult(it) }
+    val galleryOwner = cacheAccountId?.takeIf { demo == null && StudentGalleryRoute in backStack }
+    val studentGallery = remember(runtime, galleryOwner, cachePermit) {
+      galleryOwner?.let { createStudentGallery(context.applicationContext, runtime, it, cachePermit) }
+    }
+    DisposableEffect(studentGallery) {
+      onDispose { studentGallery?.close() }
+    }
     val modelOwner = requireNotNull(LocalViewModelStoreOwner.current)
     var insightsSelection by remember(cacheAccountId) { mutableStateOf(InsightsSelection()) }
     val insightsModel = remember(cacheAccountId, cachePermit, modelOwner) {
@@ -248,6 +285,14 @@ internal class BootstrapPresenter(
           // Kotlin lazy retries an initializer that throws; a transient open failure
           // must not permanently disable this account's retained model.
           val store = lazy { DebateWorkspaceStore.open(context.applicationContext, runtime::isActive) }
+          suspend fun sendWithAttachments(id: String, question: String, images: List<DraftAttachment>,
+            parentRecordId: String? = null): DebateRequest = session?.withAuthorizedToken { token ->
+            if (!hasValidatedDebateNetwork(context)) throw DebateRequestException(DebateFailure.UNAVAILABLE)
+            if (!runtime.isActive(owner)) throw DebateRequestException(DebateFailure.AUTH_REQUIRED)
+            uploads.prepare(token, id, images, parentRecordId) { store.value.image(owner, it) }
+            if (!runtime.isActive(owner)) throw DebateRequestException(DebateFailure.AUTH_REQUIRED)
+            client.submit(token, id, question, images.map { it.attachmentId }, parentRecordId)
+          } ?: throw DebateRequestException(DebateFailure.AUTH_REQUIRED)
           DebateSubmissionModel({ runtime.isActive(owner) },
             { store.value.load(owner) },
             { store.value.save(owner, it) },
@@ -271,13 +316,8 @@ internal class BootstrapPresenter(
             authenticationRequired = { session?.onAuthenticationRequired() },
             importImage = { store.value.importImage(owner, it) },
             readImage = { store.value.image(owner, it) },
-            sendWithImages = { id, question, images -> session?.withAuthorizedToken { token ->
-              if (!hasValidatedDebateNetwork(context)) throw DebateRequestException(DebateFailure.UNAVAILABLE)
-              if (!runtime.isActive(owner)) throw DebateRequestException(DebateFailure.AUTH_REQUIRED)
-              uploads.prepare(token, id, images) { store.value.image(owner, it) }
-              if (!runtime.isActive(owner)) throw DebateRequestException(DebateFailure.AUTH_REQUIRED)
-              client.submit(token, id, question, images.map { it.attachmentId })
-            } ?: throw DebateRequestException(DebateFailure.AUTH_REQUIRED) },
+            sendWithImages = { id, question, images -> sendWithAttachments(id, question, images) },
+            sendFollowUp = ::sendWithAttachments,
             control = { id, action, operationId, attemptToken -> session?.withAuthorizedToken { token ->
               if (!hasValidatedDebateNetwork(context)) throw DebateRequestException(DebateFailure.UNAVAILABLE)
               if (!runtime.isActive(owner)) throw DebateRequestException(DebateFailure.AUTH_REQUIRED)
@@ -313,9 +353,48 @@ internal class BootstrapPresenter(
     var historyMore by remember(cacheAccountId) { mutableStateOf(false) }
     val foregroundLifecycle = LocalLifecycleOwner.current.lifecycle
     val debateRoute = backStack.lastOrNull()
-    LaunchedEffect(cacheAccountId, debate.workspace?.requestId, debateRoute) {
-      val id = debate.workspace?.requestId ?: return@LaunchedEffect
-      if (cacheAccountId != null && runtime.isActive(cacheAccountId) && debateRoute == DebateCompose) {
+    var openingDebateComposer by rememberSaveable { mutableStateOf(false) }
+    var newDebateDraftConflict by remember(cacheAccountId) { mutableStateOf(false) }
+    val followUpDraftBusy = debate.busy && debate.workspace?.let { it.parentRecordId != null && it.requestId == null } == true
+    LaunchedEffect(cacheAccountId, debate.workspace != null, debate.workspace?.requestId, debateRoute, followUpDraftBusy) {
+      if (debateRoute != RecordsList) newDebateDraftConflict = false
+      if (backStack.lastOrNull() != DebateCompose) {
+        openingDebateComposer = false
+        return@LaunchedEffect
+      }
+      if (cacheAccountId == null || !runtime.isActive(cacheAccountId)) return@LaunchedEffect
+      val model = debateModel ?: return@LaunchedEffect
+      val workspace = model.state.value.workspace ?: return@LaunchedEffect
+      val id = workspace.requestId
+      // Apply the + intent once after local restoration. Later submissions open their own status.
+      if (openingDebateComposer && id == null && workspace.parentRecordId != null) {
+        when (model.prepareDraft(parentRecordId = null)) {
+          DebateDraftPreparation.Ready -> Unit
+          DebateDraftPreparation.Conflict -> {
+            openingDebateComposer = false
+            newDebateDraftConflict = true
+            backStack.removeLastOrNull()
+            return@LaunchedEffect
+          }
+          DebateDraftPreparation.Blocked -> return@LaunchedEffect
+        }
+      }
+      if (openingDebateComposer && id != null && workspace.pendingControl?.requestId != id) {
+        // Polling stops when the status screen closes, so its last receipt may be stale.
+        if (debateOnline && workspace.receipt?.terminal == false) {
+          // A restored workspace can be visible while its attachment previews still load.
+          model.awaitRestoration()
+          if (backStack.lastOrNull() != DebateCompose || !runtime.isActive(cacheAccountId)) return@LaunchedEffect
+          withTimeoutOrNull(3_000) { model.refreshStatus(id) }
+        }
+        if (backStack.lastOrNull() != DebateCompose || !runtime.isActive(cacheAccountId)) return@LaunchedEffect
+        if (model.state.value.workspace?.requestId == id && model.newDraft()) {
+          openingDebateComposer = false
+          return@LaunchedEffect
+        }
+      }
+      openingDebateComposer = false
+      if (id != null) {
         backStack[backStack.lastIndex] = DebateRequestStatus(id)
       }
     }
@@ -346,7 +425,7 @@ internal class BootstrapPresenter(
     }
     val normalRecords = remember(context.applicationContext, runtime) {
       if (demo != null) null else try {
-        RecordsRepository.open(context.applicationContext, runtime::isActive)
+        openRecords(context.applicationContext, runtime::isActive)
       }
       catch (_: Exception) { null }
     }
@@ -361,10 +440,37 @@ internal class BootstrapPresenter(
     // Search text and decrypted snapshots are account-bound memory, never SavedState.
     var listQuery by remember(cacheAccountId) { mutableStateOf(RecordListQuery()) }
     var savedEntries by remember(cacheAccountId) { mutableStateOf<List<RecordListEntry>?>(null) }
+    var showingRecent by remember(cacheAccountId) { mutableStateOf(false) }
     val requesters = remember(savedEntries) { recordRequesterChoices(savedEntries.orEmpty()) }
     var searching by remember(cacheAccountId) { mutableStateOf(false) }
     var listOwner by remember { mutableStateOf<String?>(null) }
     var syncState by remember { mutableStateOf<RecordSyncState>(RecordSyncState.Idle) }
+    val cacheIsEmpty = savedEntries?.isEmpty() == true
+    val seedDenial = remember(session) { StartupSeedDenial() }
+    var emptyFirstPage by remember(cacheAccountId, sessionState) { mutableStateOf(false) }
+    LaunchedEffect(cacheAccountId, sessionState, cacheIsEmpty) {
+      if (sessionState == SessionState.SigningOut || sessionState is SessionState.SignedOut) seedDenial.accountId = null
+      val owner = cacheAccountId ?: return@LaunchedEffect
+      val activeSession = session ?: return@LaunchedEffect
+      val repository = normalRecords ?: return@LaunchedEffect
+      if (!cacheIsEmpty || sessionState !is SessionState.SignedIn || seedDenial.accountId == owner)
+        return@LaunchedEffect
+      try {
+        val page = activeSession.withAuthorizedToken { token ->
+          repository.seedRecentRecords(token, owner, onSaved = RecordSyncScheduler::cacheChanged) {
+            activeSession.state.value === sessionState
+          }
+        } ?: return@LaunchedEffect
+        if (page.items.isEmpty()) emptyFirstPage = page.nextCursor == null
+      } catch (error: RecordReadException) {
+        // A list 401 starts another session check. Avoid looping if that check accepts the token.
+        // withAuthorizedToken already suppresses failures from a replaced credential.
+        if (error.serverRejectedSession) {
+          seedDenial.accountId = owner
+          activeSession.onAuthenticationRequired()
+        }
+      }
+    }
     LaunchedEffect(cacheAccountId, signedIn) {
       if (cacheAccountId != null && signedIn) {
         if (demo == null) RecordSyncScheduler.schedule(context)
@@ -412,13 +518,27 @@ internal class BootstrapPresenter(
       // Finish the current local read; progress only queues the latest reload.
       // collectLatest / effect keys based on progress would starve a slow decrypted read.
       snapshotFlow { listRetry }.conflate().collect {
-        val saved = try { records?.cachedRecords(cacheAccountId)
-          ?: throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE) }
-        catch (error: RecordReadException) {
-          if (runtime.isActive(cacheAccountId)) recordList = RecordListState.Error(error.failure)
+        val saved = try {
+          when {
+            normalRecords != null && savedEntries.isNullOrEmpty() && listQuery.isDefault ->
+              normalRecords.cachedRecords(cacheAccountId) { recent, total ->
+                if (runtime.isActive(cacheAccountId) && listQuery.isDefault) {
+                  showingRecent = true
+                  recordList = RecordListState.Ready.fromSaved(recent, recordList as? RecordListState.Ready, total)
+                }
+              }
+            records != null -> records.cachedRecords(cacheAccountId)
+            else -> throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE)
+          }
+        } catch (error: RecordReadException) {
+          if (runtime.isActive(cacheAccountId)) {
+            showingRecent = false
+            recordList = RecordListState.Error(error.failure)
+          }
           return@collect
         }
         if (!runtime.isActive(cacheAccountId)) return@collect
+        if (saved.isEmpty()) showingRecent = false
         savedEntries = saved
       }
     }
@@ -436,11 +556,15 @@ internal class BootstrapPresenter(
             records?.queryCachedRecords(cacheAccountId, saved, query)
               ?: throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE)
           } catch (error: RecordReadException) {
-            if (runtime.isActive(cacheAccountId)) recordList = RecordListState.Error(error.failure)
+            if (runtime.isActive(cacheAccountId)) {
+              showingRecent = false
+              recordList = RecordListState.Error(error.failure)
+            }
             searching = false
             return@collect
           }
-          if (!runtime.isActive(cacheAccountId)) return@collect
+          if (!runtime.isActive(cacheAccountId) || (showingRecent && saved.isEmpty())) return@collect
+          showingRecent = false
           val status = syncState
           recordList = if (saved.isEmpty() && query.isDefault &&
             currentSessionState != SessionState.Unavailable && status is RecordSyncState.Failed) {
@@ -455,24 +579,30 @@ internal class BootstrapPresenter(
     // Empty-list completion/errors must still change the presentation, without decrypting or
     // searching the same saved entries again just because worker/session state changed.
     LaunchedEffect(cacheAccountId, syncState, currentSessionState == SessionState.Unavailable,
-      savedEntries?.isEmpty(), listQuery) {
+      savedEntries?.isEmpty(), listQuery, showingRecent, emptyFirstPage) {
       if (cacheAccountId == null || !runtime.isActive(cacheAccountId) ||
-        savedEntries?.isEmpty() != true || !listQuery.isDefault) return@LaunchedEffect
+        showingRecent || savedEntries?.isEmpty() != true || !listQuery.isDefault) return@LaunchedEffect
       recordList = when {
         currentSessionState == SessionState.Unavailable || syncState == RecordSyncState.Completed ->
           RecordListState.Ready.fromSaved(emptyList(), recordList as? RecordListState.Ready)
         syncState is RecordSyncState.Failed -> RecordListState.Error((syncState as RecordSyncState.Failed).reason)
+        emptyFirstPage -> RecordListState.Ready.fromSaved(emptyList(), recordList as? RecordListState.Ready)
         else -> RecordListState.Idle
       }
     }
+
+    var gatedRelatedRecord by rememberSaveable { mutableStateOf<String?>(null) }
     LaunchedEffect(cacheAccountId, selectedRecordId) {
       if (cacheAccountId != null && selectedRecordId != null) {
-        snapshotFlow { Triple(recordRetry, listRetry, currentSignedIn) }.conflate().collect {
+        snapshotFlow {
+          Triple(recordRetry, listRetry, currentSignedIn &&
+            (gatedRelatedRecord != selectedRecordId || currentNetworkAvailable))
+        }.conflate().collect { (_, _, canFetch) ->
           if (record !is RecordPreviewState.Ready) record = RecordPreviewState.Loading
           val loaded = try {
             val saved = records?.cachedRecord(cacheAccountId, selectedRecordId)
             if (saved != null) RecordPreviewState.Ready(saved, saved = true)
-            else if (!currentSignedIn) RecordPreviewState.Empty
+            else if (!canFetch) RecordPreviewState.Empty
             else try {
               val result = session?.withAuthorizedToken {
                 normalRecords?.record(it, cacheAccountId, selectedRecordId)
@@ -550,17 +680,78 @@ internal class BootstrapPresenter(
       catch (error: CancellationException) { throw error }
       catch (_: Exception) { /* Retain completed originals if cleanup fails. */ }
     }
+    var showFollowUpsFor by rememberSaveable { mutableStateOf<String?>(null) }
+    var followUpDraftConflict by remember(cacheAccountId, selectedRecordId) { mutableStateOf<String?>(null) }
+    val hasReadyRecord = record is RecordPreviewState.Ready
+    val showingRecord = backStack.lastOrNull() is RecordDetail
+    val selectedOwner = cacheAccountId
+    val selectedId = selectedRecordId
+    val savedChildren = remember(selectedId, savedEntries) {
+      savedEntries.orEmpty().asSequence().filter { it.parentRecordId == selectedId && selectedId != null }
+        .sortedWith(compareByDescending<RecordListEntry> { it.completedAt }.thenByDescending { it.recordId })
+        .map { RecordFollowUpSummary(it.recordId, it.questionPreview, it.completedAt.toString()) }.toList()
+    }
+    var branchPage by remember(selectedOwner, selectedId) { mutableStateOf<RecordFollowUpsPage?>(null) }
+    var branchRequest by remember(selectedOwner, selectedId) { mutableStateOf<Pair<Int, String?>>(0 to null) }
+    var branchLoading by remember(selectedOwner, selectedId) { mutableStateOf(false) }
+    var branchError by remember(selectedOwner, selectedId) { mutableStateOf(false) }
+    val branchOnline = demo == null && signedIn && networkAvailable
+    LaunchedEffect(selectedOwner, selectedId, hasReadyRecord, showingRecord, branchOnline, branchRequest) {
+      if (selectedOwner == null || selectedId == null || !hasReadyRecord || !showingRecord || !branchOnline) return@LaunchedEffect
+      val cursor = branchRequest.second
+      branchLoading = true
+      branchError = false
+      try {
+        val page = session?.withAuthorizedToken { token ->
+          normalRecords?.followUps(token, selectedOwner, selectedId, cursor)
+            ?: throw RecordReadException(RecordReadFailure.STORAGE_UNAVAILABLE)
+        } ?: return@LaunchedEffect
+        if (runtime.isActive(selectedOwner) && (backStack.lastOrNull() as? RecordDetail)?.recordId == selectedId) {
+          val previousItems = if (cursor == null) emptyList() else branchPage?.items.orEmpty()
+          branchPage = RecordFollowUpsPage(page.schemaVersion, (previousItems + page.items).distinctBy { it.recordId },
+            page.nextCursor, page.followUpAvailable)
+        }
+      } catch (error: RecordReadException) {
+        if (runtime.isActive(selectedOwner)) {
+          branchError = true
+          if (error.failure == RecordReadFailure.AUTH_REQUIRED) session?.onAuthenticationRequired()
+        }
+      } finally { branchLoading = false }
+    }
+    val related = if (selectedOwner == null || !hasReadyRecord) RecordRelatedState()
+      else RecordRelatedState(
+        items = if (branchOnline) branchPage?.items ?: savedChildren else savedChildren,
+        nextCursor = branchPage?.nextCursor.takeIf { branchOnline },
+        canStart = branchOnline && !branchError && branchPage?.followUpAvailable == true,
+        loading = branchOnline && branchLoading,
+        failed = branchOnline && branchError,
+        offline = !branchOnline && demo == null,
+      )
+    val parentId = debate.workspace?.parentRecordId
+    var followUpParent by remember(cacheAccountId, parentId) { mutableStateOf<RecordPreview?>(null) }
+    LaunchedEffect(cacheAccountId, parentId, listRetry) {
+      if (cacheAccountId == null || parentId == null) return@LaunchedEffect
+      val preview = try { records?.cachedRecord(cacheAccountId, parentId) }
+      catch (_: RecordReadException) { null }
+      if (runtime.isActive(cacheAccountId)) followUpParent = preview
+    }
     val visibleRecord = (record as? RecordPreviewState.Ready)?.let {
       RecordPreviewState.Ready(it.preview, it.saved, it.updating, it.refreshFailure, recordImages)
     } ?: record
-    val visibleList = if (cacheAccountId != null && listOwner == cacheAccountId) recordList else RecordListState.Idle
+    val visibleList = if (cacheAccountId != null && listOwner == cacheAccountId &&
+      (!showingRecent || listQuery.isDefault)) recordList else RecordListState.Idle
     return BootstrapScreen.State(themeChoice, sessionState, visibleList, visibleRecord, selectedRecordId, syncState,
       canReadRecords = cacheAccountId != null, listQuery = listQuery, searching = searching,
       requesters = if (cacheAccountId != null) requesters else emptyList(),
       loginCompletion = loginCompletion, backStack = backStack.toList(), recordOwner = cacheAccountId,
-      debate = debate, debateStatus = debateStatus, debateHistory = debateHistory,
+      debate = if (openingDebateComposer && debateRoute == DebateCompose && debate.workspace != null)
+        DebateSubmissionState() else debate,
+      debateStatus = debateStatus, debateHistory = debateHistory,
       debateOnline = debateOnline, debateImages = debateImages, demoEntryId = runtime.demoEntryId,
-      publicPageError = publicPageError, insights = insights, momotalk = momotalk) { event ->
+      publicPageError = publicPageError, insights = insights, momotalk = momotalk, studentGallery = studentGallery,
+      loadMomotalkAnimation = { week, room, imageKey -> momotalkModel?.loadAnimation(week, room, imageKey) },
+      related = related, showFollowUpsFor = showFollowUpsFor, followUpDraftConflict = followUpDraftConflict,
+      newDebateDraftConflict = newDebateDraftConflict, followUpParent = followUpParent) { event ->
       when (event) {
         is BootstrapScreen.Event.SelectTheme -> themeChoice = event.choice
         BootstrapScreen.Event.EnterDemo -> runtime.enterDemo()
@@ -608,29 +799,113 @@ internal class BootstrapPresenter(
           cacheAccountId != null && runtime.isActive(cacheAccountId) &&
           stackOwner == cacheAccountId && session?.pendingDestination?.value == null &&
           event.recordId in ((visibleList as? RecordListState.Ready)?.loadedIds ?: emptySet())
-        ) backStack.openRecord(event.recordId)
+        ) {
+          showFollowUpsFor = null
+          gatedRelatedRecord = null
+          backStack.openRecord(event.recordId)
+        }
+        is BootstrapScreen.Event.OpenRecordFollowUps -> if (
+          cacheAccountId != null && runtime.isActive(cacheAccountId) && stackOwner == cacheAccountId &&
+          session?.pendingDestination?.value == null &&
+          event.recordId in ((visibleList as? RecordListState.Ready)?.loadedIds ?: emptySet())
+        ) {
+          showFollowUpsFor = event.recordId
+          gatedRelatedRecord = null
+          backStack.openRecord(event.recordId)
+        }
+        is BootstrapScreen.Event.OpenRelatedRecord -> if (
+          cacheAccountId != null && runtime.isActive(cacheAccountId) && stackOwner == cacheAccountId &&
+          session?.pendingDestination?.value == null &&
+          dev.pitekusu.shittim.records.auth.mobileOpaqueValue.matches(event.targetId) && event.sourceId != event.targetId
+        ) {
+          if (event.fromList) {
+            if ((visibleList as? RecordListState.Ready)?.parentById?.get(event.sourceId) == event.targetId) {
+              showFollowUpsFor = null
+              gatedRelatedRecord = event.targetId
+              backStack.openRecord(event.targetId)
+            }
+          } else if ((backStack.lastOrNull() as? RecordDetail)?.recordId == event.sourceId &&
+            ((record as? RecordPreviewState.Ready)?.preview?.parentRecordId == event.targetId ||
+              related.items.any { it.recordId == event.targetId })) {
+            gatedRelatedRecord = event.targetId
+            backStack.openRelatedRecord(event.targetId)
+          }
+        }
+        is BootstrapScreen.Event.LoadRecordFollowUps -> if (
+          cacheAccountId != null && runtime.isActive(cacheAccountId) && branchOnline && !branchLoading &&
+          (backStack.lastOrNull() as? RecordDetail)?.recordId == event.recordId
+        ) {
+          val cursor = if (event.more) branchPage?.nextCursor else null
+          if (!event.more || cursor != null) branchRequest = (branchRequest.first + 1) to cursor
+        }
+        is BootstrapScreen.Event.ComposeFollowUp -> if (
+          cacheAccountId != null && runtime.isActive(cacheAccountId) && stackOwner == cacheAccountId &&
+          session?.pendingDestination?.value == null && related.canStart &&
+          (backStack.lastOrNull() as? RecordDetail)?.recordId == event.recordId
+        ) {
+          if (!event.replaceDraft || followUpDraftConflict == event.recordId) {
+            followUpDraftConflict = null
+            when (debateModel?.prepareDraft(event.recordId, event.replaceDraft)) {
+              DebateDraftPreparation.Ready -> backStack.add(DebateCompose)
+              DebateDraftPreparation.Conflict -> followUpDraftConflict = event.recordId
+              DebateDraftPreparation.Blocked -> debate.workspace?.requestId?.let { backStack.add(DebateRequestStatus(it)) }
+              null -> Unit
+            }
+          }
+        }
+        BootstrapScreen.Event.DismissFollowUpDraftConflict -> followUpDraftConflict = null
         BootstrapScreen.Event.CloseRecord -> if (
           cacheAccountId != null && runtime.isActive(cacheAccountId) &&
           stackOwner == cacheAccountId && backStack.lastOrNull() != RecordsList &&
           session?.pendingDestination?.value == null
         ) {
-          if (backStack.lastOrNull() == DebateCompose) debateModel?.flush { backStack.closeRecord() }
-          else backStack.removeLastOrNull()
+          if (backStack.lastOrNull() == DebateCompose) debateModel?.flush {
+            if (backStack.lastOrNull() != DebateCompose) return@flush
+            if (backStack.getOrNull(backStack.lastIndex - 1) is RecordDetail) backStack.removeLastOrNull()
+            else backStack.closeRecord()
+          } else backStack.removeLastOrNull()
         }
         is BootstrapScreen.Event.SearchRecords -> listQuery = listQuery.copy(text = event.text)
         is BootstrapScreen.Event.SelectWinner -> listQuery = listQuery.copy(winner = event.winner)
         is BootstrapScreen.Event.SelectRequester -> listQuery = listQuery.copy(requesterName = event.displayName)
         is BootstrapScreen.Event.SelectOrder -> listQuery = listQuery.copy(order = event.order)
         BootstrapScreen.Event.ClearRecordQuery -> listQuery = RecordListQuery()
-        BootstrapScreen.Event.ComposeDebate -> if (cacheAccountId != null && runtime.isActive(cacheAccountId)) {
+        BootstrapScreen.Event.ComposeDebate -> if (cacheAccountId != null && runtime.isActive(cacheAccountId) &&
+          backStack.lastOrNull() == RecordsList && !newDebateDraftConflict) {
+          openingDebateComposer = true
           debateModel?.restore()
-          backStack.closeRecord()
+          backStack.add(DebateCompose)
+        }
+        BootstrapScreen.Event.DismissNewDebateDraftConflict -> newDebateDraftConflict = false
+        BootstrapScreen.Event.ConfirmNewDebateDraft -> if (newDebateDraftConflict && cacheAccountId != null &&
+          runtime.isActive(cacheAccountId) && stackOwner == cacheAccountId && backStack.lastOrNull() == RecordsList &&
+          session?.pendingDestination?.value == null &&
+          debateModel?.prepareDraft(parentRecordId = null, replaceDraft = true) == DebateDraftPreparation.Ready) {
+          newDebateDraftConflict = false
           backStack.add(DebateCompose)
         }
         is BootstrapScreen.Event.EditDebate -> debateModel?.edit(event.question)
         is BootstrapScreen.Event.AddDebateImages -> if (backStack.lastOrNull() == DebateCompose) debateModel?.addImages(event.uris)
         is BootstrapScreen.Event.RemoveDebateImage -> if (backStack.lastOrNull() == DebateCompose) debateModel?.removeImage(event.attachmentId)
-        BootstrapScreen.Event.DiscardMissingDebate -> if (debateOnline && cacheAccountId?.let(runtime::isActive) == true) debateModel?.discardMissing()
+        BootstrapScreen.Event.DiscardMissingDebate -> if (debateOnline && cacheAccountId?.let(runtime::isActive) == true) {
+          val route = backStack.lastOrNull()
+          if (route == DebateCompose || (route is DebateRequestStatus && route.requestId == debate.workspace?.requestId)) {
+            debateModel?.discardMissing {
+              if (route is DebateRequestStatus && backStack.lastOrNull() == route)
+                backStack[backStack.lastIndex] = DebateCompose
+            }
+          }
+        }
+        is BootstrapScreen.Event.EditUnavailableFollowUp -> if (
+          debateOnline && cacheAccountId?.let(runtime::isActive) == true &&
+          (backStack.lastOrNull() as? DebateRequestStatus)?.requestId == event.requestId &&
+          debate.workspace?.requestId == event.requestId
+        ) {
+          debateModel?.discardMissing(returnAsNewDebate = true) {
+            if ((backStack.lastOrNull() as? DebateRequestStatus)?.requestId == event.requestId)
+              backStack[backStack.lastIndex] = DebateCompose
+          }
+        }
         BootstrapScreen.Event.SubmitDebate -> if (debateOnline && cacheAccountId?.let(runtime::isActive) == true) debateModel?.submit()
         BootstrapScreen.Event.CheckDebate -> if (debateOnline && cacheAccountId?.let(runtime::isActive) == true) debateModel?.reconcile()
         is BootstrapScreen.Event.ControlDebate -> if (debateOnline && cacheAccountId?.let(runtime::isActive) == true &&
@@ -653,6 +928,12 @@ internal class BootstrapPresenter(
             backStack.closeRecord()
             backStack.add(DebateCompose)
           }
+        }
+        BootstrapScreen.Event.ShowStudentCollection -> if (demo == null &&
+          cacheAccountId != null && runtime.isActive(cacheAccountId) && stackOwner == cacheAccountId &&
+          session?.pendingDestination?.value == null && backStack.lastOrNull() != StudentGalleryRoute) {
+          if (backStack.lastOrNull() == DebateCompose) debateModel?.flush { backStack.add(StudentGalleryRoute) }
+          else backStack.add(StudentGalleryRoute)
         }
         BootstrapScreen.Event.ShowMomotalk -> if (cacheAccountId != null && runtime.isActive(cacheAccountId) &&
           stackOwner == cacheAccountId && session?.pendingDestination?.value == null &&
@@ -716,8 +997,14 @@ internal class BootstrapPresenter(
           debateRoute is DebateRequestStatus &&
           debateModel?.publishedRecordId(debateRoute.requestId) == event.recordId
         ) {
-          backStack.closeRecord()
-          backStack.openRecord(event.recordId)
+          val fromFollowUp = backStack.getOrNull(backStack.lastIndex - 1) is RecordDetail
+          if (fromFollowUp) {
+            backStack.removeLastOrNull()
+            backStack.openRelatedRecord(event.recordId)
+          } else {
+            backStack.closeRecord()
+            backStack.openRecord(event.recordId)
+          }
           if (demo == null && signedIn) RecordSyncScheduler.syncNow(context)
         }
         BootstrapScreen.Event.ReauthenticateDebate -> debateModel?.flush {

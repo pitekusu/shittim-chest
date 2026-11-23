@@ -33,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.pitekusu.shittim.records.ui.ShittimPanel
 import dev.pitekusu.shittim.records.ui.ShittimSpacing
@@ -43,7 +44,7 @@ internal fun DebateComposeScreen(state: DebateSubmissionState, online: Boolean,
   onRetry: () -> Unit, onReauth: () -> Unit, onNew: () -> Unit,
   modifier: Modifier = Modifier, images: List<RecordImagePresentation> = emptyList(),
   onImagesSelected: (List<Uri>) -> Unit = {}, onRemoveImage: (String) -> Unit = {},
-  onDiscardMissing: () -> Unit = {}, demo: Boolean = false) {
+  onDiscardMissing: () -> Unit = {}, demo: Boolean = false, parent: RecordPreview? = null) {
   val singlePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
     if (uri != null) onImagesSelected(listOf(uri))
   }
@@ -58,8 +59,10 @@ internal fun DebateComposeScreen(state: DebateSubmissionState, online: Boolean,
   Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(ShittimSpacing.Medium)
     .testTag("debate-compose"), verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Medium)) {
     DebateVersusHeader()
-    Text(stringResource(R.string.debate_start), style = MaterialTheme.typography.headlineMediumEmphasized)
     val workspace = state.workspace
+    val isFollowUp = workspace?.parentRecordId != null
+    Text(stringResource(if (isFollowUp) R.string.record_followup_start else R.string.debate_start),
+      style = MaterialTheme.typography.headlineMediumEmphasized)
     if (workspace == null) {
       if (state.failure == null) CircularProgressIndicator()
       else {
@@ -68,9 +71,16 @@ internal fun DebateComposeScreen(state: DebateSubmissionState, online: Boolean,
       }
       return@Column
     }
+    if (isFollowUp) ShittimPanel {
+      Text(stringResource(R.string.record_followup_parent_context), style = MaterialTheme.typography.titleMediumEmphasized)
+      if (parent != null) {
+        Text(parent.question, maxLines = 3, overflow = TextOverflow.Ellipsis)
+        Text(parent.decision, style = MaterialTheme.typography.bodySmall, maxLines = 6, overflow = TextOverflow.Ellipsis)
+      }
+    }
     val frozen = workspace.requestId != null
     OutlinedTextField(value = workspace.frozenQuestion ?: workspace.draft, onValueChange = onEdit,
-      readOnly = frozen, enabled = !state.busy, label = { Text(stringResource(R.string.debate_question)) },
+      readOnly = frozen, enabled = !state.busy, label = { Text(stringResource(if (isFollowUp) R.string.record_followup_question else R.string.debate_question)) },
       supportingText = { Text(stringResource(R.string.debate_characters,
         (workspace.frozenQuestion ?: workspace.draft).codePointCount(0, (workspace.frozenQuestion ?: workspace.draft).length))) },
       minLines = 6, modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp).testTag("debate-question"))
@@ -88,7 +98,7 @@ internal fun DebateComposeScreen(state: DebateSubmissionState, online: Boolean,
       Text(stringResource(R.string.attachment_add))
     }
     Text(stringResource(R.string.attachment_limits), style = MaterialTheme.typography.labelSmall)
-    if (demo && !frozen) TextButton(onClick = { onImagesSelected(listOf(DEMO_SAMPLE_IMAGE_URI)) },
+    if (demo && !frozen && !isFollowUp) TextButton(onClick = { onImagesSelected(listOf(DEMO_SAMPLE_IMAGE_URI)) },
       enabled = !state.busy && workspace.attachments.size < MAX_ATTACHMENT_COUNT,
       modifier = Modifier.testTag("review-demo-sample-image")) {
       Text(stringResource(R.string.review_demo_sample_image))
@@ -100,6 +110,7 @@ internal fun DebateComposeScreen(state: DebateSubmissionState, online: Boolean,
         DebateFailure.STORAGE -> R.string.debate_storage_error
         DebateFailure.REAUTH_REQUIRED -> R.string.debate_reauth
         DebateFailure.FORBIDDEN -> R.string.debate_forbidden
+        DebateFailure.FOLLOW_UP_PARENT_UNAVAILABLE -> R.string.record_followup_parent_unavailable
         DebateFailure.QUEUE_FULL -> R.string.debate_queue_full
         DebateFailure.ATTACHMENT_INVALID -> R.string.attachment_invalid
         DebateFailure.ATTACHMENT_EXPIRED -> R.string.attachment_expired

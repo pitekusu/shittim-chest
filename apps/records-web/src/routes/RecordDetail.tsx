@@ -1,12 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 
 import { RecordsApiError } from "../api/http";
 import { getRecord } from "../api/recordDetail";
 import type { ParticipantSlot, RecordDetailResponse } from "../api/types";
 import { Avatar } from "../components/Avatar";
 import { ErrorPanel } from "../components/ErrorPanel";
+import { RecordFollowUps } from "../components/RecordFollowUps";
 import { RecordImages } from "../components/RecordImages";
 import { VoteGraph } from "../components/VoteGraph";
 import { useAuthenticationRecovery } from "../hooks/useAuthenticationRecovery";
@@ -24,7 +25,13 @@ const JAPANESE_PROSE_CLASS = `${commonStyles.japaneseText} ${commonStyles.japane
 const READABLE_JAPANESE_PROSE_CLASS = `${JAPANESE_PROSE_CLASS} ${commonStyles.readableMeasure}`;
 const AFFECTION_HEART_COUNT = 10;
 
-function DetailNavigation({ hasAffection }: { readonly hasAffection: boolean }) {
+function DetailNavigation({
+  hasAffection,
+  hasFollowUps,
+}: {
+  readonly hasAffection: boolean;
+  readonly hasFollowUps: boolean;
+}) {
   const [activeSection, setActiveSection] = useState("opinions-title");
   const navigationRef = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -46,12 +53,13 @@ function DetailNavigation({ hasAffection }: { readonly hasAffection: boolean }) 
       if (heading) observer.observe(heading);
     }
     return () => observer.disconnect();
-  }, [hasAffection]);
+  }, [hasAffection, hasFollowUps]);
   const items = [
     { id: "opinions-title", label: "3人の意見" },
     ...(hasAffection ? [{ id: "affection-title", label: "親愛度" }] : []),
     { id: "votes-title", label: "投票" },
     { id: "decision-title", label: "最終決定" },
+    ...(hasFollowUps ? [{ id: "followups", label: "更問" }] : []),
   ];
   return (
     <nav
@@ -153,6 +161,8 @@ export function RecordDocument({
 }: {
   readonly record: RecordDetailResponse;
 }): React.JSX.Element {
+  const { hash } = useLocation();
+  const hasFollowUps = !!(record.parentRecordId || record.hasFollowUps || hash === "#followups");
   useEffect(() => {
     setPageMetadata(record);
     return () => setPageMetadata();
@@ -236,6 +246,7 @@ export function RecordDocument({
       </header>
       <DetailNavigation
         hasAffection={record.affection !== null && record.affection !== undefined}
+        hasFollowUps={hasFollowUps}
       />
       <section
         className={`${detailStyles.detailSection} ${routeStyles.routeMotionItem}`}
@@ -513,6 +524,7 @@ export function RecordDocument({
           </div>
         </div>
       </section>
+      {hasFollowUps && <RecordFollowUps record={record} />}
     </article>
   );
 }

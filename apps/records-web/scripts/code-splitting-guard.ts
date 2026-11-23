@@ -22,12 +22,22 @@ function htmlEntryFile(chunk: GuardChunk): string | undefined {
 }
 
 const ROUTES = {
+  GalleryPage: {
+    facade: "/src/routes/GalleryPage.tsx",
+    ownedModules: [
+      "/src/generated/gallery-collection-list-response-validator.mjs",
+      "/src/generated/gallery-roster-response-validator.mjs",
+      "/src/generated/gallery-detail-response-validator.mjs",
+      "/src/generated/gallery-thumbnails-response-validator.mjs",
+      "/src/generated/gallery-original-response-validator.mjs",
+    ],
+  },
   MomotalkPage: {
     facade: "/src/routes/MomotalkPage.tsx",
     ownedModules: [
       "/src/generated/momotalk-weeks-response-validator.mjs",
       "/src/generated/momotalk-rooms-response-validator.mjs",
-      "/src/generated/momotalk-room-response-validator.mjs",
+      "/src/generated/momotalk-room-v3-response-validator.mjs",
     ],
   },
   RecordsHome: {

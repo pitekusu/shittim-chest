@@ -13,6 +13,7 @@ const expectedRoutes = [
   "AdminPromptsPage",
   "MemorialPage",
   "MomotalkPage",
+  "GalleryPage",
 ];
 const maximumEntryGzipBytes = 113_560;
 const manifest = JSON.parse(
@@ -50,7 +51,7 @@ for (const file of HTML_ENTRY_FILES) {
   initialClosures.push(actual);
 }
 
-const initial = new Set(initialClosures.flatMap((closure) => [...closure]));
+const initial = new Set(Iterator.concat(...initialClosures));
 const routeClosures = new Map(
   expectedRoutes.map((route) => {
     const matches = chunks.filter((chunk) => chunk.route === route);

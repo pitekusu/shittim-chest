@@ -53,9 +53,16 @@ def test_generated_contracts_are_deterministic_and_checkable(tmp_path: Path) -> 
         ("get", "/api/v1/records"),
         ("get", "/api/v1/records/sync-index"),
         ("get", "/api/v1/records/{recordId}"),
+        ("get", "/api/v1/records/{recordId}/follow-ups"),
         ("get", "/api/v1/insights/rankings"),
         ("get", "/api/v1/insights/affection-rankings"),
         ("get", "/api/v1/insights/costs"),
+        ("get", "/api/v1/gallery"),
+        ("get", "/api/v1/gallery/roster"),
+        ("get", "/api/v1/gallery/school-logos"),
+        ("get", "/api/v1/gallery/thumbnails"),
+        ("get", "/api/v1/gallery/{cardId}"),
+        ("get", "/api/v1/gallery/{cardId}/original"),
         ("get", "/api/v1/momotalk/weeks"),
         ("get", "/api/v1/momotalk/weeks/{weekId}/rooms"),
         ("get", "/api/v1/momotalk/weeks/{weekId}/rooms/{roomId}"),
@@ -139,7 +146,7 @@ def test_archive_search_keeps_private_criteria_in_body_and_uses_browser_auth() -
     for operation in (openapi["paths"]["/api/v1/records"]["get"], search):
         contract = next(item for item in operation["parameters"] if item["name"] == "contract")
         assert contract["in"] == "query" and not contract["required"]
-        assert contract["schema"]["enum"] == ["record-attachments-v1"]
+        assert contract["schema"]["enum"] == ["record-attachments-v1", "record-followups-v1"]
     requesters = openapi["paths"]["/api/v1/records/requesters"]["get"]
     assert requesters["security"] == [{"sessionCookie": []}]
     assert [parameter["name"] for parameter in requesters["parameters"]] == ["cursor"]
@@ -162,9 +169,13 @@ def test_momotalk_detail_documents_opt_in_selfie_subjects() -> None:
         "name": "contract",
         "in": "query",
         "required": False,
-        "schema": {"type": "string", "enum": ["momotalk-selfie-v2"]},
+        "schema": {"type": "string", "enum": ["momotalk-selfie-v2", "momotalk-selfie-v3"]},
     }
     assert "全人格を1枚" in detail["description"] and "既存の最大2画像" in detail["description"]
+    assert detail["responses"]["200"]["content"]["application/json"]["schema"]["anyOf"] == [
+        {"$ref": "#/components/schemas/MomotalkRoomResponse"},
+        {"$ref": "#/components/schemas/MomotalkRoomV3Response"},
+    ]
     for path in ("/api/v1/momotalk/weeks", "/api/v1/momotalk/weeks/{weekId}/rooms"):
         parameters = openapi["paths"][path]["get"]["parameters"]
         assert "contract" not in {item["name"] for item in parameters}

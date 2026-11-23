@@ -22,6 +22,8 @@ from tools.check_notification_workflows import (
     RECORDS_CI_WORKFLOW,
     RECORDS_RELEASE_WORKFLOW,
     RELEASE_WORKFLOW,
+    ROSTER_PUBLISH_WORKFLOW,
+    ROSTER_RELEASE_WORKFLOW,
     WORKFLOW_DIRECTORY,
     WORKFLOW_RUN_NOTIFICATION,
     WorkflowPolicyError,
@@ -33,8 +35,8 @@ from tools.check_notification_workflows import (
 
 @pytest.fixture
 def directory(tmp_path: Path) -> Path:
-    directory = tmp_path / "workflows"
-    directory.mkdir()
+    directory = tmp_path / ".github/workflows"
+    directory.mkdir(parents=True)
     for name in (
         ALLOWED_TARGET_WORKFLOW,
         "discord-security-digest.yml",
@@ -47,9 +49,15 @@ def directory(tmp_path: Path) -> Path:
         RECORDS_RELEASE_WORKFLOW,
         RECORDS_BACKFILL_WORKFLOW,
         ANDROID_RELEASE_WORKFLOW,
+        ROSTER_RELEASE_WORKFLOW,
+        ROSTER_PUBLISH_WORKFLOW,
     ):
         (directory / name).write_bytes((WORKFLOW_DIRECTORY / name).read_bytes())
     shutil.copytree(WORKFLOW_DIRECTORY.parent / "actions", directory.parent / "actions")
+    relative_package = Path("apps/records-web/package.json")
+    package = tmp_path / relative_package
+    package.parent.mkdir(parents=True)
+    shutil.copyfile(WORKFLOW_DIRECTORY.parent.parent / relative_package, package)
     return directory
 
 
@@ -61,6 +69,41 @@ def _replace(path: Path, old: str, new: str, count: int = -1) -> None:
 
 def test_repository_target_workflow_is_accepted(directory: Path) -> None:
     assert validate_notification_workflows(directory) == 1
+
+
+@pytest.mark.parametrize(
+    "workflow,before,after",
+    (
+        (ROSTER_RELEASE_WORKFLOW, "workflow_dispatch:", "pull_request:"),
+        (
+            ROSTER_RELEASE_WORKFLOW,
+            "./.github/workflows/student-gacha-roster-publish.yml",
+            "./.github/workflows/other-publisher.yml",
+        ),
+        (ROSTER_PUBLISH_WORKFLOW, "checks: read", "checks: write"),
+        (
+            ROSTER_PUBLISH_WORKFLOW,
+            "environment: student-gacha-roster",
+            "environment: production",
+        ),
+        (
+            ROSTER_PUBLISH_WORKFLOW,
+            "python3 tools/check_release_ci.py",
+            "echo skipped",
+        ),
+        (
+            ROSTER_PUBLISH_WORKFLOW,
+            "run: bash tools/publish_student_gacha_roster.sh",
+            "run: aws cloudformation execute-change-set",
+        ),
+    ),
+)
+def test_roster_release_rejects_widened_workflow_permissions_or_missing_gate(
+    directory: Path, workflow: str, before: str, after: str
+) -> None:
+    _replace(directory / workflow, before, after)
+    with pytest.raises(WorkflowPolicyError, match="Roster release"):
+        validate_notification_workflows(directory)
 
 
 @pytest.mark.parametrize("workflow", ("ci.yml", RELEASE_WORKFLOW))
@@ -435,13 +478,13 @@ def test_grype_cache_cannot_bypass_freshness_or_write_from_prs(
         ),
         (
             RECORDS_CI_WORKFLOW,
-            "python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low",
-            "pnpm audit --audit-level=low",
+            "python3 ../../tools/run_npm_audit.py -- pnpm run audit",
+            "pnpm run audit",
         ),
         (
             RECORDS_RELEASE_WORKFLOW,
-            "python3 ../../tools/run_npm_audit.py -- pnpm audit --audit-level=low",
-            "pnpm audit --audit-level=low",
+            "python3 ../../tools/run_npm_audit.py -- pnpm run audit",
+            "pnpm run audit",
         ),
     ),
 )
@@ -649,9 +692,8 @@ def test_records_release_resolves_pnpm_from_records_web_boundary(directory: Path
 def test_records_release_runs_web_gates_from_records_web_boundary(directory: Path) -> None:
     _replace(
         directory / RECORDS_RELEASE_WORKFLOW,
-        "            cd apps/records-web\n"
-        "            pnpm exec vp check --deny-warnings --continue-on-error\n",
-        "            cd .\n            pnpm --dir apps/records-web exec vp check --deny-warnings\n",
+        "            cd apps/records-web\n            pnpm run check\n",
+        "            cd .\n            pnpm --dir apps/records-web run check\n",
         1,
     )
 
@@ -811,41 +853,29 @@ def test_records_dependency_signature_audit_follows_actual_changes(
 
 
 def test_records_ci_requires_the_web_gates(directory: Path) -> None:
-    _replace(
-        directory / RECORDS_CI_WORKFLOW,
-        "pnpm exec vp check --deny-warnings --continue-on-error",
-        "npm run check",
-        1,
-    )
+    _replace(directory / RECORDS_CI_WORKFLOW, "pnpm run check", "npm run check", 1)
 
     with pytest.raises(WorkflowPolicyError, match="frozen install and web gates"):
         validate_notification_workflows(directory)
 
 
-@pytest.mark.parametrize("workflow", [RECORDS_CI_WORKFLOW, RECORDS_RELEASE_WORKFLOW])
 @pytest.mark.parametrize("flag", ["--deny-warnings", "--continue-on-error"])
-def test_records_web_checks_require_both_flags(directory: Path, workflow: str, flag: str) -> None:
-    command = "pnpm exec vp check --deny-warnings --continue-on-error"
-    _replace(directory / workflow, command, command.replace(f" {flag}", ""), 1)
+def test_records_web_gates_require_the_shared_check_flags(directory: Path, flag: str) -> None:
+    package = directory.parent.parent / "apps/records-web/package.json"
+    _replace(package, f" {flag}", "", 1)
 
     with pytest.raises(WorkflowPolicyError, match=r"web gates"):
         validate_notification_workflows(directory)
 
 
-@pytest.mark.parametrize(
-    ("workflow", "step"),
-    [
-        (RECORDS_CI_WORKFLOW, "Check Records web formatting, lint, and types"),
-        (RECORDS_RELEASE_WORKFLOW, "Re-run Records release-critical gates"),
-    ],
-)
-def test_records_web_check_failures_cannot_be_ignored(
-    directory: Path, workflow: str, step: str
-) -> None:
-    header = f"      - name: {step}\n"
-    _replace(directory / workflow, header, f"{header}        continue-on-error: true\n", 1)
+@pytest.mark.parametrize("script", ["pnpm audit --audit-level=low", "echo audit-disabled"])
+def test_records_web_audit_cannot_bypass_the_dated_gate(directory: Path, script: str) -> None:
+    package = directory.parent.parent / "apps/records-web/package.json"
+    contents = json.loads(package.read_text())
+    contents["scripts"]["audit"] = script
+    package.write_text(json.dumps(contents))
 
-    with pytest.raises(WorkflowPolicyError, match=r"web gates"):
+    with pytest.raises(WorkflowPolicyError, match="dated dependency audit gate"):
         validate_notification_workflows(directory)
 
 
@@ -1922,7 +1952,7 @@ def test_runtime_projection_cannot_replace_raw_results_with_success(directory: P
 @pytest.mark.parametrize(
     ("workflow", "old", "new"),
     [
-        ("ci.yml", "version: v0.38.2", "version: latest"),
+        ("ci.yml", "version: v0.39.0", "version: latest"),
         (
             RELEASE_WORKFLOW,
             "image=${{ steps.buildkit-image.outputs.image }}",
@@ -2038,7 +2068,7 @@ def test_repeated_action_version_requires_one_commit_pin(directory: Path) -> Non
 def test_release_requires_the_locked_node_version(directory: Path) -> None:
     _replace(
         directory / RELEASE_WORKFLOW,
-        '          node-version: "24.22.2"',
+        '          node-version: "26.13.1"',
         "          node-version-file: .node-version",
         1,
     )

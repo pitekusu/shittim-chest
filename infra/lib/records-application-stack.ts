@@ -48,6 +48,15 @@ const FIREBASE_SERVICE_ACCOUNT_PARAMETER_NAME =
   "/shittim-chest/production/records/firebase/service-account";
 const MODERATOR_TOKEN_PARAMETER_NAME =
   "/shittim-chest/production/discord/moderator/token";
+const GALLERY_TABLE_KEY = "GACHA#GALLERY#*";
+const GALLERY_ORIGINAL_PREFIX = "student-gacha/results";
+const GALLERY_THUMBNAIL_PREFIX = "student-gacha/thumbnails/v1";
+// Keep the previous catalog readable during the Lambda alias transition and rollback.
+const GALLERY_SCHOOL_CATALOG_KEYS = [
+  "student-gacha/assets/blue_archive_school_logos.zip",
+  "student-gacha/assets/blue_archive_school_logos_mnc_v1.zip",
+] as const;
+const GALLERY_ROSTER_KEY = "student-gacha/roster/blue_archive_characters_with_npcs.json";
 
 export class RecordsApplicationStack extends Stack {
   public readonly projectorFunction: lambda.Function;
@@ -116,6 +125,10 @@ export class RecordsApplicationStack extends Stack {
     const mobileDebateEnabled = new CfnParameter(this, "MobileDebateEnabled", {
       type: "String", default: "false", allowedValues: ["false", "true"],
       description: "Enable new Android submissions only after compatible Core deployment",
+    });
+    const debateFollowUpsEnabled = new CfnParameter(this, "DebateFollowUpsEnabled", {
+      type: "String", default: "false", allowedValues: ["false", "true"],
+      description: "Enable follow-up admission and Discord controls after compatible Core deployment",
     });
     const mobileDebateChannel = new CfnParameter(this, "MobileDebateChannelId", {
       type: "String", default: "", allowedPattern: "^$|^[0-9]{17,20}$",
@@ -297,6 +310,9 @@ export class RecordsApplicationStack extends Stack {
         moderatorTokenParameterName: MODERATOR_TOKEN_PARAMETER_NAME,
       },
     });
+    this.projectorFunction.addEnvironment(
+      "RECORDS_DEBATE_FOLLOW_UPS_ENABLED", debateFollowUpsEnabled.valueAsString,
+    );
     this.projectorFunction.addEnvironment("MOBILE_PUSH_QUEUE_URL", mobilePushQueue.queueUrl);
     mobilePushQueue.grantSendMessages(this.projectorFunction);
     this.projectorFunction.addToRolePolicy(new iam.PolicyStatement({
@@ -330,9 +346,15 @@ export class RecordsApplicationStack extends Stack {
           lambda.FilterCriteria.filter({
             eventName: lambda.FilterRule.or("INSERT", "MODIFY"),
             dynamodb: {
+              Keys: {
+                PK: {
+                  S: lambda.FilterRule.beginsWith("AFFECTION#REQUESTER#"),
+                },
+                SK: { S: lambda.FilterRule.isEqual("PROFILE") },
+              },
+              // The Projector validates the schema so new versions cannot be silently filtered out.
               NewImage: {
                 record_type: { S: lambda.FilterRule.isEqual("affection_profile") },
-                schema_version: { N: lambda.FilterRule.or("8", "9", "10") },
               },
             },
           }),
@@ -344,6 +366,15 @@ export class RecordsApplicationStack extends Stack {
                   S: lambda.FilterRule.beginsWith("AFFECTION#REQUESTER#"),
                 },
                 SK: { S: lambda.FilterRule.isEqual("PROFILE") },
+              },
+            },
+          }),
+          lambda.FilterCriteria.filter({
+            eventName: lambda.FilterRule.isEqual("INSERT"),
+            dynamodb: {
+              Keys: {
+                PK: { S: lambda.FilterRule.beginsWith("GACHA#GUILD#") },
+                SK: { S: lambda.FilterRule.beginsWith("RESULT#") },
               },
             },
           }),
@@ -370,11 +401,68 @@ export class RecordsApplicationStack extends Stack {
       allowScan: true,
       allowAffectionProjection: false,
     });
+    for (const worker of [this.projectorFunction, this.backfillFunction]) {
+      worker.addEnvironment("MEDIA_BUCKET_NAME", mediaBucket.bucketName);
+      worker.addEnvironment("OAUTH_CONFIG_PARAMETER_NAME", oauthConfigParameter.parameterName);
+      worker.addToRolePolicy(new iam.PolicyStatement({
+        actions: ["ssm:GetParameters"],
+        resources: [oauthConfigParameter.parameterArn],
+      }));
+      worker.addToRolePolicy(new iam.PolicyStatement({
+        actions: ["dynamodb:GetItem"],
+        resources: [sourceTable.tableArn],
+        conditions: {
+          "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["GACHA#OFFER#*"] },
+          "ForAllValues:StringEquals": {
+            "dynamodb:Attributes": ["PK", "SK", "guild_id", "state", "owner_key"],
+          },
+          StringEqualsIfExists: { "dynamodb:Select": "SPECIFIC_ATTRIBUTES" },
+          Null: { "dynamodb:LeadingKeys": "false", "dynamodb:Attributes": "false" },
+        },
+      }));
+      worker.addToRolePolicy(new iam.PolicyStatement({
+        actions: ["dynamodb:GetItem"],
+        resources: [statisticsTable.tableArn],
+        conditions: {
+          "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["AFFECTION#PROFILE"] },
+          Null: { "dynamodb:LeadingKeys": "false" },
+        },
+      }));
+      worker.addToRolePolicy(new iam.PolicyStatement({
+        actions: ["dynamodb:GetItem", "dynamodb:PutItem"],
+        resources: [statisticsTable.tableArn],
+        conditions: {
+          "ForAllValues:StringLike": { "dynamodb:LeadingKeys": [GALLERY_TABLE_KEY] },
+          Null: { "dynamodb:LeadingKeys": "false" },
+        },
+      }));
+      worker.addToRolePolicy(new iam.PolicyStatement({
+        actions: ["s3:GetObject"],
+        resources: GALLERY_SCHOOL_CATALOG_KEYS.map((key) => `${mediaBucket.bucketArn}/${key}`),
+      }));
+      worker.addToRolePolicy(new iam.PolicyStatement({
+        actions: ["s3:GetObjectVersion"],
+        resources: [`${mediaBucket.bucketArn}/${GALLERY_ORIGINAL_PREFIX}/*`],
+      }));
+      worker.addToRolePolicy(new iam.PolicyStatement({
+        actions: ["s3:GetObject", "s3:PutObject"],
+        resources: [`${mediaBucket.bucketArn}/${GALLERY_THUMBNAIL_PREFIX}/*`],
+      }));
+      worker.role!.node.addMetadata(
+        Validations.ACKNOWLEDGED_RULES_METADATA_KEY,
+        Object.fromEntries(["arn:aws", "arn:<AWS::Partition>"].flatMap((partition) =>
+          [GALLERY_ORIGINAL_PREFIX, GALLERY_THUMBNAIL_PREFIX].map((prefix) => [
+            `AwsSolutions-IAM5[Resource::${partition}:s3:::shittim-chest-production-records-media-${nagAccount}/${prefix}/*]`,
+            "Student gacha projection reads immutable originals and writes only derived thumbnails.",
+          ]),
+        )),
+      );
+    }
 
     this.authFunction = this.httpFunctionWithRole({
       id: "AuthFunction",
       functionName: AUTH_FUNCTION_NAME,
-      handler: "shittim_records.lambda_handlers.auth_handler",
+      handler: "shittim_records.auth_handler.auth_handler",
       code,
       timeout: Duration.seconds(15),
       reservedConcurrentExecutions: 2,
@@ -847,19 +935,42 @@ export class RecordsApplicationStack extends Stack {
     this.readFunction = this.httpFunctionWithRole({
       id: "ReadFunction",
       functionName: READ_FUNCTION_NAME,
-      handler: "shittim_records.lambda_handlers.read_handler",
+      handler: "shittim_records.read_handler.read_handler",
       code,
       timeout: Duration.seconds(10),
       reservedConcurrentExecutions: 4,
       environment: {
+        MOBILE_DEBATE_ENABLED: mobileDebateEnabled.valueAsString,
+        RECORDS_DEBATE_FOLLOW_UPS_ENABLED: debateFollowUpsEnabled.valueAsString,
         RECORDS_PUBLIC_HOSTNAME: recordsPublicHostname.valueAsString,
         ARCHIVE_TABLE_NAME: archiveTable.tableName,
         STATISTICS_TABLE_NAME: statisticsTable.tableName,
         SESSION_TABLE_NAME: sessionTable.tableName,
         MEDIA_BUCKET_NAME: mediaBucket.bucketName,
         SESSION_KEY_PARAMETER_NAME: sessionKeyParameter.parameterName,
+        OAUTH_CONFIG_PARAMETER_NAME: oauthConfigParameter.parameterName,
       },
       policyStatements: [
+        new iam.PolicyStatement({
+          actions: ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:BatchGetItem"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": [GALLERY_TABLE_KEY] },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["s3:GetObjectVersion"],
+          resources: [GALLERY_ORIGINAL_PREFIX, GALLERY_THUMBNAIL_PREFIX].map((prefix) =>
+            `${mediaBucket.bucketArn}/${prefix}/*`,
+          ),
+        }),
+        new iam.PolicyStatement({
+          actions: ["s3:GetObject"],
+          resources: [...GALLERY_SCHOOL_CATALOG_KEYS, GALLERY_ROSTER_KEY].map((key) =>
+            `${mediaBucket.bucketArn}/${key}`,
+          ),
+        }),
         new iam.PolicyStatement({
           actions: ["dynamodb:GetItem", "dynamodb:Query"],
           resources: [statisticsTable.tableArn],
@@ -871,6 +982,16 @@ export class RecordsApplicationStack extends Stack {
         new iam.PolicyStatement({
           actions: ["dynamodb:GetItem", "dynamodb:BatchGetItem"],
           resources: [sessionTable.tableArn],
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": {
+              "dynamodb:LeadingKeys": ["COST#OPENAI_SUBSCRIPTION"],
+            },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
         }),
         new iam.PolicyStatement({
           actions: ["dynamodb:GetItem", "dynamodb:Query"],
@@ -900,15 +1021,36 @@ export class RecordsApplicationStack extends Stack {
         }),
         new iam.PolicyStatement({
           actions: ["dynamodb:Query"],
-          resources: [
-            archiveTable.tableArn,
-            `${archiveTable.tableArn}/index/gsi1`,
-            `${archiveTable.tableArn}/index/gsi2`,
-          ],
+          resources: [`${archiveTable.tableArn}/index/gsi1`, `${archiveTable.tableArn}/index/gsi2`],
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:Query"],
+          resources: [archiveTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["RECORD#*", "RECORD-FOLLOWUPS#*"] },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:BatchGetItem"],
+          resources: [archiveTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["RECORD-FOLLOWUPS#*"] },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"],
+          resources: [archiveTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["RECORD#*", "RECORD-SOURCE#*"] },
+            "ForAllValues:StringEquals": { "dynamodb:Attributes": ["PK", "SK", "record_id", "schema_version", "record_type"] },
+            Null: { "dynamodb:LeadingKeys": "false", "dynamodb:Attributes": "false" },
+          },
         }),
         new iam.PolicyStatement({
           actions: ["ssm:GetParameters"],
-          resources: [sessionKeyParameter.parameterArn],
+          resources: [sessionKeyParameter.parameterArn, oauthConfigParameter.parameterArn],
         }),
         new iam.PolicyStatement({
           actions: ["s3:GetObject"],
@@ -925,10 +1067,10 @@ export class RecordsApplicationStack extends Stack {
       Validations.ACKNOWLEDGED_RULES_METADATA_KEY,
       Object.fromEntries(
         ["arn:aws", "arn:<AWS::Partition>"].flatMap((partition) =>
-          ["participants", "requesters", "momotalk/images", "debate-images"].map((prefix) => [
+          ["participants", "requesters", "momotalk/images", "debate-images", GALLERY_ORIGINAL_PREFIX, GALLERY_THUMBNAIL_PREFIX].map((prefix) => [
             `AwsSolutions-IAM5[Resource::${partition}:s3:::` +
               `shittim-chest-production-records-media-${nagAccount}/${prefix}/*]`,
-            "Authenticated reads are restricted to avatars, published MomoTalk images, and immutable debate attachments.",
+            "Authenticated reads are restricted to avatars, published images, and immutable debate attachments.",
           ]),
         ),
       ),
@@ -1815,6 +1957,43 @@ export class RecordsApplicationStack extends Stack {
         }),
       ],
     });
+    // The Admin Status role's existing inline policies are close to the IAM size limit.
+    const studentGachaStatusPolicy = new iam.ManagedPolicy(this, "AdminStatusStudentGachaReadPolicy", {
+      roles: [this.adminStatusFunction.role!],
+      statements: [
+        new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"],
+          resources: [sourceTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": {
+              "dynamodb:LeadingKeys": ["CONTROL#GACHA"],
+              "dynamodb:Attributes": ["PK", "SK", "record_type", "count"],
+            },
+            StringEquals: { "dynamodb:Select": "SPECIFIC_ATTRIBUTES" },
+            Null: { "dynamodb:LeadingKeys": "false", "dynamodb:Attributes": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
+          actions: ["s3:ListBucket"],
+          resources: [mediaBucket.bucketArn],
+          conditions: {
+            StringEquals: {
+              "s3:prefix": [
+                "student-gacha/roster/blue_archive_characters_with_npcs.json",
+                "student-gacha/assets/show.gif",
+                "student-gacha/assets/format.jpg",
+                ...GALLERY_SCHOOL_CATALOG_KEYS,
+                "participants/participant-a/memorial-reference.png",
+                "participants/participant-b/memorial-reference.webp",
+                "participants/participant-c/memorial-reference.webp",
+              ],
+            },
+            NumericLessThanEquals: { "s3:max-keys": 1 },
+          },
+        }),
+      ],
+    });
+    this.adminStatusFunction.node.addDependency(studentGachaStatusPolicy);
     this.adminStatusFunction.role!.attachInlinePolicy(
       new iam.Policy(this, "AdminStatusStatisticsReadPolicy", {
         statements: [
@@ -1950,6 +2129,7 @@ export class RecordsApplicationStack extends Stack {
     const readVersion = new lambda.Version(this, "ReadVersion", {
       lambda: this.readFunction,
       codeSha256: bundleCodeSha256.valueAsString,
+      description: `Read follow-ups enabled=${debateFollowUpsEnabled.valueAsString} mobile=${mobileDebateEnabled.valueAsString}`,
     });
     const adminConfigVersion = new lambda.Version(this, "AdminConfigVersion", {
       lambda: this.adminConfigFunction,
@@ -2007,6 +2187,7 @@ export class RecordsApplicationStack extends Stack {
         MODERATOR_TOKEN_PARAMETER_NAME,
         PUBLIC_ORIGIN: `https://${recordsPublicHostname.valueAsString}`,
         MOBILE_DEBATE_ENABLED: mobileDebateEnabled.valueAsString,
+        RECORDS_DEBATE_FOLLOW_UPS_ENABLED: debateFollowUpsEnabled.valueAsString,
         MOBILE_DEBATE_CHANNEL_ID: mobileDebateChannel.valueAsString,
       },
       policyStatements: [
@@ -2061,6 +2242,15 @@ export class RecordsApplicationStack extends Stack {
           },
         }),
         new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"], resources: [archiveTable.tableArn],
+          conditions: {
+            "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["RECORD-SOURCE#*"] },
+            "ForAllValues:StringEquals": { "dynamodb:Attributes": ["PK", "SK", "record_id", "debate_id", "attempt_id"] },
+            StringEqualsIfExists: { "dynamodb:Select": "SPECIFIC_ATTRIBUTES" },
+            Null: { "dynamodb:LeadingKeys": "false", "dynamodb:Attributes": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
           actions: ["ssm:GetParameters"], resources: [
             identityParameter.parameterArn, sessionKeyParameter.parameterArn,
             this.formatArn({ service: "ssm", resource: "parameter", resourceName: runtimeParameterName.slice(1) }),
@@ -2081,6 +2271,15 @@ export class RecordsApplicationStack extends Stack {
     }));
     this.mobileDebateFunction.addToRolePolicy(new iam.PolicyStatement({
       actions: ["s3:GetObject", "s3:PutObject"], resources: [`${memorialUploadBucket.bucketArn}/debate-uploads/*`],
+    }));
+    this.mobileDebateFunction.addToRolePolicy(new iam.PolicyStatement({
+      actions: ["s3:ListBucket"],
+      resources: [memorialUploadBucket.bucketArn],
+      // GetObject can return 403 for a missing upload. Confirm only the reserved key.
+      conditions: {
+        StringLike: { "s3:prefix": `debate-uploads/${"?".repeat(43)}.bin` },
+        NumericEquals: { "s3:max-keys": 1 },
+      },
     }));
     this.mobileDebateFunction.addToRolePolicy(new iam.PolicyStatement({
       actions: ["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject"], resources: [`${mediaBucket.bucketArn}/debate-images/*`],
@@ -2128,7 +2327,7 @@ export class RecordsApplicationStack extends Stack {
       lambda: this.mobileDebateFunction, codeSha256: bundleCodeSha256.valueAsString,
       // Lambda versions freeze configuration. Flag changes must replace the
       // version and advance live even when the reviewed code bundle is unchanged.
-      description: `Native debate admission enabled=${mobileDebateEnabled.valueAsString}`,
+      description: `Native debate admission enabled=${mobileDebateEnabled.valueAsString} follow-ups=${debateFollowUpsEnabled.valueAsString}`,
     });
     const mobileDebateAlias = new lambda.Alias(this, "MobileDebateLiveAlias", {
       aliasName: "live", version: mobileDebateVersion,
@@ -2249,6 +2448,21 @@ export class RecordsApplicationStack extends Stack {
       methods: [apigatewayv2.HttpMethod.GET],
       integration: readIntegration,
     });
+    api.addRoutes({
+      path: "/api/v1/records/{recordId}/follow-ups",
+      methods: [apigatewayv2.HttpMethod.GET],
+      integration: readIntegration,
+    });
+    for (const path of [
+      "/api/v1/gallery",
+      "/api/v1/gallery/roster",
+      "/api/v1/gallery/school-logos",
+      "/api/v1/gallery/thumbnails",
+      "/api/v1/gallery/{cardId}",
+      "/api/v1/gallery/{cardId}/original",
+    ]) {
+      api.addRoutes({ path, methods: [apigatewayv2.HttpMethod.GET], integration: readIntegration });
+    }
     api.addRoutes({
       path: "/api/v1/insights/rankings",
       methods: [apigatewayv2.HttpMethod.GET],
@@ -2377,7 +2591,7 @@ export class RecordsApplicationStack extends Stack {
     return new lambda.Function(this, options.id, {
       functionName: options.functionName,
       architecture: lambda.Architecture.ARM_64,
-      runtime: lambda.Runtime.PYTHON_3_14,
+      runtime: lambda.Runtime.PYTHON_3_15,
       handler: options.handler,
       code: options.code,
       memorySize: options.memorySize ?? 512,
@@ -2470,6 +2684,14 @@ export class RecordsApplicationStack extends Stack {
       }),
     );
     if (options.allowScan) {
+      role.addToPrincipalPolicy(new iam.PolicyStatement({
+        actions: ["dynamodb:PutItem"],
+        resources: [options.archiveTable.tableArn],
+        conditions: {
+          "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["RECORD-SOURCE#*"] },
+          Null: { "dynamodb:LeadingKeys": "false" },
+        },
+      }));
       role.addToPrincipalPolicy(
         new iam.PolicyStatement({
           actions: ["dynamodb:GetItem", "dynamodb:PutItem"],
@@ -2532,10 +2754,10 @@ export class RecordsApplicationStack extends Stack {
         ],
       }),
     );
-    const function_ = new lambda.Function(this, options.id, {
+    return new lambda.Function(this, options.id, {
       functionName: options.functionName,
       architecture: lambda.Architecture.ARM_64,
-      runtime: lambda.Runtime.PYTHON_3_14,
+      runtime: lambda.Runtime.PYTHON_3_15,
       handler: options.handler,
       code: options.code,
       memorySize: 512,
@@ -2561,6 +2783,5 @@ export class RecordsApplicationStack extends Stack {
       },
       loggingFormat: lambda.LoggingFormat.JSON,
     });
-    return function_;
   }
 }

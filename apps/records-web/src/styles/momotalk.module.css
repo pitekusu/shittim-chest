@@ -560,8 +560,17 @@
   margin: auto;
   border-radius: 12px;
 }
+.imageDialog[data-animated] {
+  width: min(90vw, calc(50dvh + 34px), 514px);
+}
+.imageDialog[data-animated] > img {
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  object-fit: contain;
+}
 .imageActions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 15px;

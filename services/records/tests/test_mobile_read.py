@@ -79,15 +79,16 @@ def read():
     store = SessionStore()
     store.sessions[DIGEST] = mobile_session(now_epoch=int(NOW.timestamp()))
     records = Records()
+    momotalk = Momotalk()
     controller = ReadHttpController(
         store=cast(Any, FakeSessionStore(session())),
         session_key=SESSION_KEY,
         records=cast(Any, records),
         mobile_store=store,
-        momotalk=Momotalk(),
+        momotalk=lambda: cast(Any, momotalk),
         clock=lambda: NOW,
     )
-    return controller, store, records
+    return controller, store, records, momotalk
 
 
 @pytest.mark.parametrize(
@@ -112,7 +113,7 @@ def read():
     ],
 )
 def test_cookie_and_bearer_return_the_same_public_reads_without_cookies(read, route, query):
-    controller, store, _records = read
+    controller, store, _records, momotalk = read
     path = {"recordId": "r" * 43, "weekId": "2026-09-13", "roomId": "m" * 43}
     cookie = controller.handle(event(route, query=query, cookies=COOKIE, path=path), now=NOW)
     bearer = controller.handle(event(route, query=query, headers=BEARER, path=path), now=NOW)
@@ -123,9 +124,9 @@ def test_cookie_and_bearer_return_the_same_public_reads_without_cookies(read, ro
     assert store.reads == [DIGEST]
     assert len(store.sessions) == 1 and not store.deleted
     if "/momotalk/" in route:
-        assert len(controller._momotalk.calls) == 2
+        assert len(momotalk.calls) == 2
         if route.endswith("/{roomId}"):
-            assert controller._momotalk.calls[-1][1]["include_image_subjects"] is True
+            assert momotalk.calls[-1][1]["include_image_subjects"] is True
 
 
 @pytest.mark.parametrize(
@@ -143,7 +144,7 @@ def test_cookie_and_bearer_return_the_same_public_reads_without_cookies(read, ro
     ],
 )
 def test_insights_bearer_auth_preserves_query_validation(read, route, query):
-    controller, store, _records = read
+    controller, store, _records, _momotalk = read
     assert controller.handle(event(route, query=query), now=NOW)["statusCode"] == 401
     bearer = controller.handle(event(route, query=query, headers=BEARER), now=NOW)
     cookie = controller.handle(event(route, query=query, cookies=COOKIE), now=NOW)
@@ -152,7 +153,7 @@ def test_insights_bearer_auth_preserves_query_validation(read, route, query):
 
 
 def test_sync_index_requires_auth_and_rejects_unknown_or_duplicate_parameters(read):
-    controller, _store, _records = read
+    controller, _store, _records, _momotalk = read
     route = "GET /api/v1/records/sync-index"
     assert controller.handle(event(route), now=NOW)["statusCode"] == 401
     for query in ("limit=100", "cursor=a&cursor=b"):
@@ -191,19 +192,19 @@ def test_sync_index_requires_auth_and_rejects_unknown_or_duplicate_parameters(re
 def test_mixed_or_malformed_credentials_never_fall_back_to_cookie(
     read, headers, cookies, status, route
 ):
-    controller, store, records = read
+    controller, store, records, momotalk = read
     response = controller.handle(event(route, headers=headers, cookies=cookies), now=NOW)
     assert response["statusCode"] == status
     assert response["headers"]["Cache-Control"] == "private, no-store"
     assert TOKEN not in response["body"]
     assert not store.reads and records.list_query is None
-    assert not controller._momotalk.calls
+    assert not momotalk.calls
     if status == 401:
         assert response["headers"]["WWW-Authenticate"] == "Bearer"
 
 
 def test_bearer_scheme_is_case_insensitive_and_query_validation_is_unchanged(read):
-    controller, _store, records = read
+    controller, _store, records, _momotalk = read
     headers = {"authorization": f"bearer {TOKEN}"}
     response = controller.handle(
         event("GET /api/v1/records", headers=headers, query="limit=5&sort=oldest"), now=NOW
@@ -232,7 +233,7 @@ def test_bearer_scheme_is_case_insensitive_and_query_validation_is_unchanged(rea
 def test_mobile_revocation_expiry_and_corruption_never_read_records(
     read, state, monkeypatch, route
 ):
-    controller, store, records = read
+    controller, store, records, momotalk = read
     if state == "expired":
         controller._clock = lambda: datetime.fromtimestamp(store.sessions[DIGEST].expires_at, UTC)
     elif state == "deleted":
@@ -246,7 +247,7 @@ def test_mobile_revocation_expiry_and_corruption_never_read_records(
     response = controller.handle(event(route, headers=BEARER), now=NOW)
     assert response["statusCode"] == (503 if state == "corrupt" else 401)
     assert records.list_query is None
-    assert not controller._momotalk.calls
+    assert not momotalk.calls
     assert json.loads(response["body"])["error"]["code"] == (
         "RECORDS_UNAVAILABLE" if state == "corrupt" else "AUTHENTICATION_REQUIRED"
     )
@@ -266,13 +267,13 @@ def test_mobile_revocation_expiry_and_corruption_never_read_records(
     ],
 )
 def test_mobile_token_does_not_open_additional_routes(read, route):
-    controller, store, _records = read
+    controller, store, _records, _momotalk = read
     assert controller.handle(event(route, headers=BEARER), now=NOW)["statusCode"] == 401
     assert not store.reads
 
 
 def test_token_in_url_body_or_web_cookie_is_not_a_bearer_credential(read):
-    controller, store, _records = read
+    controller, store, _records, _momotalk = read
     for request in (
         event("GET /api/v1/records", query=f"access_token={TOKEN}"),
         {**event("GET /api/v1/records"), "body": json.dumps({"accessToken": TOKEN})},

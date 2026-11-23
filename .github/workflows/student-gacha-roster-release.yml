@@ -1,0 +1,31 @@
+name: Student Gacha Roster Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: "選定済みの main の完全なコミット SHA"
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: student-gacha-roster-release
+  cancel-in-progress: false
+
+env:
+  NODE_OPTIONS: --use-openssl-ca
+  SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
+  SSL_CERT_DIR: /etc/ssl/certs
+
+jobs:
+  publish:
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/student-gacha-roster-publish.yml
+    with:
+      expected_sha: ${{ inputs.expected_sha }}

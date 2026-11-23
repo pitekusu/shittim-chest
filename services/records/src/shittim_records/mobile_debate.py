@@ -17,6 +17,7 @@ from shittim_chest.application.discord import (
     PanelAction,
     PanelCustomId,
 )
+from shittim_chest.application.models import FollowUpParent
 from shittim_chest.application.ports import RepositoryIdentityConflict, RepositoryQueueFull
 from shittim_chest.application.scale_to_zero import (
     EnqueuedIngress,
@@ -27,7 +28,7 @@ from shittim_chest.application.scale_to_zero import (
 )
 from shittim_chest.domain import AttemptId, DebatePhase
 
-from shittim_records.archive import derive_requester_key
+from shittim_records.archive import derive_record_key, derive_requester_key
 from shittim_records.auth import AuthFailure, _digest
 from shittim_records.contracts import (
     DebateControlRequest,
@@ -88,9 +89,11 @@ class MobileDebateRepository(Protocol):
 
     def progress(self, request: IngressRequest) -> DebateProgress: ...
 
+    def follow_up_parent(self, record_id: str) -> tuple[FollowUpParent, str, str] | None: ...
+
 
 class DebatePermissionGuard(Protocol):
-    async def check(self, *, requester_id: str) -> None: ...
+    async def check(self, *, requester_id: str, channel_id: str | None = None) -> None: ...
 
 
 class DebateRequestCursor:
@@ -182,6 +185,7 @@ class MobileDebateService:
         identity_key: bytes,
         clock: Callable[[], datetime] | None = None,
         attachments: DynamoDebateAttachmentRepository | None = None,
+        follow_ups_enabled: bool = False,
     ) -> None:
         self._attachments = attachments
         self._sessions = sessions
@@ -190,6 +194,7 @@ class MobileDebateService:
         self._runtime = runtime
         self._channel_id = channel_id
         self._enabled = enabled
+        self._follow_ups_enabled = follow_ups_enabled
         self._session_key = session_key
         self._identity_key = identity_key
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -210,28 +215,69 @@ class MobileDebateService:
         if self._authenticate(token) != expected:
             raise AuthFailure("session_required")
 
-    async def authenticate_upload(self, token: str | None) -> MobileSessionRecord:
-        session = self._authenticate(token)
-        if not self._enabled:
-            raise DebateRequestFailure("DEBATE_START_DISABLED", 503)
+    def _verify_discord_identity(self, session: MobileSessionRecord) -> tuple[str, str]:
         if session.discord_user_id is None or session.discord_username is None:
             raise DebateRequestFailure("DEBATE_START_REAUTH_REQUIRED", 403)
         if not hmac.compare_digest(
             derive_requester_key(self._identity_key, session.discord_user_id), session.requester_key
         ):
             raise AuthFailure("session_required")
-        if self._channel_id not in self._runtime.allowed_channel_ids:
-            raise DebateRequestFailure("DEBATE_START_DISABLED", 503)
+        return session.discord_user_id, session.discord_username
+
+    async def _check_permission(
+        self, token: str | None, requester_id: str, channel_id: str
+    ) -> None:
+        if channel_id not in self._runtime.allowed_channel_ids:
+            raise DebateRequestFailure("CHANNEL_PERMISSION_REQUIRED", 403)
         try:
-            await self._permissions.check(requester_id=session.discord_user_id)
+            if channel_id == self._channel_id:
+                await self._permissions.check(requester_id=requester_id)
+            else:
+                await self._permissions.check(requester_id=requester_id, channel_id=channel_id)
         except DebateRequestFailure as error:
             if error.code == "GUILD_MEMBERSHIP_REQUIRED":
                 self._sessions.delete_session(
                     session_hash=_digest(self._session_key, "mobile-session", token or "")
                 )
             raise
+
+    def _submission_target(self, parent_record_id: str | None) -> tuple[FollowUpParent | None, str]:
+        if parent_record_id is None:
+            if self._channel_id not in self._runtime.allowed_channel_ids:
+                raise DebateRequestFailure("DEBATE_START_DISABLED", 503)
+            return None, self._channel_id
+        if not self._follow_ups_enabled:
+            raise DebateRequestFailure("DEBATE_START_DISABLED", 503)
+        source = self._repository.follow_up_parent(parent_record_id)
+        if source is None or source[1] != self._runtime.guild_id:
+            raise DebateRequestFailure("FOLLOW_UP_PARENT_UNAVAILABLE", 404)
+        parent, _, channel_id = source
+        return parent, channel_id
+
+    async def authenticate_upload(
+        self, token: str | None, *, parent_record_id: str | None = None
+    ) -> MobileSessionRecord:
+        session = self._authenticate(token)
+        if not self._enabled:
+            raise DebateRequestFailure("DEBATE_START_DISABLED", 503)
+        requester_id, _ = self._verify_discord_identity(session)
+        _, channel_id = self._submission_target(parent_record_id)
+        await self._check_permission(token, requester_id, channel_id)
         self._still_authorized(token, session)
         return session
+
+    def _parent_record_id(self, request: IngressRequest) -> str | None:
+        parent = request.follow_up_parent
+        return derive_record_key(self._identity_key, str(parent.debate_id)) if parent else None
+
+    def _matches_start(self, request: IngressRequest, payload: DebateStartRequest) -> bool:
+        return (
+            request.kind is IngressKind.NEW_DEBATE
+            and request.question == payload.question
+            and tuple(image.attachment_id for image in request.attachments)
+            == tuple(payload.attachment_ids)
+            and self._parent_record_id(request) == payload.parent_record_id
+        )
 
     async def start(
         self,
@@ -247,35 +293,16 @@ class MobileDebateService:
             request_id=payload.request_id,
         )
         if existing is not None:
-            if existing.question != payload.question or tuple(
-                image.attachment_id for image in existing.attachments
-            ) != tuple(payload.attachment_ids):
+            if not self._matches_start(existing, payload):
                 raise DebateRequestFailure("REQUEST_ID_CONFLICT", 409)
             response = self._view(existing)
             self._still_authorized(token, session)
             return response, False
         if not self._enabled:
             raise DebateRequestFailure("DEBATE_START_DISABLED", 503)
-        if session.discord_user_id is None or session.discord_username is None:
-            raise DebateRequestFailure("DEBATE_START_REAUTH_REQUIRED", 403)
-        if not hmac.compare_digest(
-            derive_requester_key(self._identity_key, session.discord_user_id),
-            session.requester_key,
-        ):
-            raise AuthFailure("session_required")
-        if self._channel_id not in self._runtime.allowed_channel_ids:
-            raise DebateRequestFailure("DEBATE_START_DISABLED", 503)
-        try:
-            await self._permissions.check(requester_id=session.discord_user_id)
-        except DebateRequestFailure as error:
-            if error.code == "GUILD_MEMBERSHIP_REQUIRED":
-                # A known departure must not immediately regain cached read
-                # authorization through /mobile/session with this same token.
-                # Channel-only permission loss or Discord outages do not revoke.
-                self._sessions.delete_session(
-                    session_hash=_digest(self._session_key, "mobile-session", token or "")
-                )
-            raise
+        requester_id, requester_username = self._verify_discord_identity(session)
+        parent, channel_id = self._submission_target(payload.parent_record_id)
+        await self._check_permission(token, requester_id, channel_id)
         self._still_authorized(token, session)
         now = self._clock()
         images = ()
@@ -290,13 +317,14 @@ class MobileDebateService:
             owner_key=session.requester_key,
             application_id=self._runtime.application_id_for(DiscordBotSlot.MODERATOR),
             question=payload.question,
-            requester_id=session.discord_user_id,
-            requester_username=session.discord_username,
+            requester_id=requester_id,
+            requester_username=requester_username,
             requester_display_name=session.display_name,
             guild_id=self._runtime.guild_id,
-            channel_id=self._channel_id,
+            channel_id=channel_id,
             created_at=now,
             attachments=images,
+            follow_up_parent=parent,
         )
         try:
             result = await self._repository.enqueue(
@@ -313,11 +341,7 @@ class MobileDebateService:
             existing = await self._repository.get(
                 owner_key=session.requester_key, request_id=payload.request_id
             )
-            if existing is None or (
-                existing.question != payload.question
-                or tuple(image.attachment_id for image in existing.attachments)
-                != tuple(payload.attachment_ids)
-            ):
+            if existing is None or not self._matches_start(existing, payload):
                 raise DebateRequestFailure("REQUEST_ID_CONFLICT", 409) from None
             response = self._view(existing)
             self._still_authorized(token, session)
@@ -357,7 +381,14 @@ class MobileDebateService:
 
         # Reuse the start/upload permission gate; ownership never grants a
         # manage-messages override, and no client Discord identity is accepted.
-        session = await self.authenticate_upload(token)
+        if request.follow_up_parent is None:
+            session = await self.authenticate_upload(token)
+        else:
+            if not self._enabled:
+                raise DebateRequestFailure("DEBATE_START_DISABLED", 503)
+            requester_id, _ = self._verify_discord_identity(session)
+            await self._check_permission(token, requester_id, request.channel_id)
+            self._still_authorized(token, session)
         progress = self._repository.progress(request)
         if progress.attempt_id is None or not hmac.compare_digest(
             payload.attempt_token, self._attempt_token(request, progress.attempt_id)
@@ -368,7 +399,7 @@ class MobileDebateService:
             or progress.thread_id is None
             or progress.control_panel_message_id is None
             or request.guild_id != self._runtime.guild_id
-            or request.channel_id != self._channel_id
+            or (request.follow_up_parent is None and request.channel_id != self._channel_id)
             or request.requester_id != session.discord_user_id
             or (
                 action is PanelAction.CANCEL
@@ -599,6 +630,7 @@ class MobileDebateService:
             created_at=request.created_at,
             updated_at=max(request.updated_at, progress.updated_at or request.updated_at),
             record_id=progress.record_id,
+            parent_record_id=self._parent_record_id(request),
             error_code=error_code,
             attempt_token=None
             if progress.attempt_id is None
@@ -617,7 +649,7 @@ class MobileDebateService:
         return (
             self._enabled
             and request.guild_id == self._runtime.guild_id
-            and request.channel_id == self._channel_id
+            and (request.follow_up_parent is not None or request.channel_id == self._channel_id)
             and request.channel_id in self._runtime.allowed_channel_ids
             and progress.attempt_id is not None
             and progress.thread_id is not None

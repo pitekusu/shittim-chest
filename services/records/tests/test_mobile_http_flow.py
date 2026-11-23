@@ -71,9 +71,8 @@ def flow():
         ),
         allowed_origin=config.oauth.allowed_origin,
     )
-    auth = AuthHttpController(
-        AuthService(store=web_store, discord=discord, avatars=avatars, configuration=config), mobile
-    )
+    web = AuthService(store=web_store, discord=discord, avatars=avatars, configuration=config)
+    auth = AuthHttpController(lambda: web, lambda: mobile)
     return auth, store, web_store, discord
 
 

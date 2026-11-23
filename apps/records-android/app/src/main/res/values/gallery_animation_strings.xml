@@ -1,0 +1,5 @@
+<resources>
+  <string name="gallery_animation_play">アニメーションを再生</string>
+  <string name="gallery_animation_pause">アニメーションを一時停止</string>
+  <string name="gallery_animation_failed">アニメーションを再生できませんでした。</string>
+</resources>

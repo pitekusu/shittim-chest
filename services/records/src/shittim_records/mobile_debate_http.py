@@ -11,15 +11,22 @@ from shittim_chest.application.discord import PanelAction
 
 from shittim_records.auth import AuthFailure
 from shittim_records.contracts import (
+    DEBATE_CONTRACT_HEADER,
+    DEBATE_FOLLOW_UP_IMAGES_CONTRACT,
     AttachmentId,
     DebateAttachmentUploadRequest,
     DebateControlRequest,
+    DebateControlResponse,
     DebateRequestId,
+    DebateRequestResponse,
+    DebateRequestsResponse,
     DebateStartRequest,
+    RecordId,
 )
 from shittim_records.debate_attachments import AttachmentFailure, DebateAttachmentService
 from shittim_records.http_api import (
     JSON_HEADERS,
+    _optional_single,
     _query,
     _read_bearer_token,
     _required_single,
@@ -31,6 +38,27 @@ from shittim_records.mobile_debate import DebateRequestFailure, MobileDebateServ
 from shittim_records.mobile_http import _empty_body, _unique_fields
 
 PREFIX = "/api/v1/debate-requests"
+
+
+def _debate_response(
+    status: int,
+    response: DebateRequestResponse | DebateRequestsResponse | DebateControlResponse,
+    *,
+    include_follow_up_images: bool,
+) -> dict[str, Any]:
+    body = response.model_dump(by_alias=True, mode="json")
+    if not include_follow_up_images:
+        # Older Android clients require an empty attachmentIds list for a follow-up.
+        if isinstance(response, DebateRequestsResponse):
+            requests = body["items"]
+        elif isinstance(response, DebateControlResponse):
+            requests = [body["request"]]
+        else:
+            requests = [body]
+        for request in requests:
+            if request.get("parentRecordId") is not None:
+                request["attachmentIds"] = []
+    return json_response(status, body)
 
 
 class MobileDebateHttpController:
@@ -58,6 +86,10 @@ class MobileDebateHttpController:
             if len(request.raw_query.encode()) > 4096:
                 raise DebateRequestFailure("REQUEST_INVALID", 400)
             query = _query(request.raw_query)
+            include_follow_up_images = (
+                request.headers.get(DEBATE_CONTRACT_HEADER.lower())
+                == DEBATE_FOLLOW_UP_IMAGES_CONTRACT
+            )
             control_actions = {
                 f"POST {PREFIX}/{{requestId}}/cancel": PanelAction.CANCEL,
                 f"POST {PREFIX}/{{requestId}}/retry": PanelAction.RETRY,
@@ -79,7 +111,9 @@ class MobileDebateHttpController:
                             token=token, request_id=request_id, operation_id=operation_id
                         )
                     )
-                    return json_response(200, result.model_dump(by_alias=True, mode="json"))
+                    return _debate_response(
+                        200, result, include_follow_up_images=include_follow_up_images
+                    )
                 raw = event.get("body")
                 if (
                     event.get("isBase64Encoded") is True
@@ -101,14 +135,23 @@ class MobileDebateHttpController:
                         payload=payload,
                     )
                 )
-                return json_response(202, result.model_dump(by_alias=True, mode="json"))
+                return _debate_response(
+                    202, result, include_follow_up_images=include_follow_up_images
+                )
             upload_prefix = "/api/v1/debate-attachments/uploads"
             if request.route_key.partition(" ")[2].startswith(upload_prefix):
                 if self._attachments is None:
                     raise AttachmentFailure("ATTACHMENT_UNAVAILABLE", 503)
-                if query:
+                if not set(query) <= {"parentRecordId"}:
                     raise DebateRequestFailure("REQUEST_INVALID", 400)
-                session = asyncio.run(self._service.authenticate_upload(token))
+                parent_record_id = _optional_single(query, "parentRecordId")
+                if parent_record_id is not None:
+                    parent_record_id = TypeAdapter(RecordId).validate_python(
+                        parent_record_id, strict=True
+                    )
+                session = asyncio.run(
+                    self._service.authenticate_upload(token, parent_record_id=parent_record_id)
+                )
                 now = datetime.now(UTC)
                 if request.route_key == f"POST {upload_prefix}":
                     raw = event.get("body")
@@ -155,7 +198,7 @@ class MobileDebateHttpController:
                 if (
                     not isinstance(data, dict)
                     or not {"requestId", "question"} <= set(data)
-                    or not set(data) <= {"requestId", "question", "attachmentIds"}
+                    or not set(data) <= {"requestId", "question", "attachmentIds", "parentRecordId"}
                 ):
                     raise DebateRequestFailure("REQUEST_INVALID", 400)
                 payload = DebateStartRequest.model_validate(data, strict=True)
@@ -181,7 +224,9 @@ class MobileDebateHttpController:
                 response = asyncio.run(self._service.list(token=token, limit=limit, cursor=cursor))
             else:
                 return error_response(404, "ROUTE_NOT_FOUND", request.request_id)
-            return json_response(200, response.model_dump(by_alias=True, mode="json"))
+            return _debate_response(
+                200, response, include_follow_up_images=include_follow_up_images
+            )
         except AttachmentFailure as error:
             return error_response(error.status, error.code, request.request_id)
         except DebateRequestFailure as error:

@@ -105,16 +105,6 @@ function isMemorialMemoryResponse(
   );
 }
 
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  for (const value of bytes) binary += String.fromCharCode(value);
-  return btoa(binary);
-}
-
 function invalidUpload(message: string): RecordsApiError {
   return new RecordsApiError(400, "REQUEST_INVALID", message, "local-validation");
 }
@@ -147,9 +137,9 @@ export async function prepareMemorialUpload(
     expectedCycle,
     contentType: source.type as MemorialUploadContentType,
     sizeBytes: source.size,
-    sha256: bytesToHex(digest),
+    sha256: digest.toHex(),
   };
-  const checksum = bytesToBase64(digest);
+  const checksum = digest.toBase64();
   const validate = (value: unknown): value is UploadResponse => {
     if (!memorialUploadResponseValidator(value)) return false;
     const response = value as UploadResponse;

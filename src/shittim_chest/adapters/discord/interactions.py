@@ -575,13 +575,19 @@ def _panel_content(snapshot: DebateSnapshot) -> str:
         DebatePhase.FORMING_PREFERENCES: "それぞれの考えを整理中",
         DebatePhase.SELECTING_CANDIDATES: "提案を選択中",
     }.get(snapshot.state.phase, snapshot.state.phase.value)
-    return "\n".join(
-        (
-            "**操作パネル**",
-            f"状態: `{progress}`",
-            f"試行: `{snapshot.state.attempt_id}`",
+    lines = [
+        "**操作パネル**",
+        f"状態: `{progress}`",
+        f"試行: `{snapshot.state.attempt_id}`",
+    ]
+    parent_thread = snapshot.follow_up_parent_thread_id
+    if parent_thread is not None and all(
+        value.isascii() and value.isdecimal() for value in (snapshot.guild_id, parent_thread)
+    ):
+        lines.append(
+            f"前の討論: <https://discord.com/channels/{snapshot.guild_id}/{parent_thread}>"
         )
-    )
+    return "\n".join(lines)
 
 
 def _panel_view(snapshot: DebateSnapshot) -> discord.ui.View:

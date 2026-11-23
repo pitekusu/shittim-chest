@@ -228,7 +228,8 @@ internal fun RecordFullScreenSearch(query: RecordListQuery, onDismiss: () -> Uni
   }
   val resultEvent: (BootstrapScreen.Event) -> Unit = { event ->
     when (event) {
-      is BootstrapScreen.Event.OpenRecord -> scope.launch {
+      is BootstrapScreen.Event.OpenRecord, is BootstrapScreen.Event.OpenRecordFollowUps,
+      is BootstrapScreen.Event.OpenRelatedRecord -> scope.launch {
         searchBar.snapTo(0f)
         dismiss()
         currentEvent(event)

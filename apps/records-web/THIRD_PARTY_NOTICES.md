@@ -42,3 +42,31 @@ and Brotli are pinned in the separate build-only `scripts/fonts/uv.lock`.
 - License: Commercial Use Allowed
 - Vendored without conversion or subsetting as `Delogy-Regular.ttf`
 - SHA-256: `7e8c1c12ab4a537da2d0e558cf3cbb3f81f8b2d98420a7f6891a50cee4e01e63`
+
+## Gallery libraries
+
+- TanStack React Virtual and Virtual Core, `TanStack/virtual`: Copyright (c) 2021-present Tanner Linsley
+- Yet Another React Lightbox, `igordanchenko/yet-another-react-lightbox`: Copyright (c) 2022 Igor Danchenko
+
+Both libraries use the MIT License.
+
+```text
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+```

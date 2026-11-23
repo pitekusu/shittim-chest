@@ -93,6 +93,12 @@ internal class EncryptedRecordStore(
     recordIds.chunked(200).forEach { database.records().deletePartRecords(accountKey(accountId), part.code, it) }
   }
 
+  suspend fun listOnlyRecordIds(accountId: String): Set<String> = guarded {
+    check(accountId.matches(OPAQUE_ID))
+    database.records().listOnlyRecordIds(accountKey(accountId), CachedRecordPart.LIST.code, CachedRecordPart.DETAIL.code)
+      .also { ids -> check(ids.all(OPAQUE_ID::matches)) }.toSet()
+  }
+
   /** Removes ciphertext only; account lifecycle coordinates Keystore key invalidation. */
   suspend fun deleteAccount(accountId: String): Unit = guarded {
     check(accountId.matches(OPAQUE_ID))

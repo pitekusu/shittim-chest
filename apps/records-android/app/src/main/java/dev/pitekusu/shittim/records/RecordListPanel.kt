@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyListScope
@@ -22,6 +23,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
@@ -70,6 +72,7 @@ internal sealed interface RecordListState {
     val refreshFailure: RecordReadFailure? = null,
     private val savedSnapshots: MutableStateFlow<PagingData<RecordListEntry>>? = null,
     val savedTotal: Int? = null,
+    val parentById: Map<String, String> = emptyMap(),
   ) : RecordListState {
     companion object {
       fun fromSaved(entries: List<RecordListEntry>, previous: Ready? = null, total: Int = entries.size): Ready {
@@ -84,7 +87,8 @@ internal sealed interface RecordListState {
         val snapshots = previous?.savedSnapshots ?: MutableStateFlow(snapshot)
         snapshots.value = snapshot
         return Ready(snapshots, entries.map { it.recordId }.toSet(),
-          saved = true, savedSnapshots = snapshots, savedTotal = total)
+          saved = true, savedSnapshots = snapshots, savedTotal = total,
+          parentById = entries.mapNotNull { entry -> entry.parentRecordId?.let { entry.recordId to it } }.toMap())
       }
     }
   }
@@ -151,7 +155,9 @@ internal fun LazyListScope.recordListItems(
         modifier = if (motionAllowed) Modifier.animateItem(
           fadeInSpec = MaterialTheme.motionScheme.fastEffectsSpec(),
           placementSpec = null, fadeOutSpec = null) else Modifier,
-        motionAllowed = motionAllowed) {
+        motionAllowed = motionAllowed,
+        onOpenParent = { parentId -> onEvent(BootstrapScreen.Event.OpenRelatedRecord(row.entry.recordId, parentId, fromList = true)) },
+        onFollowUps = { onEvent(BootstrapScreen.Event.OpenRecordFollowUps(row.entry.recordId)) }) {
         onEvent(BootstrapScreen.Event.OpenRecord(row.entry.recordId))
       }
       null -> Unit
@@ -219,7 +225,8 @@ private fun RecordJournalContext(ready: RecordListState.Ready?, shownCount: Int,
 
 @Composable
 private fun RecordListCard(item: RecordListEntry, isSelected: Boolean, modifier: Modifier = Modifier,
-  motionAllowed: Boolean = true, onClick: () -> Unit) {
+  motionAllowed: Boolean = true, onOpenParent: (String) -> Unit,
+  onFollowUps: () -> Unit, onClick: () -> Unit) {
   val accent = shittimParticipantColor(item.winnerName, item.winnerSlot)
   val container by animateColorAsState(if (isSelected) MaterialTheme.colorScheme.secondaryContainer
     else MaterialTheme.colorScheme.surfaceContainerLow,
@@ -247,7 +254,19 @@ private fun RecordListCard(item: RecordListEntry, isSelected: Boolean, modifier:
       Text(item.questionPreview, style = MaterialTheme.typography.titleMedium,
         maxLines = 4, overflow = TextOverflow.Ellipsis,
         modifier = Modifier.testTag("journal-question-${item.recordId}"))
-      if (item.attachmentCount > 0) {
+      item.parentRecordId?.let { parentId ->
+        Text(stringResource(R.string.record_followup_child), style = MaterialTheme.typography.labelMedium)
+        TextButton(onClick = { onOpenParent(parentId) },
+          modifier = Modifier.heightIn(min = 48.dp).testTag("journal-parent-${item.recordId}")) {
+          Text(item.parentQuestionPreview?.let { stringResource(R.string.record_followup_parent_question, it) }
+            ?: stringResource(R.string.record_followup_parent))
+        }
+      }
+      if (item.hasFollowUps) TextButton(onClick = onFollowUps,
+        modifier = Modifier.heightIn(min = 48.dp).testTag("journal-follow-ups-${item.recordId}")) {
+        Text(stringResource(R.string.record_followup_has_children))
+      }
+      if (item.attachmentCountKnown && item.attachmentCount > 0) {
         val description = stringResource(R.string.attachment_count, item.attachmentCount)
         Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.small,
           modifier = Modifier.testTag("journal-images-${item.recordId}")

@@ -108,6 +108,16 @@ class StatusHistoryProgress(StatusDeliveryError):
         self.checkpoint = checkpoint
 
 
+@dataclass(frozen=True, slots=True)
+class DiscordStatusButton:
+    """The visible label and interaction identity of a message button."""
+
+    custom_id: str
+    label: str
+    style: int = 1
+    disabled: bool = False
+
+
 @dataclass(frozen=True, slots=True, repr=False)
 class DiscordStatusMessage:
     """Minimal Discord message response required for idempotent delivery."""
@@ -117,6 +127,7 @@ class DiscordStatusMessage:
     author_id: str
     content: str
     nonce: str | None
+    buttons: tuple[DiscordStatusButton, ...] = ()
 
     def __post_init__(self) -> None:
         for label, value in (
@@ -153,6 +164,7 @@ class DiscordStatusGateway(Protocol):
         channel_id: str,
         content: str,
         nonce: str,
+        button: DiscordStatusButton | None = None,
     ) -> DiscordStatusMessage: ...
 
     async def edit_message(
@@ -161,6 +173,7 @@ class DiscordStatusGateway(Protocol):
         channel_id: str,
         message_id: str,
         content: str,
+        button: DiscordStatusButton | None = None,
     ) -> DiscordStatusMessage: ...
 
 

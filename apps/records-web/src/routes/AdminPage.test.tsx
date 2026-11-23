@@ -423,7 +423,7 @@ describe("AdminPage", () => {
     const inspectorImage = within(image as HTMLElement);
     expect(inspectorImage.getByText("CVE-2026-12345")).toBeVisible();
     expect(inspectorImage.getByText("example-package")).toBeVisible();
-    expect(image?.querySelector('[data-pending="true"]')).toHaveTextContent(/日本語.+準備/);
+    expect(image?.querySelector('[data-pending="true"]')?.textContent).toMatch(/日本語.+準備/u);
     expect(inspectorImage.getByText("合計").parentElement).toHaveTextContent("3");
     expect(
       inspectorImage.queryByText("重大・高の脆弱性は検出されていません。"),

@@ -25,6 +25,7 @@ internal class MomotalkModel(
   private val authenticationRequired: () -> Unit = {},
   private val close: () -> Unit = {},
   initial: MomotalkSelection = MomotalkSelection(),
+  private val fetchAnimation: suspend (String, String, String) -> ByteArray? = { _, _, _ -> null },
 ) : ViewModel() {
   private val mutableState = MutableStateFlow(MomotalkUiState(selectedWeek = initial.selectedWeek))
   val state = mutableState.asStateFlow()
@@ -171,6 +172,18 @@ internal class MomotalkModel(
     cached = { cachedRoom(week, room) }, remote = { refreshRoom(week, room) },
     selected = { state.value.selectedWeek == week && state.value.selectedRoom == room },
     warm = { warmRoom(week, room) })
+
+  suspend fun loadAnimation(week: String, room: String, imageKey: String): ByteArray? {
+    fun canPlay() = active() && state.value.let { current ->
+      current.online && current.selectedWeek == week && current.selectedRoom == room &&
+        current.detail.data?.images?.any { it.key == imageKey && it.animated == true && it.state == "ready" } == true
+    }
+    if (!canPlay()) return null
+    val bytes = fetchAnimation(week, room, imageKey) ?: return null
+    if (canPlay()) return bytes
+    bytes.fill(0)
+    return null
+  }
 
   fun lock() {
     epoch++

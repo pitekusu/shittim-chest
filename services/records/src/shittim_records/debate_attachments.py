@@ -439,10 +439,8 @@ class DebateAttachmentService:
                 sha256=item["sha256"],
             )
             self.repository.complete(item, token, image, datetime.now(UTC))
-        except ClientError as error:
+        except ClientError:
             self.repository.release(item, token)
-            if error.response.get("Error", {}).get("Code") in {"NoSuchKey", "404", "NotFound"}:
-                raise AttachmentFailure("ATTACHMENT_NOT_READY") from None
             raise AttachmentFailure("ATTACHMENT_UNAVAILABLE", 503) from None
         except DebateImageFailure as error:
             self.repository.release(item, token)

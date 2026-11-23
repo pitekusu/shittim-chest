@@ -8,6 +8,15 @@ on:
         required: true
         default: v0004
         type: string
+      student_gacha_enabled:
+        description: "生徒ガチャの配信状態 (keep=現状維持、true=有効、false=無効)"
+        required: true
+        default: keep
+        type: choice
+        options:
+          - keep
+          - "true"
+          - "false"
 
 permissions: {}
 
@@ -21,9 +30,9 @@ env:
   SSL_CERT_DIR: /etc/ssl/certs
   AWS_REGION: ap-northeast-1
   COST_REGION: us-east-1
-  PYTHON_VERSION: 3.14.10
+  PYTHON_VERSION: 3.15.2
   PYTHONDONTWRITEBYTECODE: "1"
-  UV_VERSION: 0.13.7
+  UV_VERSION: 0.13.9
   AWS_SIGNER_NOTATION_INSTALLER_VERSION: 2.2.0-1
   NOTATION_CLI_VERSION: 1.3.2
   AWS_SIGNER_NOTATION_PLUGIN_VERSION: 1.0.2292
@@ -31,8 +40,8 @@ env:
   AWS_SIGNER_NOTATION_SIGNATURE_SHA256: ef9bb5125579e1ca24f9508ac0903b7db4afcc20a31333c9203c784e8c34cf6b
   AWS_SIGNER_NOTATION_KEY_SHA256: e215d69bf0bd59d7a2efe165d7fb777201364f76328702248f8b82b30ec41991
   AWS_SIGNER_NOTATION_FINGERPRINT: E84AF8A2A9B52F1F4435AE71A3B52DA65461CF90
-  ECR_CREDENTIAL_HELPER_VERSION: 0.12.0
-  ECR_CREDENTIAL_HELPER_SHA256: 5bdd30fb6c7a92462f5b454cce1aa906ca7926a6c2e39efad9613a7bf7661fac
+  ECR_CREDENTIAL_HELPER_VERSION: 0.13.0
+  ECR_CREDENTIAL_HELPER_SHA256: f0669e1666c6e1c70f9484df2cbd01c89b82f687f63dc55c50b05e8d20ebd2e1
   AWS_ECR_DISABLE_CACHE: "true"
   RELEASE_IMAGE_CONTEXT: ${{ github.workspace }}/release-image-context
 
@@ -61,11 +70,10 @@ jobs:
           test "${GITHUB_REPOSITORY}" = "${EXPECTED_REPOSITORY}"
           test "${GITHUB_REPOSITORY_ID}" = "${EXPECTED_REPOSITORY_ID}"
           test "${GITHUB_SHA}" = "${GITHUB_WORKFLOW_SHA}"
-      - name: Update and verify system trust before checkout
+      - name: Verify hosted runner trust before checkout
         working-directory: ${{ runner.temp }}
         run: |
-          sudo apt-get update --quiet
-          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          dpkg-query --show --showformat='Hosted CA package: ${Version}\n' ca-certificates
           python3 - <<'PY_TLS'
           import hashlib
           import pathlib
@@ -168,17 +176,18 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ steps.records_release.outputs.run_id }}
       - name: Set up uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: ${{ env.UV_VERSION }}
           download-from-astral-mirror: false
+          require-checksums: true
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.22.2"
+          node-version: "26.13.1"
           cache: npm
       - name: Install locked test environments
         run: |
@@ -527,7 +536,7 @@ jobs:
         id: buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
-          version: v0.38.2
+          version: v0.39.0
           driver-opts: |
             image=${{ steps.buildkit-image.outputs.image }}
             env.SSL_CERT_FILE=/etc/buildkit/certs/docker.io/ca.pem
@@ -797,7 +806,7 @@ jobs:
           trap 'docker rm -f "${container}" >/dev/null 2>&1 || true' EXIT
           mkdir "${RUNNER_TEMP}/lambda-bundle"
           docker cp \
-            "${container}:/app/.venv/lib/python3.14/site-packages/." \
+            "${container}:/app/.venv/lib/python${PYTHON_VERSION%.*}/site-packages/." \
             "${RUNNER_TEMP}/lambda-bundle/"
           find "${RUNNER_TEMP}/lambda-bundle" -exec touch -d '1980-01-01T00:00:00Z' {} +
           (
@@ -838,9 +847,13 @@ jobs:
           RECORDS_PUBLIC_HOSTNAME: ${{ steps.records_evidence.outputs.hostname }}
           RUNTIME_CONFIG_VERSION: ${{ inputs.runtime_config_version }}
           RUNTIME_TEMPLATE_KEY: ${{ env.RUNTIME_TEMPLATE_KEY }}
+          STUDENT_GACHA_ROLLOUT: ${{ inputs.student_gacha_enabled }}
           TOKYO_EXECUTION_ROLE: ${{ vars.CLOUDFORMATION_EXECUTION_ROLE_ARN_TOKYO }}
         run: |
           [[ "${RUNTIME_CONFIG_VERSION}" =~ ^v[0-9]{4}$ ]]
+          STUDENT_GACHA_ENABLED=$(uv run --frozen python tools/resolve_student_gacha_rollout.py \
+            "${STUDENT_GACHA_ROLLOUT}" --region "${AWS_REGION}")
+          [[ "${STUDENT_GACHA_ENABLED}" =~ ^(true|false)$ ]]
           bundle_key=$(jq --raw-output .key "${RUNNER_TEMP}/lambda-bundle.json")
           bundle_hash=$(jq --raw-output .sha256 "${RUNNER_TEMP}/lambda-bundle.json")
           bundle_code_sha256=$(printf '%s' "${bundle_hash}" | xxd -r -p | base64 -w 0)
@@ -951,6 +964,7 @@ jobs:
             --parameters \
               "ParameterKey=RuntimeImageDigest,ParameterValue=${NORMAL_DIGEST}" \
               "ParameterKey=RuntimeConfigVersion,ParameterValue=${RUNTIME_CONFIG_VERSION}" \
+              "ParameterKey=StudentGachaEnabled,ParameterValue=${STUDENT_GACHA_ENABLED}" \
               "ParameterKey=RecordsPublicHostname,ParameterValue=${RECORDS_PUBLIC_HOSTNAME}" \
               "ParameterKey=LambdaBundleBucketName,ParameterValue=${ASSET_BUCKET}" \
               "ParameterKey=LambdaBundleObjectKey,ParameterValue=${bundle_key}" \
@@ -977,6 +991,7 @@ jobs:
           validate_change_set ShittimChest-Prod-Runtime Runtime \
             --expected-parameter "RuntimeImageDigest=${NORMAL_DIGEST}" \
             --expected-parameter "RuntimeConfigVersion=${RUNTIME_CONFIG_VERSION}" \
+            --expected-parameter "StudentGachaEnabled=${STUDENT_GACHA_ENABLED}" \
             --expected-parameter "RecordsPublicHostname=${RECORDS_PUBLIC_HOSTNAME}" \
             --expected-parameter "LambdaBundleBucketName=${ASSET_BUCKET}" \
             --expected-parameter "LambdaBundleObjectKey=${bundle_key}" \
@@ -1096,11 +1111,10 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - name: Update and verify system trust before checkout
+      - name: Verify hosted runner trust before checkout
         working-directory: ${{ runner.temp }}
         run: |
-          sudo apt-get update --quiet
-          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          dpkg-query --show --showformat='Hosted CA package: ${Version}\n' ca-certificates
           python3 - <<'PY_TLS'
           import hashlib
           import pathlib
@@ -1131,10 +1145,11 @@ jobs:
       - name: Configure the incident TLS trust policy
         uses: ./.github/actions/configure-tls
       - name: Set up uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: ${{ env.UV_VERSION }}
           download-from-astral-mirror: false
+          require-checksums: true
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -1366,7 +1381,11 @@ jobs:
           ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
           MONITOR_ARN: ${{ vars.EXISTING_SERVICE_ANOMALY_MONITOR_ARN }}
           SIGNING_PROFILE_ARN: ${{ vars.ECR_SIGNING_PROFILE_ARN }}
+          STUDENT_GACHA_ROLLOUT: ${{ inputs.student_gacha_enabled }}
         run: |
+          STUDENT_GACHA_ENABLED=$(uv run --frozen python tools/resolve_student_gacha_rollout.py \
+            "${STUDENT_GACHA_ROLLOUT}" --region "${AWS_REGION}")
+          [[ "${STUDENT_GACHA_ENABLED}" =~ ^(true|false)$ ]]
           manifest="${RUNNER_TEMP}/release/release-manifest.json"
           records_manifest="${RUNNER_TEMP}/release/records-release-evidence/records-release-manifest.json"
           records_public_hostname=$(jq --exit-status --raw-output \
@@ -1439,6 +1458,7 @@ jobs:
           validate_change_set ShittimChest-Prod-Runtime "${AWS_REGION}" Runtime \
             --expected-parameter "RuntimeImageDigest=${normal_digest}" \
             --expected-parameter "RuntimeConfigVersion=${runtime_config}" \
+            --expected-parameter "StudentGachaEnabled=${STUDENT_GACHA_ENABLED}" \
             --expected-parameter "RecordsPublicHostname=${records_public_hostname}" \
             --expected-parameter "LambdaBundleBucketName=${ASSET_BUCKET}" \
             --expected-parameter "LambdaBundleObjectKey=${bundle_key}" \
@@ -1703,11 +1723,10 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - name: Update and verify system trust before checkout
+      - name: Verify hosted runner trust before checkout
         working-directory: ${{ runner.temp }}
         run: |
-          sudo apt-get update --quiet
-          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          dpkg-query --show --showformat='Hosted CA package: ${Version}\n' ca-certificates
           python3 - <<'PY_TLS'
           import hashlib
           import pathlib

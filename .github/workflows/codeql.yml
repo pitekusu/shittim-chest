@@ -45,11 +45,10 @@ jobs:
           - language: java-kotlin
             build-mode: manual
     steps:
-      - name: Update and verify system trust before checkout
+      - name: Verify hosted runner trust before checkout
         working-directory: ${{ runner.temp }}
         run: |
-          sudo apt-get update --quiet
-          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          dpkg-query --show --showformat='Hosted CA package: ${Version}\n' ca-certificates
           python3 - <<'PY_TLS'
           import hashlib
           import pathlib
@@ -80,10 +79,7 @@ jobs:
         uses: ./.github/actions/configure-tls
       - name: Install the same JDK as local development
         if: ${{ matrix.language == 'java-kotlin' }}
-        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
-        with:
-          distribution: temurin
-          java-version-file: apps/records-android/.java-version
+        uses: ./.github/actions/setup-android-jdk
       - name: Select the filtered JDK trust store
         if: ${{ matrix.language == 'java-kotlin' }}
         run: >-

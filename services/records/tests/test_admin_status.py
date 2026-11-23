@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 import pytest
+from botocore.exceptions import ClientError
 
 import shittim_records.admin_status_adapters as status_adapters
 from shittim_records.admin_status import AdminStatusCollection, AdminStatusService
@@ -512,6 +513,7 @@ def test_ecs_includes_runtime_heartbeat_without_exposing_resource_names() -> Non
     assert values["circuit_breaker_enabled"] is True
     assert values["circuit_breaker_rollback"] is True
     assert values["execute_command_enabled"] is False
+    assert values["student_gacha_pending"] == 0
     assert isinstance(section.details, AdminEcsDetails)
     assert section.details.next_task_image_tags == NEXT_TASK_IMAGE_TAGS
     assert ecs.task_definition_calls == [TASK_DEFINITION_ARN]
@@ -525,6 +527,35 @@ def test_ecs_includes_runtime_heartbeat_without_exposing_resource_names() -> Non
     assert cloudwatch.statistics_calls[0]["MetricName"] == "HeartbeatAgeSeconds"
     assert configuration().cluster_name not in section.model_dump_json()
     assert configuration().service_name not in section.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    ("pending", "expected"),
+    [(3, 3), (True, None), (-1, None), ("unavailable", None)],
+)
+def test_student_gacha_reads_only_the_projected_activity_counter(
+    pending: int | str,
+    expected: int | None,
+) -> None:
+    class Dynamo:
+        def get_item(self, **kwargs: Any) -> dict[str, Any]:
+            key = {"PK": "CONTROL#GACHA", "SK": "ACTIVITY"}
+            assert kwargs == {
+                "TableName": configuration().tables["debate"],
+                "Key": status_adapters.marshal_item(key),
+                "ProjectionExpression": "PK, SK, record_type, #count",
+                "ExpressionAttributeNames": {"#count": "count"},
+                "ConsistentRead": True,
+            }
+            if pending == "unavailable":
+                raise ClientError({"Error": {"Code": "AccessDeniedException"}}, "GetItem")
+            return {
+                "Item": status_adapters.marshal_item(
+                    {**key, "record_type": "student_gacha_activity", "count": pending}
+                )
+            }
+
+    assert source(dynamodb=Dynamo())._student_gacha_pending() == expected
 
 
 @pytest.mark.parametrize(
@@ -595,7 +626,7 @@ def test_ecs_requires_runtime_telemetry_while_tasks_are_active(
             key = status_adapters.unmarshal_item(Key)
             if key["SK"] == "ACTIVE_ATTEMPT_COUNT":
                 item = {**key, "active_attempt_count": 1}
-            elif key["SK"] == "ACTIVITY":
+            elif key["PK"] == "CONTROL#OUTBOX":
                 item = {**key, "pending_count": 0, "claimed_count": 0}
             else:
                 return {}
@@ -1154,10 +1185,26 @@ def test_inspector_rejects_details_that_exceed_severity_aggregates(severity: str
         )._inspector_section()
 
 
-def test_s3_accepts_non_versioned_one_day_memorial_upload_lifecycle() -> None:
+@pytest.mark.parametrize(
+    ("asset_status", "expected_present", "expected_state"),
+    [
+        ("present", True, "healthy"),
+        ("absent", False, "warning"),
+        ("prefixed", False, "warning"),
+        ("unavailable", None, "unknown"),
+    ],
+)
+def test_s3_accepts_memorial_upload_lifecycle_and_checks_exact_gacha_assets(
+    asset_status: str,
+    expected_present: bool | None,
+    expected_state: str,
+) -> None:
+    roster_key = "student-gacha/roster/blue_archive_characters_with_npcs.json"
+
     class S3:
         def __init__(self, *, expiration_days: int = 1) -> None:
             self.expiration_days = expiration_days
+            self.checked_keys: set[str] = set()
 
         def get_bucket_versioning(self, *, Bucket: str) -> dict[str, Any]:
             return {} if Bucket == "private-memorial-upload-bucket" else {"Status": "Enabled"}
@@ -1190,14 +1237,35 @@ def test_s3_accepts_non_versioned_one_day_memorial_upload_lifecycle() -> None:
                 ]
             }
 
-    healthy = source(s3=S3())._s3_section(NOW)
-    warning = source(s3=S3(expiration_days=2))._s3_section(NOW)
+        def list_objects_v2(
+            self, *, Bucket: str, Prefix: str, MaxKeys: int, ExpectedBucketOwner: str
+        ) -> dict[str, Any]:
+            assert Bucket == configuration().buckets["media"]
+            assert MaxKeys == 1
+            assert ExpectedBucketOwner == AWS_ACCOUNT_ID
+            self.checked_keys.add(Prefix)
+            if Prefix == roster_key:
+                if asset_status == "absent":
+                    return {}
+                if asset_status == "prefixed":
+                    return {"Contents": [{"Key": Prefix + ".backup"}], "IsTruncated": True}
+                if asset_status == "unavailable":
+                    raise ClientError({"Error": {"Code": "AccessDenied"}}, "ListObjectsV2")
+            return {"Contents": [{"Key": Prefix}]}
 
-    assert healthy.state == "healthy"
-    assert metrics(healthy)["memorial_upload_versioning"] == "Disabled"
-    assert metrics(healthy)["memorial_upload_expiration_days"] == 1
-    assert metrics(healthy)["memorial_upload_abort_days"] == 1
-    assert warning.state == "warning"
+    s3 = S3()
+    section = source(s3=s3)._s3_section(NOW)
+    values = metrics(section)
+    assert section.state == expected_state
+    assert values["memorial_upload_versioning"] == "Disabled"
+    assert values["memorial_upload_expiration_days"] == 1
+    assert values["memorial_upload_abort_days"] == 1
+    assert values["student_gacha_roster_present"] is expected_present
+    assert values["student_gacha_loading_gif_present"] is True
+    assert len(s3.checked_keys) == 7
+    assert all(key not in section.model_dump_json() for key in s3.checked_keys)
+    if asset_status == "present":
+        assert source(s3=S3(expiration_days=2))._s3_section(NOW).state == "warning"
 
 
 @pytest.mark.parametrize("failure", ("partial", "missing"))
@@ -1628,7 +1696,23 @@ def test_sqs_android_notification_inflight_and_recovery_threshold(
     assert AWS_ACCOUNT_ID not in section.model_dump_json()
 
 
-def test_apigateway_reports_allowlisted_apis_without_exposing_ids() -> None:
+@pytest.mark.parametrize(
+    ("route_status", "expected_registered", "expected_state"),
+    [
+        ("registered", True, "healthy"),
+        ("missing", False, "warning"),
+        ("unbound", False, "warning"),
+        ("unavailable", None, "unknown"),
+    ],
+)
+def test_apigateway_reports_allowlisted_apis_and_gacha_route_without_exposing_ids(
+    route_status: str,
+    expected_registered: bool | None,
+    expected_state: str,
+) -> None:
+    route_key = "POST /interactions/student-gacha"
+    target = "integrations/internal-discord-target"
+
     class ApiGateway:
         def get_api(self, *, ApiId: str) -> dict[str, Any]:
             return {
@@ -1641,6 +1725,28 @@ def test_apigateway_reports_allowlisted_apis_without_exposing_ids() -> None:
 
         def get_stages(self, **_kwargs: Any) -> dict[str, Any]:
             return {"Items": [{"StageName": "$default", "AutoDeploy": True}]}
+
+        def get_paginator(self, name: str) -> Paginator:
+            assert name == "get_routes"
+            if route_status == "unavailable":
+                raise ClientError({"Error": {"Code": "AccessDeniedException"}}, "GetRoutes")
+            return Paginator(
+                [
+                    {"Items": [{"RouteKey": "POST /interactions", "Target": target}]},
+                    {
+                        "Items": [
+                            {
+                                "RouteKey": (
+                                    "GET /interactions/student-gacha"
+                                    if route_status == "missing"
+                                    else route_key
+                                ),
+                                "Target": "" if route_status == "unbound" else target,
+                            }
+                        ]
+                    },
+                ]
+            )
 
     class ApiMetrics(CloudWatch):
         def get_metric_data(self, **kwargs: Any) -> dict[str, Any]:
@@ -1660,12 +1766,15 @@ def test_apigateway_reports_allowlisted_apis_without_exposing_ids() -> None:
     section = status_source._apigateway_section(NOW)
     values = metrics(section)
 
-    assert section.state == "healthy"
+    assert section.state == expected_state
     assert values["discord_hour_requests"] == 10
     assert values["discord_day_requests"] == 10
     assert values["records_hour_5xx"] == 0
+    assert values["student_gacha_route_registered"] is expected_registered
     assert "discord-id" not in section.model_dump_json()
     assert "records-id" not in section.model_dump_json()
+    assert route_key not in section.model_dump_json()
+    assert target not in section.model_dump_json()
 
 
 @pytest.mark.parametrize("missing", [False, True])
@@ -1909,14 +2018,29 @@ def test_sns_reports_delivery_counts_without_subscription_addresses() -> None:
     assert "private-recipient" not in section.model_dump_json()
 
 
-def test_ssm_checks_metadata_only_and_groups_readiness() -> None:
+@pytest.mark.parametrize(
+    ("enabled", "key_present", "expected_enabled", "expected_state"),
+    [
+        ("true", True, True, "healthy"),
+        ("true", False, True, "warning"),
+        ("false", False, False, "healthy"),
+        ("invalid", True, None, "unknown"),
+    ],
+)
+def test_ssm_checks_metadata_only_and_groups_readiness(
+    enabled: str,
+    key_present: bool,
+    expected_enabled: bool | None,
+    expected_state: str,
+) -> None:
     class CloudFormation:
         def describe_stacks(self, **_kwargs: Any) -> dict[str, Any]:
             return {
                 "Stacks": [
                     {
                         "Parameters": [
-                            {"ParameterKey": "RuntimeConfigVersion", "ParameterValue": "v0001"}
+                            {"ParameterKey": "RuntimeConfigVersion", "ParameterValue": "v0001"},
+                            {"ParameterKey": "StudentGachaEnabled", "ParameterValue": enabled},
                         ]
                     }
                 ]
@@ -1933,6 +2057,8 @@ def test_ssm_checks_metadata_only_and_groups_readiness() -> None:
         }
     )
     expected_names = configured_names - {"/shittim-chest/production/runtime-prompts/active"}
+    if not key_present:
+        expected_names.remove("/shittim-chest/production/discord/participant-a/public-key")
     metadata = [
         {
             "Name": name,
@@ -1969,12 +2095,14 @@ def test_ssm_checks_metadata_only_and_groups_readiness() -> None:
     section = source(cloudformation=CloudFormation(), ssm=ssm)._ssm_section()
     values = metrics(section)
 
-    assert section.state == "healthy"
+    assert section.state == expected_state
     assert values["discord_ready"] == 5
     assert values["runtime_ready"] == 6
     assert values["records_ready"] == 8
     assert values["cost_ready"] == 2
     assert values["runtime_prompt_pointer_present"] is False
+    assert values["student_gacha_enabled"] is expected_enabled
+    assert values["student_gacha_verification_key_present"] is key_present
     assert ssm.paginator.calls == [
         {
             "ParameterFilters": [

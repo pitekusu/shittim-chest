@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import hmac
 from typing import Any, cast
 
 import pytest
@@ -9,6 +11,7 @@ from botocore.exceptions import ClientError
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.serializer import (
     CURRENT_SCHEMA_VERSION,
+    LEGACY_COMPLETED_DEBATE_SCHEMA_VERSION,
     PREVIOUS_SCHEMA_VERSION,
     DynamoItem,
     serialize_snapshot,
@@ -18,12 +21,14 @@ from tests.factories import NOW, completed_snapshot, presentation
 from shittim_records.adapters import (
     AffectionProjectionRepository,
     ArchiveRepository,
+    ProjectionConfiguration,
     ProjectionConflict,
     SourceDebateRepository,
     StatisticsRepository,
 )
 from shittim_records.archive import ArchiveProjection, project_completed_debate
 from shittim_records.mobile_notifications import pending_mobile_notification
+from shittim_records.projector import ProjectorService
 
 HMAC_KEY = b"records-test-key-that-is-longer-than-32-bytes"
 
@@ -135,7 +140,9 @@ def test_source_repository_accepts_mixed_partition_with_current_completion_metad
     assert loaded.snapshot.final_decision == source.final_decision
 
 
-@pytest.mark.parametrize("invalid_schema", (True, 7, CURRENT_SCHEMA_VERSION + 1))
+@pytest.mark.parametrize(
+    "invalid_schema", (True, LEGACY_COMPLETED_DEBATE_SCHEMA_VERSION - 1, CURRENT_SCHEMA_VERSION + 1)
+)
 def test_source_repository_rejects_invalid_item_schema(invalid_schema: object) -> None:
     items = list(serialize_snapshot(completed_snapshot()))
     items[2] = cast(DynamoItem, {**items[2], "schema_version": invalid_schema})
@@ -145,6 +152,71 @@ def test_source_repository_rejects_invalid_item_schema(invalid_schema: object) -
         SourceDebateRepository(cast(Any, client), "source").load_partition_for_projection(
             str(items[0]["PK"])
         )
+
+
+def test_legacy_completed_source_backfills_existing_archive_v1_once() -> None:
+    snapshot = completed_snapshot()
+    source_items = [
+        marshal_item({**item, "schema_version": LEGACY_COMPLETED_DEBATE_SCHEMA_VERSION})
+        for item in serialize_snapshot(snapshot)
+    ]
+    source = FakeSourceDynamoDb([{"Items": source_items}] * 3)
+
+    def archive_v1_key(value: str) -> str:
+        return (
+            base64.urlsafe_b64encode(hmac.digest(HMAC_KEY, value.encode(), "sha256"))
+            .decode()
+            .rstrip("=")
+        )
+
+    record_id = archive_v1_key(f"record:{snapshot.state.debate_id}")
+    archived_meta = marshal_item(
+        {
+            "PK": f"RECORD#{record_id}",
+            "SK": "META",
+            "record_type": "archive_meta",
+            "schema_version": 1,
+            "record_id": record_id,
+            "question": snapshot.question,
+            "requester_key": archive_v1_key(f"requester:{snapshot.requester_id}"),
+            "completed_at": snapshot.state.updated_at.isoformat(),
+        }
+    )
+
+    class ExistingArchive(FakeDynamoDb):
+        def get_item(self, **kwargs: object) -> dict[str, object]:
+            key = cast(dict[str, Any], kwargs["Key"])
+            assert kwargs["ConsistentRead"] is True
+            if key["PK"]["S"] == f"RECORD#{record_id}":
+                return {"Item": archived_meta}
+            assert key == marshal_item({"PK": f"RECORD-SOURCE#{record_id}", "SK": "META"})
+            return super().get_item(**kwargs)
+
+    class Configuration:
+        def load(self) -> ProjectionConfiguration:
+            return ProjectionConfiguration(HMAC_KEY, presentation())
+
+    archive = ExistingArchive()
+    projector = ProjectorService(
+        source=SourceDebateRepository(cast(Any, source), "source"),
+        archive=ArchiveRepository(cast(Any, archive), "archive"),
+        configuration=cast(Any, Configuration()),
+    )
+    partition_key = f"DEBATE#{snapshot.state.debate_id}"
+    assert projector.backfill_follow_up_source(partition_key, now=NOW, apply=False)
+    assert archive.marker is None
+    assert projector.backfill_follow_up_source(partition_key, now=NOW, apply=True)
+    assert not projector.backfill_follow_up_source(partition_key, now=NOW, apply=True)
+    assert archive.marker == marshal_item(
+        {
+            "PK": f"RECORD-SOURCE#{record_id}",
+            "SK": "META",
+            "record_id": record_id,
+            "debate_id": str(snapshot.state.debate_id),
+            "attempt_id": str(snapshot.state.attempt_id),
+        }
+    )
+    assert not archive.transactions
 
 
 @pytest.mark.parametrize(

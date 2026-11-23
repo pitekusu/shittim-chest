@@ -46,6 +46,9 @@ AdminServiceName = Literal[
 
 NonEmptyText = Annotated[str, Field(min_length=1, pattern=r"\S")]
 RecordId = Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{43}$")]
+GALLERY_COLLECTION_CONTRACT = "gallery-collection-v1"
+GALLERY_CARD_ID_PATTERN = r"^[A-Za-z0-9_-]{80}$"
+GalleryCardId = Annotated[str, Field(pattern=GALLERY_CARD_ID_PATTERN)]
 _ALL_PARTICIPANT_SLOTS = frozenset[ParticipantSlot](
     {"participant-a", "participant-b", "participant-c"}
 )
@@ -211,6 +214,9 @@ class RecordListItem(PublicModel):
     completed_at: AwareDatetime
     question_preview: Annotated[str, Field(min_length=1, max_length=160, pattern=r"\S")]
     attachment_count: Annotated[int, Field(strict=True, ge=0, le=3)] = 0
+    parent_record_id: RecordId | None = None
+    parent_question_preview: Annotated[str, Field(min_length=1, max_length=160)] | None = None
+    has_follow_ups: bool | None = None
     requester: RequesterSummary
     participants: ParticipantCollection
     result: RecordResultSummary
@@ -225,6 +231,19 @@ class RecordListResponse(PublicModel):
     schema_version: Literal[1]
     items: tuple[RecordListItem, ...]
     next_cursor: Annotated[str, Field(min_length=1, max_length=4096)] | None = None
+
+
+class RecordFollowUpItem(PublicModel):
+    record_id: RecordId
+    question_preview: Annotated[str, Field(min_length=1, max_length=160)]
+    completed_at: AwareDatetime
+
+
+class RecordFollowUpsResponse(PublicModel):
+    schema_version: Literal[1]
+    items: Annotated[tuple[RecordFollowUpItem, ...], Field(max_length=12)]
+    next_cursor: Annotated[str, Field(min_length=1, max_length=4096)] | None = None
+    follow_up_available: bool
 
 
 class RecordSearchRequest(PublicModel):
@@ -470,6 +489,9 @@ class RecordDetailResponse(PublicModel):
     affection: AffectionView | None
     attachments: Annotated[tuple[RecordAttachmentImage, ...], Field(max_length=3)] | None = None
     voting: VotingSummary | None = None
+    parent_record_id: RecordId | None = None
+    parent_question_preview: Annotated[str, Field(min_length=1, max_length=160)] | None = None
+    has_follow_ups: bool | None = None
     og_image_url: (
         Annotated[
             str,
@@ -818,6 +840,11 @@ class CostConversion(PublicModel):
     updated_at: AwareDatetime | None
 
 
+class NextOpenAISubscriptionCredit(PublicModel):
+    date: date
+    amount_usd: Annotated[str, Field(pattern=r"^[0-9]+\.[0-9]{2}$")]
+
+
 class CostsResponse(PublicModel):
     schema_version: Literal[1]
     period: CostPeriod
@@ -830,6 +857,12 @@ class CostsResponse(PublicModel):
     conversion: CostConversion
     updated_at: AwareDatetime | None
     status: CostStatus
+    openai_subscription_credit: CanonicalJpyAmount | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    openai_next_subscription_credit: NextOpenAISubscriptionCredit | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 PromptRevisionId = Annotated[
@@ -1049,6 +1082,8 @@ DebateRequestId = Annotated[
 DebateRequestStatus = Literal[
     "accepted", "queued", "starting", "running", "publishing", "published", "failed", "cancelled"
 ]
+DEBATE_CONTRACT_HEADER = "X-Records-Contract"
+DEBATE_FOLLOW_UP_IMAGES_CONTRACT = "debate-follow-up-images-v1"
 
 
 class DebateStartRequest(PublicModel):
@@ -1057,6 +1092,7 @@ class DebateStartRequest(PublicModel):
     request_id: DebateRequestId
     question: Annotated[str, Field(min_length=1, max_length=1000, pattern=r"\S", repr=False)]
     attachment_ids: list[AttachmentId] = Field(default_factory=list, max_length=3)
+    parent_record_id: RecordId | None = None
 
     @model_validator(mode="after")
     def unique_attachments(self) -> DebateStartRequest:
@@ -1124,6 +1160,7 @@ class DebateRequestResponse(PublicModel):
     phase: str | None
     created_at: AwareDatetime
     updated_at: AwareDatetime
+    parent_record_id: RecordId | None = Field(default=None, exclude_if=lambda value: value is None)
     record_id: RecordId | None
     error_code: Literal["DEBATE_REJECTED", "DEBATE_FAILED", "DEBATE_CANCELLED"] | None
     attempt_token: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$", repr=False)
@@ -1192,57 +1229,179 @@ class MomotalkImageSubject(PublicModel):
     mood: Literal["happy", "unhappy"]
 
 
-class MomotalkImage(PublicModel):
+class MomotalkImageV3Subject(PublicModel):
     participant: ParticipantSlot
-    mood: Literal["happy", "unhappy"]
-    subjects: (
-        Annotated[
-            list[MomotalkImageSubject],
-            Field(
-                min_length=1,
-                max_length=3,
-                json_schema_extra={
-                    "allOf": [
-                        {
-                            "contains": {
-                                "properties": {"participant": {"const": slot}},
-                                "required": ["participant"],
-                                "type": "object",
-                            },
-                            "maxContains": 1,
-                            "minContains": 0,
-                        }
-                        for slot in sorted(_ALL_PARTICIPANT_SLOTS)
-                    ]
-                },
-            ),
-        ]
-        | None
-    ) = Field(default=None, exclude_if=lambda value: value is None)
+    mood: Literal["happy", "neutral", "unhappy"]
+
+
+_MOMOTALK_SUBJECTS_SCHEMA: dict[str, JsonValue] = {
+    "allOf": [
+        {
+            "contains": {
+                "properties": {"participant": {"const": slot}},
+                "required": ["participant"],
+                "type": "object",
+            },
+            "maxContains": 1,
+            "minContains": 0,
+        }
+        for slot in sorted(_ALL_PARTICIPANT_SLOTS)
+    ]
+}
+
+
+class _MomotalkImageMedia(PublicModel):
     state: Literal["pending", "ready", "failed"]
     url: str | None = None
     thumbnail_url: str | None = None
     download_url: str | None = None
 
+    def _validate_subjects(
+        self,
+        participant: ParticipantSlot,
+        mood: str,
+        subjects: list[MomotalkImageSubject] | list[MomotalkImageV3Subject],
+    ) -> None:
+        if len({subject.participant for subject in subjects}) != len(subjects):
+            raise ValueError("selfie subjects must contain each participant at most once")
+        lead = subjects[0]
+        if (lead.participant, lead.mood) != (participant, mood):
+            raise ValueError("selfie lead must match its first subject")
+
+
+class MomotalkImage(_MomotalkImageMedia):
+    participant: ParticipantSlot
+    mood: Literal["happy", "unhappy"]
+    subjects: (
+        Annotated[
+            list[MomotalkImageSubject],
+            Field(min_length=1, max_length=3, json_schema_extra=_MOMOTALK_SUBJECTS_SCHEMA),
+        ]
+        | None
+    ) = Field(default=None, exclude_if=lambda value: value is None)
+
     @model_validator(mode="after")
     def valid_subjects(self) -> MomotalkImage:
         if self.subjects is not None:
-            if len({subject.participant for subject in self.subjects}) != len(self.subjects):
-                raise ValueError("selfie subjects must contain each participant at most once")
-            lead = self.subjects[0]
-            if (lead.participant, lead.mood) != (self.participant, self.mood):
-                raise ValueError("selfie lead must match its first subject")
+            self._validate_subjects(self.participant, self.mood, self.subjects)
         return self
 
 
-class MomotalkRoomResponse(PublicModel):
+class MomotalkImageV3(_MomotalkImageMedia):
+    participant: ParticipantSlot
+    mood: Literal["happy", "neutral", "unhappy"]
+    subjects: list[MomotalkImageV3Subject] = Field(
+        min_length=1, max_length=3, json_schema_extra=_MOMOTALK_SUBJECTS_SCHEMA
+    )
+    animated: bool
+
+    @model_validator(mode="after")
+    def valid_subjects(self) -> MomotalkImageV3:
+        self._validate_subjects(self.participant, self.mood, self.subjects)
+        return self
+
+
+class _MomotalkConversation(PublicModel):
     schema_version: Literal[1] = 1
     week: MomotalkWeek
     room: MomotalkRoomSummary
     participants: ParticipantCollection
     messages: list[MomotalkMessage] = Field(max_length=15)
+
+
+class MomotalkRoomResponse(_MomotalkConversation):
     # Existing rooms may contain one single-person photo for each mood.
     images: list[MomotalkImage] = Field(max_length=2)
+
+
+class MomotalkRoomV3Response(_MomotalkConversation):
+    images: list[MomotalkImageV3] = Field(max_length=2)
+
+
+class GalleryCollector(PublicModel):
+    id: RecordId
+    display_name: NonEmptyText
+    avatar: AvatarRef | None = None
+
+
+class GalleryCard(PublicModel):
+    card_id: GalleryCardId
+    posted_at: AwareDatetime
+    performer: ParticipantSlot
+    student_name: Annotated[str, Field(min_length=1, max_length=60)]
+    school_name: Annotated[str, Field(min_length=1, max_length=40)]
+    rarity: Annotated[int, Field(ge=0, le=4, strict=True)] | None
+    collector: GalleryCollector | None
+    is_mine: bool
+    thumbnail_ready: bool
+
+
+class GalleryCollectionCard(GalleryCard):
+    student_id: RecordId
+
+
+class GalleryListResponse(PublicModel):
+    schema_version: Literal[1]
+    items: list[GalleryCard] = Field(max_length=100)
+    next_cursor: Annotated[str, Field(min_length=1, max_length=256)] | None
+
+
+class GalleryCollectionListResponse(PublicModel):
+    schema_version: Literal[1]
+    contract: Literal["gallery-collection-v1"]
+    items: list[GalleryCollectionCard] = Field(max_length=100)
+    next_cursor: Annotated[str, Field(min_length=1, max_length=256)] | None
+
+
+class GalleryRosterEntry(PublicModel):
+    student_id: RecordId
+    student_name: Annotated[str, Field(min_length=1, max_length=60)] | None
+    school_name: Annotated[str, Field(min_length=1, max_length=40)] | None
+    rarity: Annotated[int, Field(ge=0, le=4, strict=True)]
+
+
+class GalleryRosterResponse(PublicModel):
+    schema_version: Literal[1]
+    items: list[GalleryRosterEntry] = Field(min_length=1, max_length=2000)
+
+
+class GalleryDetailResponse(PublicModel):
+    schema_version: Literal[1]
+    card: GalleryCard
+    width: Annotated[int, Field(gt=0)]
+    height: Annotated[int, Field(gt=0)]
+
+
+class GalleryImage(PublicModel):
+    url: Annotated[str, Field(min_length=1, max_length=4096, pattern=r"^https://")]
+    expires_at: AwareDatetime
+
+
+class GalleryThumbnail(GalleryImage):
+    card_id: GalleryCardId
+
+
+class GalleryThumbnailsResponse(PublicModel):
+    schema_version: Literal[1]
+    items: list[GalleryThumbnail] = Field(max_length=24)
+
+
+class GalleryOriginalResponse(GalleryImage):
+    schema_version: Literal[1]
+
+
+class GallerySchoolLogosResponse(PublicModel):
+    schema_version: Literal[1]
+    logos: Annotated[
+        dict[
+            Annotated[str, Field(min_length=1, max_length=40)],
+            Annotated[
+                str,
+                Field(max_length=16_384, pattern=r"^data:image/webp;base64,[A-Za-z0-9+/]+={0,2}$"),
+            ],
+        ],
+        Field(max_length=64),
+    ]
 
 
 PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
@@ -1255,6 +1414,7 @@ PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
     RecordRequestersResponse,
     RecordSyncIndexResponse,
     RecordDetailResponse,
+    RecordFollowUpsResponse,
     RankingsResponse,
     AffectionRankingsResponse,
     RequesterAffectionRankingsResponse,
@@ -1265,6 +1425,7 @@ PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
     MomotalkWeeksResponse,
     MomotalkRoomsResponse,
     MomotalkRoomResponse,
+    MomotalkRoomV3Response,
     SessionResponse,
     AdminPromptsResponse,
     AdminPromptApplyResponse,
@@ -1272,6 +1433,13 @@ PUBLIC_RESPONSE_MODELS: tuple[type[BaseModel], ...] = (
     AdminPromptRevisionResponse,
     AdminStatusResponse,
     ErrorResponse,
+    GalleryListResponse,
+    GalleryCollectionListResponse,
+    GalleryRosterResponse,
+    GalleryDetailResponse,
+    GalleryThumbnailsResponse,
+    GalleryOriginalResponse,
+    GallerySchoolLogosResponse,
 )
 
 PUBLIC_REQUEST_MODELS: tuple[type[BaseModel], ...] = (

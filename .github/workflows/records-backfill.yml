@@ -11,6 +11,12 @@ on:
         options:
           - dry-run
           - apply
+      target:
+        description: "議事録の投影、または更問用の完了試行対応表を補完する"
+        required: true
+        default: records
+        type: choice
+        options: [records, follow-up-sources]
       page_limit:
         description: "1回にScanするsource item上限"
         required: true
@@ -43,20 +49,21 @@ jobs:
       - name: Require immutable main inputs
         env:
           MODE: ${{ inputs.mode }}
+          TARGET: ${{ inputs.target }}
           PAGE_LIMIT: ${{ inputs.page_limit }}
         run: |
           test "${GITHUB_REF}" = refs/heads/main
           test "${GITHUB_REPOSITORY}" = pitekusu/shittim-chest
           test "${GITHUB_REPOSITORY_ID}" = "1302516701"
           test "${MODE}" = dry-run || test "${MODE}" = apply
+          test "${TARGET}" = records || test "${TARGET}" = follow-up-sources
           [[ "${PAGE_LIMIT}" =~ ^[0-9]+$ ]]
           test "${PAGE_LIMIT}" -ge 1
           test "${PAGE_LIMIT}" -le 100
-      - name: Update and verify system trust before checkout
+      - name: Verify hosted runner trust before checkout
         working-directory: ${{ runner.temp }}
         run: |
-          sudo apt-get update --quiet
-          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          dpkg-query --show --showformat='Hosted CA package: ${Version}\n' ca-certificates
           python3 - <<'PY_TLS'
           import hashlib
           import pathlib
@@ -100,10 +107,11 @@ jobs:
       - name: Invoke bounded content-free Backfill pages to completion
         env:
           MODE: ${{ inputs.mode }}
+          TARGET: ${{ inputs.target }}
           PAGE_LIMIT: ${{ inputs.page_limit }}
         run: |
-          jq --null-input --arg mode "${MODE}" --argjson page_limit "${PAGE_LIMIT}" \
-            '{mode:$mode,page_limit:$page_limit}' > "${RUNNER_TEMP}/payload.json"
+          jq --null-input --arg mode "${MODE}" --arg target "${TARGET}" \
+            --argjson page_limit "${PAGE_LIMIT}" '{mode:$mode,target:$target,page_limit:$page_limit}' > "${RUNNER_TEMP}/payload.json"
           aws lambda get-function-configuration \
             --function-name shittim-chest-production-records-backfill \
             --query '{State:State,LastUpdateStatus:LastUpdateStatus}' \

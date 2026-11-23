@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.serializer import (
-    SUPPORTED_SCHEMA_VERSIONS,
+    SUPPORTED_COMPLETED_DEBATE_SCHEMA_VERSIONS,
     DynamoItem,
     DynamoValue,
     deserialize_snapshot,
@@ -105,7 +105,7 @@ class SourceDebateRepository:
         if any(
             isinstance(item.get("schema_version"), bool)
             or not isinstance(item.get("schema_version"), int)
-            or item.get("schema_version") not in SUPPORTED_SCHEMA_VERSIONS
+            or item.get("schema_version") not in SUPPORTED_COMPLETED_DEBATE_SCHEMA_VERSIONS
             for item in items
         ):
             raise ValueError("source debate partition schema is inconsistent")
@@ -193,10 +193,12 @@ class ArchiveRepository:
         table_name: str,
         *,
         notification_table_name: str | None = None,
+        write_follow_up_sources: bool = False,
     ) -> None:
         self._client = client
         self._table_name = table_name
         self._notification_table_name = notification_table_name
+        self._write_follow_up_sources = write_follow_up_sources
 
     def put_projection(
         self,
@@ -241,7 +243,13 @@ class ArchiveRepository:
                 )
             )
         outbox_items = tuple(item for item in (notification_item, mobile_item) if item is not None)
-        transaction_items = (*marshaled_items, *outbox_items)
+        edge = projection.follow_up_edge
+        source = projection.follow_up_source if self._write_follow_up_sources else None
+        extra = [marshal_item(item) for item in (source, edge) if item is not None]
+        marker_item = marshal_item({"PK": edge["PK"], "SK": "META"}) if edge else None
+        if marker_item is not None:
+            extra.append(marker_item)
+        transaction_items = (*marshaled_items, *outbox_items, *extra)
         _validate_transaction(transaction_items)
         actions: list[TransactWriteItemTypeDef] = [
             {
@@ -251,8 +259,11 @@ class ArchiveRepository:
                     "ConditionExpression": "attribute_not_exists(PK) AND attribute_not_exists(SK)",
                 }
             }
-            for item in marshaled_items
+            for item in (*marshaled_items, *(extra[:-1] if marker_item is not None else extra))
         ]
+        if marker_item is not None:
+            # Different child completions can share the same deterministic existence marker.
+            actions.append({"Put": {"TableName": self._table_name, "Item": marker_item}})
         # Projection and its content-free outboxes must either all exist or none.
         # Queuing alone cannot cover a crash after Archive publication.
         for outbox_item in outbox_items:
@@ -280,6 +291,42 @@ class ArchiveRepository:
                 raise
             return self._classify_existing(marker, projection.source_fingerprint)
         return True
+
+    def backfill_follow_up_source(self, projection: ArchiveProjection, *, apply: bool) -> bool:
+        source = projection.follow_up_source
+        if source is None:
+            raise ValueError("completed projection has no source reference")
+        record_key = {"PK": f"RECORD#{projection.record_id}", "SK": "META"}
+        record = self._get(record_key)
+        if record is None:
+            return False
+        expected = projection.items[0]
+        if any(
+            record.get(field) != expected[field]
+            for field in (
+                "record_id",
+                "record_type",
+                "completed_at",
+                "question",
+                "requester_key",
+            )
+        ):
+            raise ProjectionConflict("existing archive does not match completed source")
+        key = {"PK": source["PK"], "SK": source["SK"]}
+        current = self._get(key)
+        if current is not None and current != source:
+            raise ProjectionConflict("existing record source does not match completed source")
+        if current is None and apply:
+            try:
+                self._client.put_item(
+                    TableName=self._table_name,
+                    Item=marshal_item(source),
+                    ConditionExpression="attribute_not_exists(PK) AND attribute_not_exists(SK)",
+                )
+            except self._client.exceptions.ConditionalCheckFailedException:
+                if self._get(key) != source:
+                    raise ProjectionConflict("concurrent record source is inconsistent") from None
+        return current is None
 
     def _get(self, key: Mapping[str, DynamoValue]) -> DynamoItem | None:
         response = self._client.get_item(
@@ -403,9 +450,12 @@ def _is_defaults_only_profile_upgrade(item: DynamoItem) -> bool:
 class StatisticsRepository:
     """Persist only the internal resumable backfill checkpoint."""
 
-    def __init__(self, client: DynamoDBClient, table_name: str) -> None:
+    def __init__(
+        self, client: DynamoDBClient, table_name: str, *, follow_up_sources_only: bool = False
+    ) -> None:
         self._client = client
         self._table_name = table_name
+        self._backfill_kind = "FOLLOW-UP-SOURCES#V1" if follow_up_sources_only else "ARCHIVE#V1"
 
     def load_backfill_checkpoint(self, *, mode: BackfillMode) -> BackfillCheckpoint | None:
         response = self._client.get_item(
@@ -496,13 +546,12 @@ class StatisticsRepository:
             item["exclusive_start_key"] = exclusive_start_key
         self._client.put_item(TableName=self._table_name, Item=marshal_item(item))
 
-    @staticmethod
-    def _key(mode: BackfillMode) -> dict[str, DynamoValue]:
+    def _key(self, mode: BackfillMode) -> dict[str, DynamoValue]:
         if mode not in {"dry-run", "apply"}:
             raise ValueError("backfill checkpoint mode is invalid")
         return {
             "PK": "CHECKPOINT#BACKFILL",
-            "SK": f"ARCHIVE#V1#{mode.upper()}",
+            "SK": f"{self._backfill_kind}#{mode.upper()}",
         }
 
 

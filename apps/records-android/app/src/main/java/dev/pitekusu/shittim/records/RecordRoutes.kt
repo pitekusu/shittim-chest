@@ -13,6 +13,9 @@ internal data object RecordsList : NavKey
 internal data object Insights : NavKey
 
 @Serializable
+internal data object StudentGalleryRoute : NavKey
+
+@Serializable
 internal data object Momotalk : NavKey
 
 @Serializable
@@ -43,9 +46,19 @@ internal data class RecordDetail(val recordId: String) : NavKey {
 // Preserve the existing list + one detail behavior, including links received in two-pane mode.
 internal fun NavBackStack<NavKey>.openRecord(recordId: String) {
   val detail = RecordDetail(recordId)
-  while (lastOrNull() == Insights || lastOrNull() == Momotalk || lastOrNull() is MomotalkRoom) removeLastOrNull()
+  while (lastOrNull() == Insights || lastOrNull() == StudentGalleryRoute ||
+    lastOrNull() == Momotalk || lastOrNull() is MomotalkRoom) removeLastOrNull()
   if (lastOrNull() == detail) return
+  while (lastOrNull() is RecordDetail && getOrNull(lastIndex - 1) is RecordDetail) removeLastOrNull()
   if (size > 1) this[lastIndex] = detail else add(detail)
+}
+
+// A link inside a record is a forward destination, so Back returns to that reader.
+internal fun NavBackStack<NavKey>.openRelatedRecord(recordId: String) {
+  val detail = RecordDetail(recordId)
+  val existing = indexOf(detail)
+  if (existing < 0) add(detail)
+  else while (lastIndex > existing) removeLastOrNull()
 }
 
 internal fun NavBackStack<NavKey>.closeRecord() {

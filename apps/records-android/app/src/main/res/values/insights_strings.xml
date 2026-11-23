@@ -58,6 +58,8 @@
   <string name="insights_cost_fargate">討論の実行</string>
   <string name="insights_cost_lambda">API・集計処理</string>
   <string name="insights_cost_openai">AIの生成</string>
+  <string name="insights_cost_openai_subscription_credit">ChatGPT特典で約%1$s円を充当済み</string>
+  <string name="insights_cost_openai_next_subscription_credit">次回のChatGPT特典は%1$sにUS$%2$s付与予定</string>
   <string name="insights_cost_other">その他のAWS</string>
   <string name="insights_cost_unavailable">費用の集計を取得できません。時間をおいて更新してください。</string>
   <string name="insights_cost_note_title">概算の算出方法</string>

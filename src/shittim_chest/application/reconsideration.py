@@ -3,12 +3,14 @@
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from hashlib import sha256
+from typing import TypedDict
 
 from shittim_chest.application.errors import GenerationProviderError
 from shittim_chest.application.models import (
     DebateSnapshot,
     GenerationCheckpoint,
     GenerationStatus,
+    PreviousDebate,
     ReconsiderationProgress,
 )
 from shittim_chest.application.ports import (
@@ -19,6 +21,11 @@ from shittim_chest.application.ports import (
 )
 from shittim_chest.domain import PARTICIPANTS, InitialOpinion, ParticipantSlot
 from shittim_chest.domain.attachments import ImageInput
+
+
+class _GenerationArguments(TypedDict, total=False):
+    images: tuple[ImageInput, ...]
+    previous_debate: PreviousDebate
 
 
 async def run_reconsideration(
@@ -111,10 +118,15 @@ async def _step(
         if coordination
         else snapshot.initial_opinions
     )
+    arguments: _GenerationArguments = {}
+    if images:
+        arguments["images"] = images
+    if snapshot.previous_debate is not None:
+        arguments["previous_debate"] = snapshot.previous_debate
     if progress.step == "classify":
         targets = await openai.find_overlap_targets(
             question=snapshot.question,
-            **({"images": images} if images else {}),
+            **arguments,
             positions=positions,
             rotation=rotation,
             coordination=coordination,
@@ -133,7 +145,7 @@ async def _step(
     if progress.step == "explore":
         alternatives = await openai.explore_alternatives(
             question=snapshot.question,
-            **({"images": images} if images else {}),
+            **arguments,
             frame=frame,
             plan=plan,
             peers=peers,
@@ -148,7 +160,7 @@ async def _step(
     elif progress.step == "select":
         selected = await openai.select_alternative(
             question=snapshot.question,
-            **({"images": images} if images else {}),
+            **arguments,
             frame=frame,
             plan=plan,
             peers=peers,
@@ -172,7 +184,7 @@ async def _step(
         )
         opinion = await openai.revise_initial_opinion(
             question=snapshot.question,
-            **({"images": images} if images else {}),
+            **arguments,
             frame=frame,
             plan=plan,
             opinions=snapshot.initial_opinions,

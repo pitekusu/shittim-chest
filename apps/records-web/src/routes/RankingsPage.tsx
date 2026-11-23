@@ -17,7 +17,6 @@ import {
 } from "../api/requesterAffectionRankings";
 import type {
   AffectionRankingsResponse,
-  AvatarRef,
   CostPeriod,
   CostsResponse,
   ParticipantAffectionRanking,
@@ -28,6 +27,7 @@ import type {
 import { Avatar } from "../components/Avatar";
 import { useAuthenticationRecovery } from "../hooks/useAuthenticationRecovery";
 import { formatCompletedDateTime } from "../lib/dateTime";
+import { personaAvatars } from "../lib/personaAvatars";
 import { routeMotionDelay } from "../lib/routePresentation";
 import commonStyles from "../styles/common.module.css";
 import rankingStyles from "../styles/rankings.module.css";
@@ -282,23 +282,6 @@ const AFFECTION_VARIANTS: Readonly<Record<ParticipantSlot, string>> = {
   "participant-a": "",
   "participant-b": rankingStyles.affectionPink,
   "participant-c": rankingStyles.affectionLavender,
-};
-const AFFECTION_PERSONA_AVATARS: Readonly<Record<ParticipantSlot, Omit<AvatarRef, "alt">>> = {
-  "participant-a": {
-    kind: "image",
-    url: new URL("../../scripts/og-image-assets/participant-a.webp", import.meta.url).href,
-    fallbackVariant: "cyan",
-  },
-  "participant-b": {
-    kind: "image",
-    url: new URL("../../scripts/og-image-assets/participant-b.webp", import.meta.url).href,
-    fallbackVariant: "pink",
-  },
-  "participant-c": {
-    kind: "image",
-    url: new URL("../../scripts/og-image-assets/participant-c.webp", import.meta.url).href,
-    fallbackVariant: "lavender",
-  },
 };
 const AFFECTION_HEART_COUNT = 10;
 
@@ -642,7 +625,7 @@ function RequesterAffectionCard({
               </span>
               <Avatar
                 avatar={{
-                  ...AFFECTION_PERSONA_AVATARS[participant.participant],
+                  ...personaAvatars[participant.participant],
                   alt: `${participant.displayName}のアイコン`,
                 }}
               />
@@ -709,7 +692,7 @@ function AffectionRankingCard({
       <header>
         <Avatar
           avatar={{
-            ...AFFECTION_PERSONA_AVATARS[ranking.participant],
+            ...personaAvatars[ranking.participant],
             alt: `${ranking.displayName}のアイコン`,
           }}
         />
@@ -796,6 +779,8 @@ function CostDashboard({
 }) {
   const apiError = costs.error instanceof RecordsApiError ? costs.error : undefined;
   const values = costs.data?.breakdown;
+  const openaiCredit = costs.data?.openaiSubscriptionCredit;
+  const nextOpenaiCredit = costs.data?.openaiNextSubscriptionCredit;
   const numericTotal = costs.data === undefined ? 0 : Number(costs.data.total);
   const graphTotal = Number.isFinite(numericTotal) && numericTotal > 0 ? numericTotal : 0;
 
@@ -892,7 +877,12 @@ function CostDashboard({
                   className={[rankingStyles.costSwatch, className].join(" ")}
                   aria-hidden="true"
                 />
-                <span>{label}</span>
+                <span>
+                  {label}
+                  {key === "openai" && openaiCredit && /[1-9]/u.test(openaiCredit) && (
+                    <small>（ChatGPT特典で約{formatJpy(openaiCredit)}を充当）</small>
+                  )}
+                </span>
                 <strong>{formatJpy(values[key])}</strong>
               </li>
             ))}
@@ -901,6 +891,13 @@ function CostDashboard({
             <p>
               概算・日本時間。Frankfurter v2の日次参照rateでUSD原価を円換算しています。
               共有固定費のRoute 53は含みません。
+              {nextOpenaiCredit && (
+                <>
+                  <br />
+                  次回のChatGPT特典付与予定は{formatCalendarDate(nextOpenaiCredit.date)}（$
+                  {nextOpenaiCredit.amountUsd}）です。
+                </>
+              )}
             </p>
             {costs.data.updatedAt && (
               <p>

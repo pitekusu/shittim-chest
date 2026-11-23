@@ -19,7 +19,12 @@ from shittim_chest.domain import (
     PreferenceFrame,
     SearchRequirement,
 )
-from tests.contract.openai.test_responses_service import response_with, service_for
+from tests.contract.openai.test_responses_service import (
+    request_input_text,
+    request_instructions,
+    response_with,
+    service_for,
+)
 
 
 @pytest.mark.parametrize(
@@ -115,14 +120,16 @@ async def test_real_requests_keep_original_and_rewrite_with_actual_affection_and
             assert request["store"] is False
             assert request["tools"] == []
         for request in server.requests[1:]:
-            assert service.profiles.for_participant(a).system_prompt in request["instructions"]
+            instructions = request_instructions(request)
+            assert service.profiles.for_participant(a).system_prompt in instructions
             assert all(
-                service.profiles.for_participant(x).system_prompt not in request["instructions"]
+                service.profiles.for_participant(x).system_prompt not in instructions
                 for x in PARTICIPANTS[1:]
             )
-            assert json.loads(request["input"])["evidence"]["summary"] == "fixture evidence"
-        assert affection_response_instructions(123) in server.requests[-1]["instructions"]
-        payload = json.loads(server.requests[-1]["input"])
+            payload = json.loads(request_input_text(request))
+            assert payload["evidence"]["summary"] == "fixture evidence"
+        assert affection_response_instructions(123) in request_instructions(server.requests[-1])
+        payload = json.loads(request_input_text(server.requests[-1]))
         assert payload["private_decision_data"]["selected_candidate"]["proposal"] == "original"
         assert {x["participant"] for x in payload["peers"]} == {x.value for x in PARTICIPANTS[1:]}
         assert len(observer.usages) == 4

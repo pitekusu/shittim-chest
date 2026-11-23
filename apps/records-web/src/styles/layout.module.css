@@ -546,7 +546,7 @@
     bottom: calc(10px + env(safe-area-inset-bottom, 0px));
     left: 12px;
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: var(--records-space-1);
     padding: 6px;
     border: 1px solid var(--records-line-strong);

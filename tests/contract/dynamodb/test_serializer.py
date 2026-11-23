@@ -24,6 +24,7 @@ from shittim_chest.adapters.dynamodb import (
     serialize_snapshot,
 )
 from shittim_chest.adapters.dynamodb.serializer import (
+    LEGACY_COMPLETED_DEBATE_SCHEMA_VERSION,
     PREVIOUS_SCHEMA_VERSION,
     DynamoItem,
     deserialize_affection_profile,
@@ -40,6 +41,7 @@ from shittim_chest.application import (
     TerminalDeliveryPlan,
     content_sha256,
 )
+from shittim_chest.application.models import FollowUpParent, PreviousDebate
 from shittim_chest.domain import (
     PARTICIPANTS,
     AffectionProfile,
@@ -212,6 +214,103 @@ def test_snapshot_round_trip_preserves_current_attempt_and_vertical_items() -> N
     assert debate_meta["control_panel_message_id"] == "103"
     assert attempt_meta["gsi2pk"] == "RECOVERABLE"
     assert attempt_meta["fencing_token"] == 42
+
+
+@pytest.fixture
+def legacy_completed_items() -> tuple[DynamoItem, ...]:
+    source = snapshot()
+    completed_at = NOW + timedelta(seconds=8)
+    source = replace(
+        source,
+        state=source.state.transition_to(DebatePhase.COMPLETED, at=completed_at),
+        lease=None,
+        terminal_delivery=TerminalDeliveryPlan(
+            target_phase=DebatePhase.COMPLETED,
+            operation_ids=("terminal-completed-0000",),
+            content_hashes=("a" * 64,),
+            staged_at=NOW + timedelta(seconds=7),
+            completed_at=completed_at,
+        ),
+    )
+    items = serialize_snapshot(source)
+    for item in items:
+        item["schema_version"] = LEGACY_COMPLETED_DEBATE_SCHEMA_VERSION
+        if item["record_type"] == "attempt_meta":
+            # Written before the addition of affection and versioned voting.
+            del item["voting_rules_version"]
+    return items
+
+
+def test_legacy_completed_snapshot_can_supply_follow_up_context(
+    legacy_completed_items: tuple[DynamoItem, ...],
+) -> None:
+    restored = deserialize_snapshot(legacy_completed_items)
+
+    assert restored.state.phase is DebatePhase.COMPLETED
+    assert restored.state.schema_version == CURRENT_SCHEMA_VERSION
+    assert restored.terminal_delivery_complete
+    assert restored.affection_assessment is None
+    assert restored.voting_rules_version == "legacy-v1"
+    assert restored.final_decision is not None
+    assert PreviousDebate.from_result(restored.question, restored.final_decision) == PreviousDebate(
+        "甘い朝食は何がいい?", "フレンチトースト", ("パンを卵液に浸す",), ("アレルギーを確認する",)
+    )
+    assert all(
+        item["schema_version"] == LEGACY_COMPLETED_DEBATE_SCHEMA_VERSION
+        for item in legacy_completed_items
+    )
+    with pytest.raises(PersistenceFormatError, match="unsupported schema version: 7"):
+        migrate_item(legacy_completed_items[0])
+
+
+@pytest.mark.parametrize(
+    ("record_type", "bad_fields"),
+    (
+        ("debate_meta", {"current_phase": "accepted"}),
+        ("attempt_meta", {"phase": "failed"}),
+        ("attempt_meta", {"SK": "ATTEMPT#stale#META"}),
+    ),
+)
+def test_legacy_schema_requires_canonical_completed_debate_and_attempt(
+    legacy_completed_items: tuple[DynamoItem, ...],
+    record_type: str,
+    bad_fields: DynamoItem,
+) -> None:
+    invalid = tuple(
+        {**item, **bad_fields} if item["record_type"] == record_type else item
+        for item in legacy_completed_items
+    )
+    with pytest.raises(PersistenceFormatError, match="schema v7 requires completed"):
+        deserialize_snapshot(invalid)
+
+
+def test_follow_up_snapshot_round_trip_preserves_immutable_context() -> None:
+    ordinary = snapshot()
+    parent = FollowUpParent(DebateId.new(), AttemptId.new())
+    context = PreviousDebate("前の質問", "前の結論", ("手順",), ("注意",))
+    source = replace(
+        ordinary,
+        follow_up_parent=parent,
+        previous_debate=context,
+        follow_up_parent_thread_id="106",
+    )
+    items = serialize_snapshot(source)
+    assert deserialize_snapshot(items) == source
+    meta = next(item for item in items if item["record_type"] == "debate_meta")
+    assert meta["follow_up_parent"] == {
+        "debate_id": str(parent.debate_id),
+        "attempt_id": str(parent.attempt_id),
+    }
+    assert meta["previous_debate"] == {
+        "question": context.question,
+        "decision": context.decision,
+        "actions": ["手順"],
+        "caveats": ["注意"],
+    }
+    assert deserialize_snapshot(serialize_snapshot(ordinary)).previous_debate is None
+    del meta["previous_debate"]
+    with pytest.raises(ValueError, match="invalid follow-up context"):
+        deserialize_snapshot(items)
 
 
 def test_legacy_decision_without_victory_message_remains_readable() -> None:

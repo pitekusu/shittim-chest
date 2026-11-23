@@ -34,6 +34,10 @@ from shittim_chest.adapters.dynamodb.serializer import (
     CURRENT_SCHEMA_VERSION,
     DynamoItem,
 )
+from shittim_chest.adapters.dynamodb.student_gacha_activity import (
+    STUDENT_GACHA_ACTIVITY_KEY,
+    student_gacha_activity_count,
+)
 from shittim_chest.application.ports import (
     IngressRepository,
     RepositoryConflict,
@@ -71,7 +75,7 @@ class DynamoDbRuntimeActivityInspector:
                 self._ingress.list_active_wake_candidates(),
                 asyncio.to_thread(self._read_durable, at),
             )
-        except BotoCoreError, ClientError:
+        except BotoCoreError, ClientError, ValueError:
             raise RepositoryUnavailable from None
 
         pending = sum(candidate.status is IngressStatus.PENDING for candidate in candidates)
@@ -98,6 +102,7 @@ class DynamoDbRuntimeActivityInspector:
             claimed_outbox=durable.claimed_outbox,
             pending_status_updates=durable.pending_status,
             pending_panel_refreshes=durable.pending_panel_refreshes,
+            pending_student_gacha=durable.pending_student_gacha,
             # Every application/checkpoint task owns one of the three durable
             # lease slots. The slot is the cross-process stop fence.
             checkpoint_tasks=0,
@@ -112,6 +117,7 @@ class DynamoDbRuntimeActivityInspector:
             {"PK": "CONTROL#OUTBOX", "SK": "ACTIVITY"},
             {"PK": "CONTROL#DEBATE", "SK": "ACTIVE_ATTEMPT_COUNT"},
             *({"PK": "CONTROL#GLOBAL", "SK": f"SLOT#{slot}"} for slot in range(GLOBAL_LEASE_SLOTS)),
+            STUDENT_GACHA_ACTIVITY_KEY,
         )
         actions = [
             cast(
@@ -167,7 +173,7 @@ class DynamoDbRuntimeActivityInspector:
         )
         active_leases = 0
         expired_leases = 0
-        for slot, item in enumerate(items[6:]):
+        for slot, item in enumerate(items[6:-1]):
             active, expired = _lease_activity(item, slot=slot, at=at)
             active_leases += active
             expired_leases += expired
@@ -178,6 +184,7 @@ class DynamoDbRuntimeActivityInspector:
             active_attempts=active_attempts,
             pending_status=pending_status,
             pending_panel_refreshes=pending_panel_refreshes,
+            pending_student_gacha=student_gacha_activity_count(items[-1]),
             pending_outbox=pending_outbox,
             claimed_outbox=claimed_outbox,
             active_leases=active_leases,
@@ -195,6 +202,7 @@ class _DurableActivity:
         "pending_outbox",
         "pending_panel_refreshes",
         "pending_status",
+        "pending_student_gacha",
     )
 
     def __init__(
@@ -204,6 +212,7 @@ class _DurableActivity:
         active_attempts: int,
         pending_status: int,
         pending_panel_refreshes: int,
+        pending_student_gacha: int,
         pending_outbox: int,
         claimed_outbox: int,
         active_leases: int,
@@ -213,6 +222,7 @@ class _DurableActivity:
         self.active_attempts = active_attempts
         self.pending_status = pending_status
         self.pending_panel_refreshes = pending_panel_refreshes
+        self.pending_student_gacha = pending_student_gacha
         self.pending_outbox = pending_outbox
         self.claimed_outbox = claimed_outbox
         self.active_leases = active_leases

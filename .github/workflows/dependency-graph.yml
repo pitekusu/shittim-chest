@@ -22,8 +22,8 @@ env:
   NODE_OPTIONS: --use-openssl-ca
   SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
   SSL_CERT_DIR: /etc/ssl/certs
-  PYTHON_VERSION: "3.14.10"
-  UV_VERSION: "0.13.7"
+  PYTHON_VERSION: "3.15.2"
+  UV_VERSION: "0.13.9"
 
 jobs:
   submit-android-dependencies:
@@ -33,11 +33,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Update and verify system trust before checkout
+      - name: Verify hosted runner trust before checkout
         working-directory: ${{ runner.temp }}
         run: |
-          sudo apt-get update --quiet
-          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          dpkg-query --show --showformat='Hosted CA package: ${Version}\n' ca-certificates
           python3 - <<'PY_TLS'
           import hashlib
           import pathlib
@@ -67,10 +66,7 @@ jobs:
       - name: Configure the incident TLS trust policy
         uses: ./.github/actions/configure-tls
       - name: Install the pinned Android JDK
-        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
-        with:
-          distribution: temurin
-          java-version-file: apps/records-android/.java-version
+        uses: ./.github/actions/setup-android-jdk
       - name: Select the filtered JDK trust store
         run: >-
           python3 -m tools.configure_build_tls --java
@@ -91,11 +87,10 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
-      - name: Update and verify system trust before checkout
+      - name: Verify hosted runner trust before checkout
         working-directory: ${{ runner.temp }}
         run: |
-          sudo apt-get update --quiet
-          sudo apt-get install --yes --only-upgrade --no-install-recommends ca-certificates
+          dpkg-query --show --showformat='Hosted CA package: ${Version}\n' ca-certificates
           python3 - <<'PY_TLS'
           import hashlib
           import pathlib
@@ -125,10 +120,11 @@ jobs:
       - name: Configure the incident TLS trust policy
         uses: ./.github/actions/configure-tls
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: ${{ env.UV_VERSION }}
           download-from-astral-mirror: false
+          require-checksums: true
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
       - name: Synchronize the locked environment

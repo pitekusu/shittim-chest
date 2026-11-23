@@ -364,16 +364,24 @@ class Repository:
         self.cleaned_items.append(item)
 
 
-def test_missing_upload_can_be_resumed_and_ready_complete_is_replayed() -> None:
-    repository, s3 = Repository(), S3()
+@pytest.mark.parametrize("missing_code", ["NoSuchKey", "AccessDenied", "403"])
+def test_missing_upload_can_be_resumed_and_ready_complete_is_replayed(missing_code) -> None:
+    repository, s3 = Repository(), S3(missing_get_code=missing_code)
     store = S3DebateImageStore(
         cast(Any, s3), media_bucket_name="media", upload_bucket_name="staging"
     )
     service = DebateAttachmentService(cast(Any, repository), store)
-    with pytest.raises(AttachmentFailure, match="ATTACHMENT_NOT_READY"):
+    key = repository.item["upload_key"]
+    assert isinstance(key, str)
+    s3.objects[key + ".other"] = {}
+    with pytest.raises(AttachmentFailure, match="ATTACHMENT_NOT_READY") as failure:
         service.complete("owner", ID, datetime.now(UTC))
+    assert failure.value.status == 409
     assert repository.releases == 1
-    s3.objects[repository.item["upload_key"]] = {"content": png(), "ContentLength": len(png())}
+    assert s3.listed == (
+        [] if missing_code == "NoSuchKey" else [{"Bucket": "staging", "Prefix": key, "MaxKeys": 1}]
+    )
+    s3.objects[key] = {"content": png(), "ContentLength": len(png())}
     result = service.complete("owner", ID, datetime.now(UTC))
     assert result["status"] == "ready"
     assert service.complete("owner", ID, datetime.now(UTC)) == result
@@ -382,18 +390,32 @@ def test_missing_upload_can_be_resumed_and_ready_complete_is_replayed() -> None:
         service.status("other-owner", ID, datetime.now(UTC))
 
 
-@pytest.mark.parametrize("missing_code", ["AccessDenied", "403"])
-def test_mobile_upload_read_denial_never_promotes_image(missing_code) -> None:
-    repository, s3 = Repository(), S3(missing_get_code=missing_code)
+@pytest.mark.parametrize("listing_allowed", [True, False])
+def test_mobile_upload_read_denial_never_promotes_image(monkeypatch, listing_allowed) -> None:
+    repository, s3 = Repository(), S3()
+    key = repository.item["upload_key"]
+    s3.objects[key] = {"content": png(), "ContentLength": len(png())}
+
+    def deny_get(**kwargs):
+        raise ClientError({"Error": {"Code": "AccessDenied"}}, "GetObject")
+
+    monkeypatch.setattr(s3, "get_object", deny_get)
+    if not listing_allowed:
+
+        def deny_listing(**kwargs):
+            raise ClientError({"Error": {"Code": "AccessDenied"}}, "ListObjectsV2")
+
+        monkeypatch.setattr(s3, "list_objects_v2", deny_listing)
     service = DebateAttachmentService(
         cast(Any, repository),
         S3DebateImageStore(cast(Any, s3), media_bucket_name="media", upload_bucket_name="staging"),
     )
-    with pytest.raises(AttachmentFailure, match="ATTACHMENT_UNAVAILABLE"):
+    with pytest.raises(AttachmentFailure, match="ATTACHMENT_UNAVAILABLE") as failure:
         service.complete("owner", ID, datetime.now(UTC))
+    assert failure.value.status == 503
     assert repository.releases == 1
     assert repository.item["state"] == "reserved"
-    assert not s3.writes and not s3.listed
+    assert not s3.writes
 
 
 def test_cleanup_marks_unuploaded_reservation_clean_after_proving_absence() -> None:

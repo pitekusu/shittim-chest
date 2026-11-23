@@ -29,12 +29,14 @@ from shittim_chest.application.discord import (
 from shittim_chest.application.models import (
     DebateSnapshot,
     DeliveryAbandonReason,
+    FollowUpParent,
     GenerationCheckpoint,
     GenerationStatus,
     LeaseGrant,
     PendingDiscordImage,
     PhaseDeliveryPlan,
     PhaseDeliveryStatus,
+    PreviousDebate,
     ReconsiderationProgress,
     TerminalDeliveryPlan,
 )
@@ -90,10 +92,15 @@ type DynamoItem = dict[str, DynamoValue]
 CURRENT_SCHEMA_VERSION = 11
 PREVIOUS_SCHEMA_VERSION = 10
 SUPPORTED_SCHEMA_VERSIONS = frozenset({8, 9, 10, 11})
+LEGACY_COMPLETED_DEBATE_SCHEMA_VERSION = 7
+SUPPORTED_COMPLETED_DEBATE_SCHEMA_VERSIONS = SUPPORTED_SCHEMA_VERSIONS | {
+    LEGACY_COMPLETED_DEBATE_SCHEMA_VERSION
+}
 LEGACY_AFFECTION_SCHEMA_VERSION = 8
 OPAQUE_AFFECTION_SCHEMA_VERSIONS = frozenset({9, 10, 11})
 MAX_ITEM_BYTES = 400 * 1024
 INGRESS_ACTIVE_POINTER_RECORD_SCHEMA_VERSION = 1
+RUNTIME_STATE_KEY = {"PK": "CONTROL#RUNTIME", "SK": "STATE"}
 
 
 class PersistenceFormatError(ValueError):
@@ -173,6 +180,16 @@ def serialize_snapshot(snapshot: DebateSnapshot) -> tuple[DynamoItem, ...]:
         ]
     _put_optional(debate_meta, "starter_message_id", snapshot.starter_message_id)
     _put_optional(debate_meta, "thread_id", snapshot.thread_id)
+    if snapshot.follow_up_parent is not None:
+        debate_meta["follow_up_parent"] = _serialize_follow_up_parent(snapshot.follow_up_parent)
+    if snapshot.previous_debate is not None:
+        debate_meta["previous_debate"] = {
+            "question": snapshot.previous_debate.question,
+            "decision": snapshot.previous_debate.decision,
+            "actions": list(snapshot.previous_debate.actions),
+            "caveats": list(snapshot.previous_debate.caveats),
+        }
+    _put_optional(debate_meta, "follow_up_parent_thread_id", snapshot.follow_up_parent_thread_id)
     _put_optional(
         debate_meta,
         "control_panel_message_id",
@@ -375,7 +392,16 @@ def serialize_snapshot(snapshot: DebateSnapshot) -> tuple[DynamoItem, ...]:
 def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> DebateSnapshot:
     """Validate and rebuild the current attempt from a DynamoDB item collection."""
 
-    items = tuple(migrate_item(item) for item in raw_items)
+    migrated_items: list[DynamoItem] = []
+    has_legacy_schema = False
+    for item in raw_items:
+        version = item.get("schema_version")
+        if type(version) is int and version == LEGACY_COMPLETED_DEBATE_SCHEMA_VERSION:
+            has_legacy_schema = True
+            # v7 predates affection. Its completed snapshot fields need no transformation.
+            item = {**item, "schema_version": CURRENT_SCHEMA_VERSION}
+        migrated_items.append(migrate_item(item))
+    items = tuple(migrated_items)
     debate_meta = _one(items, "debate_meta")
     partition_key = _text(debate_meta, "PK")
     debate_id_text = _text(debate_meta, "debate_id")
@@ -387,6 +413,14 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
             raise PersistenceFormatError("item collection contains multiple debate IDs")
     attempt_id = _text(debate_meta, "current_attempt_id")
     attempt_meta = _one(items, "attempt_meta", attempt_id=attempt_id)
+    if has_legacy_schema and (
+        partition_key != f"DEBATE#{debate_id_text}"
+        or debate_meta.get("SK") != "META"
+        or debate_meta.get("current_phase") != DebatePhase.COMPLETED.value
+        or attempt_meta.get("SK") != f"ATTEMPT#{attempt_id}#META"
+        or attempt_meta.get("phase") != DebatePhase.COMPLETED.value
+    ):
+        raise PersistenceFormatError("schema v7 requires completed debate and attempt metadata")
     debate_id = DebateId.parse(debate_id_text)
     state = DebateState(
         debate_id=debate_id,
@@ -601,6 +635,9 @@ def deserialize_snapshot(raw_items: Iterable[Mapping[str, DynamoValue]]) -> Deba
     return DebateSnapshot(
         state=state,
         question=_text(debate_meta, "question"),
+        follow_up_parent=_deserialize_follow_up_parent(debate_meta),
+        previous_debate=_deserialize_previous_debate(debate_meta),
+        follow_up_parent_thread_id=_optional_text(debate_meta, "follow_up_parent_thread_id"),
         attachments=_deserialize_images(debate_meta.get("attachments", [])),
         pending_attachments=_deserialize_pending_images(debate_meta.get("pending_attachments", [])),
         attachment_message_ids=tuple(
@@ -1356,6 +1393,8 @@ def serialize_ingress_request(request: IngressRequest) -> DynamoItem:
         _put_optional(item, field, value)
     if request.attachments:
         item["attachments"] = [serialize_debate_image(image) for image in request.attachments]
+    if request.follow_up_parent is not None:
+        item["follow_up_parent"] = _serialize_follow_up_parent(request.follow_up_parent)
     if request.pending_attachments:
         item["pending_attachments"] = [
             _serialize_pending_image(image, include_url=request.status.counts_toward_queue_limit)
@@ -1397,6 +1436,7 @@ def deserialize_ingress_request(raw_item: Mapping[str, DynamoValue]) -> IngressR
             command_name=_optional_text(item, "command_name"),
             custom_id=_optional_text(item, "custom_id"),
             question=_optional_text(item, "question"),
+            follow_up_parent=_deserialize_follow_up_parent(item),
             attachments=_deserialize_images(item.get("attachments", [])),
             pending_attachments=_deserialize_pending_images(item.get("pending_attachments", [])),
             parent_channel_id=_optional_text(item, "parent_channel_id"),
@@ -1714,8 +1754,7 @@ def serialize_runtime_state(state: RuntimeState) -> DynamoItem:
     """Serialize the singleton generation-fenced runtime control record."""
 
     item: DynamoItem = {
-        "PK": "CONTROL#RUNTIME",
-        "SK": "STATE",
+        **RUNTIME_STATE_KEY,
         "record_type": "runtime_state",
         "schema_version": CURRENT_SCHEMA_VERSION,
         "record_schema_version": state.schema_version,
@@ -1772,7 +1811,7 @@ def deserialize_runtime_state(raw_item: Mapping[str, DynamoValue]) -> RuntimeSta
         )
     except ValueError as error:
         raise PersistenceFormatError("invalid runtime state") from error
-    if _text(item, "PK") != "CONTROL#RUNTIME" or _text(item, "SK") != "STATE":
+    if any(item.get(key) != value for key, value in RUNTIME_STATE_KEY.items()):
         raise PersistenceFormatError("runtime state has an invalid key")
     return state
 
@@ -2437,6 +2476,36 @@ def _optional_attempt(item: Mapping[str, DynamoValue], field: str) -> AttemptId 
 def _optional_debate(item: Mapping[str, DynamoValue], field: str) -> DebateId | None:
     value = _optional_text(item, field)
     return DebateId.parse(value) if value is not None else None
+
+
+def _serialize_follow_up_parent(parent: FollowUpParent) -> DynamoItem:
+    return {"debate_id": str(parent.debate_id), "attempt_id": str(parent.attempt_id)}
+
+
+def _deserialize_follow_up_parent(item: Mapping[str, DynamoValue]) -> FollowUpParent | None:
+    if "follow_up_parent" not in item:
+        return None
+    value = item["follow_up_parent"]
+    if not isinstance(value, dict) or set(value) != {"debate_id", "attempt_id"}:
+        raise PersistenceFormatError("invalid follow-up reference")
+    return FollowUpParent(
+        debate_id=DebateId.parse(_text(value, "debate_id")),
+        attempt_id=AttemptId.parse(_text(value, "attempt_id")),
+    )
+
+
+def _deserialize_previous_debate(item: Mapping[str, DynamoValue]) -> PreviousDebate | None:
+    if "previous_debate" not in item:
+        return None
+    value = item["previous_debate"]
+    if not isinstance(value, dict) or set(value) != {"question", "decision", "actions", "caveats"}:
+        raise PersistenceFormatError("invalid prior debate context")
+    return PreviousDebate(
+        question=_text(value, "question"),
+        decision=_text(value, "decision"),
+        actions=_string_tuple(value, "actions"),
+        caveats=_string_tuple(value, "caveats"),
+    )
 
 
 def _optional_phase(item: Mapping[str, DynamoValue], field: str) -> DebatePhase | None:

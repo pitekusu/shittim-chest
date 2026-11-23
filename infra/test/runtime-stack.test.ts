@@ -149,22 +149,10 @@ describe("RuntimeStack", () => {
     // would weaken the VPC baseline solely to change a resource count.
     expect(deploymentProviders).toHaveLength(1);
     expect(functions).toHaveLength(5);
-    const layers = Object.entries(template.findResources("AWS::Lambda::LayerVersion"));
-    expect(layers).toHaveLength(1);
-    const [layerId, layer] = layers[0]!;
-    expect(layer.Properties).toMatchObject({
-      CompatibleArchitectures: ["x86_64"],
-      CompatibleRuntimes: ["nodejs24.x"],
-      LayerName: "shittim-chest-production-cdk-helper-tls",
-      LicenseInfo: "MIT AND MPL-2.0",
-    });
-    expect(deploymentProviders[0]!.Properties).toMatchObject({
-      Environment: {
-        Variables: { NODE_OPTIONS: "--require=/opt/shittim-tls/trust.cjs" },
-      },
-      Layers: [{ Ref: layerId }],
-      Runtime: "nodejs24.x",
-    });
+    template.resourceCountIs("AWS::Lambda::LayerVersion", 0);
+    expect(deploymentProviders[0]!.Properties.Runtime).toBe("nodejs26.x");
+    expect(deploymentProviders[0]!.Properties.Layers).toBeUndefined();
+    expect(deploymentProviders[0]!.Properties.Environment).toBeUndefined();
     expect(
       Object.keys(template.findResources("AWS::Lambda::Function")),
     ).toContain("CustomVpcRestrictDefaultSGCustomResourceProviderHandlerDC833E5E");
@@ -203,7 +191,7 @@ describe("RuntimeStack", () => {
         LoggingConfig: expect.objectContaining({ LogFormat: "JSON" }),
         MemorySize: limits?.memory,
         ReservedConcurrentExecutions: limits?.concurrency,
-        Runtime: "python3.14",
+        Runtime: "python3.15",
         Timeout: limits?.timeout,
       });
       expect(properties.VpcConfig).toBeUndefined();
@@ -247,6 +235,7 @@ describe("RuntimeStack", () => {
               ],
             },
             "/shittim-chest/production/discord/moderator/public-key",
+            { Ref: "StudentGachaEnabled" },
           ],
         ],
       },
@@ -263,18 +252,19 @@ describe("RuntimeStack", () => {
       Name: "live",
     });
 
-    const integration = Object.values(
-      template.findResources("AWS::ApiGatewayV2::Integration"),
-    )[0];
-    expect(JSON.stringify(integration?.Properties.IntegrationUri)).toContain(aliasLogicalId);
-    expect(JSON.stringify(integration?.Properties.IntegrationUri)).not.toContain("$LATEST");
+    const integrations = Object.values(template.findResources("AWS::ApiGatewayV2::Integration"));
+    expect(integrations).toHaveLength(2);
+    for (const integration of integrations) {
+      expect(JSON.stringify(integration.Properties.IntegrationUri)).toContain(aliasLogicalId);
+      expect(JSON.stringify(integration.Properties.IntegrationUri)).not.toContain("$LATEST");
+    }
     const apiPermissions = Object.values(
       template.findResources("AWS::Lambda::Permission"),
     ).filter((resource) => resource.Properties.Principal === "apigateway.amazonaws.com");
-    expect(apiPermissions).toHaveLength(1);
-    expect(JSON.stringify(apiPermissions[0]?.Properties.FunctionName)).toContain(
-      aliasLogicalId,
-    );
+    expect(apiPermissions).toHaveLength(2);
+    for (const permission of apiPermissions) {
+      expect(JSON.stringify(permission.Properties.FunctionName)).toContain(aliasLogicalId);
+    }
   });
 
   test("fails closed before scale-up unless the release image is admitted", () => {
@@ -372,7 +362,12 @@ describe("RuntimeStack", () => {
       SHITTIM_ECS_SERVICE: expect.anything(),
       SHITTIM_STATUS_PUBLISHER_FUNCTION: expect.anything(),
     });
-    expect(JSON.stringify([ingress, status, reconciler])).not.toContain("participant-");
+    expect(ingress?.Environment?.Variables).toMatchObject({
+      SHITTIM_ARONA_PUBLIC_KEY_PARAMETER: "/shittim-chest/production/discord/participant-a/public-key",
+      SHITTIM_STUDENT_GACHA_ENABLED: { Ref: "StudentGachaEnabled" },
+    });
+    expect(JSON.stringify([status, reconciler])).not.toContain("participant-");
+    expect(JSON.stringify(ingress)).not.toMatch(/participant-[abc]\/token/);
     expect(JSON.stringify([ingress, status, reconciler])).not.toContain("OPENAI_API_KEY");
     const policies = Object.values(template.findResources("AWS::IAM::Policy"));
     const ingressPolicy = policies.find((policy) =>
@@ -384,12 +379,12 @@ describe("RuntimeStack", () => {
     expect(ingressPolicyText).toContain("/discord/moderator/public-key");
   });
 
-  test("exposes only the signed Discord POST route through HTTP API v2", () => {
+  test("exposes only the two signed Discord POST routes through HTTP API v2", () => {
     const { template } = fixture;
 
     template.resourceCountIs("AWS::ApiGatewayV2::Api", 1);
-    template.resourceCountIs("AWS::ApiGatewayV2::Integration", 1);
-    template.resourceCountIs("AWS::ApiGatewayV2::Route", 1);
+    template.resourceCountIs("AWS::ApiGatewayV2::Integration", 2);
+    template.resourceCountIs("AWS::ApiGatewayV2::Route", 2);
     template.resourceCountIs("AWS::ApiGatewayV2::Stage", 1);
     template.resourceCountIs("AWS::ApiGateway::RestApi", 0);
     template.hasResourceProperties("AWS::ApiGatewayV2::Api", {
@@ -403,6 +398,14 @@ describe("RuntimeStack", () => {
     template.hasResourceProperties("AWS::ApiGatewayV2::Route", {
       AuthorizationType: "NONE",
       RouteKey: "POST /interactions",
+    });
+    template.hasResourceProperties("AWS::ApiGatewayV2::Route", {
+      AuthorizationType: "NONE",
+      RouteKey: "POST /interactions/student-gacha",
+    });
+    template.hasParameter("StudentGachaEnabled", {
+      AllowedValues: ["true", "false"],
+      Default: "false",
     });
     template.hasResourceProperties("AWS::ApiGatewayV2::Stage", {
       AccessLogSettings: Match.objectLike({
@@ -643,6 +646,31 @@ describe("RuntimeStack", () => {
       Effect: "Allow",
     });
     expect(JSON.stringify(identityHmacStatements?.[0].Resource)).not.toContain("*");
+    const rosterReadStatements = normal?.Properties.PolicyDocument.Statement.filter(
+      (statement: { Action?: string | string[]; Resource?: unknown }) =>
+        JSON.stringify(statement.Resource).includes("student-gacha/roster/"),
+    );
+    expect(rosterReadStatements).toHaveLength(1);
+    expect(rosterReadStatements?.[0].Action).toBe("s3:GetObject");
+    const rosterResources = JSON.stringify(rosterReadStatements?.[0].Resource);
+    expect(rosterResources).toContain("student-gacha/roster/blue_archive_characters_with_npcs.json");
+    expect(rosterResources).not.toContain("student-gacha/assets/blue_archive_characters");
+    expect(rosterResources).not.toContain("*");
+    for (const costume of ["spako", "sfare", "chiffon", "grus"]) {
+      expect(rosterResources).toContain(`student-gacha/assets/costumes/mnc/${costume}.png`);
+    }
+    const schoolLogosStatements = normal?.Properties.PolicyDocument.Statement.filter(
+      (statement: { Action?: string | string[]; Resource?: unknown }) =>
+        JSON.stringify(statement.Resource).includes("student-gacha/assets/blue_archive_school_logos.zip"),
+    );
+    expect(schoolLogosStatements).toHaveLength(1);
+    expect(JSON.stringify(schoolLogosStatements?.[0].Resource))
+      .toContain("student-gacha/assets/blue_archive_school_logos_mnc_v1.zip");
+    expect(schoolLogosStatements?.[0]).toMatchObject({
+      Action: "s3:GetObject",
+      Effect: "Allow",
+    });
+    expect(JSON.stringify(schoolLogosStatements?.[0].Resource)).not.toContain("*");
     expect(JSON.stringify(normal)).not.toContain("ssm:GetParametersByPath");
     expect(JSON.stringify(normal)).not.toContain("ssm:DescribeParameters");
     expect(JSON.stringify(normal)).not.toContain("ssmmessages:");
@@ -710,6 +738,7 @@ describe("RuntimeStack", () => {
     expect(reconciler).toContain("/index/gsi2");
     expect(ingress).toContain("ssm:GetParameter");
     expect(ingress).toContain("discord/moderator/public-key");
+    expect(ingress).toContain("discord/participant-a/public-key");
     expect(ingress).toContain("production/runtime/");
     expect(ingress).not.toContain("lambda:InvokeFunction");
     expect(ingress).not.toContain("discord/moderator/token");
@@ -729,6 +758,9 @@ describe("RuntimeStack", () => {
       [
         "DiscordIngressFunctionRole",
         [
+          "GACHA#OFFER#*",
+          "GACHA#JOB#*",
+          "CONTROL#GACHA",
           "CONTROL#INGRESS",
           "CONTROL#INGRESS#ACTIVE",
           "INGRESS_OPERATION#*",
@@ -751,6 +783,8 @@ describe("RuntimeStack", () => {
       [
         "NormalTaskRole",
         [
+          "GACHA#*",
+          "CONTROL#GACHA",
           "AFFECTION#REQUESTER#*",
           "CONTROL#DEBATE",
           "CONTROL#GLOBAL",
@@ -771,6 +805,9 @@ describe("RuntimeStack", () => {
       [
         "DiscordIngressFunctionRole",
         [
+          "GACHA#OFFER#*",
+          "GACHA#JOB#*",
+          "CONTROL#GACHA",
           "CONTROL#INGRESS",
           "DEBATE#*",
           "INGRESS_OPERATION#*",
@@ -784,6 +821,7 @@ describe("RuntimeStack", () => {
       [
         "RuntimeReconcilerFunctionRole",
         [
+          "CONTROL#GACHA",
           "CONTROL#DEBATE",
           "CONTROL#GLOBAL",
           "CONTROL#INGRESS",
@@ -797,6 +835,8 @@ describe("RuntimeStack", () => {
       [
         "NormalTaskRole",
         [
+          "GACHA#*",
+          "CONTROL#GACHA",
           "AFFECTION#REQUESTER#*",
           "CONTROL#DEBATE",
           "CONTROL#GLOBAL",
@@ -826,6 +866,7 @@ describe("RuntimeStack", () => {
         "RuntimeReconcilerFunctionRole",
         [
           "CONTROL#DEPLOYMENT",
+          "CONTROL#GACHA",
           "CONTROL#DEBATE",
           "CONTROL#GLOBAL",
           "CONTROL#INGRESS",
@@ -840,6 +881,8 @@ describe("RuntimeStack", () => {
         "NormalTaskRole",
         [
           "CONTROL#DEPLOYMENT",
+          "GACHA#*",
+          "CONTROL#GACHA",
           "AFFECTION#REQUESTER#*",
           "CONTROL#DEBATE",
           "CONTROL#GLOBAL",

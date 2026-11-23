@@ -4,7 +4,7 @@ aliases:
 tags: [project, shittim-chest, python, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-11-05
+updated: 2026-11-23
 ---
 
 # アプリケーション・Python詳細設計
@@ -268,17 +268,15 @@ API・画面は[メモリアルロビー設計](27_メモリアルロビー設�
 
 ## 9. Python 3.15の新機能の採用候補
 
-[Issue #599](https://github.com/pitekusu/shittim-chest/issues/599)に対する2026年10月14日時点の評価。
-Python 3.15は正式公開済みだが、プロジェクトの実行版はまだ更新していない。
-移行条件と確認結果は[CI/CD設計の移行評価](15_GitHub・CI-CD詳細設計.md#python-315への移行評価2026年10月14日)を参照する。
-Web本体はTypeScript、Android本体はKotlin/Composeであり、Python更新の対象は共有API、Core、配布・検証ツール。
-画面の描画や端末操作が直接改善するとは扱わない。
+[Issue #599](https://github.com/pitekusu/shittim-chest/issues/599)では、Core、Records API、配布・検証ツールを
+Python 3.15へ移行する。Web本体はTypeScript、Android本体はKotlin/Composeを使う。
+実行環境と検証条件は[CI/CD設計の移行評価](15_GitHub・CI-CD詳細設計.md#python-315への移行評価2026年10月14日)を参照する。
 
 | 新機能・改善 | 実装上の候補 | 採用判断と理由 |
 |---|---|---|
 | UTF-8既定化 | 日本語の更新情報、契約生成、CI/CDのファイル入出力 | **移行時に採用**。localeによる差を減らせる。公開JSON・状態ファイルでは引き続き`encoding="utf-8"`を明示する |
-| `profiling.sampling`（Tachyon） | Recordsの画像処理、API、契約生成・ZIP作成の性能調査 | **必要時の調査手段として推奨**。標準機能でCPU処理と待機を切り分け、改善箇所を選べる。合成データのローカル実行から始め、通常CIや本番へ常時追加しない |
-| 明示的なlazy import | `services/records/src/shittim_records/lambda_handlers.py`のhandler固有依存、`tools/android_release.py`のGoogle API依存 | **起動時間を計測してから限定導入**。不要な依存の読み込みを遅らせられる。import時の副作用、例外発生時点、初回呼び出し時間を確認する。Lambdaの3.15対応が前提 |
+| `profiling.sampling`（Tachyon） | RecordsのOGPレンダラと配布ZIPの性能調査 | **必要時のローカル調査に採用**。固定入力で初回と再実行を計り、標準機能でCPU処理と待機を切り分ける。計測結果から改善箇所を選ぶ |
+| 明示的なlazy import | `services/records/src/shittim_records/lambda_handlers.py`のhandler固有依存、`tools/android_release.py`のGoogle API依存 | **起動時間を計測してから限定導入**。不要な依存の読み込みを遅らせられる。import時の副作用、例外発生時点、初回呼び出し時間を確認する |
 | `frozendict` | `admin_status_adapters.py`の固定対応表、Coreの`ParticipantProfiles`の設定snapshot | **小さな保守改善の候補**。既存の`MappingProxyType(dict(...))`を標準の不変辞書で表せる。既存実装も保護されており優先度は低い。深い不変性や`dict`との型互換性は仮定しない |
 | `sentinel` | `src/shittim_chest/adapters/openai/evidence.py`の`_MISSING = object()` | **低優先候補**。欠落値の名前・型を明確にできる。現状に不具合はなく、移行必須の置換にはしない |
 | `TypedDict`の`closed`／`extra_items` | CI/CDツールの状態辞書など、必要な箇所の型境界 | **必要箇所だけ検討**。実行時の入力検証は提供しない。公開契約は既存のPydanticと生成TypeScript/Kotlinを維持する |
@@ -288,14 +286,13 @@ Web本体はTypeScript、Android本体はKotlin/Composeであり、Python更新�
 独立した3.15標準ライブラリtoolのローカル調査手順へ採用した。
 運用は[CI/CD設計の標準プロファイラ](15_GitHub・CI-CD詳細設計.md#標準プロファイラによるローカル計測)を参照する。
 
-限定した`__lazy_modules__`候補はprivate copyの3.14／3.15でZIP出力とhelpの整合を確認したが、
-現行3.14では遅延効果がなく、`lazy import`構文も3.14では使えない。
-SDKの関数内importと`TYPE_CHECKING`も既に使っているため、今回lazy importsのsource追加は採用しない。
-実行版を移行した後、初回応答と例外発生時点を含めた実workloadの計測で再評価する。
+移行前の比較では、限定した`__lazy_modules__`候補のZIP出力とhelpが3.14／3.15で一致した。
+既存の関数内importと`TYPE_CHECKING`を使う箇所は、初回応答と例外発生時点を含めて計測し、
+効果を確認できた依存だけを遅延読み込みの候補にする。
 
-優先するのはUTF-8既定化と標準profilerによる必要時の調査。lazy importは初回応答まで含めた計測後に選ぶ。
-一括の`PYTHON_LAZY_IMPORTS=all`、JIT、free-threaded buildは、既存SDK・ARM64 Linuxでの互換性と効果の根拠が不足するため今回の推奨に含めない。
-3.14で動かすLambda／共有コードに3.15専用構文や組み込みを先行導入しない。
+UTF-8の既定化と、標準profilerを使った必要時の調査を優先する。
+一括の`PYTHON_LAZY_IMPORTS=all`、JIT、free-threaded buildを検討する場合は、
+既存SDKとの互換性とARM64 Linuxでの効果を個別に確認する。
 
 機能仕様は[Python 3.15の変更点](https://docs.python.org/3.15/whatsnew/3.15.html)、
 計測方法は[標準sampling profiler](https://docs.python.org/3.15/library/profiling.sampling.html)を参照する。

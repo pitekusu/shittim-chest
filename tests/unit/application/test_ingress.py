@@ -20,12 +20,17 @@ from shittim_chest.application import (
     PanelAction,
     PanelCustomId,
 )
+from shittim_chest.application.discord_http import DiscordFollowUpOperation, FollowUpCustomId
 from shittim_chest.application.ingress import (
     DiscordIngressApplication,
     IngressOutcome,
     _outcome_for_status,
 )
-from shittim_chest.application.models import DebateAuthorizationSnapshot
+from shittim_chest.application.models import (
+    DebateAuthorizationSnapshot,
+    FollowUpParent,
+    PendingDiscordImage,
+)
 from shittim_chest.application.ports import (
     DebateLookup,
     IngressRepository,
@@ -195,6 +200,67 @@ async def test_command_persists_pending_without_pre_response_accelerators() -> N
     assert not ingress.saved.requester_can_manage_messages
     assert ingress.saved.question == "甘い朝ごはんは何がいい?"
     assert ingress.saved.status_message_state is StatusMessageState.PENDING
+
+
+@pytest.mark.asyncio
+async def test_follow_up_authorizes_other_posting_member_and_admits_only_modal_submit() -> None:
+    parent = FollowUpParent(DebateId.new(), AttemptId.new())
+    snapshot = replace(
+        _snapshot(debate_id=parent.debate_id, attempt_id=parent.attempt_id),
+        phase=DebatePhase.COMPLETED,
+    )
+    debates = FakeDebates(snapshot)
+    app, ingress, events = application(debates=debates)
+    click = DiscordFollowUpOperation(
+        interaction_id="301",
+        application_id=MODERATOR_APPLICATION_ID,
+        guild_id=GUILD_ID,
+        channel_id=CHANNEL_ID,
+        channel_type=0,
+        requester_id="106",
+        requester_username="other",
+        requester_display_name="Other",
+        may_post=True,
+        received_at=NOW,
+        binding=FollowUpCustomId(parent, "999"),
+        is_modal=False,
+        question=None,
+    )
+    assert await app.can_follow_up(click)
+    assert not await app.can_follow_up(replace(click, may_post=False))
+    assert not await app.can_follow_up(replace(click, channel_type=11))
+    assert (await app.accept_follow_up(click)).outcome is IngressOutcome.NOT_ALLOWED
+    submit = replace(click, is_modal=True, interaction_id="302")
+    assert (await app.accept_follow_up(submit)).outcome is IngressOutcome.INVALID_FOLLOW_UP_QUESTION
+    submit = replace(submit, question="ビーフとポークなら?")
+    invalid = await app.accept_follow_up(replace(submit, pending_attachments=None))
+    assert invalid.outcome is IngressOutcome.INVALID_FOLLOW_UP_ATTACHMENTS
+    assert ingress.saved is None
+    assert events == []
+
+    image = PendingDiscordImage(
+        attachment_id="4510b0d3-dee2-406b-9d65-6ebbe6ef41d9",
+        discord_attachment_id="123",
+        content_type="image/png",
+        size_bytes=100,
+        url="https://cdn.discordapp.com/ephemeral-attachments/102/123/sample.png",
+    )
+    result = await app.accept_follow_up(replace(submit, pending_attachments=(image,)))
+    assert result.outcome is IngressOutcome.PENDING
+    assert result.created
+    assert ingress.saved is not None
+    assert ingress.saved.operation_id == ingress.saved.interaction_id == "302"
+    assert ingress.saved.kind is IngressKind.NEW_DEBATE
+    assert ingress.saved.requester_id == click.requester_id != snapshot.requester_id
+    assert ingress.saved.follow_up_parent == parent
+    assert ingress.saved.pending_attachments == (image,)
+    assert events == ["enqueue"]
+
+    for phase in (DebatePhase.FAILED, DebatePhase.CANCELLED):
+        debates.snapshot = replace(snapshot, phase=phase)
+        result = await app.accept_follow_up(replace(submit, question="別の質問"))
+        assert result.outcome is IngressOutcome.NOT_ALLOWED
+    assert events == ["enqueue"]
 
 
 @pytest.mark.asyncio

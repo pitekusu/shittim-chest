@@ -11,6 +11,8 @@ assertGeneratedValidatorCurrent();
 export default defineConfig({
   plugins: [react(), codeSplittingModuleOwnershipGuard()],
   build: {
+    // The gallery uses native Map upsert methods.
+    target: ["chrome145", "edge145", "firefox144", "safari26.2", "ios26.2"],
     rolldownOptions: {
       input: {
         main: resolve(import.meta.dirname, "index.html"),

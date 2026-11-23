@@ -185,6 +185,7 @@ class BootstrapConfig:
     system_prompt: str | None = field(default=None, repr=False)
     moderator_prompt: str | None = field(default=None, repr=False)
     debate_media_bucket: str | None = None
+    student_gacha_enabled: bool = False
 
     def with_identity_hmac_key(self, raw_value: str) -> BootstrapConfig:
         """Attach the decrypted Records identity key without retaining plaintext text."""
@@ -335,11 +336,18 @@ def load_bootstrap_config(environ: Mapping[str, str]) -> BootstrapConfig:
         if identity_hmac_parameter_name != IDENTITY_HMAC_PARAMETER_NAME:
             raise ValueError("invalid identity HMAC parameter")
 
+        student_gacha_enabled = environ.get("SHITTIM_STUDENT_GACHA_ENABLED", "false")
+        if student_gacha_enabled not in {"true", "false"} or (
+            student_gacha_enabled == "true" and debate_media_bucket is None
+        ):
+            raise ValueError("invalid student gacha configuration")
+
         return BootstrapConfig(
             environment=environment,
             aws_region=aws_region,
             table_name=table_name,
             debate_media_bucket=debate_media_bucket,
+            student_gacha_enabled=student_gacha_enabled == "true",
             status_publisher_function=status_publisher_function,
             records_memorial_url=records_memorial_url,
             log_level=log_level,

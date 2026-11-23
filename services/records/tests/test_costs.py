@@ -17,6 +17,9 @@ from shittim_records.costs import (
     CostCollectionService,
     CostProviderUnavailable,
     CostSourceName,
+    OpenAISubscription,
+    OpenAISubscriptionGrant,
+    OpenAISubscriptionRenewal,
     ProviderDailyCost,
     ProviderDailyRate,
     StoredDailyCost,
@@ -295,6 +298,93 @@ def test_cost_view_uses_same_day_rates_and_jst_timestamps() -> None:
     }
     assert result.total_jpy == "1501.234567"
     assert result.updated_at is not None and result.updated_at.isoformat().endswith("+09:00")
+    assert result.status == "partial"
+
+
+def test_openai_credit_uses_earlier_usage_before_the_selected_period() -> None:
+    yesterday = TODAY - timedelta(days=1)
+    costs = (
+        stored_cost(TODAY, "OPENAI", "4"),
+        stored_cost(yesterday, "OPENAI", "3"),
+        stored_cost(TODAY, "FARGATE", "1"),
+    )
+    rates = (
+        StoredDailyRate(yesterday, Decimal("140"), NOW),
+        StoredDailyRate(TODAY, Decimal("150"), NOW),
+    )
+    benefit = OpenAISubscription(
+        grants=(
+            OpenAISubscriptionGrant(
+                start_date=yesterday, end_date=TODAY + timedelta(days=1), amount_usd=Decimal("5")
+            ),
+        )
+    )
+
+    today = build_cost_view(
+        costs=costs, rates=rates, period="today", now=NOW, openai_subscription=benefit
+    )
+    month = build_cost_view(
+        costs=costs, rates=rates, period="month", now=NOW, openai_subscription=benefit
+    )
+
+    assert today.openai_subscription_credit_jpy == "300.000000"
+    assert month.openai_subscription_credit_jpy == "720.000000"
+    assert today.amounts_jpy["OPENAI"] == month.amounts_jpy["OPENAI"] == "300.000000"
+    assert today.total_jpy == month.total_jpy == "450.000000"
+
+
+def test_openai_renewal_does_not_apply_early_and_uses_the_original_billing_day() -> None:
+    renewal = date(2026, 1, 31)
+    prior = renewal - timedelta(days=1)
+    costs = (stored_cost(prior, "OPENAI", "2"), stored_cost(renewal, "OPENAI", "2"))
+    rates = tuple(StoredDailyRate(day, Decimal("150"), NOW) for day in (prior, renewal))
+    benefit = OpenAISubscription(
+        monthly_renewal=OpenAISubscriptionRenewal(start_date=renewal, amount_usd=Decimal("5"))
+    )
+
+    before = build_cost_view(
+        costs=costs,
+        rates=rates,
+        period="all",
+        now=datetime(2026, 1, 30, 23, tzinfo=UTC),
+        openai_subscription=benefit,
+    )
+    after = build_cost_view(
+        costs=costs,
+        rates=rates,
+        period="all",
+        now=datetime(2026, 1, 31, 10, tzinfo=UTC),
+        openai_subscription=benefit,
+    )
+
+    assert before.amounts_jpy["OPENAI"] == "600.000000"
+    assert before.openai_next_subscription_credit == benefit.monthly_renewal
+    assert after.amounts_jpy["OPENAI"] == "300.000000"
+    assert after.openai_next_subscription_credit == OpenAISubscriptionRenewal(
+        start_date=date(2026, 2, 28), amount_usd=Decimal("5")
+    )
+    _, next_renewal = benefit.windows(first_cost_date=renewal, today=date(2026, 2, 28))
+    assert next_renewal is not None and next_renewal.start_date == date(2026, 3, 31)
+
+
+def test_openai_credit_cannot_be_used_again_when_prior_daily_usage_is_missing() -> None:
+    start = TODAY - timedelta(days=2)
+    costs = (stored_cost(start, "OPENAI", "1"), stored_cost(TODAY, "OPENAI", "2"))
+    rates = (StoredDailyRate(TODAY, Decimal("150"), NOW),)
+    benefit = OpenAISubscription(
+        grants=(
+            OpenAISubscriptionGrant(
+                start_date=start, end_date=TODAY + timedelta(days=1), amount_usd=Decimal("5")
+            ),
+        )
+    )
+
+    result = build_cost_view(
+        costs=costs, rates=rates, period="today", now=NOW, openai_subscription=benefit
+    )
+
+    assert result.openai_subscription_credit_jpy == "0.000000"
+    assert result.amounts_jpy["OPENAI"] == "300.000000"
     assert result.status == "partial"
 
 

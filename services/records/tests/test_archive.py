@@ -8,6 +8,7 @@ from dataclasses import replace
 import pytest
 from shittim_chest.adapters.dynamodb.serializer import PREVIOUS_SCHEMA_VERSION
 from shittim_chest.application import DebateSnapshot
+from shittim_chest.application.models import FollowUpParent, PreviousDebate
 from shittim_chest.domain import (
     AFFECTION_RULES_VERSION,
     AffectionAssessment,
@@ -370,3 +371,24 @@ def test_presentation_rejects_historical_participant_avatar_keys() -> None:
 
     with pytest.raises(ValueError):
         type(presentation()).model_validate(raw)
+
+
+def test_follow_up_projects_public_link_and_keeps_source_separate() -> None:
+    source = completed_snapshot()
+    parent = FollowUpParent(DebateId.new(), AttemptId.new())
+    snapshot = replace(
+        source,
+        follow_up_parent=parent,
+        previous_debate=PreviousDebate("今日は何を食べる?", "カレー"),
+    )
+    projection = project_completed_debate(
+        snapshot, identity_hmac_key=HMAC_KEY, presentation=presentation(), projected_at=NOW
+    )
+    meta = projection.items[0]
+    assert len(projection.items) == 12 and str(parent.debate_id) not in repr(projection.items)
+    assert meta["parent_question_preview"] == "今日は何を食べる?"
+    assert projection.follow_up_edge is not None
+    assert projection.follow_up_edge["PK"] == f"RECORD-FOLLOWUPS#{meta['parent_record_id']}"
+    assert projection.follow_up_edge["record_id"] == projection.record_id
+    assert projection.follow_up_source is not None
+    assert projection.follow_up_source["debate_id"] == str(source.state.debate_id)

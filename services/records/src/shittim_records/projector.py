@@ -88,6 +88,10 @@ class ProjectorService:
             )
         return ProjectionResult(created=created)
 
+    def backfill_follow_up_source(self, partition_key: str, *, now: datetime, apply: bool) -> bool:
+        projection, _ = self._prepare_partition(partition_key, now=now)
+        return self._archive.backfill_follow_up_source(projection, apply=apply)
+
     def validate_partition(self, partition_key: str, *, now: datetime) -> None:
         """Run the complete source validation without writing the Archive."""
 
@@ -355,10 +359,12 @@ class BackfillService:
         source: SourceDebateRepository,
         projector: ProjectorService,
         statistics: StatisticsRepository,
+        follow_up_sources_only: bool = False,
     ) -> None:
         self._source = source
         self._projector = projector
         self._statistics = statistics
+        self._follow_up_sources_only = follow_up_sources_only
 
     def run_page(
         self,
@@ -387,6 +393,15 @@ class BackfillService:
         projected = 0
         skipped = 0
         for partition_key in partition_keys:
+            if self._follow_up_sources_only:
+                added = self._projector.backfill_follow_up_source(
+                    partition_key, now=now, apply=apply
+                )
+                validated += 1
+                if apply:
+                    projected += int(added)
+                    skipped += int(not added)
+                continue
             if not apply:
                 self._projector.validate_partition(partition_key, now=now)
                 validated += 1

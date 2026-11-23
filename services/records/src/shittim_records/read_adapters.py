@@ -15,8 +15,6 @@ from shittim_chest.adapters.dynamodb.serializer import DynamoItem
 from shittim_chest.domain.attachments import DebateImage
 
 from shittim_records.auth import AuthFailure
-from shittim_records.cost_adapters import parse_stored_costs, parse_stored_rates
-from shittim_records.costs import StoredDailyCost, StoredDailyRate
 from shittim_records.read_api import (
     ArchivePage,
     ParticipantSlot,
@@ -24,6 +22,9 @@ from shittim_records.read_api import (
     RequesterProfile,
     SortOrder,
 )
+
+if TYPE_CHECKING:
+    from shittim_records.costs import OpenAISubscription, StoredDailyCost, StoredDailyRate
 
 MAX_BATCH_GET_ATTEMPTS = 5
 
@@ -123,6 +124,82 @@ class DynamoRecordsReader:
                 break
         return tuple(items)
 
+    def follow_up_parents(self, record_ids: tuple[str, ...]) -> frozenset[str]:
+        if not record_ids:
+            return frozenset()
+        partitions = {f"RECORD-FOLLOWUPS#{record_id}": record_id for record_id in record_ids}
+        request_items: dict[str, Any] = {
+            self._archive_table: {
+                "Keys": [marshal_item({"PK": pk, "SK": "META"}) for pk in partitions],
+                "ConsistentRead": True,
+            }
+        }
+        found: set[str] = set()
+        for _attempt in range(MAX_BATCH_GET_ATTEMPTS):
+            response = self._client.batch_get_item(RequestItems=request_items)
+            for raw in response.get("Responses", {}).get(self._archive_table, []):
+                item = unmarshal_item(raw)
+                pk = item.get("PK")
+                if not isinstance(pk, str) or pk not in partitions or item.get("SK") != "META":
+                    raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+                found.add(partitions[pk])
+            unprocessed = response.get("UnprocessedKeys", {})
+            if not unprocessed:
+                return frozenset(found)
+            request_items = cast(dict[str, Any], unprocessed)
+        raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+
+    def load_follow_ups(
+        self,
+        record_id: str,
+        *,
+        after: str | None,
+    ) -> tuple[tuple[DynamoItem, ...], str | None]:
+        pk = f"RECORD-FOLLOWUPS#{record_id}"
+        parameters: dict[str, Any] = {
+            "TableName": self._archive_table,
+            "KeyConditionExpression": "PK = :pk AND begins_with(SK, :prefix)",
+            "ExpressionAttributeValues": marshal_item({":pk": pk, ":prefix": "CHILD#"}),
+            "ScanIndexForward": False,
+            "ConsistentRead": True,
+            "Limit": 12,
+        }
+        if after is not None:
+            parameters["ExclusiveStartKey"] = marshal_item({"PK": pk, "SK": after})
+        response = self._client.query(**parameters)
+        rows = tuple(unmarshal_item(item) for item in response.get("Items", []))
+        if any(
+            row.get("PK") != pk
+            or row.get("record_id") == record_id
+            or row.get("SK") != f"CHILD#{row.get('completed_at')}#{row.get('record_id')}"
+            for row in rows
+        ):
+            raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+        raw_key = response.get("LastEvaluatedKey")
+        next_key = unmarshal_item(raw_key).get("SK") if raw_key else None
+        if next_key is not None and (
+            not isinstance(next_key, str) or not next_key.startswith("CHILD#")
+        ):
+            raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+        return rows, next_key
+
+    def load_record_meta(self, record_id: str) -> DynamoItem | None:
+        return self._load_archive_meta(f"RECORD#{record_id}")
+
+    def has_follow_up_source(self, record_id: str) -> bool:
+        item = self._load_archive_meta(f"RECORD-SOURCE#{record_id}")
+        return item is not None and item.get("record_id") == record_id
+
+    def _load_archive_meta(self, pk: str) -> DynamoItem | None:
+        response = self._client.get_item(
+            TableName=self._archive_table,
+            Key=marshal_item({"PK": pk, "SK": "META"}),
+            ProjectionExpression="PK, SK, record_id, schema_version, record_type",
+            ConsistentRead=True,
+        )
+        raw = response.get("Item")
+        return unmarshal_item(raw) if raw is not None else None
+
     def load_ranking_snapshots(self) -> tuple[DynamoItem, ...]:
         response = self._client.transact_get_items(
             TransactItems=[
@@ -208,6 +285,8 @@ class DynamoRecordsReader:
     def load_cost_ledger(
         self,
     ) -> tuple[tuple[StoredDailyCost, ...], tuple[StoredDailyRate, ...]]:
+        from shittim_records.cost_adapters import parse_stored_costs, parse_stored_rates
+
         items: list[DynamoItem] = []
         for partition_key in ("COST#DAILY", "FX#DAILY"):
             start_key: dict[str, AttributeValueTypeDef] | None = None
@@ -227,6 +306,19 @@ class DynamoRecordsReader:
                     break
         raw_items = tuple(items)
         return parse_stored_costs(raw_items), parse_stored_rates(raw_items)
+
+    def load_openai_subscription(self) -> OpenAISubscription | None:
+        from shittim_records.costs import OpenAISubscription
+
+        response = self._client.get_item(
+            TableName=self._statistics_table,
+            Key=marshal_item({"PK": "COST#OPENAI_SUBSCRIPTION", "SK": "CONFIG"}),
+            ConsistentRead=True,
+        )
+        raw_item = response.get("Item")
+        if raw_item is None:
+            return None
+        return OpenAISubscription.model_validate(unmarshal_item(raw_item).get("configuration"))
 
     def load_profiles(self, *, requester_keys: tuple[str, ...]) -> dict[str, RequesterProfile]:
         if not requester_keys:
@@ -290,15 +382,14 @@ class DynamoRecordsReader:
     def attachment_url(self, image: DebateImage, *, thumbnail: bool = False) -> str:
         key = image.vision_asset_key if thumbnail else image.asset_key
         version = image.vision_asset_version_id if thumbnail else image.asset_version_id
-        params = {
-            "Bucket": self._media_bucket,
-            "Key": key,
-            "ResponseContentType": "image/webp" if thumbnail else image.content_type,
-            "ResponseCacheControl": "private, no-store",
-        }
-        if version:
-            params["VersionId"] = version
-        return self._s3.generate_presigned_url("get_object", Params=params, ExpiresIn=300)
+        return sign_private_image(
+            self._s3,
+            bucket=self._media_bucket,
+            key=key,
+            version=version,
+            content_type="image/webp" if thumbnail else image.content_type,
+            expires_in=300,
+        )
 
     def avatar_url(self, *, asset_key: str) -> str:
         if not asset_key.startswith(("participants/", "requesters/")):
@@ -308,3 +399,23 @@ class DynamoRecordsReader:
             Params={"Bucket": self._media_bucket, "Key": asset_key},
             ExpiresIn=300,
         )
+
+
+def sign_private_image(
+    client: S3Client,
+    *,
+    bucket: str,
+    key: str,
+    version: str | None,
+    content_type: str,
+    expires_in: int,
+) -> str:
+    params = {
+        "Bucket": bucket,
+        "Key": key,
+        "ResponseContentType": content_type,
+        "ResponseCacheControl": "private, no-store",
+    }
+    if version:
+        params["VersionId"] = version
+    return client.generate_presigned_url("get_object", Params=params, ExpiresIn=expires_in)

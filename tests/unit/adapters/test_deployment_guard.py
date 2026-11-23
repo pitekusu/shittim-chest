@@ -52,6 +52,7 @@ class FakeClient:
         self.persisted: dict[tuple[str, str], DynamoItem] = {}
         self.raise_after_persist = False
         self.raise_before_persist = False
+        self.gacha_activity: DynamoItem | None = None
         self.audit_mutation: DynamoItem | None = None
         self.snapshot_mutation: tuple[int, DynamoItem] | None = None
         self.exceptions = SimpleNamespace(
@@ -60,7 +61,11 @@ class FakeClient:
 
     def transact_get_items(self, **kwargs: object) -> dict[str, object]:
         self.transact_get_requests.append(kwargs)
-        return {"Responses": [{"Item": marshal_item(item)} for item in self.items]}
+        responses = [{"Item": marshal_item(item)} for item in self.items]
+        responses.append(
+            {} if self.gacha_activity is None else {"Item": marshal_item(self.gacha_activity)}
+        )
+        return {"Responses": responses}
 
     def transact_write_items(self, **kwargs: object) -> dict[str, object]:
         self.transact_write_requests.append(kwargs)
@@ -146,7 +151,7 @@ def _guard(client: FakeClient) -> DynamoDbDeploymentGuard:
     )
 
 
-def test_guard_reads_exactly_eleven_records_in_one_transaction() -> None:
+def test_guard_reads_controls_and_optional_gacha_activity_in_one_transaction() -> None:
     client = FakeClient(_items())
 
     assessment = _guard(client).guard(context=_context(), evaluated_at=NOW)
@@ -156,7 +161,22 @@ def test_guard_reads_exactly_eleven_records_in_one_transaction() -> None:
     assert len(client.transact_get_requests) == 1
     request = client.transact_get_requests[0]
     assert request["ReturnConsumedCapacity"] == "NONE"
-    assert len(cast(list[object], request["TransactItems"])) == 11
+    assert len(cast(list[object], request["TransactItems"])) == 12
+
+
+def test_guard_refuses_deploy_while_a_gacha_draw_is_pending() -> None:
+    client = FakeClient(_items())
+    client.gacha_activity = {
+        "PK": "CONTROL#GACHA",
+        "SK": "ACTIVITY",
+        "record_type": "student_gacha_activity",
+        "count": 1,
+    }
+
+    assessment = _guard(client).guard(context=_context(), evaluated_at=NOW)
+
+    assert assessment.code is DeploymentGuardCode.DURABLE_ACTIVITY_PRESENT
+    assert not assessment.allowed
 
 
 def test_guard_fails_closed_on_missing_or_malformed_snapshot() -> None:
@@ -187,7 +207,7 @@ def test_acquire_has_one_lock_action_exact_snapshot_checks_and_append_only_audit
     assert acquired.control_schema_after == CURRENT_SCHEMA_VERSION
     request = client.transact_write_requests[0]
     actions = cast(list[dict[str, Any]], request["TransactItems"])
-    assert len(actions) == 12
+    assert len(actions) == 13
     assert len(cast(str, request["ClientRequestToken"])) <= 36
     touched_keys: list[tuple[str, str]] = []
     for action in actions:
@@ -198,7 +218,8 @@ def test_acquire_has_one_lock_action_exact_snapshot_checks_and_append_only_audit
         touched_keys.append((cast(str, key["PK"]), cast(str, key["SK"])))
     assert touched_keys.count(("CONTROL#DEPLOYMENT", "LOCK")) == 1
     assert any(key[0].startswith("CONTROL#DEPLOYMENT#AUDIT#") for key in touched_keys)
-    assert sum("ConditionCheck" in action for action in actions) == 10
+    assert ("CONTROL#GACHA", "ACTIVITY") in touched_keys
+    assert sum("ConditionCheck" in action for action in actions) == 11
     assert sum("Put" in action for action in actions) == 2
 
 
@@ -215,8 +236,8 @@ def test_previous_schema_acquire_migrates_all_controls_and_locks_atomically() ->
     assert acquired.control_schema_before == PREVIOUS_SCHEMA_VERSION
     assert acquired.control_schema_after == CURRENT_SCHEMA_VERSION
     actions = cast(list[dict[str, Any]], client.transact_write_requests[0]["TransactItems"])
-    assert len(actions) == 12
-    assert all("Put" in action for action in actions)
+    assert len(actions) == 13
+    assert sum("Put" in action for action in actions) == 12
     migrated = _persisted_snapshot(client)
     assert all(item["schema_version"] == CURRENT_SCHEMA_VERSION for item in migrated)
     assert migrated[0]["manifest_hash"] == CONTROL_RECORD_MANIFEST_HASH

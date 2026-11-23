@@ -238,8 +238,8 @@ def test_exception_unknown_field_fails_closed(tmp_path: Path) -> None:
     assert "unknown: owner" in result.stderr
 
 
-@pytest.mark.parametrize("expires", ["2026-99-99", "2026-02-29"])
-def test_exception_nonexistent_calendar_date_fails_closed(
+@pytest.mark.parametrize("expires", ["2026-99-99", "2026-02-29", "2999-01-01T00:00:00"])
+def test_exception_invalid_expiry_date_fails_closed(
     tmp_path: Path,
     expires: str,
 ) -> None:
@@ -264,3 +264,168 @@ def test_unused_exception_fails_closed(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "unused npm audit exception" in result.stderr
+
+
+def _pnpm_advisory(**overrides: object) -> dict[str, object]:
+    advisory: dict[str, object] = {
+        "id": 1247710,
+        "module_name": "picomatch",
+        "title": "ReDoS in repeated extglobs",
+        "severity": "high",
+        "github_advisory_id": "GHSA-fc5q-39xc-vjpf",
+        "url": "https://github.com/advisories/GHSA-fc5q-39xc-vjpf",
+        "patched_versions": None,
+        "findings": [{"version": "4.0.7", "paths": [".>vitest>picomatch"], "dev": True}],
+    }
+    advisory.update(overrides)
+    return advisory
+
+
+def _pnpm_report(
+    *,
+    advisories: dict[str, object] | None = None,
+    counts: dict[str, object] | None = None,
+    **extra: object,
+) -> object:
+    return {
+        "advisories": {"1247710": _pnpm_advisory()} if advisories is None else advisories,
+        "metadata": {
+            "vulnerabilities": {
+                "info": 0,
+                "low": 0,
+                "moderate": 0,
+                "high": 1,
+                "critical": 0,
+            }
+            if counts is None
+            else counts,
+            "dependencies": 27,
+            "devDependencies": 222,
+            "totalDependencies": 249,
+        },
+        **extra,
+    }
+
+
+def _pnpm_exception(**overrides: str) -> dict[str, str]:
+    return _exception(id="GHSA-fc5q-39xc-vjpf", package="picomatch", **overrides)
+
+
+def test_pnpm_unpatched_advisory_uses_the_same_dated_gate(tmp_path: Path) -> None:
+    result = _run(
+        _pnpm_report(),
+        exceptions_path=_write_exceptions(tmp_path, [_pnpm_exception()]),
+    )
+
+    assert result.returncode == 0
+    assert "1 dated exception(s) active" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "override,message",
+    [
+        ({"package": "vite-plus"}, "exception package vite-plus did not match picomatch"),
+        ({"severity": "moderate"}, "exception severity moderate did not match high"),
+        ({"expires": datetime.now(UTC).date().isoformat()}, "exception expired on"),
+    ],
+)
+def test_pnpm_exception_scope_and_expiry_remain_enforced(
+    tmp_path: Path, override: dict[str, str], message: str
+) -> None:
+    entry = _pnpm_exception()
+    entry.update(override)
+    result = _run(
+        _pnpm_report(),
+        exceptions_path=_write_exceptions(tmp_path, [entry]),
+    )
+
+    assert result.returncode == 1
+    assert message in result.stderr
+
+
+def test_pnpm_known_advisory_does_not_cover_an_unknown_one(tmp_path: Path) -> None:
+    result = _run(
+        _pnpm_report(
+            advisories={
+                "1247710": _pnpm_advisory(),
+                "1247711": _pnpm_advisory(
+                    id=1247711,
+                    github_advisory_id="GHSA-xxxx-yyyy-zzzz",
+                    url="https://github.com/advisories/GHSA-xxxx-yyyy-zzzz",
+                ),
+            },
+            counts={"info": 0, "low": 0, "moderate": 0, "high": 2, "critical": 0},
+        ),
+        exceptions_path=_write_exceptions(tmp_path, [_pnpm_exception()]),
+    )
+
+    assert result.returncode == 1
+    assert "GHSA-xxxx-yyyy-zzzz" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"module_name": ""},
+        {"severity": "unrecognized"},
+        {"github_advisory_id": ""},
+        {"url": "https://github.com/advisories/GHSA-xxxx-yyyy-zzzz"},
+        {"id": 1247711},
+    ],
+)
+def test_pnpm_incomplete_or_mismatched_identity_fails_closed(
+    tmp_path: Path, override: dict[str, object]
+) -> None:
+    result = _run(
+        _pnpm_report(advisories={"1247710": _pnpm_advisory(**override)}),
+        exceptions_path=_write_exceptions(tmp_path, [_pnpm_exception()]),
+    )
+
+    assert result.returncode == 1
+    assert "invalid pnpm audit advisory metadata" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "report,message",
+    [
+        (
+            _pnpm_report(advisories={}),
+            "count did not match advisories",
+        ),
+        (
+            _pnpm_report(counts={"high": 1}),
+            "count did not match advisories",
+        ),
+        (
+            _pnpm_report(ignoredAdvisories=[_pnpm_advisory()]),
+            "incomplete or reported an error",
+        ),
+        (
+            _pnpm_report(error={"code": "ERR_PNPM_AUDIT_BAD_RESPONSE"}),
+            "incomplete or reported an error",
+        ),
+    ],
+)
+def test_pnpm_filtered_or_incomplete_report_fails_closed(
+    tmp_path: Path, report: object, message: str
+) -> None:
+    result = _run(
+        report,
+        exceptions_path=_write_exceptions(tmp_path, [_pnpm_exception()]),
+    )
+
+    assert result.returncode == 1
+    assert message in result.stderr
+
+
+def test_clean_pnpm_report_rejects_an_unused_exception(tmp_path: Path) -> None:
+    report = _pnpm_report(
+        advisories={},
+        counts={"info": 0, "low": 0, "moderate": 0, "high": 0, "critical": 0},
+    )
+    unused = _run(report, exceptions_path=_write_exceptions(tmp_path, [_pnpm_exception()]))
+    clean = _run(report, exceptions_path=_write_exceptions(tmp_path, []))
+
+    assert unused.returncode == 1
+    assert "unused npm audit exception" in unused.stderr
+    assert clean.returncode == 0

@@ -21,7 +21,7 @@ from tests.factories import NOW, completed_snapshot, presentation
 
 from shittim_records.archive import project_completed_debate
 from shittim_records.contracts import RecordSearchRequest
-from shittim_records.costs import CostCategory, StoredDailyCost, StoredDailyRate
+from shittim_records.costs import CostCategory, OpenAISubscription, StoredDailyCost, StoredDailyRate
 from shittim_records.read_api import (
     AffectionRankingQuery,
     ArchivePage,
@@ -76,6 +76,7 @@ class FakeReader:
                 collected_at=NOW,
             ),
         )
+        self.openai_subscription: OpenAISubscription | None = None
 
     def list_meta(self, **kwargs: Any) -> ArchivePage:
         self.list_calls.append(kwargs)
@@ -83,6 +84,20 @@ class FakeReader:
 
     def load_record(self, *, record_id: str) -> tuple[dict[str, Any], ...]:
         return self.items if record_id == self.record_id else ()
+
+    def follow_up_parents(self, record_ids: tuple[str, ...]) -> frozenset[str]:
+        return frozenset()
+
+    def load_record_meta(self, record_id: str) -> dict[str, Any] | None:
+        return self.meta if record_id == self.record_id else None
+
+    def has_follow_up_source(self, record_id: str) -> bool:
+        return False
+
+    def load_follow_ups(
+        self, record_id: str, *, after: str | None
+    ) -> tuple[tuple[dict[str, Any], ...], str | None]:
+        return (), None
 
     def load_ranking_snapshots(self) -> tuple[dict[str, Any], ...]:
         return self.ranking_items
@@ -128,6 +143,9 @@ class FakeReader:
         self,
     ) -> tuple[tuple[StoredDailyCost, ...], tuple[StoredDailyRate, ...]]:
         return self.costs, self.rates
+
+    def load_openai_subscription(self) -> OpenAISubscription | None:
+        return self.openai_subscription
 
     def load_profiles(
         self,
@@ -939,6 +957,32 @@ def test_costs_fail_closed_on_duplicate_stored_daily_record() -> None:
     assert (caught.value.code, caught.value.status) == ("INSIGHTS_UNAVAILABLE", 503)
 
 
+def test_subscription_credits_adjust_both_contracts_and_only_new_contract_reports_details() -> None:
+    records, reader = service()
+    reader.openai_subscription = OpenAISubscription.model_validate(
+        {
+            "grants": [
+                {"start_date": "2026-08-14", "end_date": "2026-08-15", "amount_usd": "2.50"}
+            ],
+            "monthly_renewal": {"start_date": "2026-08-26", "amount_usd": "10.00"},
+        }
+    )
+
+    legacy = records.get_costs(period="all", now=NOW).model_dump(by_alias=True, mode="json")
+    current = records.get_costs(
+        period="all", now=NOW, include_subscription_credits=True
+    ).model_dump(by_alias=True, mode="json")
+
+    assert current.pop("openaiSubscriptionCredit") == "375.000000"
+    assert current.pop("openaiNextSubscriptionCredit") == {
+        "date": "2026-08-26",
+        "amountUsd": "10.00",
+    }
+    assert current == legacy
+    assert legacy["breakdown"]["openai"] == "75.000000"
+    assert legacy["total"] == "1125.000000"
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     (
@@ -1404,3 +1448,66 @@ def test_requesters_cover_all_pages_preserving_avatars_current_names_and_same_na
     assert "requesterKey" not in first.model_dump_json(by_alias=True)
     with pytest.raises(ReadFailure, match="CURSOR_INVALID"):
         records.search_records(query=RecordSearchRequest(cursor=first.next_cursor), now=NOW)
+
+
+def test_follow_up_navigation_and_selective_sync_revision() -> None:
+    class FollowUpReader(FakeReader):
+        parent_ids: frozenset[str] = frozenset()
+        cursor_after: str | None = None
+
+        def follow_up_parents(self, record_ids):
+            return self.parent_ids.intersection(record_ids)
+
+        def load_record_meta(self, record_id):
+            return self.meta if record_id == self.record_id else None
+
+        def has_follow_up_source(self, record_id):
+            return record_id == self.record_id
+
+        def load_follow_ups(self, record_id, *, after):
+            assert record_id == self.record_id
+            self.cursor_after = after
+            return (
+                (
+                    {
+                        "record_id": "c" * 43,
+                        "question_preview": "チキンカレーは?",
+                        "completed_at": NOW.isoformat(),
+                    },
+                ),
+                None if after else f"CHILD#{NOW.isoformat()}#{'c' * 43}",
+            )
+
+    reader = FollowUpReader()
+    records = RecordsReadService(
+        reader=reader, cursor_codec=CursorCodec(SESSION_KEY), follow_ups_enabled=True
+    )
+    prior = records.get_sync_index(cursor=None, now=NOW).items[0].revision
+    assert (
+        records.get_sync_index(cursor=None, now=NOW, include_follow_ups=True).items[0].revision
+        == prior
+    )
+    reader.parent_ids = frozenset({reader.record_id})
+    assert (
+        records.list_records(query=ListQuery(), now=NOW, include_follow_ups=True)
+        .items[0]
+        .has_follow_ups
+    )
+    assert records.get_record(
+        record_id=reader.record_id, now=NOW, include_follow_ups=True
+    ).has_follow_ups
+    assert (
+        records.get_sync_index(cursor=None, now=NOW, include_follow_ups=True).items[0].revision
+        != prior
+    )
+    assert records.get_sync_index(cursor=None, now=NOW).items[0].revision == prior
+
+    mobile = records.get_follow_ups(record_id=reader.record_id, cursor=None, now=NOW, mobile=True)
+    assert mobile.follow_up_available and mobile.items[0].question_preview == "チキンカレーは?"
+    assert mobile.next_cursor is not None
+    web = records.get_follow_ups(
+        record_id=reader.record_id, cursor=mobile.next_cursor, now=NOW, mobile=False
+    )
+    assert not web.follow_up_available and web.next_cursor is None and reader.cursor_after
+    with pytest.raises(ReadFailure, match="CURSOR_INVALID"):
+        records.get_follow_ups(record_id="x" * 43, cursor=mobile.next_cursor, now=NOW, mobile=True)

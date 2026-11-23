@@ -175,6 +175,7 @@
     <string name="menu_insights">いろいろな記録</string>
     <string name="menu_momotalk">モモトーク</string>
     <string name="menu_memorial">メモリアルロビー</string>
+    <string name="menu_student_collection">生徒図鑑</string>
     <string name="menu_status">サービス状態確認</string>
     <string name="menu_prompts">プロンプト管理</string>
     <string name="menu_settings">アプリ設定</string>
@@ -208,7 +209,7 @@
     <string name="notification_disable">通知をオフにする</string>
     <string name="attachment_add">画像を添付</string>
     <string name="attachment_remove">削除</string>
-    <string name="attachment_limits">JPEG・PNG・WebP、1枚10 MiBまで、最大3枚。議題を入力して送信してください。</string>
+    <string name="attachment_limits">JPEG・PNG・WebP、1枚10 MiBまで、最大3枚。</string>
     <string name="attachment_invalid">画像を添付できません。形式・サイズ・枚数を確認してください。</string>
     <string name="attachment_expired">画像の受付期限が切れました。受付状況を確認し、未送信の下書きを作り直してください。</string>
     <string name="attachment_discard_unsent">未送信の画像を削除して下書きに戻る</string>
@@ -224,4 +225,24 @@
     <string name="attachment_offline">この画像は端末に保存されていません。オンラインで記録を開くと保存できます。</string>
     <string name="attachment_storage">画像を保存できません。端末の空き容量を確認してください。</string>
     <string name="attachment_unavailable">画像を開けませんでした。本文は引き続き読むことができます。</string>
+    <string name="record_followup_child">更問</string>
+    <string name="record_followup_parent">元の議論を開く</string>
+    <string name="record_followup_parent_question">元の議論：%1$s</string>
+    <string name="record_followup_has_children">更問あり・一覧を見る</string>
+    <string name="record_followup_children">この議論への更問</string>
+    <string name="record_followup_start">更問する</string>
+    <string name="record_followup_saved_only">端末に保存済みの更問だけを表示しています。</string>
+    <string name="record_followup_loading">関連する議論を読み込んでいます。</string>
+    <string name="record_followup_retry">関連する議論を再読み込み</string>
+    <string name="record_followup_more">更問をもっと見る</string>
+    <string name="record_followup_replace_title">未送信の下書きがあります</string>
+    <string name="record_followup_replace_message">この更問を始めると、現在の下書きと添付画像を破棄します。</string>
+    <string name="record_followup_replace">下書きを破棄して更問する</string>
+    <string name="debate_replace_followup_message">新しい議論を始めると、更問の下書きと添付画像を破棄します。</string>
+    <string name="debate_replace_followup">下書きを破棄して新しい議論を始める</string>
+    <string name="record_followup_parent_context">元の議論と結論</string>
+    <string name="record_followup_question">追加で聞きたいこと</string>
+    <string name="record_followup_parent_unavailable">元の議論を参照できなくなったため、更問を受け付けられませんでした。</string>
+    <string name="record_followup_edit_as_new">質問を新しい議題の下書きに戻す</string>
+    <string name="record_followup_discard_images_and_edit_as_new">画像を削除し、質問を新しい議題の下書きに戻す</string>
 </resources>

@@ -2,17 +2,25 @@
 
 import io
 import json
+import warnings
 from collections.abc import Iterator
 from contextlib import suppress
 from datetime import date, datetime
+from itertools import batched, pairwise
+from statistics import fmean
+from struct import error as StructError
 from typing import TYPE_CHECKING, Any, cast
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageChops, ImageOps, ImageStat
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 
 from shittim_records.contracts import MomotalkWeek
 from shittim_records.memorial_adapters import MemorialConfigurationRepository
 from shittim_records.momotalk import (
+    ANIMATION_FRAME_COUNT,
+    ANIMATION_FRAME_MS,
+    ANIMATION_MAX_BYTES,
+    ANIMATION_SIZE,
     MAX_CHAIN_STEPS,
     PARTICIPANTS,
     MomotalkFailure,
@@ -212,6 +220,303 @@ class DynamoMomotalkStore:
                 yield self.decode_room(unmarshal_item(item))
 
 
+def _selfie_seam_start(frame: Image.Image) -> int | None:
+    # A displaced provider panel leaves a narrow, almost entirely black vertical seam.
+    gray = frame.convert("L")
+    dark = [
+        x
+        for x in range(frame.width * 4 // 5, frame.width - 4)
+        if sum(gray.crop((x, 0, x + 1, frame.height)).histogram()[:33]) >= frame.height * 0.95
+    ]
+    if 1 <= len(dark) <= 3 and dark[-1] - dark[0] == len(dark) - 1:
+        return dark[0]
+    return None
+
+
+def _selfie_contrast_seam_start(gray: Image.Image, *, minimum_x: int | None = None) -> int | None:
+    width, height = gray.size
+    start = width * 4 // 5 if minimum_x is None else minimum_x
+    # A wrapped-in panel can have no black divider. Its boundary still changes
+    # luminance sharply along most of the frame height.
+    edges = ImageChops.difference(
+        gray.crop((start - 1, 0, width - 1, height)), gray.crop((start, 0, width, height))
+    )
+    count = edges.width - 4 if minimum_x is None else edges.width
+    columns = [
+        start + x
+        for x in range(count)
+        if sum(edges.crop((x, 0, x + 1, height)).histogram()[32:]) >= height * 0.6
+    ]
+    if minimum_x is not None:
+        # An outer-edge artifact must not hide an established interior divider.
+        columns = [x for x in columns if x < width - 4] or columns
+    if columns and columns[-1] - columns[0] <= 2:
+        if minimum_x is not None:
+            # For a strip cut, use the strongest boundary rather than its
+            # antialiased leading pixels, which can vary between rows.
+            return max(
+                columns,
+                key=lambda x: ImageStat.Stat(
+                    edges.crop((x - start, 0, x - start + 1, height))
+                ).mean[0],
+            )
+        return columns[0]
+    return None
+
+
+def _selfie_band_offsets(frames: list[Image.Image], top: int) -> list[int] | None:
+    width, height = frames[0].size
+    band_height = height // 5
+    max_shift = width // 6
+    bands = [
+        frame.crop((0, top, width, top + band_height)).resize(
+            (width, band_height // 6), Image.Resampling.BOX
+        )
+        for frame in frames
+    ]
+    bottom = bands[0].height
+    reference = bands[0].crop((max_shift, 0, width - max_shift, bottom))
+    if ImageStat.Stat(reference).stddev[0] < 10:
+        return None
+
+    offsets = [0]
+    for band in bands[1:]:
+        errors = {
+            offset: ImageStat.Stat(
+                ImageChops.difference(
+                    reference,
+                    band.crop((max_shift + offset, 0, width - max_shift + offset, bottom)),
+                )
+            ).mean[0]
+            for offset in range(-max_shift, max_shift + 1)
+        }
+        offset = min(errors, key=lambda x: (errors[x], abs(x)))
+        if abs(offset) >= 8 and errors[offset] >= errors[0] * 0.8:
+            return None
+        offsets.append(offset)
+    return offsets
+
+
+def _selfie_wrap_boundaries(frames: list[Image.Image]) -> list[int] | None:
+    gray = [frame.convert("L") for frame in frames]
+    seams = {
+        i: seam
+        for i, frame in enumerate(gray)
+        if (seam := _selfie_contrast_seam_start(frame)) is not None
+    }
+    if len(seams) * 2 < len(frames) or max(seams.values()) - min(seams.values()) < 8:
+        return None
+
+    width, height = frames[0].size
+    top = _selfie_band_offsets(gray, 0)
+    bottom = _selfie_band_offsets(gray, height - height // 5)
+    if (
+        top is None
+        or bottom is None
+        or any(abs(a - b) > 3 for a, b in zip(top, bottom, strict=True))
+    ):
+        return None
+
+    # Confirm the visible boundaries move with the scene. This also provides
+    # a safe crop limit for frames where the panel edge is outside the picture.
+    registered = [seam - top[i] for i, seam in seams.items()]
+    boundary = min(registered)
+    if max(registered) - boundary > 4:
+        return None
+    # Limit the shared crop before reapplying each frame's offset. Clamping
+    # frames individually would leave a jump when the seam moves off-canvas.
+    boundary = min(boundary, width - max(top))
+    boundaries = [boundary + offset for offset in top]
+    return boundaries if min(boundaries) >= width * 4 // 5 else None
+
+
+def _selfie_frame_change(frames: list[Image.Image]) -> float:
+    samples = [frame.resize((120, 180), Image.Resampling.BOX).convert("L") for frame in frames]
+    return fmean(
+        ImageStat.Stat(ImageChops.difference(a, b)).mean[0]
+        for a, b in zip(samples, samples[1:] + samples[:1], strict=True)
+    )
+
+
+def _repair_selfie_panel_strips(frames: list[Image.Image]) -> list[Image.Image] | None:
+    width, height = ANIMATION_SIZE
+    gray = [frame.convert("L") for frame in frames]
+    # Some provider GIFs divide each four-panel strip into equal GIF windows
+    # even though the original panels are narrower than those windows.
+    strip_size = 4
+    rows = list(batched(gray, strip_size, strict=True))
+    right_edges = []
+    pitches = []
+    for row in rows:
+        seams = [_selfie_contrast_seam_start(frame, minimum_x=width * 3 // 4) for frame in row]
+        # The last tile can run to the end of the strip without a visible divider.
+        if any(seam is None for seam in seams[:-1]):
+            return None
+        edges = [index * width + seam for index, seam in enumerate(seams) if seam is not None]
+        right_edges.append(edges)
+        pitches.extend(right - left for left, right in pairwise(edges))
+        # The edges of adjacent GIF windows must be contiguous image content.
+        for before, after in pairwise(row):
+            join = ImageChops.difference(
+                before.crop((width - 1, 0, width, height)), after.crop((0, 0, 1, height))
+            )
+            if ImageStat.Stat(join).mean[0] > 36:
+                return None
+
+    pitch = round(fmean(pitches))
+    has_end_divider = len(right_edges[0]) == strip_size
+    min_overhang = 8 if has_end_divider else 6
+    if (
+        not width * 7 // 8 <= pitch <= width - min_overhang
+        or max(pitches) - min(pitches) > 4
+        or len({len(edges) for edges in right_edges}) != 1
+        or any(max(column) - min(column) > 3 for column in zip(*right_edges, strict=True))
+    ):
+        return None
+
+    starts = [edges[0] - pitch for edges in right_edges]
+    if any(not 0 <= start <= 12 for start in starts):
+        return None
+
+    inset = 4
+    crop_width = min(pitch, min(pitches)) - inset * 2
+    if any(
+        edges[strip_size - 2] + inset + crop_width > width * strip_size for edges in right_edges
+    ):
+        return None
+    crop_height = round(crop_width * height / width)
+    top = (height - crop_height) // 2
+    repaired = []
+    for row, start, edges in zip(
+        batched(frames, strip_size, strict=True), starts, right_edges, strict=True
+    ):
+        strip = Image.new("RGB", (width * strip_size, height))
+        for i, frame in enumerate(row):
+            strip.paste(frame, (i * width, 0))
+        for edge in [start, *edges[: strip_size - 1]]:
+            x = edge + inset
+            tile = strip.crop((x, top, x + crop_width, top + crop_height))
+            # Smooth only the two pixels where an extracted tile crosses an
+            # original GIF window boundary, using pixels of that same tile.
+            join = width - x % width
+            if 2 <= join <= crop_width - 2:
+                left = tile.crop((join - 2, 0, join - 1, crop_height))
+                right = tile.crop((join + 1, 0, join + 2, crop_height))
+                tile.paste(Image.blend(left, right, 1 / 3), (join - 1, 0))
+                tile.paste(Image.blend(left, right, 2 / 3), (join, 0))
+            repaired.append(tile.resize(ANIMATION_SIZE, Image.Resampling.LANCZOS))
+
+    if _selfie_frame_change(repaired) >= _selfie_frame_change(frames) * 0.75:
+        return None
+    aligned = [frame.convert("L") for frame in repaired]
+    band_tops = [0, height - height // 5]
+    if not has_end_divider:
+        # Moving arms or the foreground need not follow the static background.
+        band_tops.append(height // 5)
+    band_offsets = [_selfie_band_offsets(aligned, y) for y in band_tops]
+    matched = sum(offsets is not None and max(map(abs, offsets)) <= 3 for offsets in band_offsets)
+    if matched < 2:
+        return None
+    return repaired
+
+
+def _repair_slipping_selfie(frames: list[Image.Image]) -> list[Image.Image] | None:
+    seams = [_selfie_seam_start(frame) for frame in frames]
+    boundaries = [seam for seam in seams if seam is not None]
+    if len(boundaries) != len(frames) or max(boundaries) - min(boundaries) < 8:
+        recut = _repair_selfie_panel_strips(frames)
+        if recut is not None:
+            return recut
+        inferred = _selfie_wrap_boundaries(frames)
+        if inferred is None:
+            return None
+        boundaries = inferred
+
+    # Keep the shared region of the primary panel to the left of each seam.
+    # The right strip may be another panel, so wrapping it back adds a second seam.
+    width, height = ANIMATION_SIZE
+    inset = 4
+    common_width = min(boundaries) - inset
+    crop_height = round(common_width * height / width)
+    repaired = []
+    for frame, boundary in zip(frames, boundaries, strict=True):
+        right = boundary - (inset - 1)
+        cropped = frame.crop((right - common_width, inset, right, inset + crop_height))
+        repaired.append(cropped.resize(ANIMATION_SIZE, Image.Resampling.LANCZOS))
+
+    # A real slip moves the whole scene. Avoid changing an incidental dark line.
+    if _selfie_frame_change(repaired) < _selfie_frame_change(frames) * 0.75:
+        return repaired
+    return None
+
+
+def decode_selfie_animation(content: bytes) -> tuple[bytes, Image.Image]:
+    """Validate one provider GIF and produce the looping original and its poster."""
+    if not 1 <= len(content) <= ANIMATION_MAX_BYTES or not content.endswith(b";"):
+        raise MomotalkFailure("MOMOTALK_IMAGE_INVALID")
+    try:
+        with (
+            warnings.catch_warnings(action="error", category=Image.DecompressionBombWarning),
+            Image.open(io.BytesIO(content), formats=["GIF"]) as source,
+        ):
+            if source.size != ANIMATION_SIZE:
+                raise MomotalkFailure("MOMOTALK_IMAGE_INVALID")
+            loop = source.info.get("loop")
+            frames = []
+            durations = []
+            for index in range(ANIMATION_FRAME_COUNT):
+                source.seek(index)
+                if source.size != ANIMATION_SIZE:
+                    raise MomotalkFailure("MOMOTALK_IMAGE_INVALID")
+                frames.append(source.convert("RGB"))
+                durations.append(source.info.get("duration"))
+            try:
+                source.seek(ANIMATION_FRAME_COUNT)
+            except EOFError:
+                pass
+            else:
+                raise MomotalkFailure("MOMOTALK_IMAGE_INVALID")
+        repaired = _repair_slipping_selfie(frames)
+        if repaired is not None:
+            frames = repaired
+        poster = frames[0]
+        if not any(ImageChops.difference(poster, frame).getbbox() for frame in frames[1:]):
+            raise MomotalkFailure("MOMOTALK_IMAGE_INVALID")
+        if (
+            repaired is None
+            and loop == 0
+            and durations == [ANIMATION_FRAME_MS] * ANIMATION_FRAME_COUNT
+        ):
+            return content, poster
+        # The decoded RGB frames can inherit the provider's old palette metadata.
+        for frame in frames:
+            frame.info.clear()
+        with io.BytesIO() as buffer:
+            poster.save(
+                buffer,
+                format="GIF",
+                save_all=True,
+                append_images=frames[1:],
+                duration=ANIMATION_FRAME_MS,
+                loop=0,
+            )
+            normalized = buffer.getvalue()
+        if len(normalized) > ANIMATION_MAX_BYTES:
+            raise MomotalkFailure("MOMOTALK_IMAGE_INVALID")
+        return normalized, poster
+    except (
+        EOFError,
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+        IndexError,
+        OSError,
+        StructError,
+        SyntaxError,
+        ValueError,
+    ):
+        raise MomotalkFailure("MOMOTALK_IMAGE_INVALID") from None
+
+
 class MomotalkAssets:
     def __init__(self, client: S3Client, bucket: str) -> None:
         self.client = client
@@ -262,7 +567,7 @@ class MomotalkAssets:
         thumbnail_key = image_key(room, image, thumbnail=True)
         # A narrowly scoped ListBucket permission distinguishes absence from a 403.
         response = self.client.list_objects_v2(
-            Bucket=self.bucket, Prefix=full_key.removesuffix(".webp"), MaxKeys=10
+            Bucket=self.bucket, Prefix=full_key.rsplit(".", 1)[0], MaxKeys=10
         )
         keys = {entry["Key"] for entry in response.get("Contents", [])}
         if full_key not in keys:
@@ -271,43 +576,65 @@ class MomotalkAssets:
             # Recover a failed thumbnail write without paying to generate the image again.
             response = self.client.get_object(Bucket=self.bucket, Key=full_key)
             with response["Body"] as body:
-                self.store_image(room, image, body.read(), thumbnail_only=True)
+                limit = ANIMATION_MAX_BYTES if image.animated else 20 * 1024 * 1024
+                self.store_image(room, image, body.read(limit + 1), thumbnail_only=True)
         return True
 
     def store_image(
-        self, room: Room, image: SavedImage, content: bytes, *, thumbnail_only: bool = False
+        self,
+        room: Room,
+        image: SavedImage,
+        content: bytes,
+        *,
+        thumbnail_only: bool = False,
     ) -> None:
-        if len(content) > 20 * 1024 * 1024:
+        limit = ANIMATION_MAX_BYTES if image.animated else 20 * 1024 * 1024
+        if not 1 <= len(content) <= limit:
             raise MomotalkFailure("MOMOTALK_IMAGE_INVALID")
-        with Image.open(io.BytesIO(content)) as source:
-            if source.width * source.height > 16_000_000 or min(source.size) < 256:
-                raise MomotalkFailure("MOMOTALK_IMAGE_INVALID")
-            decoded = ImageOps.exif_transpose(source).convert("RGB")
+        if image.animated and not thumbnail_only:
+            content, decoded = decode_selfie_animation(content)
+        else:
+            # An already stored, normalized GIF only needs its first frame for repair.
+            with Image.open(
+                io.BytesIO(content), formats=["GIF"] if image.animated else None
+            ) as source:
+                if source.width * source.height > 16_000_000 or min(source.size) < 256:
+                    raise MomotalkFailure("MOMOTALK_IMAGE_INVALID")
+                decoded = ImageOps.exif_transpose(source).convert("RGB")
         for thumbnail in (True,) if thumbnail_only else (False, True):
-            output = decoded.copy()
-            output.thumbnail((320, 480) if thumbnail else (1024, 1536))
-            buffer = io.BytesIO()
-            output.save(buffer, format="WEBP", quality=84 if thumbnail else 94, method=4)
+            if image.animated and not thumbnail:
+                body, content_type = content, "image/gif"
+            else:
+                output = decoded.copy()
+                output.thumbnail((320, 480) if thumbnail else (1024, 1536))
+                with io.BytesIO() as buffer:
+                    output.save(buffer, format="WEBP", quality=84 if thumbnail else 94, method=4)
+                    body = buffer.getvalue()
+                content_type = "image/webp"
             self.client.put_object(
                 Bucket=self.bucket,
                 Key=image_key(room, image, thumbnail=thumbnail),
-                Body=buffer.getvalue(),
-                ContentType="image/webp",
+                Body=body,
+                ContentType=content_type,
                 ServerSideEncryption="AES256",
                 CacheControl="private, max-age=300",
             )
 
     def image_url(
-        self, room: Room, image: SavedImage, *, thumbnail: bool = False, download: bool = False
+        self,
+        room: Room,
+        image: SavedImage,
+        *,
+        thumbnail: bool = False,
+        download: bool = False,
     ) -> str:
-        parameters = {
-            "Bucket": self.bucket,
-            "Key": image_key(room, image, thumbnail=thumbnail),
-        }
+        key = image_key(room, image, thumbnail=thumbnail)
+        parameters = {"Bucket": self.bucket, "Key": key}
         if download:
             name = "selfie" if image.subjects is not None else image.mood
+            extension = key.rsplit(".", 1)[1]
             parameters["ResponseContentDisposition"] = (
-                f'attachment; filename="momotalk-{room.week_id}-{name}.webp"'
+                f'attachment; filename="momotalk-{room.week_id}-{name}.{extension}"'
             )
         return self.client.generate_presigned_url("get_object", Params=parameters, ExpiresIn=300)
 

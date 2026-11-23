@@ -18,14 +18,25 @@ from nacl.signing import VerifyKey
 
 from shittim_chest.application.discord import PanelAction, PanelCustomId
 from shittim_chest.application.discord_http import (
+    FOLLOW_UP_CUSTOM_ID_PREFIX,
+    FOLLOW_UP_QUESTION_FIELD,
     SHITTIM_COMMAND_NAME,
+    DiscordFollowUpOperation,
     DiscordHttpInput,
     DiscordHttpOperation,
     DiscordHttpPing,
+    FollowUpCustomId,
 )
 from shittim_chest.application.ingress import IngressOutcome
 from shittim_chest.application.models import PendingDiscordImage
 from shittim_chest.application.scale_to_zero import IngressKind
+from shittim_chest.application.student_gacha_discord import (
+    DiscordStudentGachaOperation,
+    GachaInteractionOutcome,
+    GachaInteractionResult,
+)
+from shittim_chest.application.student_gacha_models import normalize_teacher_name
+from shittim_chest.domain.attachments import MAX_DEBATE_IMAGES, MAX_IMAGE_BYTES
 
 DISCORD_SIGNATURE_REPLAY_TOLERANCE = timedelta(minutes=5)
 # Discord interactions are small JSON documents. Bound attacker-controlled input
@@ -35,10 +46,29 @@ DISCORD_HTTP_MAX_BASE64_BODY_CHARACTERS = ((DISCORD_HTTP_MAX_RAW_BODY_BYTES + 2)
 
 _APPLICATION_COMMAND = 2
 _MESSAGE_COMPONENT = 3
+_MODAL_SUBMIT = 5
+_LABEL_COMPONENT = 18
+_TEXT_INPUT_COMPONENT = 4
+_FILE_UPLOAD_COMPONENT = 19
+_FOLLOW_UP_IMAGES_FIELD = "follow_up_images"
+_FOLLOW_UP_IMAGE_LIMITS = (
+    f"JPEG・PNG・静止WebP、1枚{MAX_IMAGE_BYTES // (1024 * 1024)} MiBまで、"
+    f"最大{MAX_DEBATE_IMAGES}枚。"
+)
+STUDENT_GACHA_ROUTE = "POST /interactions/student-gacha"
+STUDENT_GACHA_OFFER_ID = re.compile(r"[0-9a-f]{32}\Z")
+STUDENT_GACHA_OFFER_BUTTON = re.compile(r"([0-9a-f]{32}):[A-Za-z0-9_-]{22}\Z")
+STUDENT_GACHA_BUTTON_PREFIX = "shittim:gacha:v1:offer:"
+STUDENT_GACHA_MODAL_PREFIX = "shittim:gacha:v1:teacher:"
+_STUDENT_GACHA_TEACHER_FIELD = "teacher_name"
+STUDENT_GACHA_APPROVAL = "🎉 生徒募集の準備ができました! 承認をお願いします!"
 _PING = 1
 _CHAT_INPUT_COMMAND = 1
 _STRING_OPTION = 3
 _BUTTON_COMPONENT = 2
+_ACTION_ROW_COMPONENT = 1
+_ADMINISTRATOR_PERMISSION = 1 << 3
+_VIEW_AND_SEND_MESSAGES_PERMISSIONS = (1 << 10) | (1 << 11)
 _MANAGE_MESSAGES_PERMISSION = 1 << 13
 _PUBLIC_KEY_PATTERN = re.compile(r"[0-9a-fA-F]{64}\Z")
 _SIGNATURE_PATTERN = re.compile(r"[0-9a-fA-F]{128}\Z")
@@ -65,6 +95,10 @@ class DiscordHttpAuthenticationError(DiscordHttpBoundaryError):
 
 class DiscordHttpPayloadError(DiscordHttpBoundaryError):
     """A signed request that does not match the supported payload contract."""
+
+
+class _DiscordHttpAttachmentMetadataError(DiscordHttpPayloadError):
+    """A resolved attachment outside the supported image limits."""
 
 
 class DiscordHttpPayloadTooLargeError(DiscordHttpPayloadError):
@@ -113,7 +147,7 @@ class DiscordHttpReception:
     """Exactly one early HTTP response or one authenticated typed input."""
 
     response: ApiGatewayV2Response | None = None
-    interaction: DiscordHttpInput | None = None
+    interaction: DiscordHttpInput | DiscordStudentGachaOperation | None = None
 
     def __post_init__(self) -> None:
         if (self.response is None) is (self.interaction is None):
@@ -168,18 +202,33 @@ class DiscordRequestVerifier:
 class DiscordHttpBoundary:
     """Authenticate and parse one event without invoking application or AWS services."""
 
-    __slots__ = ("_verifier",)
+    __slots__ = ("_student_gacha_verifier", "_verifier")
 
-    def __init__(self, verifier: DiscordRequestVerifier) -> None:
+    def __init__(
+        self,
+        verifier: DiscordRequestVerifier,
+        *,
+        student_gacha_verifier: DiscordRequestVerifier | None = None,
+    ) -> None:
         self._verifier = verifier
+        self._student_gacha_verifier = student_gacha_verifier
 
     def receive(self, event: Mapping[str, object], *, now: datetime) -> DiscordHttpReception:
         """Return PONG/error immediately, otherwise one token-free typed operation."""
 
         try:
+            request_context = _mapping(event.get("requestContext"))
+            is_student_gacha = request_context.get("routeKey") == STUDENT_GACHA_ROUTE
+            verifier = self._student_gacha_verifier if is_student_gacha else self._verifier
+            if verifier is None:
+                return DiscordHttpReception(response=_json_response(404, {"error": "not_found"}))
             request = extract_api_gateway_v2_request(event)
-            self._verifier.verify(request, now=now)
-            interaction = parse_verified_interaction(request.raw_body, received_at=now)
+            verifier.verify(request, now=now)
+            interaction = (
+                _parse_student_gacha(request.raw_body, received_at=now)
+                if is_student_gacha
+                else parse_verified_interaction(request.raw_body, received_at=now)
+            )
         except DiscordHttpBoundaryError as error:
             return DiscordHttpReception(response=error_response(error))
         if isinstance(interaction, DiscordHttpPing):
@@ -246,13 +295,7 @@ def extract_api_gateway_v2_request(
     )
 
 
-def parse_verified_interaction(
-    raw_body: bytes,
-    *,
-    received_at: datetime,
-) -> DiscordHttpInput:
-    """Parse only a body that the caller has already authenticated."""
-
+def _decode_verified_payload(raw_body: bytes) -> Mapping[str, object]:
     try:
         decoded = raw_body.decode("utf-8")
         parsed = cast(
@@ -268,10 +311,21 @@ def parse_verified_interaction(
     payload = _mapping(parsed)
     if _integer(payload.get("version")) != 1:
         raise DiscordHttpPayloadError
+    return payload
+
+
+def parse_verified_interaction(
+    raw_body: bytes,
+    *,
+    received_at: datetime,
+) -> DiscordHttpInput:
+    """Parse only a body that the caller has already authenticated."""
+
+    payload = _decode_verified_payload(raw_body)
     interaction_type = _integer(payload.get("type"))
     if interaction_type == _PING:
         return DiscordHttpPing(received_at=received_at)
-    if interaction_type not in {_APPLICATION_COMMAND, _MESSAGE_COMPONENT}:
+    if interaction_type not in {_APPLICATION_COMMAND, _MESSAGE_COMPONENT, _MODAL_SUBMIT}:
         raise DiscordHttpPayloadError
 
     interaction_id = _snowflake(payload.get("id"))
@@ -297,6 +351,26 @@ def parse_verified_interaction(
             permissions=permissions,
             received_at=received_at,
         )
+    custom_id = _text(data.get("custom_id"))
+    if custom_id.startswith(FOLLOW_UP_CUSTOM_ID_PREFIX):
+        return _parse_follow_up(
+            data,
+            _mapping(payload.get("message")),
+            interaction_id=interaction_id,
+            application_id=application_id,
+            guild_id=guild_id,
+            channel_id=channel_id,
+            channel_type=channel_type,
+            requester_id=requester_id,
+            username=username,
+            display_name=display_name,
+            permissions=permissions,
+            received_at=received_at,
+            is_modal=interaction_type == _MODAL_SUBMIT,
+            custom_id=custom_id,
+        )
+    if interaction_type == _MODAL_SUBMIT:
+        raise DiscordHttpPayloadError
     return _parse_component(
         payload,
         data,
@@ -311,6 +385,308 @@ def parse_verified_interaction(
         display_name=display_name,
         permissions=permissions,
         received_at=received_at,
+    )
+
+
+def _parse_follow_up(
+    data: Mapping[str, object],
+    message: Mapping[str, object],
+    *,
+    interaction_id: str,
+    application_id: str,
+    guild_id: str,
+    channel_id: str,
+    channel_type: int | None,
+    requester_id: str,
+    username: str,
+    display_name: str,
+    permissions: int,
+    received_at: datetime,
+    is_modal: bool,
+    custom_id: str,
+) -> DiscordFollowUpOperation:
+    try:
+        binding = FollowUpCustomId.parse(custom_id, modal=is_modal)
+    except ValueError:
+        raise DiscordHttpPayloadError from None
+    _snowflake(message.get("id"))
+    author = _mapping(message.get("author"))
+    # Discord routes the signed interaction to the publishing application. The
+    # component binds the actual Bot user because its ID may differ from the app's.
+    if (
+        _snowflake(message.get("channel_id")) != channel_id
+        or _snowflake(author.get("id")) != binding.author_id
+        or author.get("bot") is not True
+        or message.get("webhook_id") is not None
+        or not _has_follow_up_button(message, binding.encode())
+    ):
+        raise DiscordHttpPayloadError
+    if not is_modal and _integer(data.get("component_type")) != _BUTTON_COMPONENT:
+        raise DiscordHttpPayloadError
+    question = None
+    pending_attachments: tuple[PendingDiscordImage, ...] | None = ()
+    if is_modal:
+        value, pending_attachments = _parse_follow_up_modal(data)
+        if value.strip() and len(value) <= 1_000:
+            question = value
+    return DiscordFollowUpOperation(
+        interaction_id=interaction_id,
+        application_id=application_id,
+        guild_id=guild_id,
+        channel_id=channel_id,
+        channel_type=channel_type,
+        requester_id=requester_id,
+        requester_username=username,
+        requester_display_name=display_name,
+        may_post=(
+            bool(permissions & _ADMINISTRATOR_PERMISSION)
+            or permissions & _VIEW_AND_SEND_MESSAGES_PERMISSIONS
+            == _VIEW_AND_SEND_MESSAGES_PERMISSIONS
+        ),
+        received_at=received_at,
+        binding=binding,
+        is_modal=is_modal,
+        question=question,
+        pending_attachments=pending_attachments,
+    )
+
+
+def _parse_follow_up_modal(
+    data: Mapping[str, object],
+) -> tuple[str, tuple[PendingDiscordImage, ...] | None]:
+    labels = _sequence(data.get("components"))
+    fields: dict[str, Mapping[str, object]] = {}
+    for label in labels:
+        component = _parse_modal_label(label)
+        field = _text(component.get("custom_id"))
+        if field not in {FOLLOW_UP_QUESTION_FIELD, _FOLLOW_UP_IMAGES_FIELD} or field in fields:
+            raise DiscordHttpPayloadError
+        fields[field] = component
+    text_input = fields.get(FOLLOW_UP_QUESTION_FIELD)
+    if text_input is None:
+        raise DiscordHttpPayloadError
+    question = _parse_modal_text(text_input, field=FOLLOW_UP_QUESTION_FIELD)
+
+    upload = fields.get(_FOLLOW_UP_IMAGES_FIELD)
+    if upload is None:
+        # A form opened before the upload field was added remains valid.
+        return question, ()
+    if _integer(upload.get("type")) != _FILE_UPLOAD_COMPONENT:
+        raise DiscordHttpPayloadError
+    attachment_ids = tuple(_snowflake(value) for value in _sequence(upload.get("values")))
+    try:
+        return question, _parse_resolved_images(data, attachment_ids)
+    except _DiscordHttpAttachmentMetadataError:
+        return question, None
+
+
+def _has_follow_up_button(message: Mapping[str, object], custom_id: str) -> bool:
+    count = 0
+    for raw_row in _sequence(message.get("components")):
+        row = _mapping(raw_row)
+        if _integer(row.get("type")) != _ACTION_ROW_COMPONENT:
+            continue
+        for raw_component in _sequence(row.get("components")):
+            component = _mapping(raw_component)
+            if (
+                component.get("custom_id") == custom_id
+                and _integer(component.get("type")) == _BUTTON_COMPONENT
+                and component.get("disabled", False) is False
+            ):
+                count += 1
+    return count == 1
+
+
+def _parse_student_gacha(
+    raw_body: bytes,
+    *,
+    received_at: datetime,
+) -> DiscordHttpPing | DiscordStudentGachaOperation:
+    payload = _decode_verified_payload(raw_body)
+    interaction_type = _integer(payload.get("type"))
+    if interaction_type == _PING:
+        return DiscordHttpPing(received_at=received_at)
+    if interaction_type not in {_MESSAGE_COMPONENT, _MODAL_SUBMIT}:
+        raise DiscordHttpPayloadError
+    is_modal = interaction_type == _MODAL_SUBMIT
+    data = _mapping(payload.get("data"))
+    prefix = STUDENT_GACHA_MODAL_PREFIX if is_modal else STUDENT_GACHA_BUTTON_PREFIX
+    custom_id = _text(data.get("custom_id"))
+    binding = custom_id.removeprefix(prefix)
+    if binding == custom_id:
+        raise DiscordHttpPayloadError
+    teacher_name = None
+    if is_modal:
+        if STUDENT_GACHA_OFFER_ID.fullmatch(binding) is None:
+            raise DiscordHttpPayloadError
+        offer_id = binding
+        teacher_name = _parse_teacher_name(data)
+    else:
+        button = STUDENT_GACHA_OFFER_BUTTON.fullmatch(binding)
+        if _integer(data.get("component_type")) != _BUTTON_COMPONENT or button is None:
+            raise DiscordHttpPayloadError
+        offer_id = button.group(1)
+    message = _mapping(payload.get("message"))
+    channel_id = _snowflake(payload.get("channel_id"))
+    if _snowflake(message.get("channel_id")) != channel_id:
+        raise DiscordHttpPayloadError
+    channel_type, _ = _channel_context(payload, channel_id=channel_id)
+    member = _mapping(payload.get("member"))
+    user = _mapping(member.get("user"))
+    return DiscordStudentGachaOperation(
+        interaction_id=_snowflake(payload.get("id")),
+        application_id=_snowflake(payload.get("application_id")),
+        guild_id=_snowflake(payload.get("guild_id")),
+        channel_id=channel_id,
+        channel_type=channel_type,
+        requester_id=_snowflake(user.get("id")),
+        offer_id=offer_id,
+        message_id=_snowflake(message.get("id")),
+        message_author_id=_snowflake(_mapping(message.get("author")).get("id")),
+        received_at=received_at,
+        teacher_name=teacher_name,
+        is_modal=is_modal,
+    )
+
+
+def _parse_teacher_name(data: Mapping[str, object]) -> str | None:
+    components = _sequence(data.get("components"))
+    if len(components) != 1:
+        raise DiscordHttpPayloadError
+    value = _parse_modal_text(_parse_modal_label(components[0]), field=_STUDENT_GACHA_TEACHER_FIELD)
+    try:
+        return normalize_teacher_name(value)
+    except ValueError:
+        # A legitimate user's input error should receive an ephemeral callback.
+        return None
+
+
+def _parse_modal_label(raw_label: object) -> Mapping[str, object]:
+    label = _mapping(raw_label)
+    if _integer(label.get("type")) != _LABEL_COMPONENT:
+        raise DiscordHttpPayloadError
+    return _mapping(label.get("component"))
+
+
+def _parse_modal_text(text_input: Mapping[str, object], *, field: str) -> str:
+    if (
+        _integer(text_input.get("type")) != _TEXT_INPUT_COMPONENT
+        or text_input.get("custom_id") != field
+    ):
+        raise DiscordHttpPayloadError
+    value = text_input.get("value")
+    if not isinstance(value, str):
+        raise DiscordHttpPayloadError
+    return value
+
+
+def follow_up_modal_response(binding: FollowUpCustomId) -> ApiGatewayV2Response:
+    """Collect the next question and optional images from the completion button."""
+
+    return _json_response(
+        200,
+        {
+            "type": 9,
+            "data": {
+                "custom_id": binding.encode(modal=True),
+                "title": "更問する",
+                "components": [
+                    {
+                        "type": _LABEL_COMPONENT,
+                        "label": "追加の質問",
+                        "component": {
+                            "type": _TEXT_INPUT_COMPONENT,
+                            "custom_id": FOLLOW_UP_QUESTION_FIELD,
+                            "style": 2,
+                            "required": True,
+                            "min_length": 1,
+                            "max_length": 1_000,
+                        },
+                    },
+                    {
+                        "type": _LABEL_COMPONENT,
+                        "label": "画像 (任意)",
+                        "description": _FOLLOW_UP_IMAGE_LIMITS,
+                        "component": {
+                            "type": _FILE_UPLOAD_COMPONENT,
+                            "custom_id": _FOLLOW_UP_IMAGES_FIELD,
+                            "min_values": 0,
+                            "max_values": MAX_DEBATE_IMAGES,
+                            "required": False,
+                            "file_types": [".jpg", ".jpeg", ".png", ".webp"],
+                        },
+                    },
+                ],
+            },
+        },
+    )
+
+
+def student_gacha_modal_response(offer_id: str) -> ApiGatewayV2Response:
+    """Open the modal directly in the button interaction's initial response."""
+
+    return _json_response(
+        200,
+        {
+            "type": 9,
+            "data": {
+                "custom_id": STUDENT_GACHA_MODAL_PREFIX + offer_id,
+                "title": "承認をお願いします!",
+                "components": [
+                    {
+                        "type": _LABEL_COMPONENT,
+                        "label": "先生の名前",
+                        "description": "先生のサインをお願いしますっ\uff01",
+                        "component": {
+                            "type": _TEXT_INPUT_COMPONENT,
+                            "custom_id": _STUDENT_GACHA_TEACHER_FIELD,
+                            "style": 1,
+                            "required": True,
+                            "min_length": 1,
+                            "max_length": 24,
+                        },
+                    },
+                ],
+            },
+        },
+    )
+
+
+def student_gacha_response(
+    operation: DiscordStudentGachaOperation,
+    result: GachaInteractionResult,
+) -> ApiGatewayV2Response:
+    outcome = result.outcome
+    if outcome is GachaInteractionOutcome.OPEN_MODAL:
+        return student_gacha_modal_response(operation.offer_id)
+    if result.warned_users is not None:
+        owner, clicker = result.warned_users
+        return _json_response(
+            200,
+            {
+                "type": 4,
+                "data": {
+                    "content": (
+                        f"今回の生徒募集は<@{owner}>先生だけができるんです\uff01"
+                        f"<@{clicker}>先生は押しちゃダメですよっ\uff01"
+                    ),
+                    "allowed_mentions": {"parse": [], "users": [owner, clicker]},
+                },
+            },
+        )
+    content = {
+        GachaInteractionOutcome.ACCEPTED: "✅ 生徒募集を受け付けました!",
+        GachaInteractionOutcome.UNAVAILABLE: (
+            "この募集ボタンは利用できません。最新の案内をご確認ください。"
+        ),
+        GachaInteractionOutcome.WRONG_OWNER: "この募集ボタンは対象の先生だけが使えます。",
+        GachaInteractionOutcome.INVALID_TEACHER_NAME: (
+            "先生の名前を１〜２４文字で入力してください。"
+        ),
+    }[outcome]
+    return _json_response(
+        200,
+        {"type": 4, "data": {"content": content, "allowed_mentions": {"parse": []}, "flags": 64}},
     )
 
 
@@ -368,6 +744,10 @@ def ingress_response(outcome: IngressOutcome) -> ApiGatewayV2Response:
         IngressOutcome.TERMINAL_FAILED: "この依頼は処理期限内に開始できませんでした。",
         IngressOutcome.QUEUE_FULL: (
             "\u274c 現在20件の依頼が待機しています。\nしばらくしてから再実行してください。"
+        ),
+        IngressOutcome.INVALID_FOLLOW_UP_QUESTION: "追加の質問を1〜1,000文字で入力してください。",
+        IngressOutcome.INVALID_FOLLOW_UP_ATTACHMENTS: (
+            f"添付画像を確認してください。{_FOLLOW_UP_IMAGE_LIMITS}"
         ),
         IngressOutcome.NOT_ALLOWED: "この場所または操作では利用できません。",
     }[outcome]
@@ -443,53 +823,15 @@ def _parse_command(
     if question_option is None or _integer(question_option.get("type")) != _STRING_OPTION:
         raise DiscordHttpPayloadError
     question = _text(question_option.get("value"))
-    pending: list[PendingDiscordImage] = []
+    attachment_ids: list[str] = []
     for name in ("image1", "image2", "image3"):
         option = by_name.get(name)
         if option is None:
             continue
         if _integer(option.get("type")) != 11:
             raise DiscordHttpPayloadError
-        attachment_id = _text(option.get("value"))
-        resolved = _mapping(_mapping(data.get("resolved")).get("attachments"))
-        attachment = _mapping(resolved.get(attachment_id))
-        if _text(attachment.get("id")) != attachment_id:
-            raise DiscordHttpPayloadError
-        url = _text(attachment.get("url"))
-        try:
-            location = urlsplit(url)
-            parts = location.path.split("/")
-            if (
-                location.scheme != "https"
-                or location.hostname != "cdn.discordapp.com"
-                or location.username is not None
-                or location.password is not None
-                or location.port not in (None, 443)
-                or location.fragment
-                or len(parts) != 5
-                or parts[1] not in {"attachments", "ephemeral-attachments"}
-                or parts[3] != attachment_id
-                or not parts[2].isdecimal()
-                or not parts[4]
-            ):
-                raise ValueError("invalid image source")
-            pending.append(
-                PendingDiscordImage(
-                    attachment_id=str(uuid5(NAMESPACE_URL, "discord-attachment:" + attachment_id)),
-                    discord_attachment_id=attachment_id,
-                    content_type=_text(attachment.get("content_type")),
-                    size_bytes=_integer(attachment.get("size")),
-                    url=url,
-                    width=None
-                    if attachment.get("width") is None
-                    else _integer(attachment.get("width")),
-                    height=None
-                    if attachment.get("height") is None
-                    else _integer(attachment.get("height")),
-                )
-            )
-        except TypeError, ValueError:
-            raise DiscordHttpPayloadError from None
+        attachment_ids.append(_snowflake(option.get("value")))
+    pending = _parse_resolved_images(data, tuple(attachment_ids))
     try:
         return DiscordHttpOperation(
             interaction_id=interaction_id,
@@ -507,10 +849,69 @@ def _parse_command(
             received_at=received_at,
             command_name=command_name,
             question=question,
-            pending_attachments=tuple(pending),
+            pending_attachments=pending,
         )
     except TypeError, ValueError:
         raise DiscordHttpPayloadError from None
+
+
+def _parse_resolved_images(
+    data: Mapping[str, object], attachment_ids: tuple[str, ...]
+) -> tuple[PendingDiscordImage, ...]:
+    if not attachment_ids:
+        return ()
+    if len(attachment_ids) > MAX_DEBATE_IMAGES or len(set(attachment_ids)) != len(attachment_ids):
+        raise DiscordHttpPayloadError
+    resolved = _mapping(_mapping(data.get("resolved")).get("attachments"))
+    return tuple(
+        _parse_resolved_image(_mapping(resolved.get(attachment_id)), attachment_id)
+        for attachment_id in attachment_ids
+    )
+
+
+def _parse_resolved_image(
+    attachment: Mapping[str, object], attachment_id: str
+) -> PendingDiscordImage:
+    if _text(attachment.get("id")) != attachment_id:
+        raise DiscordHttpPayloadError
+    url = _text(attachment.get("url"))
+    try:
+        location = urlsplit(url)
+        parts = location.path.split("/")
+        if (
+            location.scheme != "https"
+            or location.hostname != "cdn.discordapp.com"
+            or location.username is not None
+            or location.password is not None
+            or location.port not in (None, 443)
+            or location.fragment
+            or len(parts) != 5
+            or parts[1] not in {"attachments", "ephemeral-attachments"}
+            or parts[3] != attachment_id
+            or not parts[2].isdecimal()
+            or not parts[4]
+        ):
+            raise ValueError("invalid image source")
+    except ValueError:
+        raise DiscordHttpPayloadError from None
+
+    content_type = attachment.get("content_type")
+    if not isinstance(content_type, str):
+        raise _DiscordHttpAttachmentMetadataError
+    width = attachment.get("width")
+    height = attachment.get("height")
+    try:
+        return PendingDiscordImage(
+            attachment_id=str(uuid5(NAMESPACE_URL, "discord-attachment:" + attachment_id)),
+            discord_attachment_id=attachment_id,
+            content_type=content_type,
+            size_bytes=_integer(attachment.get("size")),
+            url=url,
+            width=None if width is None else _integer(width),
+            height=None if height is None else _integer(height),
+        )
+    except ValueError:
+        raise _DiscordHttpAttachmentMetadataError from None
 
 
 def _parse_component(

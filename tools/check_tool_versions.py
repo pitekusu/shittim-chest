@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Validate pinned release tools and compare them with official GitHub releases."""
+"""Validate pinned release tools and compare official release or npm versions."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Mapping, Sequence
@@ -21,9 +22,10 @@ from typing import Final, cast
 
 MAX_CONFIG_BYTES: Final = 128 * 1024
 MAX_RESPONSE_BYTES: Final = 1024 * 1024
-# The weekly workflow uses the runner's Python, not the application's Python 3.14.
+# The weekly workflow uses the runner's Python, not the pinned application interpreter.
 LOOKUP_ERRORS: Final = (OSError, RuntimeError, ValueError)
 REPOSITORY_PATTERN: Final = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+NPM_PACKAGE_PATTERN: Final = re.compile(r"^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$")
 VERSION_PATTERN: Final = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 JDK_VERSION_PATTERN: Final = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?\+[0-9]+$")
 SHA256_PATTERN: Final = re.compile(r"^[0-9a-f]{64}$")
@@ -53,6 +55,7 @@ class ToolPin:
     archive_name: str
     archive_sha256: str
     release_prefix: str = ""
+    npm_package: str = ""
 
     @property
     def expected_tag(self) -> str:
@@ -166,14 +169,18 @@ def load_source_pins(path: Path, repository_root: Path) -> tuple[ToolPin, ...]:
         raise ValueError("sources must be an object")
     pins: list[ToolPin] = []
     for name, source in sorted(sources.items()):
-        if not isinstance(source, dict) or set(source) not in (
-            {"repository", "tag_prefix", "files"},
-            {"repository", "tag_prefix", "files", "release_prefix"},
+        required = {"repository", "tag_prefix", "files"}
+        if not isinstance(source, dict) or (
+            not required <= set(source)
+            or set(source) - required - {"release_prefix", "npm_package"}
         ):
             raise ValueError(f"invalid source fields for {name}")
         repository = _require_string(source, "repository", name)
         prefix = source["tag_prefix"]
         channel = source.get("release_prefix", "")
+        npm_package = (
+            _require_string(source, "npm_package", name) if "npm_package" in source else ""
+        )
         if REPOSITORY_PATTERN.fullmatch(repository) is None or prefix not in ("", "v", "jdk-"):
             raise ValueError(f"invalid repository or tag prefix for {name}")
         version_pattern = JDK_VERSION_PATTERN if prefix == "jdk-" else VERSION_PATTERN
@@ -181,6 +188,10 @@ def load_source_pins(path: Path, repository_root: Path) -> tuple[ToolPin, ...]:
             channel and re.fullmatch(r"v?\d+(?:\.\d+)?\.", channel) is None
         ):
             raise ValueError(f"invalid release prefix for {name}")
+        if npm_package and (
+            NPM_PACKAGE_PATTERN.fullmatch(npm_package) is None or prefix != "" or channel
+        ):
+            raise ValueError(f"invalid npm package or release prefix for {name}")
         files = source["files"]
         if not isinstance(files, dict) or not files:
             raise ValueError(f"source files missing for {name}")
@@ -203,7 +214,7 @@ def load_source_pins(path: Path, repository_root: Path) -> tuple[ToolPin, ...]:
         version = versions.pop()
         if channel and not f"{prefix}{version}".startswith(channel):
             raise ValueError(f"{name} pin no longer matches its monitored release line")
-        pins.append(ToolPin(name, repository, version, prefix, "", "", channel))
+        pins.append(ToolPin(name, repository, version, prefix, "", "", channel, npm_package))
     return tuple(pins)
 
 
@@ -299,6 +310,40 @@ def fetch_latest_release_tag(repository: str, token: str | None, release_prefix:
     return tag_name
 
 
+@cache
+def fetch_latest_npm_version(package: str) -> str:
+    """Read the package's stable latest version without sending GitHub credentials."""
+
+    if NPM_PACKAGE_PATTERN.fullmatch(package) is None:
+        raise ValueError("invalid npm package")
+    request = urllib.request.Request(
+        f"https://registry.npmjs.org/{urllib.parse.quote(package, safe='')}/latest",
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "shittim-chest-tool-version-check",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:  # noqa: S310
+            payload = response.read(MAX_RESPONSE_BYTES + 1)
+    except (OSError, urllib.error.URLError) as error:
+        raise RuntimeError("npm version lookup failed") from error
+    if len(payload) > MAX_RESPONSE_BYTES:
+        raise RuntimeError("npm version response is too large")
+    try:
+        value = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError("invalid npm version response") from error
+    if (
+        not isinstance(value, dict)
+        or value.get("name") != package
+        or not isinstance(value.get("version"), str)
+        or VERSION_PATTERN.fullmatch(value["version"]) is None
+    ):
+        raise RuntimeError("npm latest response must match the package and a stable version")
+    return value["version"]
+
+
 def check_signer_bundle(repository_root: Path) -> tuple[str, ...]:
     """Detect replacement of the AWS installer served only at a mutable latest URL."""
 
@@ -344,7 +389,11 @@ def build_report(pins: Sequence[ToolPin], fetch_tag: Callable[[ToolPin], str]) -
     ]
     status = 0
     for pin in pins:
-        url = f"https://github.com/{pin.repository}/releases"
+        url = (
+            f"https://www.npmjs.com/package/{pin.npm_package}"
+            if pin.npm_package
+            else f"https://github.com/{pin.repository}/releases"
+        )
         try:
             latest = fetch_tag(pin)
             version_pattern = JDK_VERSION_PATTERN if pin.tag_prefix == "jdk-" else VERSION_PATTERN
@@ -461,7 +510,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
         report, status = build_report(
             pins,
-            lambda pin: fetch_latest_release_tag(pin.repository, token, pin.release_prefix),
+            lambda pin: (
+                fetch_latest_npm_version(pin.npm_package)
+                if pin.npm_package
+                else fetch_latest_release_tag(pin.repository, token, pin.release_prefix)
+            ),
         )
         if has_android:
             try:

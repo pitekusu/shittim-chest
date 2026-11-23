@@ -127,6 +127,16 @@ const S3_RESOURCES = [
   { key: "memorial_upload", label: "メモリアル原本" },
 ] as const;
 
+const STUDENT_GACHA_ASSETS = [
+  { name: "student_gacha_roster_present", label: "生徒名簿" },
+  { name: "student_gacha_loading_gif_present", label: "待機GIF" },
+  { name: "student_gacha_layout_present", label: "募集画面の構図" },
+  { name: "student_gacha_school_logos_present", label: "学校ロゴ" },
+  { name: "student_gacha_reference_a_present", label: "参照肖像A" },
+  { name: "student_gacha_reference_b_present", label: "参照肖像B" },
+  { name: "student_gacha_reference_c_present", label: "参照肖像C" },
+] as const;
+
 const SQS_QUEUES = [
   { prefix: "memorial_", label: "メモリアル", dlq: false, waiting: "memorial_queued_messages" },
   { prefix: "momotalk_", label: "モモトーク", dlq: false, waiting: "momotalk_visible_messages" },
@@ -258,7 +268,13 @@ function healthTone(state: AdminHealthState): "normal" | "warning" | "critical" 
 function formatMetricValue(name: string, value: AdminStatusMetric["value"]): string {
   if (value === null) return "未取得";
   if (typeof value === "boolean") {
-    if (name.endsWith("_image_present")) return value ? "登録済み" : "未登録";
+    if (
+      name.endsWith("_image_present") ||
+      (name.startsWith("student_gacha_") && name.endsWith("_present")) ||
+      name === "student_gacha_route_registered"
+    ) {
+      return value ? "登録済み" : "未登録";
+    }
     if (name.endsWith("_initial_complete")) return value ? "完了" : "準備中";
     if (name.endsWith("_fresh")) return value ? "最新" : "要確認";
     if (name === "runtime_prompt_pointer_present" || name === "anomaly_subscription") {
@@ -1048,6 +1064,12 @@ function EcsMetrics({ section }: { readonly section: AdminStatusSection }): Reac
           <dt>最終応答から</dt>
           <dd>{metricValue(metrics, "heartbeat_age_seconds")}</dd>
         </div>
+        {metrics.has("student_gacha_pending") && (
+          <div>
+            <dt>生徒ガチャの未完了ジョブ</dt>
+            <dd>{metricValue(metrics, "student_gacha_pending")}</dd>
+          </div>
+        )}
       </dl>
     </>
   );
@@ -1421,6 +1443,19 @@ function S3Metrics({
           </table>
         </section>
       </details>
+      {STUDENT_GACHA_ASSETS.some(({ name }) => metrics.has(name)) && (
+        <section className={adminStyles.serviceDetail} aria-labelledby="student-gacha-assets-title">
+          <h4 id="student-gacha-assets-title">生徒ガチャの素材</h4>
+          <dl className={adminStyles.inlineFacts}>
+            {STUDENT_GACHA_ASSETS.map(({ name, label }) => (
+              <div key={name}>
+                <dt>{label}</dt>
+                <dd>{metricValue(metrics, name)}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      )}
     </>
   );
 }
@@ -1481,7 +1516,7 @@ function DynamoDbMetrics({
         </section>
       </details>
       <section
-        className={adminStyles.translationCacheStatus}
+        className={adminStyles.serviceDetail}
         aria-labelledby="translation-cache-status-title"
       >
         <h4 id="translation-cache-status-title">脆弱性概要翻訳キャッシュ</h4>
@@ -1503,10 +1538,7 @@ function DynamoDbMetrics({
           </div>
         </dl>
       </section>
-      <section
-        className={adminStyles.translationCacheStatus}
-        aria-labelledby="affection-data-status-title"
-      >
+      <section className={adminStyles.serviceDetail} aria-labelledby="affection-data-status-title">
         <h4 id="affection-data-status-title">親愛度データ</h4>
         <dl className={`${adminStyles.readinessGrid} ${adminStyles.affectionReadiness}`}>
           <div data-ready={rankingReadyValue === true || undefined}>
@@ -1784,6 +1816,14 @@ function ApiGatewayMetrics({
       <p className={adminStyles.metricNote}>
         件数は選択期間の合計、p95最大は時間ごとのp95の最大値です。4xxは認証・入力エラー等、5xxはサーバー側エラーです。
       </p>
+      {metrics.has("student_gacha_route_registered") && (
+        <dl className={adminStyles.inlineFacts}>
+          <div>
+            <dt>生徒ガチャのDiscord受付ルート</dt>
+            <dd>{metricValue(metrics, "student_gacha_route_registered")}</dd>
+          </div>
+        </dl>
+      )}
     </>
   );
 }
@@ -1912,6 +1952,18 @@ function SsmMetrics({
           <dt>設定の最終更新</dt>
           <dd>{metricValue(metrics, "latest_modified_at")}</dd>
         </div>
+        {metrics.has("student_gacha_enabled") && (
+          <div>
+            <dt>生徒ガチャの受付設定</dt>
+            <dd>{metricValue(metrics, "student_gacha_enabled")}</dd>
+          </div>
+        )}
+        {metrics.has("student_gacha_verification_key_present") && (
+          <div>
+            <dt>生徒ガチャのDiscord署名検証キー</dt>
+            <dd>{metricValue(metrics, "student_gacha_verification_key_present")}</dd>
+          </div>
+        )}
       </dl>
     </>
   );

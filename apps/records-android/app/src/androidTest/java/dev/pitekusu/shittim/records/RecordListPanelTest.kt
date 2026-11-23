@@ -92,6 +92,32 @@ class RecordListPanelTest {
     assertEquals(1, events.size)
   }
 
+  @Test fun followUpCardAndParentLinkHaveSeparateActionsWhenParentIsFilteredOut() {
+    val parentId = "p".repeat(43)
+    val childId = "c".repeat(43)
+    val child = RecordListEntry(childId, "ビーフとポークならどっち？", "架空の依頼者",
+      RecordAvatar(null, "cyan"), Instant.parse("2026-09-24T00:00:00Z"), "アロナ",
+      parentRecordId = parentId, parentQuestionPreview = "夕ご飯のおすすめ")
+    val state = RecordListState.Ready.fromSaved(listOf(child))
+    val events = mutableListOf<BootstrapScreen.Event>()
+    compose.activityRule.scenario.onActivity { activity -> activity.setContent { ShittimTheme(false) {
+      val pages = remember(state.pages) { state.pages.asRecordJournal() }
+      val items = pages.collectAsLazyPagingItems()
+      LazyColumn(Modifier.testTag("records-follow-up-test-list")) { recordListItems(state, items, events::add) }
+    } } }
+    compose.waitUntil(5_000) {
+      compose.onAllNodesWithTag("journal-parent-$childId").fetchSemanticsNodes().isNotEmpty()
+    }
+    compose.onNodeWithTag("journal-parent-$childId").performClick()
+    compose.onNodeWithTag("journal-card-$childId").performClick()
+    compose.runOnIdle {
+      assertEquals(listOf(
+        BootstrapScreen.Event.OpenRelatedRecord(childId, parentId, fromList = true),
+        BootstrapScreen.Event.OpenRecord(childId),
+      ), events)
+    }
+  }
+
   @Test fun imageBadgeIdentifiesSavedAttachmentsAndCardStillOpensDetail() {
     val imageId = "i".repeat(43)
     val plainId = "p".repeat(43)

@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum, unique
 from uuid import UUID
 
-from shittim_chest.application.models import PendingDiscordImage
+from shittim_chest.application.models import FollowUpParent, PendingDiscordImage
 from shittim_chest.domain import AttemptId, DebateId
 from shittim_chest.domain.attachments import DebateImage, validate_images
 
@@ -242,8 +242,14 @@ class IngressRequest:
     mobile_request_id: str | None = None
     mobile_target_request_id: str | None = None
     history_after_snowflake: str | None = None
+    follow_up_parent: FollowUpParent | None = None
 
     def __post_init__(self) -> None:
+        if self.follow_up_parent is not None and (
+            self.kind is not IngressKind.NEW_DEBATE
+            or not isinstance(self.follow_up_parent, FollowUpParent)
+        ):
+            raise ValueError("only a new debate can carry a follow-up reference")
         validate_images(self.attachments)
         if self.status.counts_toward_queue_limit and any(
             image.url is None for image in self.pending_attachments
@@ -402,6 +408,7 @@ class IngressRequest:
         created_at: datetime,
         attachments: tuple[DebateImage, ...] = (),
         pending_attachments: tuple[PendingDiscordImage, ...] = (),
+        follow_up_parent: FollowUpParent | None = None,
     ) -> IngressRequest:
         """Reuse debate admission without fabricating a Discord HTTP interaction."""
 
@@ -414,6 +421,7 @@ class IngressRequest:
                 question=question,
                 attachments=attachments,
                 pending_attachments=pending_attachments,
+                follow_up_parent=follow_up_parent,
                 requester_id=requester_id,
                 requester_username=requester_username,
                 requester_display_name=requester_display_name,
@@ -495,6 +503,7 @@ class IngressRequest:
         created_at: datetime,
         attachments: tuple[DebateImage, ...] = (),
         pending_attachments: tuple[PendingDiscordImage, ...] = (),
+        follow_up_parent: FollowUpParent | None = None,
     ) -> IngressRequest:
         """Construct one pending command using per-request deadline anchors."""
 
@@ -520,6 +529,7 @@ class IngressRequest:
             question=question,
             attachments=attachments,
             pending_attachments=pending_attachments,
+            follow_up_parent=follow_up_parent,
         )
 
     @classmethod
@@ -1048,6 +1058,7 @@ class RuntimeActivity:
     claimed_outbox: int = 0
     pending_status_updates: int = 0
     pending_panel_refreshes: int = 0
+    pending_student_gacha: int = 0
     checkpoint_tasks: int = 0
 
     def __post_init__(self) -> None:
@@ -1063,6 +1074,7 @@ class RuntimeActivity:
             self.claimed_outbox,
             self.pending_status_updates,
             self.pending_panel_refreshes,
+            self.pending_student_gacha,
             self.checkpoint_tasks,
         ):
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -1085,6 +1097,7 @@ class RuntimeActivity:
                 self.claimed_outbox,
                 self.pending_status_updates,
                 self.pending_panel_refreshes,
+                self.pending_student_gacha,
                 self.checkpoint_tasks,
             )
         )
@@ -1109,6 +1122,7 @@ class RuntimeActivity:
                 self.pending_outbox,
                 self.claimed_outbox,
                 self.pending_panel_refreshes,
+                self.pending_student_gacha,
                 self.checkpoint_tasks,
             )
         )

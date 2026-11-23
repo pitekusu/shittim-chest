@@ -1628,6 +1628,30 @@
           "title": "Enddate",
           "type": "string"
         },
+        "openaiNextSubscriptionCredit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NextOpenAISubscriptionCredit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "openaiSubscriptionCredit": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9]+\\.[0-9]{6}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Openaisubscriptioncredit"
+        },
         "period": {
           "enum": [
             "today",
@@ -2046,6 +2070,19 @@
           ],
           "title": "Errorcode"
         },
+        "parentRecordId": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parentrecordid"
+        },
         "phase": {
           "anyOf": [
             {
@@ -2154,6 +2191,19 @@
           "maxItems": 3,
           "title": "Attachmentids",
           "type": "array"
+        },
+        "parentRecordId": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parentrecordid"
         },
         "question": {
           "maxLength": 1000,
@@ -2310,6 +2360,509 @@
         "proposal"
       ],
       "title": "FinalProposalView",
+      "type": "object"
+    },
+    "GalleryCard": {
+      "additionalProperties": false,
+      "properties": {
+        "cardId": {
+          "pattern": "^[A-Za-z0-9_-]{80}$",
+          "title": "Cardid",
+          "type": "string"
+        },
+        "collector": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GalleryCollector"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "isMine": {
+          "title": "Ismine",
+          "type": "boolean"
+        },
+        "performer": {
+          "enum": [
+            "participant-a",
+            "participant-b",
+            "participant-c"
+          ],
+          "title": "Performer",
+          "type": "string"
+        },
+        "postedAt": {
+          "format": "date-time",
+          "title": "Postedat",
+          "type": "string"
+        },
+        "rarity": {
+          "anyOf": [
+            {
+              "maximum": 4,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Rarity"
+        },
+        "schoolName": {
+          "maxLength": 40,
+          "minLength": 1,
+          "title": "Schoolname",
+          "type": "string"
+        },
+        "studentName": {
+          "maxLength": 60,
+          "minLength": 1,
+          "title": "Studentname",
+          "type": "string"
+        },
+        "thumbnailReady": {
+          "title": "Thumbnailready",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cardId",
+        "postedAt",
+        "performer",
+        "studentName",
+        "schoolName",
+        "rarity",
+        "collector",
+        "isMine",
+        "thumbnailReady"
+      ],
+      "title": "GalleryCard",
+      "type": "object"
+    },
+    "GalleryCollectionCard": {
+      "additionalProperties": false,
+      "properties": {
+        "cardId": {
+          "pattern": "^[A-Za-z0-9_-]{80}$",
+          "title": "Cardid",
+          "type": "string"
+        },
+        "collector": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GalleryCollector"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "isMine": {
+          "title": "Ismine",
+          "type": "boolean"
+        },
+        "performer": {
+          "enum": [
+            "participant-a",
+            "participant-b",
+            "participant-c"
+          ],
+          "title": "Performer",
+          "type": "string"
+        },
+        "postedAt": {
+          "format": "date-time",
+          "title": "Postedat",
+          "type": "string"
+        },
+        "rarity": {
+          "anyOf": [
+            {
+              "maximum": 4,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Rarity"
+        },
+        "schoolName": {
+          "maxLength": 40,
+          "minLength": 1,
+          "title": "Schoolname",
+          "type": "string"
+        },
+        "studentId": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "title": "Studentid",
+          "type": "string"
+        },
+        "studentName": {
+          "maxLength": 60,
+          "minLength": 1,
+          "title": "Studentname",
+          "type": "string"
+        },
+        "thumbnailReady": {
+          "title": "Thumbnailready",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cardId",
+        "postedAt",
+        "performer",
+        "studentName",
+        "schoolName",
+        "rarity",
+        "collector",
+        "isMine",
+        "thumbnailReady",
+        "studentId"
+      ],
+      "title": "GalleryCollectionCard",
+      "type": "object"
+    },
+    "GalleryCollectionListResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "contract": {
+          "const": "gallery-collection-v1",
+          "title": "Contract",
+          "type": "string"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/GalleryCollectionCard"
+          },
+          "maxItems": 100,
+          "title": "Items",
+          "type": "array"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Nextcursor"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "contract",
+        "items",
+        "nextCursor"
+      ],
+      "title": "GalleryCollectionListResponse",
+      "type": "object"
+    },
+    "GalleryCollector": {
+      "additionalProperties": false,
+      "properties": {
+        "avatar": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ImageAvatarRef"
+            },
+            {
+              "$ref": "#/$defs/PlaceholderAvatarRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Avatar"
+        },
+        "displayName": {
+          "minLength": 1,
+          "pattern": "\\S",
+          "title": "Displayname",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "title": "Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "displayName"
+      ],
+      "title": "GalleryCollector",
+      "type": "object"
+    },
+    "GalleryDetailResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "card": {
+          "$ref": "#/$defs/GalleryCard"
+        },
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "card",
+        "width",
+        "height"
+      ],
+      "title": "GalleryDetailResponse",
+      "type": "object"
+    },
+    "GalleryListResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/GalleryCard"
+          },
+          "maxItems": 100,
+          "title": "Items",
+          "type": "array"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Nextcursor"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "items",
+        "nextCursor"
+      ],
+      "title": "GalleryListResponse",
+      "type": "object"
+    },
+    "GalleryOriginalResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "expiresAt": {
+          "format": "date-time",
+          "title": "Expiresat",
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "url": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "pattern": "^https://",
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "expiresAt",
+        "schemaVersion"
+      ],
+      "title": "GalleryOriginalResponse",
+      "type": "object"
+    },
+    "GalleryRosterEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "rarity": {
+          "maximum": 4,
+          "minimum": 0,
+          "title": "Rarity",
+          "type": "integer"
+        },
+        "schoolName": {
+          "anyOf": [
+            {
+              "maxLength": 40,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Schoolname"
+        },
+        "studentId": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "title": "Studentid",
+          "type": "string"
+        },
+        "studentName": {
+          "anyOf": [
+            {
+              "maxLength": 60,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Studentname"
+        }
+      },
+      "required": [
+        "studentId",
+        "studentName",
+        "schoolName",
+        "rarity"
+      ],
+      "title": "GalleryRosterEntry",
+      "type": "object"
+    },
+    "GalleryRosterResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/GalleryRosterEntry"
+          },
+          "maxItems": 2000,
+          "minItems": 1,
+          "title": "Items",
+          "type": "array"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "items"
+      ],
+      "title": "GalleryRosterResponse",
+      "type": "object"
+    },
+    "GallerySchoolLogosResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "logos": {
+          "additionalProperties": {
+            "maxLength": 16384,
+            "pattern": "^data:image/webp;base64,[A-Za-z0-9+/]+={0,2}$",
+            "type": "string"
+          },
+          "maxProperties": 64,
+          "propertyNames": {
+            "maxLength": 40,
+            "minLength": 1
+          },
+          "title": "Logos",
+          "type": "object"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "logos"
+      ],
+      "title": "GallerySchoolLogosResponse",
+      "type": "object"
+    },
+    "GalleryThumbnail": {
+      "additionalProperties": false,
+      "properties": {
+        "cardId": {
+          "pattern": "^[A-Za-z0-9_-]{80}$",
+          "title": "Cardid",
+          "type": "string"
+        },
+        "expiresAt": {
+          "format": "date-time",
+          "title": "Expiresat",
+          "type": "string"
+        },
+        "url": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "pattern": "^https://",
+          "title": "Url",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "expiresAt",
+        "cardId"
+      ],
+      "title": "GalleryThumbnail",
+      "type": "object"
+    },
+    "GalleryThumbnailsResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/GalleryThumbnail"
+          },
+          "maxItems": 24,
+          "title": "Items",
+          "type": "array"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "items"
+      ],
+      "title": "GalleryThumbnailsResponse",
       "type": "object"
     },
     "ImageAvatarRef": {
@@ -2971,9 +3524,9 @@
         }
       },
       "required": [
+        "state",
         "participant",
-        "mood",
-        "state"
+        "mood"
       ],
       "title": "MomotalkImage",
       "type": "object"
@@ -3004,6 +3557,172 @@
         "mood"
       ],
       "title": "MomotalkImageSubject",
+      "type": "object"
+    },
+    "MomotalkImageV3": {
+      "additionalProperties": false,
+      "properties": {
+        "animated": {
+          "title": "Animated",
+          "type": "boolean"
+        },
+        "downloadUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Downloadurl"
+        },
+        "mood": {
+          "enum": [
+            "happy",
+            "neutral",
+            "unhappy"
+          ],
+          "title": "Mood",
+          "type": "string"
+        },
+        "participant": {
+          "enum": [
+            "participant-a",
+            "participant-b",
+            "participant-c"
+          ],
+          "title": "Participant",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "pending",
+            "ready",
+            "failed"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "subjects": {
+          "allOf": [
+            {
+              "contains": {
+                "properties": {
+                  "participant": {
+                    "const": "participant-a"
+                  }
+                },
+                "required": [
+                  "participant"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 0
+            },
+            {
+              "contains": {
+                "properties": {
+                  "participant": {
+                    "const": "participant-b"
+                  }
+                },
+                "required": [
+                  "participant"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 0
+            },
+            {
+              "contains": {
+                "properties": {
+                  "participant": {
+                    "const": "participant-c"
+                  }
+                },
+                "required": [
+                  "participant"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 0
+            }
+          ],
+          "items": {
+            "$ref": "#/$defs/MomotalkImageV3Subject"
+          },
+          "maxItems": 3,
+          "minItems": 1,
+          "title": "Subjects",
+          "type": "array"
+        },
+        "thumbnailUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Thumbnailurl"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        }
+      },
+      "required": [
+        "state",
+        "participant",
+        "mood",
+        "subjects",
+        "animated"
+      ],
+      "title": "MomotalkImageV3",
+      "type": "object"
+    },
+    "MomotalkImageV3Subject": {
+      "additionalProperties": false,
+      "properties": {
+        "mood": {
+          "enum": [
+            "happy",
+            "neutral",
+            "unhappy"
+          ],
+          "title": "Mood",
+          "type": "string"
+        },
+        "participant": {
+          "enum": [
+            "participant-a",
+            "participant-b",
+            "participant-c"
+          ],
+          "title": "Participant",
+          "type": "string"
+        }
+      },
+      "required": [
+        "participant",
+        "mood"
+      ],
+      "title": "MomotalkImageV3Subject",
       "type": "object"
     },
     "MomotalkMessage": {
@@ -3180,6 +3899,112 @@
       "title": "MomotalkRoomSummary",
       "type": "object"
     },
+    "MomotalkRoomV3Response": {
+      "additionalProperties": false,
+      "properties": {
+        "images": {
+          "items": {
+            "$ref": "#/$defs/MomotalkImageV3"
+          },
+          "maxItems": 2,
+          "title": "Images",
+          "type": "array"
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/MomotalkMessage"
+          },
+          "maxItems": 15,
+          "title": "Messages",
+          "type": "array"
+        },
+        "participants": {
+          "allOf": [
+            {
+              "contains": {
+                "properties": {
+                  "slot": {
+                    "const": "participant-a"
+                  }
+                },
+                "required": [
+                  "slot"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "slot": {
+                    "const": "participant-b"
+                  }
+                },
+                "required": [
+                  "slot"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "slot": {
+                    "const": "participant-c"
+                  }
+                },
+                "required": [
+                  "slot"
+                ],
+                "type": "object"
+              },
+              "maxContains": 1,
+              "minContains": 1
+            }
+          ],
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "$ref": "#/$defs/ParticipantSummary"
+            },
+            {
+              "$ref": "#/$defs/ParticipantSummary"
+            },
+            {
+              "$ref": "#/$defs/ParticipantSummary"
+            }
+          ],
+          "title": "Participants",
+          "type": "array"
+        },
+        "room": {
+          "$ref": "#/$defs/MomotalkRoomSummary"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "default": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        },
+        "week": {
+          "$ref": "#/$defs/MomotalkWeek"
+        }
+      },
+      "required": [
+        "week",
+        "room",
+        "participants",
+        "messages",
+        "images"
+      ],
+      "title": "MomotalkRoomV3Response",
+      "type": "object"
+    },
     "MomotalkRoomsResponse": {
       "additionalProperties": false,
       "properties": {
@@ -3285,6 +4110,27 @@
         "weeks"
       ],
       "title": "MomotalkWeeksResponse",
+      "type": "object"
+    },
+    "NextOpenAISubscriptionCredit": {
+      "additionalProperties": false,
+      "properties": {
+        "amountUsd": {
+          "pattern": "^[0-9]+\\.[0-9]{2}$",
+          "title": "Amountusd",
+          "type": "string"
+        },
+        "date": {
+          "format": "date",
+          "title": "Date",
+          "type": "string"
+        }
+      },
+      "required": [
+        "date",
+        "amountUsd"
+      ],
+      "title": "NextOpenAISubscriptionCredit",
       "type": "object"
     },
     "ParticipantAffectionRanking": {
@@ -3644,6 +4490,18 @@
           "title": "Finalproposals",
           "type": "array"
         },
+        "hasFollowUps": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hasfollowups"
+        },
         "initialOpinions": {
           "allOf": [
             {
@@ -3720,6 +4578,33 @@
           ],
           "default": null,
           "title": "Ogimageurl"
+        },
+        "parentQuestionPreview": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parentquestionpreview"
+        },
+        "parentRecordId": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parentrecordid"
         },
         "participants": {
           "allOf": [
@@ -3900,6 +4785,77 @@
       "title": "RecordDetailResponse",
       "type": "object"
     },
+    "RecordFollowUpItem": {
+      "additionalProperties": false,
+      "properties": {
+        "completedAt": {
+          "format": "date-time",
+          "title": "Completedat",
+          "type": "string"
+        },
+        "questionPreview": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Questionpreview",
+          "type": "string"
+        },
+        "recordId": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "title": "Recordid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "recordId",
+        "questionPreview",
+        "completedAt"
+      ],
+      "title": "RecordFollowUpItem",
+      "type": "object"
+    },
+    "RecordFollowUpsResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "followUpAvailable": {
+          "title": "Followupavailable",
+          "type": "boolean"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/RecordFollowUpItem"
+          },
+          "maxItems": 12,
+          "title": "Items",
+          "type": "array"
+        },
+        "nextCursor": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nextcursor"
+        },
+        "schemaVersion": {
+          "const": 1,
+          "title": "Schemaversion",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "items",
+        "followUpAvailable"
+      ],
+      "title": "RecordFollowUpsResponse",
+      "type": "object"
+    },
     "RecordListItem": {
       "additionalProperties": false,
       "properties": {
@@ -3914,6 +4870,45 @@
           "format": "date-time",
           "title": "Completedat",
           "type": "string"
+        },
+        "hasFollowUps": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hasfollowups"
+        },
+        "parentQuestionPreview": {
+          "anyOf": [
+            {
+              "maxLength": 160,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parentquestionpreview"
+        },
+        "parentRecordId": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9_-]{43}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parentrecordid"
         },
         "participants": {
           "allOf": [
@@ -4828,6 +5823,9 @@
       "$ref": "#/$defs/RecordDetailResponse"
     },
     {
+      "$ref": "#/$defs/RecordFollowUpsResponse"
+    },
+    {
       "$ref": "#/$defs/RankingsResponse"
     },
     {
@@ -4855,9 +5853,6 @@
       "$ref": "#/$defs/MomotalkRoomsResponse"
     },
     {
-      "$ref": "#/$defs/MomotalkRoomResponse"
-    },
-    {
       "$ref": "#/$defs/SessionResponse"
     },
     {
@@ -4877,6 +5872,37 @@
     },
     {
       "$ref": "#/$defs/ErrorResponse"
+    },
+    {
+      "$ref": "#/$defs/GalleryListResponse"
+    },
+    {
+      "$ref": "#/$defs/GalleryCollectionListResponse"
+    },
+    {
+      "$ref": "#/$defs/GalleryRosterResponse"
+    },
+    {
+      "$ref": "#/$defs/GalleryDetailResponse"
+    },
+    {
+      "$ref": "#/$defs/GalleryThumbnailsResponse"
+    },
+    {
+      "$ref": "#/$defs/GalleryOriginalResponse"
+    },
+    {
+      "$ref": "#/$defs/GallerySchoolLogosResponse"
+    },
+    {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MomotalkRoomResponse"
+        },
+        {
+          "$ref": "#/$defs/MomotalkRoomV3Response"
+        }
+      ]
     }
   ],
   "title": "Shittim Chest Records API v1"

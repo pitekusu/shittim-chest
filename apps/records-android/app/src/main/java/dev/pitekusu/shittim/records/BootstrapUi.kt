@@ -24,10 +24,14 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
@@ -43,6 +47,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -58,6 +63,21 @@ import dev.pitekusu.shittim.records.ui.ShittimTheme
 import dev.pitekusu.shittim.records.ui.ShittimSpacing
 import dev.pitekusu.shittim.records.auth.SessionState
 import androidx.lifecycle.Lifecycle
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun StudentCollectionAppBar(onBack: () -> Unit) {
+  TopAppBar(
+    title = { Text(stringResource(R.string.menu_student_collection),
+      style = MaterialTheme.typography.titleMediumEmphasized) },
+    expandedHeight = if (LocalDensity.current.fontScale >= 1.5f) 112.dp else 64.dp,
+    navigationIcon = {
+      IconButton(onClick = onBack, modifier = Modifier.testTag("student-collection-back")) {
+        Icon(painterResource(R.drawable.ic_arrow_back), stringResource(R.string.momotalk_back))
+      }
+    },
+  )
+}
 
 @Preview(name = "Light", widthDp = 360, heightDp = 800)
 @Preview(name = "Dark", uiMode = Configuration.UI_MODE_NIGHT_YES, widthDp = 360, heightDp = 800)
@@ -106,6 +126,9 @@ internal fun BootstrapUi(state: BootstrapScreen.State, modifier: Modifier = Modi
             }
             Momotalk, is MomotalkRoom -> MomotalkAppBar(state.momotalk) {
               state.eventSink(BootstrapScreen.Event.MomotalkAction(it))
+            }
+            StudentGalleryRoute -> StudentCollectionAppBar {
+              state.eventSink(BootstrapScreen.Event.CloseRecord)
             }
             else -> RecordsAppBar(onMenuClick = { menuOpen = true })
           }

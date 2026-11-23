@@ -43,7 +43,7 @@ function searchMock(
     vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const path =
         typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      if (path === "/api/v1/records/search?contract=record-attachments-v1") {
+      if (path === "/api/v1/records/search?contract=record-followups-v1") {
         const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as SearchBody;
         bodies.push(body);
         return Promise.resolve(handler(body, init));
@@ -55,11 +55,14 @@ function searchMock(
   );
   return bodies;
 }
-function selectRequester(name: string) {
+async function selectRequester(name: string) {
   fireEvent.click(screen.getByRole("combobox", { name: "依頼者" }));
-  const option = within(screen.getByRole("listbox", { name: "依頼者" })).getByRole("option", {
-    name,
-  });
+  const option = await within(screen.getByRole("listbox", { name: "依頼者" })).findByRole(
+    "option",
+    {
+      name,
+    },
+  );
   fireEvent.pointerDown(option, { pointerType: "mouse" });
   fireEvent.click(option);
 }
@@ -113,17 +116,15 @@ describe("RecordsHome", () => {
       "datetime",
       "2026-08-15T06:00:00Z",
     );
-    expect(card.closest("a")).toHaveAccessibleName(
+    expect(within(card).getByRole("link")).toHaveAccessibleName(
       /2026年8月15日 15:00 休日の過ごし方を決める 依頼者\s*依頼者\s*勝者\s*アロナ 記録を読む/,
     );
     expect(screen.queryByText(/所要時間|Evidence|外部根拠/)).not.toBeInTheDocument();
-    expect(requests).toContain(
-      "/api/v1/records?limit=12&contract=record-attachments-v1&sort=newest",
-    );
+    expect(requests).toContain("/api/v1/records?limit=12&contract=record-followups-v1&sort=newest");
     fireEvent.click(screen.getByRole("radio", { name: "古い順" }));
     await waitFor(() =>
       expect(requests).toContain(
-        "/api/v1/records?limit=12&contract=record-attachments-v1&sort=oldest",
+        "/api/v1/records?limit=12&contract=record-followups-v1&sort=oldest",
       ),
     );
   });
@@ -244,8 +245,10 @@ describe("RecordsHome", () => {
       }),
     );
     renderRoute(home);
-    await waitFor(() => expect(candidateCursors).toHaveLength(2));
-    selectRequester(second.displayName);
+    await screen.findByRole("article");
+    expect(candidateCursors).toHaveLength(0);
+    await selectRequester(second.displayName);
+    expect(candidateCursors).toHaveLength(2);
     expect(await screen.findByText("該当する記録はありません")).toBeVisible();
     expect(screen.getByRole("combobox", { name: "依頼者" })).toHaveTextContent(second.displayName);
     fireEvent.click(screen.getByRole("radio", { name: "古い順" }));

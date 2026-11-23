@@ -255,7 +255,8 @@ def test_discord_oauth_uses_form_token_exchange_and_guild_member_endpoint() -> N
             return httpx2.Response(200, content=b"webp", headers={"content-type": "image/webp"})
         raise AssertionError(f"unexpected request path: {request.url}")
 
-    client = DiscordOAuthClient(httpx2.Client(transport=httpx2.MockTransport(handler)))
+    transport = httpx2.Client(transport=httpx2.MockTransport(handler))
+    client = DiscordOAuthClient(lambda: transport)
     configuration = AuthConfiguration(
         identity_hmac_key=b"i" * 32,
         session_hmac_key=b"s" * 32,
@@ -274,10 +275,12 @@ def test_discord_oauth_uses_form_token_exchange_and_guild_member_endpoint() -> N
 
 
 def test_discord_authorization_url_preserves_scope_callback_and_state() -> None:
-    with httpx2.Client() as transport:
-        location = DiscordOAuthClient(transport).authorization_url(
-            configuration=oauth_config(), state="m.transaction.opaque-state"
-        )
+    def unused_transport() -> httpx2.Client:
+        pytest.fail("Authorization URL generation does not require HTTP")
+
+    location = DiscordOAuthClient(unused_transport).authorization_url(
+        configuration=oauth_config(), state="m.transaction.opaque-state"
+    )
 
     parsed = urlsplit(location)
     assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == (
@@ -327,7 +330,7 @@ def test_token_failure_is_sanitized_and_never_retried_or_redirected(
         )
 
     with httpx2.Client(transport=httpx2.MockTransport(handler), follow_redirects=False) as http:
-        client = DiscordOAuthClient(http)
+        client = DiscordOAuthClient(lambda: http)
         with pytest.raises(AuthFailure) as caught:
             client.exchange_code(code="inert-code", configuration=configuration())
 
@@ -352,7 +355,9 @@ def test_token_timeout_has_no_retry_or_private_exception_context() -> None:
         httpx2.Client(transport=httpx2.MockTransport(handler)) as http,
         pytest.raises(AuthFailure) as caught,
     ):
-        DiscordOAuthClient(http).exchange_code(code="inert-code", configuration=configuration())
+        DiscordOAuthClient(lambda: http).exchange_code(
+            code="inert-code", configuration=configuration()
+        )
 
     assert caught.value.code == "discord_token_exchange_failed"
     assert calls == 1
@@ -371,7 +376,7 @@ def test_token_exchange_does_not_reuse_a_previous_users_bearer_token() -> None:
         return httpx2.Response(200, json={"access_token": code, "token_type": "Bearer"})
 
     with httpx2.Client(transport=httpx2.MockTransport(handler)) as http:
-        client = DiscordOAuthClient(http)
+        client = DiscordOAuthClient(lambda: http)
         for code in ("first", "second"):
             assert (
                 client.exchange_code(code=code, configuration=configuration()).access_token == code
@@ -386,7 +391,8 @@ def test_discord_non_member_never_returns_an_identity() -> None:
             return httpx2.Response(200, json={"id": "user", "username": "name"})
         return httpx2.Response(404)
 
-    client = DiscordOAuthClient(httpx2.Client(transport=httpx2.MockTransport(handler)))
+    transport = httpx2.Client(transport=httpx2.MockTransport(handler))
+    client = DiscordOAuthClient(lambda: transport)
     with pytest.raises(AuthFailure) as caught:
         client.get_identity(
             tokens=DiscordTokens(access_token="token", token_type="Bearer"),  # noqa: S106
@@ -397,7 +403,7 @@ def test_discord_non_member_never_returns_an_identity() -> None:
 
 def test_avatar_store_limits_prefix_size_and_presign_ttl() -> None:
     client = FakeS3()
-    store = S3AvatarStore(cast(Any, client), "media")
+    store = S3AvatarStore(lambda: cast(Any, client), "media")
 
     store.put_requester_avatar(object_key="requesters/opaque/avatar.webp", body=b"webp")
     url = store.requester_avatar_url(object_key="requesters/opaque/avatar.webp")

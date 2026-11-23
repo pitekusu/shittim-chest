@@ -1,6 +1,7 @@
 package dev.pitekusu.shittim.records
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.performScrollToNode
@@ -35,8 +36,9 @@ class ReviewDemoUiTest {
 
   @Test fun reviewerCanBrowseImagesAndCreateResultAfterLeavingProgress() {
     enter()
-    val question = DemoFixtures.records.first().entry.questionPreview
-    compose.onNodeWithText(question).performScrollTo().performClick()
+    val firstCard = "journal-card-${DemoFixtures.records.first().entry.recordId}"
+    compose.waitUntil(10_000) { compose.onAllNodesWithTag(firstCard).fetchSemanticsNodes().isNotEmpty() }
+    compose.onNodeWithTag(firstCard).performScrollTo().performClick()
     compose.waitUntil(10_000) { compose.onAllNodesWithTag("detail-question-open").fetchSemanticsNodes().isNotEmpty() }
     compose.onNodeWithTag("detail-question-open").performClick()
     compose.onNodeWithTag("attachment-0").performClick()
@@ -63,6 +65,37 @@ class ReviewDemoUiTest {
     compose.onNodeWithTag("attachment-close").performClick()
     compose.onNodeWithTag("detail-question-close").performClick()
     compose.onNodeWithTag("review-demo-banner").assertIsDisplayed()
+
+    back()
+    compose.onNodeWithTag("debate-compose-open").performClick()
+    compose.waitUntil(10_000) { compose.onAllNodesWithTag("debate-question").fetchSemanticsNodes().isNotEmpty() }
+    compose.onNodeWithTag("debate-status").assertDoesNotExist()
+    compose.onNodeWithTag("debate-submit").performScrollTo().assertIsNotEnabled()
+  }
+
+  @Test fun floatingActionOpensAnEditableDraftAfterPublication() {
+    enter()
+    val publishedQuestion = "架空の相談：公園の花壇を手入れする順番を考えてください。"
+    compose.onNodeWithTag("debate-compose-open").performClick()
+    compose.waitUntil(10_000) { compose.onAllNodesWithTag("debate-question").fetchSemanticsNodes().isNotEmpty() }
+    compose.onNodeWithTag("debate-question").performTextInput(publishedQuestion)
+    compose.onNodeWithTag("debate-submit").performScrollTo().performClick()
+    compose.waitUntil(20_000) { compose.onAllNodesWithTag("debate-open-result").fetchSemanticsNodes().isNotEmpty() }
+
+    back()
+    compose.onNodeWithTag("debate-compose-open").performClick()
+    compose.waitUntil(10_000) { compose.onAllNodesWithTag("debate-question").fetchSemanticsNodes().isNotEmpty() }
+    compose.onNodeWithTag("debate-status").assertDoesNotExist()
+    compose.onNodeWithTag("debate-submit").performScrollTo().assertIsNotEnabled()
+    val nextQuestion = "架空の新しい相談：雨の日の遊びを考えてください。"
+    compose.onNodeWithTag("debate-question").performScrollTo().performTextInput(nextQuestion)
+    compose.onNodeWithTag("debate-question").assertTextContains(nextQuestion)
+
+    compose.onNodeWithTag("records-menu-open").performClick()
+    compose.onNodeWithTag("debate-requests-open").performScrollTo().performClick()
+    compose.waitUntil(10_000) { compose.onAllNodesWithTag("debate-requests").fetchSemanticsNodes().isNotEmpty() }
+    compose.waitUntil(10_000) { compose.onAllNodesWithText(publishedQuestion).fetchSemanticsNodes().isNotEmpty() }
+    compose.onNodeWithText(publishedQuestion).assertIsDisplayed()
   }
 
   @Test fun draftSurvivesRecreationAndResetExitReturnToReusableEntry() {

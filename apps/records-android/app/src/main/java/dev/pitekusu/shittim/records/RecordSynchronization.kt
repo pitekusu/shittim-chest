@@ -19,12 +19,13 @@ internal suspend fun RecordsRepository.synchronize(token: String, accountId: Str
       readContractVersion = stored?.readContractVersion ?: 0,
       pendingAvatars = stored?.pendingAvatars.orEmpty(), needsAvatarPrune = stored?.needsAvatarPrune ?: false)
   val completeIds = cachedCompleteRecordIds(accountId).toMutableSet()
-  // Older clients saved a projection without reasons or attachments under the same server revision.
-  // Restart every index page once; retain readable bodies and pending icon work.
-  if (progress.readContractVersion != 2) {
-    progress = progress.copy(readContractVersion = 2, cursor = null, pendingIds = emptyList(),
+  // Finish the index under one contract. The follow-up contract changes revisions only for
+  // linked records, so v2 commits for unrelated records still skip their detail reads.
+  if (progress.readContractVersion != 3) {
+    progress = progress.copy(readContractVersion = 3, cursor = null, pendingIds = emptyList(),
       pendingReferences = emptyList(), pageLoaded = false, cursorHashes = emptySet(), complete = false,
-      committedRevisions = emptyMap(), removalCandidates = cachedRecordIds(accountId), indexBased = true)
+      committedRevisions = if (progress.readContractVersion == 2) progress.committedRevisions else emptyMap(),
+      removalCandidates = cachedRecordIds(accountId), indexBased = true)
     saveSyncCheckpoint(accountId, progress)
   }
   // C31 checkpoints cannot prove which earlier pages were seen: restart, never guess deletions.
@@ -113,8 +114,9 @@ internal suspend fun RecordsRepository.synchronize(token: String, accountId: Str
     if (reference != null) {
       consume(reference)
     } else if (progress.cursor == null) {
-      // GSI omissions are not proof of deletion: only an authenticated detail 404
-      // may remove data. Keep each candidate until its confirmation succeeds.
+      // Include summaries published by foreground startup while this index was loading.
+      // An authenticated detail 404 is still required before deleting any candidate.
+      progress = progress.copy(removalCandidates = progress.removalCandidates.orEmpty() + finishIndexDiscovery(accountId))
       for (candidate in progress.removalCandidates.orEmpty()) {
         currentCoroutineContext().ensureActive()
         removeIfDeleted(token, accountId, candidate)

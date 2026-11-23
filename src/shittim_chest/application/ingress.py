@@ -6,7 +6,11 @@ from dataclasses import dataclass, replace
 from enum import StrEnum, unique
 
 from shittim_chest.application.discord import DiscordBotSlot, DiscordRuntimeConfig
-from shittim_chest.application.discord_http import DiscordHttpOperation
+from shittim_chest.application.discord_http import (
+    SHITTIM_COMMAND_NAME,
+    DiscordFollowUpOperation,
+    DiscordHttpOperation,
+)
 from shittim_chest.application.ports import (
     DebateLookup,
     IngressRepository,
@@ -14,6 +18,7 @@ from shittim_chest.application.ports import (
     RepositoryQueueFull,
 )
 from shittim_chest.application.scale_to_zero import (
+    EnqueuedIngress,
     IngressKind,
     IngressRequest,
     IngressStatus,
@@ -40,6 +45,8 @@ class IngressOutcome(StrEnum):
     REJECTED = "rejected"
     TERMINAL_FAILED = "terminal_failed"
     QUEUE_FULL = "queue_full"
+    INVALID_FOLLOW_UP_QUESTION = "invalid_follow_up_question"
+    INVALID_FOLLOW_UP_ATTACHMENTS = "invalid_follow_up_attachments"
     NOT_ALLOWED = "not_allowed"
 
 
@@ -96,6 +103,65 @@ class DiscordIngressApplication:
                 request,
                 status_message_state=StatusMessageState.PENDING,
             )
+        return await self._enqueue(request, replay)
+
+    async def can_follow_up(self, operation: DiscordFollowUpOperation) -> bool:
+        """Check the current completed attempt and Discord channel permissions."""
+
+        if (
+            operation.application_id != self._moderator_application_id
+            or operation.channel_type != GUILD_TEXT_CHANNEL
+            or not operation.may_post
+            or not self._runtime.allows(
+                guild_id=operation.guild_id, channel_id=operation.channel_id
+            )
+        ):
+            return False
+        parent = operation.binding.parent
+        snapshot = await self._debates.get(parent.debate_id, parent.attempt_id)
+        return (
+            snapshot is not None
+            and snapshot.debate_id == parent.debate_id
+            and snapshot.attempt_id == parent.attempt_id
+            and snapshot.guild_id == operation.guild_id
+            and snapshot.channel_id == operation.channel_id
+            and snapshot.thread_id is not None
+            and snapshot.phase is DebatePhase.COMPLETED
+        )
+
+    async def accept_follow_up(self, operation: DiscordFollowUpOperation) -> IngressAcceptance:
+        """Admit a modal submission with a distinct, replay-safe child identity."""
+
+        if not operation.is_modal or not await self.can_follow_up(operation):
+            return IngressAcceptance(IngressOutcome.NOT_ALLOWED)
+        if operation.question is None:
+            return IngressAcceptance(IngressOutcome.INVALID_FOLLOW_UP_QUESTION)
+        if operation.pending_attachments is None:
+            return IngressAcceptance(IngressOutcome.INVALID_FOLLOW_UP_ATTACHMENTS)
+        request = IngressRequest.new_debate(
+            interaction_id=operation.interaction_id,
+            operation_id=operation.interaction_id,
+            application_id=operation.application_id,
+            question=operation.question,
+            pending_attachments=operation.pending_attachments,
+            requester_id=operation.requester_id,
+            requester_username=operation.requester_username,
+            requester_display_name=operation.requester_display_name,
+            guild_id=operation.guild_id,
+            channel_id=operation.channel_id,
+            command_name=SHITTIM_COMMAND_NAME,
+            created_at=operation.received_at,
+            follow_up_parent=operation.binding.parent,
+        )
+        return await self._enqueue(
+            replace(request, status_message_state=StatusMessageState.PENDING)
+        )
+
+    async def _enqueue(
+        self,
+        request: IngressRequest,
+        replay: EnqueuedIngress | None = None,
+    ) -> IngressAcceptance:
         try:
             enqueued = replay or await self._ingress.enqueue(request)
         except RepositoryQueueFull:

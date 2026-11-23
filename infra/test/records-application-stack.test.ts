@@ -75,6 +75,7 @@ describe("RecordsApplicationStack", () => {
   test("isolates native debate admission and exposes only bounded progress metadata", () => {
     const { template } = fixture;
     template.hasParameter("MobileDebateEnabled", { Default: "false", AllowedValues: ["false", "true"] });
+    template.hasParameter("DebateFollowUpsEnabled", { Default: "false", AllowedValues: ["false", "true"] });
     template.hasParameter("MobileDebateChannelId", { Default: "", NoEcho: true });
     template.hasResourceProperties("AWS::Lambda::Function", {
       FunctionName: "shittim-chest-production-records-mobile-debate-api",
@@ -82,6 +83,7 @@ describe("RecordsApplicationStack", () => {
       Architectures: ["arm64"], Timeout: 29, ReservedConcurrentExecutions: 2,
       Environment: { Variables: {
         MOBILE_DEBATE_ENABLED: { Ref: "MobileDebateEnabled" },
+        RECORDS_DEBATE_FOLLOW_UPS_ENABLED: { Ref: "DebateFollowUpsEnabled" },
         MOBILE_DEBATE_CHANNEL_ID: { Ref: "MobileDebateChannelId" },
         SOURCE_TABLE_NAME: { Ref: "SourceDebateTableName" },
         SESSION_TABLE_NAME: "shittim-chest-production-records-sessions",
@@ -90,7 +92,17 @@ describe("RecordsApplicationStack", () => {
     });
     template.hasResourceProperties("AWS::Lambda::Version", {
       FunctionName: { Ref: Match.stringLikeRegexp("^MobileDebateFunction") },
-      Description: { "Fn::Join": ["", ["Native debate admission enabled=", { Ref: "MobileDebateEnabled" }]] },
+      Description: { "Fn::Join": ["", [
+        "Native debate admission enabled=", { Ref: "MobileDebateEnabled" },
+        " follow-ups=", { Ref: "DebateFollowUpsEnabled" },
+      ]] },
+    });
+    template.hasResourceProperties("AWS::Lambda::Version", {
+      FunctionName: { Ref: Match.stringLikeRegexp("^ReadFunction") },
+      Description: { "Fn::Join": ["", [
+        "Read follow-ups enabled=", { Ref: "DebateFollowUpsEnabled" },
+        " mobile=", { Ref: "MobileDebateEnabled" },
+      ]] },
     });
     const routes = Object.values(template.findResources("AWS::ApiGatewayV2::Route"));
     const native = routes.filter(route => route.Properties.RouteKey.includes("/debate-requests"));
@@ -107,7 +119,7 @@ describe("RecordsApplicationStack", () => {
     const own = policies.filter(policy => JSON.stringify(policy.Properties.Roles).includes("MobileDebateFunctionRole"));
     const statements = own.flatMap(policy => policy.Properties.PolicyDocument.Statement) as PolicyStatement[];
     const database = statements.filter(statement => actionsOf(statement).some(action => action.startsWith("dynamodb:")));
-    expect(database).toHaveLength(8);
+    expect(database).toHaveLength(9);
     for (const statement of database.filter(statement => actionsOf(statement).some(action =>
       ["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:ConditionCheckItem"].includes(action)))) {
       if (JSON.stringify(statement.Condition).includes("DEBATE_UPLOAD#")) {
@@ -122,7 +134,7 @@ describe("RecordsApplicationStack", () => {
       expect(JSON.stringify(statement.Condition)).not.toContain("RECORD#");
     }
     const progress = database.filter(statement => JSON.stringify(statement.Condition).includes("dynamodb:Attributes"));
-    expect(progress).toHaveLength(2);
+    expect(progress).toHaveLength(3);
     for (const statement of progress) {
       expect(statement.Action).toBe("dynamodb:GetItem");
       expect(statement.Condition?.Null).toEqual({ "dynamodb:Attributes": "false", "dynamodb:LeadingKeys": "false" });
@@ -137,6 +149,11 @@ describe("RecordsApplicationStack", () => {
         "guild_id", "channel_id", "current_phase", "current_attempt_id", "thread_id",
         "control_panel_message_id", "updated_at",
       ],
+    });
+    const followUpSource = progress.find(statement =>
+      JSON.stringify(statement.Condition).includes("RECORD-SOURCE#*"));
+    expect(followUpSource?.Condition?.["ForAllValues:StringEquals"]).toEqual({
+      "dynamodb:Attributes": ["PK", "SK", "record_id", "debate_id", "attempt_id"],
     });
     const revocation = database.filter(statement => actionsOf(statement).includes("dynamodb:DeleteItem"));
     expect(revocation).toHaveLength(1);
@@ -223,7 +240,7 @@ describe("RecordsApplicationStack", () => {
     template.resourceCountIs("AWS::S3::Bucket", 0);
   });
 
-  test("allows only attachment cleanup to check missing objects in the debate image prefix", () => {
+  test("isolates S3 existence checks for staged debate uploads and expired debate images", () => {
     const policies = Object.entries(fixture.template.findResources("AWS::IAM::Policy"));
     const cleanup = policies.filter(([id]) => id.startsWith("DebateAttachmentCleanupFunctionRole"));
     const cleanupStatements = cleanup.flatMap(([, policy]) => policy.Properties.PolicyDocument.Statement) as PolicyStatement[];
@@ -237,12 +254,28 @@ describe("RecordsApplicationStack", () => {
         ]] },
       },
     ]);
+    const native = policies.filter(([id]) => id.startsWith("MobileDebateFunctionRole"));
+    const nativeStatements = native.flatMap(([, policy]) => policy.Properties.PolicyDocument.Statement) as PolicyStatement[];
+    expect(nativeStatements.filter(statement => actionsOf(statement).includes("s3:ListBucket"))).toEqual([
+      {
+        Action: "s3:ListBucket",
+        Condition: {
+          StringLike: { "s3:prefix": `debate-uploads/${"?".repeat(43)}.bin` },
+          NumericEquals: { "s3:max-keys": 1 },
+        },
+        Effect: "Allow",
+        Resource: { "Fn::Join": ["", [
+          "arn:", { Ref: "AWS::Partition" }, ":s3:::shittim-chest-production-records-memorial-upload-000000000000",
+        ]] },
+      },
+    ]);
     for (const [id, policy] of policies) {
-      if (id.startsWith("DebateAttachmentCleanupFunctionRole")) continue;
+      if (id.startsWith("DebateAttachmentCleanupFunctionRole") || id.startsWith("MobileDebateFunctionRole")) continue;
       const listStatements = (policy.Properties.PolicyDocument.Statement as PolicyStatement[])
         .filter(statement => actionsOf(statement).includes("s3:ListBucket"));
       expect(JSON.stringify(listStatements)).not.toContain("debate-images");
-      if (id.startsWith("ReadFunctionRole") || id.startsWith("MobileDebateFunctionRole")) {
+      expect(JSON.stringify(listStatements)).not.toContain("debate-uploads");
+      if (id.startsWith("ReadFunctionRole")) {
         expect(listStatements).toEqual([]);
       }
     }
@@ -490,7 +523,7 @@ describe("RecordsApplicationStack", () => {
         },
         FunctionName: functionName,
         MemorySize: functionName.endsWith("-worker") || functionName.endsWith("-mobile-debate-api") ? 1024 : 512,
-        Runtime: "python3.14",
+        Runtime: "python3.15",
       });
     }
   });
@@ -547,10 +580,18 @@ describe("RecordsApplicationStack", () => {
   test("publishes seven isolated aliases behind the Records HTTP API routes", () => {
     const { template } = fixture;
 
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      FunctionName: "shittim-chest-production-records-auth",
+      Handler: "shittim_records.auth_handler.auth_handler",
+    });
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      FunctionName: "shittim-chest-production-records-read",
+      Handler: "shittim_records.read_handler.read_handler",
+    });
     template.resourceCountIs("AWS::Lambda::Version", 7);
     template.resourceCountIs("AWS::Lambda::Alias", 7);
     template.resourceCountIs("AWS::ApiGatewayV2::Api", 1);
-    template.resourceCountIs("AWS::ApiGatewayV2::Route", 47);
+    template.resourceCountIs("AWS::ApiGatewayV2::Route", 54);
     template.resourceCountIs("AWS::ApiGatewayV2::Stage", 1);
     template.hasResourceProperties("AWS::ApiGatewayV2::Stage", {
       AutoDeploy: true,
@@ -601,7 +642,7 @@ describe("RecordsApplicationStack", () => {
       Handler: "shittim_records.lambda_handlers.ranking_handler",
       MemorySize: 512,
       ReservedConcurrentExecutions: 1,
-      Runtime: "python3.14",
+      Runtime: "python3.15",
       Timeout: 60,
       Environment: {
         Variables: {
@@ -642,7 +683,7 @@ describe("RecordsApplicationStack", () => {
       Handler: "shittim_records.lambda_handlers.cost_handler",
       MemorySize: 512,
       ReservedConcurrentExecutions: 1,
-      Runtime: "python3.14",
+      Runtime: "python3.15",
       Timeout: 300,
       Environment: {
         Variables: {
@@ -692,7 +733,7 @@ describe("RecordsApplicationStack", () => {
       Handler: "shittim_records.lambda_handlers.inspector_translation_handler",
       MemorySize: 512,
       ReservedConcurrentExecutions: 1,
-      Runtime: "python3.14",
+      Runtime: "python3.15",
       Timeout: 300,
       Environment: {
         Variables: {
@@ -730,7 +771,7 @@ describe("RecordsApplicationStack", () => {
       Handler: "shittim_records.lambda_handlers.memorial_api_handler",
       MemorySize: 512,
       ReservedConcurrentExecutions: 2,
-      Runtime: "python3.14",
+      Runtime: "python3.15",
       Timeout: 15,
       Environment: {
         Variables: {
@@ -753,7 +794,7 @@ describe("RecordsApplicationStack", () => {
       Handler: "shittim_records.lambda_handlers.memorial_worker_handler",
       MemorySize: 1024,
       ReservedConcurrentExecutions: 1,
-      Runtime: "python3.14",
+      Runtime: "python3.15",
       Timeout: 300,
       Environment: {
         Variables: {
@@ -956,11 +997,14 @@ describe("RecordsApplicationStack", () => {
     template.resourceCountIs("AWS::Lambda::Function", recordsFunctionNames.length);
   });
 
-  test("routes archive search and all requester options through the existing Read integration", () => {
+  test("routes archive search, requester options, and follow-ups through the existing Read integration", () => {
     const { template } = fixture;
     const routes = Object.values(template.findResources("AWS::ApiGatewayV2::Route"));
     const readTarget = routes.find(route => route.Properties.RouteKey === "GET /api/v1/records")!.Properties.Target;
-    for (const routeKey of ["POST /api/v1/records/search", "GET /api/v1/records/requesters"]) {
+    for (const routeKey of [
+      "POST /api/v1/records/search", "GET /api/v1/records/requesters",
+      "GET /api/v1/records/{recordId}/follow-ups",
+    ]) {
       expect(routes.find(route => route.Properties.RouteKey === routeKey)?.Properties.Target)
         .toEqual(readTarget);
     }
@@ -1081,7 +1125,7 @@ describe("RecordsApplicationStack", () => {
       Handler: "shittim_records.lambda_handlers.admin_config_handler",
       MemorySize: 512,
       ReservedConcurrentExecutions: 2,
-      Runtime: "python3.14",
+      Runtime: "python3.15",
       Timeout: 15,
       Environment: {
         Variables: {
@@ -1209,9 +1253,18 @@ describe("RecordsApplicationStack", () => {
     const statusPolicies = Object.values(policies).filter((policy) =>
       JSON.stringify(policy).includes("AdminStatusFunctionRole"),
     );
+    const statusManagedPolicies = Object.entries(
+      template.findResources("AWS::IAM::ManagedPolicy"),
+    ).filter(([, policy]) => JSON.stringify(policy.Properties.Roles)?.includes("AdminStatusFunctionRole"));
 
     expect(statusPolicies).toHaveLength(5);
-    const statusText = JSON.stringify(statusPolicies);
+    expect(statusManagedPolicies).toHaveLength(1);
+    template.hasResource("AWS::Lambda::Function", {
+      Properties: { FunctionName: "shittim-chest-production-records-admin-status" },
+      DependsOn: Match.arrayWith(statusManagedPolicies.map(([id]) => id)),
+    });
+    const allStatusPolicies = [...statusPolicies, ...statusManagedPolicies.map(([, policy]) => policy)];
+    const statusText = JSON.stringify(allStatusPolicies);
 
     for (const action of [
       "acm:DescribeCertificate",
@@ -1276,7 +1329,7 @@ describe("RecordsApplicationStack", () => {
       expect(statusText).toContain(`stack/ShittimChest-Prod-${stackName}/*`);
     }
 
-    const statusStatements = statusPolicies.flatMap(
+    const statusStatements = allStatusPolicies.flatMap(
       (policy) => policy.Properties.PolicyDocument.Statement,
     ) as PolicyStatement[];
     const statusTaskDefinitionRead = statusStatements.find((statement) =>
@@ -1362,8 +1415,7 @@ describe("RecordsApplicationStack", () => {
     const statusControlRead = statusStatements.find(
       (statement) =>
         actionsOf(statement).includes("dynamodb:GetItem") &&
-        statement.Condition !== undefined &&
-        Object.hasOwn(statement.Condition, "ForAllValues:StringEquals"),
+        JSON.stringify(statement.Condition)?.includes("CONTROL#RUNTIME"),
     );
     expect(statusControlRead?.Condition).toEqual({
       "ForAllValues:StringEquals": {
@@ -1375,6 +1427,59 @@ describe("RecordsApplicationStack", () => {
       },
       Null: { "dynamodb:LeadingKeys": "false" },
     });
+    const statusGachaRead = statusStatements.filter((statement) =>
+      JSON.stringify(statement.Condition)?.includes("CONTROL#GACHA"),
+    );
+    expect(statusGachaRead).toEqual([
+      {
+        Action: "dynamodb:GetItem",
+        Effect: "Allow",
+        Resource: statusControlRead?.Resource,
+        Condition: {
+          "ForAllValues:StringEquals": {
+            "dynamodb:LeadingKeys": ["CONTROL#GACHA"],
+            "dynamodb:Attributes": ["PK", "SK", "record_type", "count"],
+          },
+          StringEquals: { "dynamodb:Select": "SPECIFIC_ATTRIBUTES" },
+          Null: { "dynamodb:LeadingKeys": "false", "dynamodb:Attributes": "false" },
+        },
+      },
+    ]);
+    const statusGachaMediaList = statusStatements.filter((statement) =>
+      actionsOf(statement).includes("s3:ListBucket"),
+    );
+    expect(statusGachaMediaList).toEqual([
+      {
+        Action: "s3:ListBucket",
+        Effect: "Allow",
+        Resource: {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              { Ref: "AWS::Partition" },
+              ":s3:::shittim-chest-production-records-media-000000000000",
+            ],
+          ],
+        },
+        Condition: {
+          StringEquals: {
+            "s3:prefix": [
+              "student-gacha/roster/blue_archive_characters_with_npcs.json",
+              "student-gacha/assets/show.gif",
+              "student-gacha/assets/format.jpg",
+              "student-gacha/assets/blue_archive_school_logos.zip",
+              "student-gacha/assets/blue_archive_school_logos_mnc_v1.zip",
+              "participants/participant-a/memorial-reference.png",
+              "participants/participant-b/memorial-reference.webp",
+              "participants/participant-c/memorial-reference.webp",
+            ],
+          },
+          NumericLessThanEquals: { "s3:max-keys": 1 },
+        },
+      },
+    ]);
+    expect(statusStatements.flatMap(actionsOf)).not.toContain("s3:GetObject");
     const statusCollectorRead = statusStatements.find(
       (statement) =>
         actionsOf(statement).includes("dynamodb:GetItem") &&
@@ -1417,7 +1522,7 @@ describe("RecordsApplicationStack", () => {
     expect(parameters.RecordsCertificateArn).toBeUndefined();
   });
 
-  test("filters completed metadata and bounds every stream retry dimension", () => {
+  test("routes affection profiles independently of schema version and bounds stream retries", () => {
     const { template } = fixture;
 
     template.hasResourceProperties("AWS::Lambda::EventSourceMapping", {
@@ -1432,11 +1537,15 @@ describe("RecordsApplicationStack", () => {
           },
           {
             Pattern:
-              '{"eventName":["INSERT","MODIFY"],"dynamodb":{"NewImage":{"record_type":{"S":["affection_profile"]},"schema_version":{"N":["8","9","10"]}}}}',
+              '{"eventName":["INSERT","MODIFY"],"dynamodb":{"Keys":{"PK":{"S":[{"prefix":"AFFECTION#REQUESTER#"}]},"SK":{"S":["PROFILE"]}},"NewImage":{"record_type":{"S":["affection_profile"]}}}}',
           },
           {
             Pattern:
               '{"eventName":["REMOVE"],"dynamodb":{"Keys":{"PK":{"S":[{"prefix":"AFFECTION#REQUESTER#"}]},"SK":{"S":["PROFILE"]}}}}',
+          },
+          {
+            Pattern:
+              '{"eventName":["INSERT"],"dynamodb":{"Keys":{"PK":{"S":[{"prefix":"GACHA#GUILD#"}]},"SK":{"S":[{"prefix":"RESULT#"}]}}}}',
           },
         ],
       },
@@ -1445,6 +1554,51 @@ describe("RecordsApplicationStack", () => {
       MaximumRetryAttempts: 3,
       StartingPosition: "TRIM_HORIZON",
     });
+  });
+
+  test("routes gallery reads to Records and confines thumbnail writes to projection workers", () => {
+    const { template } = fixture;
+    const routes = Object.values(template.findResources("AWS::ApiGatewayV2::Route"));
+    const gallery = routes.filter((route) => route.Properties.RouteKey.startsWith("GET /api/v1/gallery"));
+    expect(gallery.map((route) => route.Properties.RouteKey).sort()).toEqual([
+      "GET /api/v1/gallery",
+      "GET /api/v1/gallery/roster",
+      "GET /api/v1/gallery/school-logos",
+      "GET /api/v1/gallery/thumbnails",
+      "GET /api/v1/gallery/{cardId}",
+      "GET /api/v1/gallery/{cardId}/original",
+    ]);
+    expect(gallery.every((route) => JSON.stringify(route.Properties.Target) === JSON.stringify(
+      routes.find((route) => route.Properties.RouteKey === "GET /api/v1/records")?.Properties.Target,
+    ))).toBe(true);
+    const policies = Object.entries(template.findResources("AWS::IAM::Policy"));
+    const galleryStatements = (role: string) => policies
+      .filter(([id]) => id.startsWith(role))
+      .flatMap(([, policy]) => policy.Properties.PolicyDocument.Statement as PolicyStatement[])
+      .filter((statement) => /student-gacha\/|GACHA#/.test(JSON.stringify(statement)));
+    const read = galleryStatements("ReadFunctionRole");
+    expect(read.flatMap(actionsOf).sort()).toEqual([
+      "dynamodb:BatchGetItem", "dynamodb:GetItem", "dynamodb:Query", "s3:GetObject", "s3:GetObjectVersion",
+    ]);
+    const assetRead = read.find((statement) => actionsOf(statement).includes("s3:GetObject"));
+    expect(assetRead?.Resource).toHaveLength(3);
+    expect(JSON.stringify(assetRead?.Resource)).toContain("student-gacha/assets/blue_archive_school_logos.zip");
+    expect(JSON.stringify(assetRead?.Resource)).toContain("student-gacha/assets/blue_archive_school_logos_mnc_v1.zip");
+    expect(JSON.stringify(assetRead?.Resource)).toContain("student-gacha/roster/blue_archive_characters_with_npcs.json");
+    expect(JSON.stringify(assetRead?.Resource)).not.toContain("*");
+    expect(JSON.stringify(read)).not.toContain("GACHA#OFFER#");
+    for (const role of ["ProjectorFunctionRole", "BackfillFunctionRole"]) {
+      const statements = galleryStatements(role);
+      const writes = statements.filter((statement) => actionsOf(statement).includes("s3:PutObject"));
+      expect(writes).toHaveLength(1);
+      expect(JSON.stringify(writes[0]?.Resource)).toContain("student-gacha/thumbnails/v1/*");
+      expect(JSON.stringify(writes[0]?.Resource)).not.toContain("student-gacha/results/");
+      const offers = statements.find((statement) => JSON.stringify(statement.Condition).includes("GACHA#OFFER#"));
+      expect(offers?.Condition).toHaveProperty(["ForAllValues:StringEquals", "dynamodb:Attributes"], [
+        "PK", "SK", "guild_id", "state", "owner_key",
+      ]);
+    }
+    expect(galleryStatements("OgpFunctionRole")).toEqual([]);
   });
 
   test("keeps source writes and projector scans out of both execution roles", () => {

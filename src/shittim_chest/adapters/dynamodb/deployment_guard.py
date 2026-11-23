@@ -51,6 +51,11 @@ from shittim_chest.adapters.dynamodb.serializer import (
     deserialize_runtime_state,
     serialize_deployment_lock,
 )
+from shittim_chest.adapters.dynamodb.student_gacha_activity import (
+    STUDENT_GACHA_ACTIVITY_KEY,
+    student_gacha_activity_count,
+    student_gacha_idle_check,
+)
 from shittim_chest.application.deployment_guard import (
     DEPLOYMENT_GUARD_AUDIT_SCHEMA_VERSION,
     BreakGlassReason,
@@ -190,6 +195,7 @@ class DynamoDbDeploymentGuard:
                 validated=validated,
                 post_acquire_items=post_acquire_items,
                 audit=audit,
+                require_student_gacha_idle=context.mode is DeploymentMode.NORMAL,
             )
             try:
                 self._client.transact_write_items(
@@ -413,22 +419,22 @@ class DynamoDbDeploymentGuard:
                 {
                     "Get": {
                         "TableName": self._table_name,
-                        "Key": marshal_item(spec.key),
+                        "Key": marshal_item(key),
                     }
                 },
             )
-            for spec in specs
+            for key in (*(spec.key for spec in specs), STUDENT_GACHA_ACTIVITY_KEY)
         ]
         response = self._client.transact_get_items(
             TransactItems=actions,
             ReturnConsumedCapacity="NONE",
         )
         raw_responses = response.get("Responses", [])
-        if len(raw_responses) != _SNAPSHOT_RECORD_COUNT:
+        if len(raw_responses) != _SNAPSHOT_RECORD_COUNT + 1:
             raise DeploymentGuardUnavailable("deployment snapshot has an invalid shape")
         items = tuple(
             None if raw.get("Item") is None else unmarshal_item(raw["Item"])
-            for raw in raw_responses
+            for raw in raw_responses[:-1]
         )
         if any(item is None for item in items):
             raise DeploymentGuardUnavailable("deployment snapshot is incomplete")
@@ -461,7 +467,14 @@ class DynamoDbDeploymentGuard:
         schema_version = schema_versions.pop()
         runtime = deserialize_runtime_state(runtime_item)
         lock = deserialize_deployment_lock(lock_item)
-        activity = _runtime_activity(complete[1:9], at=at)
+        raw_gacha = raw_responses[-1].get("Item")
+        activity = _runtime_activity(
+            complete[1:9],
+            at=at,
+            pending_student_gacha=student_gacha_activity_count(
+                None if raw_gacha is None else unmarshal_item(raw_gacha)
+            ),
+        )
         return _ValidatedSnapshot(
             items=complete,
             schema_version=schema_version,
@@ -489,6 +502,7 @@ class DynamoDbDeploymentGuard:
         validated: _ValidatedSnapshot,
         post_acquire_items: tuple[DynamoItem, ...],
         audit: DynamoItem,
+        require_student_gacha_idle: bool,
     ) -> list[TransactWriteItemTypeDef]:
         specs: tuple[ControlRecordSpec | _RuntimeStateSpec, ...] = (
             *CONTROL_RECORD_MANIFEST.activity_records,
@@ -531,6 +545,8 @@ class DynamoDbDeploymentGuard:
                 }
             }
         )
+        if require_student_gacha_idle:
+            actions.append(student_gacha_idle_check(self._table_name))
         actions.append(_put_immutable(self._table_name, audit))
         return actions
 
@@ -654,7 +670,9 @@ def _control_snapshot_hash(items: tuple[DynamoItem, ...]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
-def _runtime_activity(items: tuple[DynamoItem, ...], *, at: datetime) -> RuntimeActivity:
+def _runtime_activity(
+    items: tuple[DynamoItem, ...], *, at: datetime, pending_student_gacha: int
+) -> RuntimeActivity:
     ingress = _bounded_counter(items[0], "count", INGRESS_QUEUE_LIMIT)
     status = _bounded_counter(items[1], "count", _STATUS_PENDING_LIMIT)
     panel = _bounded_counter(items[2], "count", PANEL_REFRESH_COUNT_LIMIT)
@@ -688,6 +706,7 @@ def _runtime_activity(items: tuple[DynamoItem, ...], *, at: datetime) -> Runtime
         claimed_outbox=claimed_outbox,
         pending_status_updates=status,
         pending_panel_refreshes=panel,
+        pending_student_gacha=pending_student_gacha,
     )
 
 

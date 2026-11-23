@@ -18,6 +18,12 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
+# Also support direct script execution.
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from tools.check_container_policy import DHI_REFERENCE_PATTERN
+
 KEY_COMMIT = "d6b11e0475ac7ddf74687268d16a4201a15e163f"
 KEY_SHA256 = "1d02bbccf149283ae6288d96264dcad3fb23ee1911d90324a48eab28e4cb8a5f"
 KEY_URL = (
@@ -30,7 +36,6 @@ IMAGE_TYPE = "application/vnd.oci.image.manifest.v1+json"
 INTOTO_TYPE = "application/vnd.in-toto+json"
 MAX_BYTES = 32 * 1024 * 1024
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
-REFERENCE = re.compile(r"dhi\.io/python:3\.14\.10-debian13(?:-dev)?@(sha256:[0-9a-f]{64})\Z")
 Command = Callable[[list[str]], bytes]
 
 
@@ -179,7 +184,7 @@ def fetch_attestations(
     command: Command = run_command,
 ) -> dict[str, Any]:
     """Fetch immutable evidence; a receipt is written only after every check passes."""
-    match = REFERENCE.fullmatch(reference)
+    match = DHI_REFERENCE_PATTERN.fullmatch(reference)
     _require(match is not None, "dhi_reference_invalid")
     match = cast(re.Match[str], match)
     _require(not output_dir.is_symlink(), "dhi_output_symlink")
@@ -196,7 +201,7 @@ def fetch_attestations(
     key = download_key()
     _require(_digest(key) == "sha256:" + KEY_SHA256, "dhi_signing_key_mismatch")
     save("dhi-signing-key.pub", key)
-    index_digest = match[1]
+    index_digest = match.group("digest")
     immutable = "dhi.io/python@" + index_digest
     index_raw = command([regctl, "manifest", "get", immutable, "--format", "raw-body"])
     _require(_digest(index_raw) == index_digest, "dhi_index_digest_mismatch")

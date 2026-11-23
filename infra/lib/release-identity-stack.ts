@@ -18,6 +18,11 @@ const MAIN_SUBJECT =
   "repo:pitekusu@12059348/shittim-chest@1302516701:ref:refs/heads/main";
 const DEPLOY_SUBJECT =
   "repo:pitekusu@12059348/shittim-chest@1302516701:environment:production";
+const ROSTER_RELEASE_SUBJECT =
+  "repo:pitekusu@12059348/shittim-chest@1302516701:environment:student-gacha-roster";
+const ROSTER_PUBLISH_WORKFLOW =
+  "pitekusu/shittim-chest/.github/workflows/student-gacha-roster-publish.yml@refs/heads/main";
+const ROSTER_KEY = "student-gacha/roster/blue_archive_characters_with_npcs.json";
 const TOKYO_REGION = "ap-northeast-1";
 const COST_REGION = "us-east-1";
 const RECORDS_EDGE_REGION = "us-east-1";
@@ -177,6 +182,36 @@ export class ReleaseIdentityStack extends Stack {
       "Detect drift in the Records stacks without reading source records",
     );
 
+    const rosterReleaseRole = this.githubRole(
+      "StudentGachaRosterReleaseRole",
+      "ShittimChest-Prod-GitHub-StudentGachaRosterRelease",
+      ROSTER_RELEASE_SUBJECT,
+      "Publish and verify the versioned Student Gacha roster",
+      ROSTER_PUBLISH_WORKFLOW,
+    );
+    const mediaArn = `arn:${Aws.PARTITION}:s3:::shittim-chest-production-records-media-${Aws.ACCOUNT_ID}`;
+    const rosterArn = `${mediaArn}/${ROSTER_KEY}`;
+    rosterReleaseRole.addToPolicy(new iam.PolicyStatement({
+      actions: ["s3:GetBucketVersioning"],
+      resources: [mediaArn],
+    }));
+    rosterReleaseRole.addToPolicy(new iam.PolicyStatement({
+      actions: ["s3:GetObject", "s3:GetObjectVersion"],
+      resources: [rosterArn],
+    }));
+    // Require an S3 precondition for both bootstrap and updates. A timed-out
+    // request can be reconciled against the exact object without a second PUT.
+    for (const header of ["s3:if-none-match", "s3:if-match"]) {
+      rosterReleaseRole.addToPolicy(new iam.PolicyStatement({
+        actions: ["s3:PutObject"],
+        conditions: {
+          Null: { [header]: "false" },
+          StringEquals: { "s3:x-amz-server-side-encryption": "AES256" },
+        },
+        resources: [rosterArn],
+      }));
+    }
+
     this.grantPlanPermissions(props);
     this.grantDeployPermissions(props);
     this.grantDriftPermissions();
@@ -190,6 +225,7 @@ export class ReleaseIdentityStack extends Stack {
     new CfnOutput(this, "PlanRoleArn", { value: this.planRole.roleArn });
     new CfnOutput(this, "DeployRoleArn", { value: this.deployRole.roleArn });
     new CfnOutput(this, "DriftRoleArn", { value: this.driftRole.roleArn });
+    new CfnOutput(this, "StudentGachaRosterReleaseRoleArn", { value: rosterReleaseRole.roleArn });
     new CfnOutput(this, "RecordsPlanRoleArn", { value: this.recordsPlanRole.roleArn });
     new CfnOutput(this, "RecordsDeployRoleArn", { value: this.recordsDeployRole.roleArn });
     new CfnOutput(this, "RecordsBackfillRoleArn", {
@@ -203,6 +239,7 @@ export class ReleaseIdentityStack extends Stack {
     roleName: string,
     subject: string,
     description: string,
+    workflowRef?: string,
   ): iam.Role {
     const principal = new iam.FederatedPrincipal(
       this.oidcProvider.openIdConnectProviderArn,
@@ -210,6 +247,12 @@ export class ReleaseIdentityStack extends Stack {
         StringEquals: {
           "token.actions.githubusercontent.com:aud": OIDC_AUDIENCE,
           "token.actions.githubusercontent.com:sub": subject,
+          ...(workflowRef === undefined
+            ? {}
+            : {
+              "token.actions.githubusercontent.com:job_workflow_ref": workflowRef,
+              "token.actions.githubusercontent.com:ref": "refs/heads/main",
+            }),
         },
       },
       "sts:AssumeRoleWithWebIdentity",

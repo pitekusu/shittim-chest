@@ -14,6 +14,13 @@ regexes = ['''^\s*AWS_SIGNER_NOTATION_KEY_SHA256:\s+[0-9a-f]{64}\s*$''']
 paths = ['''^\.github/workflows/release\.yml$''']
 
 [[rules.allowlists]]
+description = "Amazon ECR Credential Helper v0.13.0 public ARM64 checksum"
+condition = "AND"
+regexTarget = "line"
+regexes = ['''^\s*ECR_CREDENTIAL_HELPER_SHA256:\s+f0669e1666c6e1c70f9484df2cbd01c89b82f687f63dc55c50b05e8d20ebd2e1\s*$''']
+paths = ['''^\.github/workflows/release\.yml$''']
+
+[[rules.allowlists]]
 description = "Exact Docker DHI public signing-key commit and public-file checksum"
 condition = "AND"
 regexTarget = "line"
@@ -26,6 +33,20 @@ condition = "AND"
 regexTarget = "line"
 regexes = ['''^\s*ECR_CREDENTIAL_HELPER_SHA256:\s+5bdd30fb6c7a92462f5b454cce1aa906ca7926a6c2e39efad9613a7bf7661fac\s*$''']
 paths = ['''^\.github/workflows/release\.yml$''']
+
+[[rules.allowlists]]
+description = "Exact SHA-256 checksums of current and historical student gacha assets"
+condition = "AND"
+regexTarget = "line"
+regexes = [
+  '''^\s*(?:ROSTER_KEY: "40dba2b9261072e25a8e9a1378447880e07658446c82cbc3836ce5759336cabd"|ROSTER_KEY: "561318df841fd812e90166c30506d61d83e9c07f4d5954a6ed7f3850b43cbbc6"|LOADING_GIF_KEY: "a902598c659185353850dbe9e26c18fa0dd57d9f5d6288d2673b3c1e7e47ad63"|FORMAT_KEY: "4d921dc67519a8b826a7ef6cf4853acaffca6db69c81e737816378f2ea9e80e0"),\s*$''',
+  '''^\s*SCHOOL_LOGOS_KEY: "(?:c4090aa1613efab81b3255b0ee74db79f8ff240a1cd5cbec6ab51d453e4a23e8|d0fc662e7429134433c1ff7fb9bf01598516ea07ade16194f07aef3d61209a09)",\s*$''',
+  '''^\s*_SPAKO_KEY: "213bd650bfe09589364ec86cfb332172a485e76d50dde7a1c9e14256febefcc9",\s*$''',
+  '''^\s*_SFARE_KEY: "ed813794585294d4868549a37a84b06cb640a3e820ff2f8d81d2261bf92a6bf2",\s*$''',
+  '''^\s*_CHIFFON_KEY: "821fda383ce5fc32fc89eee7e42615f6aa5ac3732924d50fd26f3ffc2b750d30",\s*$''',
+  '''^\s*_GRUS_KEY: "1f529249da4218feffdcfa5090e2dbe5cedf3ab763456b0e2e1d2c85260a3888",\s*$''',
+]
+paths = ['''^src/shittim_chest/adapters/assets/student_gacha\.py$''']
 
 [[rules]]
 id = "generic-password"

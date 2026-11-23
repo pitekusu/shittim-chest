@@ -1,6 +1,6 @@
 import weeksValidator from "../generated/momotalk-weeks-response-validator.mjs";
 import roomsValidator from "../generated/momotalk-rooms-response-validator.mjs";
-import roomValidator from "../generated/momotalk-room-response-validator.mjs";
+import roomValidator from "../generated/momotalk-room-v3-response-validator.mjs";
 import { requestJson } from "./http";
 import type { ParticipantSlot, ParticipantSummary, RequesterSummary } from "./types";
 
@@ -34,10 +34,11 @@ export interface MomotalkMessage {
 }
 export interface MomotalkImageSubject {
   readonly participant: ParticipantSlot;
-  readonly mood: "happy" | "unhappy";
+  readonly mood: "happy" | "neutral" | "unhappy";
 }
 export interface MomotalkImage extends MomotalkImageSubject {
-  readonly subjects?: readonly MomotalkImageSubject[] | null;
+  readonly subjects: readonly MomotalkImageSubject[];
+  readonly animated: boolean;
   readonly state: "pending" | "ready" | "failed";
   readonly url: string | null;
   readonly thumbnailUrl: string | null;
@@ -84,7 +85,7 @@ export function getMomotalkRoom(
   signal?: AbortSignal,
 ): Promise<MomotalkRoomResponse> {
   return requestJson(
-    `/api/v1/momotalk/weeks/${encodeURIComponent(week)}/rooms/${encodeURIComponent(room)}?contract=momotalk-selfie-v2`,
+    `/api/v1/momotalk/weeks/${encodeURIComponent(week)}/rooms/${encodeURIComponent(room)}?contract=momotalk-selfie-v3`,
     (value): value is MomotalkRoomResponse => roomValidator(value),
     { signal },
   );

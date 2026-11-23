@@ -1,6 +1,9 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+
+import { staticClosure, type GuardChunk } from "../scripts/code-splitting-guard";
 
 const RECORD_ID = "r".repeat(43);
 const DARK_THEME_SNAPSHOT_MAX_DIFF_RATIO = 0.0001;
@@ -12,6 +15,8 @@ const AUTHENTICATED_ROUTE_CHUNK_NAMES = [
   "AdminPromptsPage",
   "MemorialPage",
   "MomotalkPage",
+  "GalleryPage",
+  "GalleryViewer",
 ] as const;
 
 function observeAssetRequests(page: Page): Set<string> {
@@ -21,6 +26,19 @@ function observeAssetRequests(page: Page): Set<string> {
     requestedAssets.add(new URL(request.url()).pathname);
   });
   return requestedAssets;
+}
+
+function routeStylesheets(routeName: string) {
+  const { chunks } = JSON.parse(
+    readFileSync(new URL("../dist/records-code-splitting.json", import.meta.url), "utf8"),
+  ) as { chunks: (GuardChunk & { route: string | null })[] };
+  const route = chunks.find((chunk) => chunk.route === routeName);
+  if (!route) throw new Error(`Missing manifest route ${routeName}`);
+  const byName = new Map(chunks.map((chunk) => [chunk.fileName, chunk]));
+  const styles = (chunk: GuardChunk) =>
+    [...staticClosure(chunk, byName)].flatMap((file) => byName.get(file)?.css ?? []);
+  const initial = new Set(chunks.filter((chunk) => chunk.isEntry).flatMap(styles));
+  return [...new Set(styles(route))].filter((file) => !initial.has(file));
 }
 
 function matchingChunkAssets(requestedAssets: ReadonlySet<string>, chunkName: string): string[] {
@@ -880,7 +898,7 @@ async function mockAuthenticatedApi(
       json: { schemaVersion: 1, items: [recordDetail.requester], nextCursor: null },
     }),
   );
-  await page.route("**/api/v1/records/search?contract=record-attachments-v1", (route) => {
+  await page.route("**/api/v1/records/search?contract=record-followups-v1", (route) => {
     const body = route.request().postDataJSON() as {
       search: string;
       requester?: string;
@@ -938,7 +956,7 @@ async function mockAuthenticatedApi(
       },
     }),
   );
-  await page.route(`**/api/v1/records/${RECORD_ID}?contract=record-images-v1`, (route) =>
+  await page.route(`**/api/v1/records/${RECORD_ID}?contract=record-followups-v1`, (route) =>
     route.fulfill({ json: recordDetail }),
   );
   await page.route("**/api/v1/insights/rankings", (route) => route.fulfill({ json: rankings }));
@@ -1131,6 +1149,9 @@ test("individual OGP follows detail navigation and returns to common preview", a
 });
 
 test("record detail identifies the requester and uses affection hearts", async ({ page }) => {
+  // The two navigation bars are verified separately and can overlap this tall clip.
+  const hideNavigation =
+    'nav[aria-label="議論内ナビゲーション"], nav[aria-label="モバイルナビゲーション"] { visibility: hidden; }';
   await mockAuthenticatedApi(page, detailWithAffection);
   await page.goto(`/records/${RECORD_ID}`);
 
@@ -1166,10 +1187,15 @@ test("record detail identifies the requester and uses affection hearts", async (
     await expect(card.getByText(change.reason)).toBeVisible();
   }
 
-  await expect(affection).toHaveScreenshot("records-detail-affection.png", {
-    animations: "disabled",
-    maxDiffPixels: 30,
-  });
+  const navigationStyle = await page.addStyleTag({ content: hideNavigation });
+  try {
+    await expect(affection).toHaveScreenshot("records-detail-affection.png", {
+      animations: "disabled",
+      maxDiffPixels: 30,
+    });
+  } finally {
+    await navigationStyle.evaluate((style) => style.parentNode?.removeChild(style));
+  }
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
 });
@@ -1520,6 +1546,47 @@ test("authenticated member can review responsive rankings", async ({ page }) => 
     expect(cardBox!.x).toBeGreaterThanOrEqual(0);
     expect(cardBox!.x + cardBox!.width).toBeLessThanOrEqual(320);
   }
+});
+
+test("shows applied and upcoming ChatGPT credits in the selected period's costs", async ({
+  page,
+}) => {
+  await mockAuthenticatedApi(page);
+  await page.route("**/api/v1/insights/costs?*", (route) => {
+    const params = new URL(route.request().url()).searchParams;
+    const period = params.get("period");
+    expect(params.get("contract")).toBe("subscription-credits-v1");
+    if (period === "today") {
+      return route.fulfill({
+        json: {
+          ...costs,
+          period,
+          startDate: costs.endDate,
+          total: "88.456789",
+          breakdown: { ...costs.breakdown, openai: "65.000000" },
+          openaiSubscriptionCredit: "35.000001",
+          openaiNextSubscriptionCredit: { date: "2026-09-01", amountUsd: "29.00" },
+        },
+      });
+    }
+    return route.fulfill({ json: { ...costs, period, openaiSubscriptionCredit: "0.000000" } });
+  });
+  await page.goto("/insights");
+
+  const dashboard = page.getByRole("region", { name: "概算費用" });
+  const openaiRow = dashboard.getByRole("listitem").filter({ hasText: "OpenAI" });
+  await expect(openaiRow.getByText("¥100")).toBeVisible();
+  await expect(dashboard.getByText(/ChatGPT特典/)).toHaveCount(0);
+
+  await dashboard.getByText("今日", { exact: true }).click();
+  await expect(dashboard.getByRole("radio", { name: "今日" })).toBeChecked();
+
+  await expect(openaiRow.getByText("¥65")).toBeVisible();
+  await expect(openaiRow.getByText("（ChatGPT特典で約¥36を充当）")).toBeVisible();
+  await expect(dashboard.getByText("¥89", { exact: true })).toBeVisible();
+  await expect(
+    dashboard.getByText(/次回のChatGPT特典付与予定は2026年9月1日（\$29\.00）/),
+  ).toBeVisible();
 });
 
 test("expands all affection ranks together, keeps cached pages and leaves lower requests visible", async ({
@@ -2204,7 +2271,7 @@ test("anonymous login does not request authenticated route assets", async ({ pag
   expect(matchingChunkAssets(requestedAssets, "AdminPanelState")).toEqual([]);
 });
 
-test("Memorial and SYSTEM ACCESS keep usable targets in the narrow mobile navigation", async ({
+test("Gallery, Memorial and SYSTEM ACCESS keep usable targets in the narrow mobile navigation", async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
@@ -2219,7 +2286,8 @@ test("Memorial and SYSTEM ACCESS keep usable targets in the narrow mobile naviga
     name: "モバイルナビゲーション",
   });
   await expect(mobileNavigation).toBeVisible();
-  await expect(mobileNavigation.getByRole("link")).toHaveCount(4);
+  await expect(mobileNavigation.getByRole("link")).toHaveCount(5);
+  await expect(mobileNavigation.getByRole("link", { name: "生徒図鑑" })).toBeVisible();
   await expect(mobileNavigation.getByRole("link", { name: "モモトーク" })).toBeVisible();
   await expect(
     mobileNavigation.getByRole("link", { name: "メモリアル", exact: true }),
@@ -2950,6 +3018,62 @@ test("service status page presents localized visual status", async ({ page }, te
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
 });
 
+test("service status shows student gacha readiness and unfinished jobs to members", async ({
+  page,
+}) => {
+  const studentGachaMetrics: Readonly<
+    Record<string, readonly { name: string; value: boolean | number | null }[]>
+  > = {
+    ecs: [{ name: "student_gacha_pending", value: 0 }],
+    apigateway: [{ name: "student_gacha_route_registered", value: true }],
+    s3: [
+      { name: "student_gacha_roster_present", value: true },
+      { name: "student_gacha_loading_gif_present", value: true },
+      { name: "student_gacha_layout_present", value: true },
+      { name: "student_gacha_school_logos_present", value: null },
+      { name: "student_gacha_reference_a_present", value: true },
+      { name: "student_gacha_reference_b_present", value: false },
+      { name: "student_gacha_reference_c_present", value: true },
+    ],
+    ssm: [
+      { name: "student_gacha_enabled", value: false },
+      { name: "student_gacha_verification_key_present", value: true },
+    ],
+  };
+  await mockAuthenticatedApi(page);
+  await page.route("**/api/v1/admin/status*", (route) =>
+    route.fulfill({
+      json: {
+        ...adminStatus,
+        sections: adminStatus.sections.map((section) => ({
+          ...section,
+          metrics: [...section.metrics, ...(studentGachaMetrics[section.service] ?? [])],
+        })),
+      },
+    }),
+  );
+
+  await page.goto("/admin");
+
+  const ecs = page.locator("#admin-service-ecs");
+  await expect(ecs.getByText("生徒ガチャの未完了ジョブ", { exact: true }).locator("..")).toHaveText(
+    "生徒ガチャの未完了ジョブ0",
+  );
+  const assets = page.getByRole("region", { name: "生徒ガチャの素材" });
+  await expect(assets).toContainText("生徒名簿登録済み");
+  await expect(assets).toContainText("学校ロゴ未取得");
+  await expect(assets).toContainText("参照肖像B未登録");
+  const api = page.locator("#admin-service-apigateway");
+  await expect(api).toContainText("生徒ガチャのDiscord受付ルート登録済み");
+  await expect(api).toContainText("リクエスト合計32");
+  const settings = page.locator("#admin-service-ssm");
+  await expect(settings).toContainText("生徒ガチャの受付設定無効");
+  await expect(settings).toContainText("生徒ガチャのDiscord署名検証キー登録済み");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+    page.viewportSize()!.width,
+  );
+});
+
 test("service status page contains wide status tables on mobile", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium");
   await page.setViewportSize({ width: 320, height: 844 });
@@ -3124,6 +3248,7 @@ for (const directRoute of [
   { path: `/records/${RECORD_ID}`, chunkName: "RecordDetail", heading: detail.question },
   { path: "/insights", chunkName: "RankingsPage", heading: "いろいろな記録" },
   { path: "/memorial", chunkName: "MemorialPage", heading: "メモリアルロビー" },
+  { path: "/gallery", chunkName: "GalleryPage", heading: "生徒図鑑" },
   { path: "/admin", chunkName: "AdminPage", heading: "サービス状態確認" },
   { path: "/admin/prompts", chunkName: "AdminPromptsPage", heading: "プロンプト管理" },
 ] as const) {
@@ -3133,6 +3258,33 @@ for (const directRoute of [
     test.skip(testInfo.project.name !== "desktop-chromium");
     const requestedAssets = observeAssetRequests(page);
     await mockAuthenticatedApi(page);
+    await page.route(
+      (url) => url.pathname === "/api/v1/gallery",
+      (route) =>
+        route.fulfill({
+          json: {
+            schemaVersion: 1,
+            contract: "gallery-collection-v1",
+            items: [],
+            nextCursor: null,
+          },
+        }),
+    );
+    await page.route("**/api/v1/gallery/roster", (route) =>
+      route.fulfill({
+        json: {
+          schemaVersion: 1,
+          items: [
+            {
+              studentId: "a".repeat(43),
+              studentName: "アリス",
+              schoolName: "ミレニアムサイエンススクール",
+              rarity: 3,
+            },
+          ],
+        },
+      }),
+    );
 
     await page.goto(directRoute.path);
     await expect(
@@ -3144,15 +3296,9 @@ for (const directRoute of [
       requiredRouteAssets.filter((assetPath) => assetPath.endsWith(".js")),
       `${directRoute.chunkName} JavaScript`,
     ).toHaveLength(1);
-    const stylesheetChunk = directRoute.chunkName.startsWith("Admin")
-      ? "AdminPanelState"
-      : directRoute.chunkName;
-    expect(
-      matchingChunkAssets(requestedAssets, stylesheetChunk).filter((assetPath) =>
-        assetPath.endsWith(".css"),
-      ),
-      `${directRoute.chunkName} CSS`,
-    ).toHaveLength(1);
+    const stylesheets = routeStylesheets(directRoute.chunkName);
+    expect(stylesheets.length, `${directRoute.chunkName} lazy CSS`).toBeGreaterThan(0);
+    for (const stylesheet of stylesheets) expect(requestedAssets).toContain(`/${stylesheet}`);
     for (const unrelatedChunkName of AUTHENTICATED_ROUTE_CHUNK_NAMES.filter(
       (chunkName) => chunkName !== directRoute.chunkName,
     )) {
@@ -3181,7 +3327,7 @@ test("archive restores its in-memory filters, focus and reading position", async
   await page.route("**/api/v1/records?*", (route) =>
     route.fulfill({ json: { schemaVersion: 1, items, nextCursor: null } }),
   );
-  await page.route("**/api/v1/records/search?contract=record-attachments-v1", (route) =>
+  await page.route("**/api/v1/records/search?contract=record-followups-v1", (route) =>
     route.fulfill({ json: { schemaVersion: 1, items, nextCursor: null } }),
   );
   await page.goto("/");
@@ -3211,6 +3357,113 @@ test("archive restores its in-memory filters, focus and reading position", async
   });
   await page.reload();
   await expect(search).toHaveValue("");
+});
+
+test("follow-up links open related records and restore their originating archive action", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockAuthenticatedApi(page);
+  const childId = "b".repeat(43);
+  const secondId = "s".repeat(43);
+  const parentQuestion = "今日の献立は何にする?";
+  const childQuestion = "ビーフとポークならどちら?";
+  const secondQuestion = "辛さはどれくらいがいい?";
+  const archiveCard = {
+    schemaVersion: 1,
+    completedAt: detail.completedAt,
+    requester: detail.requester,
+    participants: detail.participants,
+    result: detail.result,
+  };
+  await page.route("**/api/v1/records?*", (route) =>
+    route.fulfill({
+      json: {
+        schemaVersion: 1,
+        items: [
+          {
+            ...archiveCard,
+            recordId: childId,
+            questionPreview: childQuestion,
+            parentRecordId: RECORD_ID,
+            parentQuestionPreview: parentQuestion,
+          },
+          {
+            ...archiveCard,
+            recordId: RECORD_ID,
+            questionPreview: parentQuestion,
+            hasFollowUps: true,
+          },
+        ],
+        nextCursor: null,
+      },
+    }),
+  );
+  const followUpsPattern = `**/api/v1/records/${RECORD_ID}/follow-ups*`;
+  await page.route(`**/api/v1/records/${RECORD_ID}?contract=record-followups-v1`, (route) =>
+    route.fulfill({ json: { ...detail, question: parentQuestion, hasFollowUps: true } }),
+  );
+  await page.route(followUpsPattern, (route) => {
+    const cursor = new URL(route.request().url()).searchParams.get("cursor");
+    return route.fulfill({
+      json: {
+        schemaVersion: 1,
+        items: [
+          {
+            recordId: cursor ? secondId : childId,
+            questionPreview: cursor ? secondQuestion : childQuestion,
+            completedAt: detail.completedAt,
+          },
+        ],
+        nextCursor: cursor ? null : "next-page",
+        followUpAvailable: false,
+      },
+    });
+  });
+  await page.route(`**/api/v1/records/${childId}?contract=record-followups-v1`, (route) =>
+    route.fulfill({
+      json: {
+        ...detail,
+        recordId: childId,
+        question: childQuestion,
+        parentRecordId: RECORD_ID,
+        parentQuestionPreview: parentQuestion,
+      },
+    }),
+  );
+  await page.route(`**/api/v1/records/${childId}/follow-ups*`, (route) =>
+    route.fulfill({
+      json: { schemaVersion: 1, items: [], nextCursor: null, followUpAvailable: false },
+    }),
+  );
+
+  await page.goto("/");
+  const origin = page.getByRole("link", { name: /元の議論へ/ });
+  await expect(page.getByText("更問", { exact: true })).toBeVisible();
+  await expect(origin).toContainText(parentQuestion);
+  await origin.click();
+  await expect(page.getByRole("heading", { name: parentQuestion, level: 1 })).toBeFocused();
+  await page.goBack();
+  await expect(origin).toBeFocused();
+
+  const followUpsAction = page.getByRole("link", { name: "更問を見る" });
+  await followUpsAction.click();
+  await expect(page).toHaveURL(new RegExp(`/records/${RECORD_ID}#followups$`));
+  const followUps = page.getByRole("region", { name: "更問", exact: true });
+  await expect(followUps.getByRole("heading", { name: "更問", exact: true })).toBeFocused();
+  const child = followUps.getByRole("link", { name: new RegExp(childQuestion.slice(0, -1)) });
+  await expect(child).toBeVisible();
+  await followUps.getByRole("button", { name: "更問をさらに読み込む" }).click();
+  await expect(
+    followUps.getByRole("link", { name: new RegExp(secondQuestion.slice(0, -1)) }),
+  ).toBeVisible();
+  await expect(child).toBeVisible();
+  await child.click();
+  await expect(page.getByRole("heading", { name: childQuestion, level: 1 })).toBeVisible();
+  await expect(followUps.getByRole("link", { name: /元の議論へ/ })).toContainText(parentQuestion);
+  await page.goBack();
+  await page.goBack();
+  await expect(followUpsAction).toBeFocused();
 });
 
 test("refreshed workspaces fit PC and narrow viewports with the whole shell accessible", async ({
@@ -3510,7 +3763,7 @@ test("record attachments are visible in cards and the question and recover expir
   await expect(dialog).not.toBeVisible();
   await expect(trigger).toBeFocused();
   await page.route(images[2]!.url, (route) => route.fulfill({ status: 403 }));
-  await page.route(`**/api/v1/records/${RECORD_ID}?contract=record-images-v1`, (route) =>
+  await page.route(`**/api/v1/records/${RECORD_ID}?contract=record-followups-v1`, (route) =>
     route.fulfill({
       json: {
         ...detail,
@@ -3544,7 +3797,7 @@ test("archive search reaches a full-question match after empty server segments w
   const finalSegment = new Promise<void>((resolve) => {
     finish = resolve;
   });
-  await page.route("**/api/v1/records/search?contract=record-attachments-v1", async (route) => {
+  await page.route("**/api/v1/records/search?contract=record-followups-v1", async (route) => {
     expect(route.request().method()).toBe("POST");
     expect(route.request().headers()["x-csrf-token"]).toBe("csrf-token");
     const body = route.request().postDataJSON() as { search: string; cursor?: string };
@@ -3600,9 +3853,14 @@ test("archive requester options cover unloaded records and preserve selection th
     avatar: placeholder("まだカードを読み込んでいない依頼者", "pink"),
   };
   const candidateReads: string[] = [];
-  await page.route("**/api/v1/records/requesters*", (route) => {
+  let releaseCandidates!: () => void;
+  const candidatesReady = new Promise<void>((resolve) => {
+    releaseCandidates = resolve;
+  });
+  await page.route("**/api/v1/records/requesters*", async (route) => {
     const cursor = new URL(route.request().url()).searchParams.get("cursor");
     candidateReads.push(cursor ?? "first");
+    await candidatesReady;
     return route.fulfill({
       json: {
         schemaVersion: 1,
@@ -3612,14 +3870,30 @@ test("archive requester options cover unloaded records and preserve selection th
     });
   });
   const bodies: { requester?: string; sort: string }[] = [];
-  await page.route("**/api/v1/records/search?contract=record-attachments-v1", (route) => {
+  await page.route("**/api/v1/records/search?contract=record-followups-v1", (route) => {
     bodies.push(route.request().postDataJSON() as { requester?: string; sort: string });
     return route.fulfill({ json: { schemaVersion: 1, items: [], nextCursor: null } });
   });
   await page.goto("/");
-  await expect.poll(() => candidateReads.length).toBe(2);
-  await page.getByRole("combobox", { name: "依頼者" }).click();
-  await page.getByRole("option", { name: otherRequester.displayName }).click();
+  await expect(page.getByRole("article").first()).toBeVisible();
+  expect(candidateReads).toHaveLength(0);
+  const requesterFilter = page.getByRole("combobox", { name: "依頼者" });
+  await requesterFilter.press("ArrowDown");
+  const requesterOptions = page.getByRole("region", { name: "依頼者の選択肢" });
+  try {
+    await expect(requesterOptions.getByRole("status")).toHaveText(
+      "依頼者の候補を読み込んでいます。",
+    );
+    await expect(requesterOptions.getByRole("option")).toHaveCount(1);
+  } finally {
+    releaseCandidates();
+  }
+  await expect(
+    requesterOptions.getByRole("option", { name: otherRequester.displayName }),
+  ).toBeVisible();
+  expect(candidateReads).toHaveLength(2);
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
   await expect(page.getByText("該当する記録はありません")).toBeVisible();
   await expect(page.getByRole("combobox", { name: "依頼者" })).toContainText(
     otherRequester.displayName,

@@ -2,9 +2,9 @@
 
 ARG SOURCE_DATE_EPOCH=0
 
-FROM ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.9@sha256:d3b601f0c7b118bc1753febf7c41cc80981df678445e0254284eecf84db79a7d AS uv
 
-FROM dhi.io/python:3.14.10-debian13-dev@sha256:290766784d2488991d638bc8c52a53a3c5012513075da9b7bc67705510d7cb2d AS builder
+FROM dhi.io/python:3.15.2-debian13-dev@sha256:e52e8a325d11080c04be94b02f9e7df64370ca8a866b5a75fcb56e17bcf11c0d AS builder
 
 ARG SOURCE_DATE_EPOCH
 
@@ -43,7 +43,7 @@ RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     && python /tmp/canonicalize_wheel_records.py \
         --source-date-epoch "${SOURCE_DATE_EPOCH}" /app/.venv
 
-FROM dhi.io/python:3.14.10-debian13@sha256:4491196f15b7afb538ea121eed173cdd136297f616b15b34f66c25610bf80241 AS runtime-base
+FROM dhi.io/python:3.15.2-debian13@sha256:76e89381500bad12fdaba7333bca42a96e4f1a72e3bf5ef753bbe5258cc77ac8 AS runtime-base
 
 ARG SOURCE_DATE_EPOCH
 
@@ -63,13 +63,13 @@ RUN --mount=type=bind,from=builder,source=/etc/ssl/certs,target=/run/updated-ca/
     --mount=type=bind,from=builder,source=/etc/ca-certificates.conf,target=/run/updated-ca/ca-certificates.conf,ro \
     --mount=type=bind,from=builder,source=/tmp/tools,target=/tmp/tools,ro \
     --mount=type=bind,from=builder,source=/tmp/install_runtime_ca.py,target=/tmp/install_runtime_ca.py,ro \
-    ["/usr/bin/python3.14", "/tmp/install_runtime_ca.py"]
+    ["/usr/bin/python3.15", "/tmp/install_runtime_ca.py"]
 
 USER 65532:65532
 
 RUN --mount=type=bind,from=builder,source=/app/.venv,target=/tmp/source-venv,ro \
     --mount=type=bind,from=builder,source=/tmp/transfer_tree_deterministically.py,target=/tmp/transfer_tree_deterministically.py,ro \
-    ["/usr/bin/python3.14", "/tmp/transfer_tree_deterministically.py", "--uid", "65532", "--gid", "65532", "/tmp/source-venv", "/app/.venv"]
+    ["/usr/bin/python3.15", "/tmp/transfer_tree_deterministically.py", "--uid", "65532", "--gid", "65532", "/tmp/source-venv", "/app/.venv"]
 
 USER 65532:65532
 

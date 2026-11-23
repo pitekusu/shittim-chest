@@ -9,6 +9,7 @@ import {
 import { useLocation } from "react-router-dom";
 
 import { useOptionalRecordsArchive } from "./hooks/useRecordsArchive";
+import { routeScenePath } from "./lib/routePresentation";
 import styles from "./styles/routeMotion.module.css";
 
 export type RouteMotionKind = "archive" | "detail" | "insights" | "admin" | "memorial" | "other";
@@ -109,36 +110,38 @@ function RouteScene({
 
 export function BrandedRouteStage({ children }: PropsWithChildren) {
   const location = useLocation();
+  const scenePath = routeScenePath(location.pathname);
   const archive = useOptionalRecordsArchive();
   const archiveReturnTarget = archive?.returnTarget;
   const clearArchiveReturnTarget = archive?.clearReturnTarget;
   const sceneRef = useRef<HTMLDivElement>(null);
-  const previousPathnameRef = useRef(location.pathname);
+  const previousPathnameRef = useRef(scenePath);
   const hasNavigatedRef = useRef(false);
   const mountedRef = useRef(false);
-  const focusedPathnameRef = useRef(location.pathname);
+  const focusedPathnameRef = useRef(scenePath);
 
-  if (previousPathnameRef.current !== location.pathname) {
-    previousPathnameRef.current = location.pathname;
+  if (previousPathnameRef.current !== scenePath) {
+    previousPathnameRef.current = scenePath;
     hasNavigatedRef.current = true;
   }
 
   useEffect(() => {
+    const followUpsAnchor = scenePath.startsWith("/records/") && location.hash === "#followups";
     if (!mountedRef.current) {
       mountedRef.current = true;
-      return;
+      if (!followUpsAnchor) return;
     }
     const previousPathname = focusedPathnameRef.current;
-    focusedPathnameRef.current = location.pathname;
-    if (previousPathname === location.pathname) return;
+    focusedPathnameRef.current = scenePath;
+    if (previousPathname === scenePath && !followUpsAnchor) return;
 
     const scene = sceneRef.current;
     if (!scene) return;
 
     const returnTarget =
-      location.pathname === "/" &&
+      scenePath === "/" &&
       archiveReturnTarget != null &&
-      previousPathname === `/records/${archiveReturnTarget.recordId}`
+      previousPathname === `/records/${archiveReturnTarget.destinationRecordId}`
         ? archiveReturnTarget
         : null;
     const focusContent = () => {
@@ -146,16 +149,32 @@ export function BrandedRouteStage({ children }: PropsWithChildren) {
         // Cached cards can move or disappear during a refetch. Restore only after
         // the archive's current retrieval has settled, even when a card is present.
         if (!scene.querySelector("[data-archive-ready]")) return false;
-        const card = scene.querySelector<HTMLAnchorElement>(
+        const primary = scene.querySelector<HTMLAnchorElement>(
           `[data-record-id="${returnTarget.recordId}"]`,
         );
-        if (card) {
+        const action =
+          returnTarget.action === "record"
+            ? primary
+            : (primary
+                ?.closest("article")
+                ?.querySelector<HTMLAnchorElement>(
+                  `[data-archive-action="${returnTarget.action}"]`,
+                ) ?? primary);
+        if (action) {
           window.scrollTo({ top: returnTarget.scrollY, behavior: "instant" });
-          card.focus({ preventScroll: true });
+          action.focus({ preventScroll: true });
           clearArchiveReturnTarget?.();
           return true;
         }
         clearArchiveReturnTarget?.();
+      }
+      if (followUpsAnchor) {
+        const sectionHeading = scene.querySelector<HTMLElement>("#followups");
+        if (sectionHeading) {
+          sectionHeading.scrollIntoView({ behavior: "instant", block: "start" });
+          sectionHeading.focus({ preventScroll: true });
+          return true;
+        }
       }
       const heading = scene.querySelector<HTMLElement>('h1[tabindex="-1"]');
       if (!heading) return false;
@@ -170,18 +189,18 @@ export function BrandedRouteStage({ children }: PropsWithChildren) {
     });
     observer.observe(scene, { attributes: true, childList: true, subtree: true });
     return () => observer.disconnect();
-  }, [location.pathname, archiveReturnTarget, clearArchiveReturnTarget]);
+  }, [scenePath, location.hash, archiveReturnTarget, clearArchiveReturnTarget]);
 
   return (
     <div
       className={styles.routeStage}
-      data-route-kind={routeMotionKind(location.pathname)}
+      data-route-kind={routeMotionKind(scenePath)}
       data-route-stage=""
     >
       <RouteScene
-        pathname={location.pathname}
+        pathname={scenePath}
         animate={hasNavigatedRef.current}
-        key={location.pathname}
+        key={scenePath}
         sceneRef={sceneRef}
       >
         {children}

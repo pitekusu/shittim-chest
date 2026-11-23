@@ -73,6 +73,9 @@ export interface RecordListItem {
   readonly completedAt: string;
   readonly questionPreview: string;
   readonly attachmentCount?: number;
+  readonly parentRecordId?: string | null;
+  readonly parentQuestionPreview?: string | null;
+  readonly hasFollowUps?: boolean | null;
   readonly requester: RequesterSummary;
   readonly participants: readonly ParticipantSummary[];
   readonly result: ResultSummary;
@@ -273,6 +276,11 @@ export interface CostsResponse {
   readonly endDate: string;
   readonly currency: "JPY";
   readonly total: string;
+  readonly openaiSubscriptionCredit?: string;
+  readonly openaiNextSubscriptionCredit?: {
+    readonly date: string;
+    readonly amountUsd: string;
+  };
   readonly breakdown: {
     readonly fargate: string;
     readonly lambda: string;
@@ -304,6 +312,9 @@ export interface RecordAttachment {
 export interface RecordDetailResponse {
   readonly attachments?: readonly RecordAttachment[] | null;
   readonly ogImageUrl?: string | null;
+  readonly parentRecordId?: string | null;
+  readonly parentQuestionPreview?: string | null;
+  readonly hasFollowUps?: boolean | null;
   readonly schemaVersion: 2;
   readonly recordId: string;
   readonly completedAt: string;
@@ -349,6 +360,17 @@ export interface RecordDetailResponse {
     readonly caveats: readonly string[];
   };
   readonly affection: DebateAffection | null;
+}
+
+export interface RecordFollowUpsResponse {
+  readonly schemaVersion: 1;
+  readonly items: readonly {
+    readonly recordId: string;
+    readonly questionPreview: string;
+    readonly completedAt: string;
+  }[];
+  readonly nextCursor?: string | null;
+  readonly followUpAvailable: boolean;
 }
 
 export type SessionResponse =

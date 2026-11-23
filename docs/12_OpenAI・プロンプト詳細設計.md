@@ -29,7 +29,7 @@ OpenAIのマルチエージェント機能へ進行を委ねず、Pythonが再�
 
 | 対象 | 方針 |
 |---|---|
-| 通常討論モデル | `gpt-6.1-terra`の標準設定（`standard`）。上位モデルへ自動切替しない |
+| テキスト・推論モデル | Core／Recordsともに`gpt-6.2-sol`。通常討論は標準設定（`standard`）で実行する |
 | OpenAI接続 | Core／RecordsともSDK 3系・HTTPX2 2系。正確な版は各ロックファイルで固定 |
 | 他のHTTP通信 | Discord・認証・費用取得等のHTTPXと境界を分ける |
 | Responsesの保存 | `store=false`を明示 |
@@ -38,8 +38,19 @@ OpenAIのマルチエージェント機能へ進行を委ねず、Pythonが再�
 | 全体の期限 | 論理生成段階120秒、試行作成から600秒。途中投稿・自動復旧で延長しない |
 | SDK型・例外 | 外部接続層の内側へ漏らさない |
 
+GPT-6.2ではトップレベルの`instructions`が`input`の後ろに配置される。コードが組み立てた指示は`input`先頭の`developer`メッセージに入れ、質問や添付画像などの未信頼データは後続の`user`メッセージに入れる。
+推論量は用途に応じて`low`／`medium`／`high`を指定する。`none`を使っていたRecordsの思い出文、モモトーク、Inspector翻訳は`low`を使う。
+
 `store=false`はAPIの保存設定であり、アプリケーション側で本文をログへ残さないこととは別の契約である。
 画像編集APIにはResponsesの`store`設定をそのまま適用しない。
+
+生徒募集の画像編集では、カメラと構図を固定し、最初から最後まで同じ着用者が映るループGIFを求める。
+自然に動く着用者が終盤で始点の位置・体の向き・ポーズに戻っていくように指示する。
+最後から最初への切り替えも隣り合うフレームと同程度の変化にし、同じコマの重複や停止を避ける。
+各フレームには画面全体を1コマだけ描くよう指定する。
+組版前に画面のほぼ全幅を横切る黒いコマの境界線を検査し、該当フレームを除外した場合は
+正常な連続区間を使って始点へ戻る往復ループを組み立てる。
+保存と表示の仕様は[Discord詳細設計](11_Discord詳細設計.md)を参照する。
 
 ## 2. 信頼境界と人格表現
 
@@ -337,9 +348,9 @@ Inspector翻訳は専用の指示とAPIキーで`responses.parse()`を使う別�
 
 ### 討論の画像入力
 
-通常討論は`gpt-6.1-terra`を使用し、親愛度、事前調査、判断基準、候補、意見、再考、投票、最終決定へ同じ順序の画像を直接渡す。既存の構造化出力・課金上限・再試行・Pythonによる勝者決定を維持する。
+通常討論は`gpt-6.2-sol`を使用し、親愛度、事前調査、判断基準、候補、意見、再考、投票、最終決定へ同じ順序の画像を直接渡す。既存の構造化出力・課金上限・再試行・Pythonによる勝者決定を維持する。
 
-画像は管理下の原画像から最大辺2,048px・品質90・透過を保持するWebPを用意し、Responsesの`input_image`へdata URL、`detail=high`で渡す。画像の説明を一度作って全人格へ共有する方式にはしない。添付なしの入力形式は従来どおりとする。
+画像は管理下の原画像から最大辺2,048px・品質90・透過を保持するWebPを用意し、Responsesの`input_image`へdata URL、`detail=high`で渡す。画像の説明を一度作って全人格へ共有する方式にはしない。
 
 画像と写り込んだ文章は未信頼の質問資料であり、埋め込まれた命令へ従わず、検証済みのWeb Evidenceへ昇格させない。画像本文やdata URLを観測記録へ残さず、既存の`store=false`を維持する。各人格は自分の判断基準で同じ画像を理解する。
 
@@ -363,10 +374,10 @@ flowchart TD
 | 人格の取得 | 有効版の構成一覧（`manifest`）とチェックサムを検証。有効ポインターがない場合だけ配信時に固定した旧人格設定を使う |
 | 入力画像 | 本人のJPEG／PNG／WebPと、選出人格の表示画像。形式・フレーム数・画素数・容量を確認 |
 | 正規化 | 最大辺1,536px、10MiB以下のRGB PNG。両画像を最初の課金呼出前に検証 |
-| 画像生成 | `gpt-image-2.5-sunburst`、品質`xhigh`で親密なデフォルメ2ショット。実写調・第三者の追加・入力画像内の命令追従を禁止 |
+| 画像生成 | `gpt-image-2.6-sunburst`、品質`xhigh`で親密なデフォルメ2ショット。実写調・第三者の追加・入力画像内の命令追従を禁止 |
 | 最終寸法 | 1920×1088で生成後、中央を切り抜いて1920×1080へ固定 |
 | 文字の合成 | アプリケーションでDelogyの`THE SHITTIM CHEST`とLINE Seed JPの日本時間の達成日を描画 |
-| 思い出文 | `gpt-6.1-terra`、約800字。実装では平文出力を650〜950字で検証 |
+| 思い出文 | `gpt-6.2-sol`、推論量`low`、約800字。完了した平文出力を650〜950字で検証 |
 | 文章の内容 | 達成時のDiscord表示名と直近10質問を素材に、最大親愛度の口調で語る。質問を引用・列挙しない |
 | 通信 | 各呼出120秒、SDK自動再試行0回、終了処理用15秒を確保 |
 
@@ -407,3 +418,4 @@ flowchart TD
 | 2026-08-14 | OpenAI Python | [公式SDK](https://github.com/openai/openai-python) | 非同期クライアント、例外、parse |
 | 2026-09-05 | Responsesの再確認 | [API間の相違](https://developers.openai.com/api/docs/guides/migrate-to-responses#additional-differences) | 保存設定と構造化出力形式を再確認。用途ごとの採用方式は実装と照合 |
 | 2026-10-27 | GPT-6.1 Terra | [モデル仕様](https://developers.openai.com/api/docs/models/gpt-6.1-terra) | テキスト生成を`gpt-6.1-terra`へ統一。既存の推論量`none`／`medium`／`high`、画像入力、Structured Outputs、Web検索を維持 |
+| 2026-11-19 | GPT-6.2 Sol | [モデル仕様](https://developers.openai.com/api/docs/models/gpt-6.2-sol)、[移行ガイド](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6.2-sol#gpt-6.2-astra-migration-quickstart) | テキスト・推論を`gpt-6.2-sol`へ統一。推論量`none`を`low`に切り替え、開発者の指示を`input`の先頭へ配置 |

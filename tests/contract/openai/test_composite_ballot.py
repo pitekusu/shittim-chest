@@ -4,7 +4,12 @@ import pytest
 
 from shittim_chest.adapters.openai.composite_ballot import score_composite_ballot
 from shittim_chest.domain import PARTICIPANTS, EvidenceBundle, FinalProposal, InitialOpinion
-from tests.contract.openai.test_responses_service import response_with, service_for
+from tests.contract.openai.test_responses_service import (
+    request_input_text,
+    request_instructions,
+    response_with,
+    service_for,
+)
 
 
 @pytest.mark.asyncio
@@ -43,14 +48,16 @@ async def test_both_scores_are_mapped_back_without_provider_selecting_a_winner(v
         assert [item.reason for item in ballot.assessments] == ["fixture", "fixture"]
         assert len(server.requests) == 1
         request = server.requests[0]
-        payload = json.loads(request["input"])
+        text = request_input_text(request)
+        payload = json.loads(text)
         assert set(payload["candidates"]) == {"first", "second"}
-        assert all(slot.value not in request["input"] for slot in PARTICIPANTS)
+        assert all(slot.value not in text for slot in PARTICIPANTS)
         assert set(payload["initial_opinions"]) == {"first", "second", "voter"}
         # The current voter speaks; no other persona or internal preparation is supplied.
-        assert service.profiles.for_participant(voter).system_prompt in request["instructions"]
+        instructions = request_instructions(request)
+        assert service.profiles.for_participant(voter).system_prompt in instructions
         assert all(
-            service.profiles.for_participant(slot).system_prompt not in request["instructions"]
+            service.profiles.for_participant(slot).system_prompt not in instructions
             for slot in PARTICIPANTS
             if slot != voter
         )

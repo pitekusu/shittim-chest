@@ -25,12 +25,15 @@ from shittim_records.contracts import (
     CostPeriod,
     CostsResponse,
     ImageAvatarRef,
+    NextOpenAISubscriptionCredit,
     ParticipantAffectionRanking,
     ParticipantSlot,
     PlaceholderAvatarRef,
     RankingEntry,
     RankingsResponse,
     RecordDetailResponse,
+    RecordFollowUpItem,
+    RecordFollowUpsResponse,
     RecordListItem,
     RecordListResponse,
     RecordRequestersResponse,
@@ -44,6 +47,7 @@ from shittim_records.contracts import (
 )
 from shittim_records.costs import (
     CostDataInvalid,
+    OpenAISubscription,
     StoredDailyCost,
     StoredDailyRate,
     build_cost_view,
@@ -118,6 +122,16 @@ class RecordsReader(Protocol):
 
     def load_record(self, *, record_id: str) -> tuple[DynamoItem, ...]: ...
 
+    def follow_up_parents(self, record_ids: tuple[str, ...]) -> frozenset[str]: ...
+
+    def load_follow_ups(
+        self, record_id: str, *, after: str | None
+    ) -> tuple[tuple[DynamoItem, ...], str | None]: ...
+
+    def load_record_meta(self, record_id: str) -> DynamoItem | None: ...
+
+    def has_follow_up_source(self, record_id: str) -> bool: ...
+
     def load_ranking_snapshots(self) -> tuple[DynamoItem, ...]: ...
 
     def load_affection_ranking_pointer(self) -> DynamoItem | None: ...
@@ -137,6 +151,8 @@ class RecordsReader(Protocol):
     def load_cost_ledger(
         self,
     ) -> tuple[tuple[StoredDailyCost, ...], tuple[StoredDailyRate, ...]]: ...
+
+    def load_openai_subscription(self) -> OpenAISubscription | None: ...
 
     def load_profiles(self, *, requester_keys: tuple[str, ...]) -> dict[str, RequesterProfile]: ...
 
@@ -180,29 +196,10 @@ class CursorCodec:
         if query.sync_index:
             payload["version"] = 3
             payload["kind"] = "sync-index"
-        encoded = _base64url(_canonical(payload))
-        signature = _base64url(
-            hmac.new(self._key, f"records:cursor:{encoded}".encode(), hashlib.sha256).digest()
-        )
-        return f"{encoded}.{signature}"
+        return self._encode_payload(payload, scope="cursor")
 
     def decode(self, *, query: ListQuery, now: datetime) -> tuple[str, DynamoItem]:
-        if not query.cursor or len(query.cursor) > 4096:
-            raise ReadFailure("CURSOR_INVALID", 400)
-        try:
-            encoded, signature = query.cursor.split(".", 1)
-            expected = _base64url(
-                hmac.new(
-                    self._key,
-                    f"records:cursor:{encoded}".encode(),
-                    hashlib.sha256,
-                ).digest()
-            )
-            if not hmac.compare_digest(signature, expected):
-                raise ValueError
-            payload = json.loads(_decode_base64url(encoded))
-        except UnicodeDecodeError, ValueError, json.JSONDecodeError:
-            raise ReadFailure("CURSOR_INVALID", 400) from None
+        payload = self._decode_payload(query.cursor, scope="cursor")
         expected_fields = {
             "version",
             "index",
@@ -237,6 +234,54 @@ class CursorCodec:
         except ValueError:
             raise ReadFailure("CURSOR_INVALID", 400) from None
         return expected_index, key
+
+    def encode_position(self, position: str, *, scope: str, now: datetime) -> str:
+        """Sign a position with a server-selected scope kept outside the public payload."""
+        return self._encode_payload(
+            {"position": position, "expires_at": int((_utc(now) + CURSOR_TTL).timestamp())},
+            scope=f"position:{scope}",
+        )
+
+    def decode_position(self, cursor: str, *, scope: str, now: datetime) -> str:
+        payload = self._decode_payload(cursor, scope=f"position:{scope}")
+        if (
+            set(payload) != {"position", "expires_at"}
+            or not isinstance(payload["position"], str)
+            or type(payload["expires_at"]) is not int
+            or payload["expires_at"] <= int(_utc(now).timestamp())
+        ):
+            raise ReadFailure("CURSOR_INVALID", 400)
+        return payload["position"]
+
+    def _encode_payload(self, payload: dict[str, Any], *, scope: str) -> str:
+        encoded = _base64url(_canonical(payload))
+        return f"{encoded}.{self._signature(encoded, scope=scope)}"
+
+    def _decode_payload(self, cursor: str | None, *, scope: str) -> dict[str, Any]:
+        if not cursor or len(cursor) > 4096:
+            raise ReadFailure("CURSOR_INVALID", 400)
+        try:
+            encoded, signature = cursor.split(".", 1)
+            if not hmac.compare_digest(signature, self._signature(encoded, scope=scope)):
+                raise ValueError
+            payload = json.loads(_decode_base64url(encoded))
+            if not isinstance(payload, dict):
+                raise ValueError
+        except ValueError:
+            raise ReadFailure("CURSOR_INVALID", 400) from None
+        return payload
+
+    def _signature(self, encoded: str, *, scope: str) -> str:
+        return self.sign_message(domain=scope, value=encoded)
+
+    def sign_message(self, *, domain: str, value: str) -> str:
+        """Sign a domain-separated Records message with the cursor key."""
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.hmac import HMAC
+
+        signature = HMAC(self._key, hashes.SHA256())
+        signature.update(f"records:{domain}:{value}".encode())
+        return _base64url(signature.finalize())
 
     def encode_filtered(
         self,
@@ -405,13 +450,17 @@ class RecordsReadService:
         cursor_codec: CursorCodec,
         public_origin: str | None = None,
         search_clock: Callable[[], float] = monotonic,
+        follow_ups_enabled: bool = False,
     ) -> None:
         self._reader = reader
         self._cursor_codec = cursor_codec
         self._public_origin = public_origin
         self._search_clock = search_clock
+        self._follow_ups_enabled = follow_ups_enabled
 
-    def list_records(self, *, query: ListQuery, now: datetime) -> RecordListResponse:
+    def list_records(
+        self, *, query: ListQuery, now: datetime, include_follow_ups: bool = False
+    ) -> RecordListResponse:
         query = validate_list_query(query)
         expected_index = "gsi2" if query.winner else "gsi1"
         start_key: DynamoItem | None = None
@@ -440,6 +489,8 @@ class RecordsReadService:
         )
         profiles = self._reader.load_profiles(requester_keys=tuple(dict.fromkeys(requester_keys)))
         items = tuple(self._list_item(item, profiles) for item in page.items)
+        if include_follow_ups:
+            items = self._with_follow_up_parents(items)
         next_cursor = None
         if page.last_evaluated_key is not None:
             next_cursor = self._cursor_codec.encode(
@@ -450,7 +501,9 @@ class RecordsReadService:
             )
         return RecordListResponse(schema_version=1, items=items, next_cursor=next_cursor)
 
-    def search_records(self, *, query: RecordSearchRequest, now: datetime) -> RecordListResponse:
+    def search_records(
+        self, *, query: RecordSearchRequest, now: datetime, include_follow_ups: bool = False
+    ) -> RecordListResponse:
         query = query.model_copy(update={"search": query.search.strip().lower()})
         criteria = query.model_dump(exclude={"cursor"})
         index_name = "gsi2" if query.winner else "gsi1"
@@ -536,7 +589,9 @@ class RecordsReadService:
             batch_limit = min(50, batch_limit * 2)
         return RecordListResponse(
             schema_version=1,
-            items=tuple(items),
+            items=self._with_follow_up_parents(tuple(items))
+            if include_follow_ups
+            else tuple(items),
             next_cursor=self._cursor_codec.encode_filtered(
                 kind="search",
                 criteria=criteria,
@@ -585,7 +640,9 @@ class RecordsReadService:
             else None,
         )
 
-    def get_sync_index(self, *, cursor: str | None, now: datetime) -> RecordSyncIndexResponse:
+    def get_sync_index(
+        self, *, cursor: str | None, now: datetime, include_follow_ups: bool = False
+    ) -> RecordSyncIndexResponse:
         # Enumerate the complete index, not "completed_at > last_sync": late Archive
         # projections and deletions must also converge. No question/profile text is sent.
         query = ListQuery(limit=50, cursor=cursor, sync_index=True)
@@ -600,6 +657,13 @@ class RecordsReadService:
             _validate_meta_item(item)
         keys = tuple(dict.fromkeys(_required_text(item, "requester_key") for item in page.items))
         profiles = self._reader.load_profiles(requester_keys=keys)
+        parents = (
+            self._reader.follow_up_parents(
+                tuple(_required_text(item, "record_id") for item in page.items)
+            )
+            if include_follow_ups and page.items
+            else frozenset()
+        )
         references = []
         for item in page.items:
             profile = profiles.get(_required_text(item, "requester_key"))
@@ -623,6 +687,10 @@ class RecordsReadService:
                 if profile is not None
                 else _required_text(item, "requester_display_name"),
             }
+            if include_follow_ups:
+                version.update(_follow_up_parent(item))
+                if version["id"] in parents:
+                    version["has_follow_ups"] = True
             references.append(
                 RecordSyncReference(
                     record_id=version["id"],
@@ -642,7 +710,9 @@ class RecordsReadService:
             else None,
         )
 
-    def get_record(self, *, record_id: str, now: datetime) -> RecordDetailResponse:
+    def get_record(
+        self, *, record_id: str, now: datetime, include_follow_ups: bool = False
+    ) -> RecordDetailResponse:
         if not _is_record_id(record_id):
             raise ReadFailure("REQUEST_INVALID", 400)
         items = self._reader.load_record(record_id=record_id)
@@ -680,7 +750,11 @@ class RecordsReadService:
         decision_winner = _required_text(by_key["DECISION"], "winner")
         if stored_winner != decision_winner:
             raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+        relation = _follow_up_parent(meta) if include_follow_ups else {}
+        if include_follow_ups:
+            relation["has_follow_ups"] = record_id in self._reader.follow_up_parents((record_id,))
         payload: dict[str, Any] = {
+            **relation,
             "schemaVersion": 2,
             "recordId": _required_text(meta, "record_id"),
             "completedAt": _required_text(meta, "completed_at"),
@@ -1019,7 +1093,9 @@ class RecordsReadService:
             generated_at=generated_at,
         )
 
-    def get_costs(self, *, period: CostPeriod, now: datetime) -> CostsResponse:
+    def get_costs(
+        self, *, period: CostPeriod, now: datetime, include_subscription_credits: bool = False
+    ) -> CostsResponse:
         if now.tzinfo is None or now.utcoffset() is None:
             raise ReadFailure("REQUEST_INVALID", 400)
         try:
@@ -1029,7 +1105,9 @@ class RecordsReadService:
                 rates=rates,
                 period=period,
                 now=now,
+                openai_subscription=self._reader.load_openai_subscription(),
             )
+            next_credit = view.openai_next_subscription_credit
             return CostsResponse(
                 schema_version=1,
                 period=view.period,
@@ -1052,9 +1130,66 @@ class RecordsReadService:
                 ),
                 updated_at=view.updated_at,
                 status=view.status,
+                openai_subscription_credit=(
+                    view.openai_subscription_credit_jpy if include_subscription_credits else None
+                ),
+                openai_next_subscription_credit=(
+                    NextOpenAISubscriptionCredit(
+                        date=next_credit.start_date,
+                        amount_usd=f"{next_credit.amount_usd:.2f}",
+                    )
+                    if include_subscription_credits and next_credit is not None
+                    else None
+                ),
             )
         except (CostDataInvalid, ValidationError) as error:
             raise ReadFailure("INSIGHTS_UNAVAILABLE", 503) from error
+
+    def get_follow_ups(
+        self, *, record_id: str, cursor: str | None, now: datetime, mobile: bool
+    ) -> RecordFollowUpsResponse:
+        if not _is_record_id(record_id):
+            raise ReadFailure("REQUEST_INVALID", 400)
+        scope = f"record-follow-ups:{record_id}"
+        after = self._cursor_codec.decode_position(cursor, scope=scope, now=now) if cursor else None
+        if after is not None and not after.startswith("CHILD#"):
+            raise ReadFailure("CURSOR_INVALID", 400)
+        meta = self._reader.load_record_meta(record_id)
+        if meta is None:
+            raise ReadFailure("RECORD_NOT_FOUND", 404)
+        _validate_meta_item(meta)
+        rows, next_key = self._reader.load_follow_ups(record_id, after=after)
+        try:
+            items = tuple(
+                RecordFollowUpItem(
+                    record_id=_required_text(row, "record_id"),
+                    question_preview=_required_text(row, "question_preview"),
+                    completed_at=_canonical_timestamp(row, field="completed_at"),
+                )
+                for row in rows
+            )
+        except ValidationError:
+            raise ReadFailure("ARCHIVE_UNAVAILABLE", 503) from None
+        return RecordFollowUpsResponse(
+            schema_version=1,
+            items=items,
+            next_cursor=self._cursor_codec.encode_position(next_key, scope=scope, now=now)
+            if next_key
+            else None,
+            follow_up_available=(
+                mobile and self._follow_ups_enabled and self._reader.has_follow_up_source(record_id)
+            ),
+        )
+
+    def _with_follow_up_parents(
+        self, items: tuple[RecordListItem, ...]
+    ) -> tuple[RecordListItem, ...]:
+        if not items:
+            return items
+        parents = self._reader.follow_up_parents(tuple(item.record_id for item in items))
+        return tuple(
+            item.model_copy(update={"has_follow_ups": item.record_id in parents}) for item in items
+        )
 
     def _list_item(
         self,
@@ -1074,6 +1209,7 @@ class RecordsReadService:
                     "completedAt": _required_text(item, "completed_at"),
                     "questionPreview": question,
                     "attachmentCount": len(_archive_images(item)),
+                    **_follow_up_parent(item),
                     "requester": self._requester(
                         item,
                         profiles.get(requester_key),
@@ -1315,6 +1451,23 @@ def _validate_meta_item(item: DynamoItem) -> None:
         or item.get("SK") != "META"
     ):
         raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+
+
+def _follow_up_parent(meta: DynamoItem) -> dict[str, str | bool]:
+    parent = meta.get("parent_record_id")
+    preview = meta.get("parent_question_preview")
+    if parent is None and preview is None:
+        return {}
+    if (
+        not isinstance(parent, str)
+        or not _is_record_id(parent)
+        or parent == meta.get("record_id")
+        or not isinstance(preview, str)
+        or not preview.strip()
+        or len(preview) > 160
+    ):
+        raise ReadFailure("ARCHIVE_UNAVAILABLE", 503)
+    return {"parent_record_id": parent, "parent_question_preview": preview}
 
 
 def _archive_images(meta: DynamoItem) -> tuple[DebateImage, ...]:

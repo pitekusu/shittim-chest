@@ -124,6 +124,13 @@ async def test_revision_comparison_selects_requested_workflow(
 
 
 def test_persona_revision_options_must_be_paired(monkeypatch) -> None:
+    # The CLI turns off logging for its process. This in-process test must
+    # leave the previous logging threshold for later Discord contract tests.
+    monkeypatch.setattr(
+        evaluate_deliberation.logging.root.manager,
+        "disable",
+        evaluate_deliberation.logging.root.manager.disable,
+    )
     monkeypatch.setattr(
         "sys.argv", ["evaluate", "--history-table", "fixture", "--before-revision", "before"]
     )

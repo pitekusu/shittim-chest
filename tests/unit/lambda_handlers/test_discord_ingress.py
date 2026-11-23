@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import cast
 
@@ -17,12 +18,18 @@ from shittim_chest.adapters.discord_http import (
     pong_response,
 )
 from shittim_chest.application import DiscordHttpOperation, IngressKind
+from shittim_chest.application.discord import (
+    DISCORD_BOT_SLOTS,
+    DiscordIdentityConfig,
+    DiscordRuntimeConfig,
+)
 from shittim_chest.application.ingress import (
     DiscordIngressApplication,
     IngressAcceptance,
     IngressOutcome,
 )
-from shittim_chest.application.ports import Clock, RepositoryUnavailable
+from shittim_chest.application.ports import Clock, ParameterReader, RepositoryUnavailable
+from shittim_chest.config.ingress import IngressBootstrapSettings, IngressRuntimeSettings
 from shittim_chest.lambda_handlers import discord_ingress as ingress_module
 from shittim_chest.lambda_handlers.discord_ingress import (
     DISCORD_INGRESS_MAX_ACTIVE_SDK_CALL_SECONDS,
@@ -467,6 +474,94 @@ def test_lambda_initialization_resolves_handler_before_first_request(
 
     assert calls == [environment]
     assert ingress_module._handler is marker
+
+
+@pytest.mark.parametrize("gacha_enabled", [False, True])
+def test_snapstart_initialization_shares_one_dynamodb_client_without_requests(
+    monkeypatch: pytest.MonkeyPatch, gacha_enabled: bool
+) -> None:
+    class NoDynamoRequests:
+        def __getattr__(self, attribute: str) -> object:
+            raise AssertionError(f"unexpected DynamoDB operation: {attribute}")
+
+    dynamodb = NoDynamoRequests()
+    client_creations: list[str] = []
+    settings = IngressBootstrapSettings(
+        aws_region="ap-northeast-1",
+        table_name="test-table",
+        runtime_config_parameter="/test/runtime/v0001",
+        discord_public_key_parameter="/test/moderator/public-key",
+        arona_public_key_parameter="/test/participant-a/public-key",
+        student_gacha_enabled=gacha_enabled,
+    )
+    runtime = IngressRuntimeSettings(
+        discord=DiscordRuntimeConfig(
+            guild_id="101",
+            allowed_channel_ids=frozenset({"102"}),
+            farewell_channel_id="102",
+            identities=tuple(
+                DiscordIdentityConfig(slot=slot, application_id=str(number))
+                for number, slot in enumerate(DISCORD_BOT_SLOTS, start=201)
+            ),
+            schema_version="2",
+        ),
+        public_key_hex="a" * 64,
+        arona_public_key_hex="b" * 64 if gacha_enabled else None,
+        student_gacha_enabled=gacha_enabled,
+    )
+
+    async def load_runtime(
+        given_settings: IngressBootstrapSettings, reader: ParameterReader
+    ) -> IngressRuntimeSettings:
+        assert given_settings == settings
+        assert isinstance(reader, ingress_module.SsmParameterReader)
+        return runtime
+
+    def create_client(*, region_name: str) -> NoDynamoRequests:
+        client_creations.append(region_name)
+        return dynamodb
+
+    factories: list[tuple[str, object, str]] = []
+
+    def repository_factory(role: str) -> object:
+        def build(*, client: object, table_name: str) -> object:
+            factories.append((role, client, table_name))
+            return object()
+
+        return build
+
+    monkeypatch.setattr(ingress_module, "_handler", None)
+    monkeypatch.setattr(
+        ingress_module,
+        "load_ingress_bootstrap_settings",
+        lambda _environment: settings,
+    )
+    monkeypatch.setattr(ingress_module, "create_ssm_client", lambda **_options: object())
+    monkeypatch.setattr(ingress_module, "load_ingress_runtime_settings", load_runtime)
+    monkeypatch.setattr(ingress_module, "create_ingress_dynamodb_client", create_client)
+    monkeypatch.setattr(
+        ingress_module, "DynamoDbIngressRepository", repository_factory("moderator_ingress")
+    )
+    monkeypatch.setattr(
+        ingress_module, "DynamoDbDebateAuthorizationLookup", repository_factory("moderator_lookup")
+    )
+    monkeypatch.setattr(
+        ingress_module, "DynamoDbStudentGachaRepository", repository_factory("arona")
+    )
+
+    environment: Mapping[str, str] = {
+        "AWS_LAMBDA_FUNCTION_NAME": "discord-ingress",
+        "AWS_LAMBDA_INITIALIZATION_TYPE": "snap-start",
+    }
+    ingress_module._initialize_for_lambda(environment)
+    ingress_module._initialize_for_lambda(environment)
+
+    roles = ["moderator_ingress", "moderator_lookup"]
+    if gacha_enabled:
+        roles.append("arona")
+    assert factories == [(role, dynamodb, settings.table_name) for role in roles]
+    assert client_creations == [settings.aws_region]
+    assert ingress_module._handler is not None
 
 
 def test_failure_log_contains_only_category_and_request_id(

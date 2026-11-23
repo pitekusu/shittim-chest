@@ -3,6 +3,7 @@ package dev.pitekusu.shittim.records
 import androidx.lifecycle.ViewModelStore
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
@@ -18,9 +19,9 @@ import org.junit.runner.RunWith
 class DebateProgressModelTest {
   private val id = "11111111-2222-4333-8444-abcdefabcdef"
   private val second = "99999999-2222-4333-8444-abcdefabcdef"
-  private fun request(requestId: String = id, status: String = "queued") = DebateRequest(
+  private fun request(requestId: String = id, status: String = "queued", attachmentIds: List<String> = emptyList()) = DebateRequest(
     requestId, "架空の議題", status, createdAt = "2026-10-04T00:00:00Z", updatedAt = "2026-10-04T00:00:00Z",
-    recordId = "r".repeat(43).takeIf { status == "published" })
+    recordId = "r".repeat(43).takeIf { status == "published" }, attachmentIds = attachmentIds)
   private suspend fun await(condition: () -> Boolean) = withTimeout(5000) { while (!condition()) delay(10) }
   private suspend fun clear(model: DebateSubmissionModel): Unit = withContext(Dispatchers.Main) {
     ViewModelStore().apply { put("model", model); clear() }
@@ -42,6 +43,48 @@ class DebateProgressModelTest {
     assertEquals(0, posts)
     assertEquals(id, saved.receipt?.requestId)
     clear(model)
+  }
+
+  @Test fun waitingForImageRestorationLetsTheStatusCheckOpenANewDraft() = runBlocking<Unit> {
+    val preview = byteArrayOf(1, 2)
+    val image = DraftAttachment(second, "image/png", preview.size, attachmentDigest(preview), 1, 2)
+    val queued = request(attachmentIds = listOf(image.attachmentId))
+    val published = request(status = "published", attachmentIds = queued.attachmentIds)
+    var saved = DebateWorkspace(draft = queued.question, requestId = id, frozenQuestion = queued.question,
+      receipt = queued, attachments = listOf(image))
+    val readingPreview = CompletableDeferred<Unit>()
+    val finishPreview = CompletableDeferred<Unit>()
+    var lookups = 0
+    val model = DebateSubmissionModel({ true }, { saved }, { saved = it }, { _, _ -> null },
+      { lookups++; published }, {}, readImage = {
+        readingPreview.complete(Unit)
+        finishPreview.await()
+        preview
+      })
+    try {
+      withContext(Dispatchers.Main) { model.restore() }
+      withTimeout(5000) { readingPreview.await() }
+      assertSame(queued, model.state.value.workspace?.receipt)
+      withContext(Dispatchers.Main) {
+        val lookup = async(start = CoroutineStart.UNDISPATCHED) {
+          model.awaitRestoration()
+          model.refreshStatus(id)
+        }
+        assertFalse(lookup.isCompleted)
+        assertEquals(0, lookups)
+        finishPreview.complete(Unit)
+        withTimeout(5000) { lookup.await() }
+        assertEquals(1, lookups)
+        assertSame(published, model.state.value.workspace?.receipt)
+        assertTrue(model.newDraft())
+      }
+      await { !model.state.value.saving }
+      assertNull(saved.requestId)
+      assertEquals("", saved.draft)
+      assertTrue(saved.attachments.isEmpty())
+    } finally {
+      clear(model)
+    }
   }
 
   @Test fun cancelledForegroundReadDoesNotFinishOrSendAndCanResume() = runBlocking {

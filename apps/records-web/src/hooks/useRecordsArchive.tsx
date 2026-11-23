@@ -9,15 +9,19 @@ import {
 
 import type { ParticipantSlot, SortOrder } from "../api/types";
 
-interface ArchiveFilters {
+export interface ArchiveFilters {
   readonly winner: ParticipantSlot | "";
   readonly sort: SortOrder;
   readonly search: string;
   readonly requester: string;
 }
 
+export type ArchiveCardAction = "record" | "parent" | "follow-ups";
+
 interface ArchiveReturnTarget {
   readonly recordId: string;
+  readonly destinationRecordId: string;
+  readonly action: ArchiveCardAction;
   readonly scrollY: number;
 }
 
@@ -29,7 +33,11 @@ interface ArchiveViewState {
 
 interface ArchiveActions {
   readonly updateFilters: (changes: Partial<ArchiveFilters>) => void;
-  readonly rememberRecord: (recordId: string) => void;
+  readonly rememberRecord: (
+    recordId: string,
+    destinationRecordId?: string,
+    action?: ArchiveCardAction,
+  ) => void;
   readonly clearReturnTarget: () => void;
   readonly reset: () => void;
   readonly showMore: () => void;
@@ -46,7 +54,12 @@ function criteriaKey(filters: ArchiveFilters): string {
   return JSON.stringify([filters.winner, filters.sort, filters.search.trim(), filters.requester]);
 }
 
-const INITIAL_FILTERS: ArchiveFilters = { winner: "", sort: "newest", search: "", requester: "" };
+export const INITIAL_ARCHIVE_FILTERS: ArchiveFilters = {
+  winner: "",
+  sort: "newest",
+  search: "",
+  requester: "",
+};
 const ArchiveViewContext = createContext<ArchiveViewState | null>(null);
 const ArchiveActionsContext = createContext<ArchiveActions | null>(null);
 
@@ -54,7 +67,7 @@ const ArchiveActionsContext = createContext<ArchiveActions | null>(null);
 // exclusively in React memory; history state and browser storage can persist it.
 export function RecordsArchiveProvider({ children }: PropsWithChildren): React.JSX.Element {
   const [criteria, setCriteria] = useState<ArchiveCriteriaState>(() => ({
-    filters: INITIAL_FILTERS,
+    filters: INITIAL_ARCHIVE_FILTERS,
     requestedCounts: new Map(),
   }));
   const { filters, requestedCounts } = criteria;
@@ -75,12 +88,14 @@ export function RecordsArchiveProvider({ children }: PropsWithChildren): React.J
       };
     });
   }, []);
-  const rememberRecord = useCallback((recordId: string) => {
-    setReturnTarget({ recordId, scrollY: window.scrollY });
-  }, []);
+  const rememberRecord = useCallback(
+    (recordId: string, destinationRecordId = recordId, action: ArchiveCardAction = "record") =>
+      setReturnTarget({ recordId, destinationRecordId, action, scrollY: window.scrollY }),
+    [],
+  );
   const clearReturnTarget = useCallback(() => setReturnTarget(null), []);
   const reset = useCallback(() => {
-    setCriteria({ filters: INITIAL_FILTERS, requestedCounts: new Map() });
+    setCriteria({ filters: INITIAL_ARCHIVE_FILTERS, requestedCounts: new Map() });
     setReturnTarget(null);
   }, []);
   const view = useMemo(

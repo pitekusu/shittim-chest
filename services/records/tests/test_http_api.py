@@ -233,6 +233,9 @@ class FakeRecords:
             ),
             updated_at=NOW,
             status="partial",
+            openai_subscription_credit=(
+                "3.000000" if kwargs["include_subscription_credits"] else None
+            ),
         )
 
 
@@ -252,19 +255,25 @@ def session(*, avatar: bool = False, expired: bool = False) -> SessionRecord:
 
 def _momotalk_image_controller(
     grouped: bool,
+    *,
+    animated: bool = False,
 ) -> tuple[ReadHttpController, list[str]]:
     from shittim_records.momotalk import Room
     from shittim_records.momotalk_read import MomotalkReadService
 
     slots = ("participant-a", "participant-b", "participant-c")
     order = (0, 1, 0, 2, 1, 2, 0, 1, 2)
-    subjects = [
+    subjects: list[dict[str, str | int]] = [
         {"participant": "participant-a", "mood": "happy"},
         {"participant": "participant-b", "mood": "unhappy"},
         {"participant": "participant-c", "mood": "happy"},
     ]
+    if animated:
+        subjects[0]["mood"] = "neutral"
+        for subject, score in zip(subjects, (500, 200, 800), strict=True):
+            subject["affection_score"] = score
     images = (
-        [{**subjects[0], "subjects": subjects, "state": "ready"}]
+        [{**subjects[0], "subjects": subjects, "state": "ready", "animated": animated}]
         if grouped
         else [{**subject, "state": "ready"} for subject in subjects[:2]]
     )
@@ -316,7 +325,7 @@ def _momotalk_image_controller(
             store=cast(Any, FakeSessionStore(session())),
             session_key=SESSION_KEY,
             records=cast(Any, None),
-            momotalk=momotalk,
+            momotalk=lambda: momotalk,
         ),
         signed,
     )
@@ -368,6 +377,41 @@ def test_momotalk_selfie_contract_adds_subjects_without_changing_legacy_images(
             }
 
 
+@pytest.mark.parametrize("contract", ["momotalk-selfie-v2", "momotalk-selfie-v3"])
+@pytest.mark.parametrize("animated", [False, True])
+def test_momotalk_animated_contract_projects_neutral_and_legacy_poster(
+    contract: str, animated: bool
+) -> None:
+    controller, signed = _momotalk_image_controller(True, animated=animated)
+    v3 = contract == "momotalk-selfie-v3"
+    response = controller.handle(
+        event(
+            "GET /api/v1/momotalk/weeks/{weekId}/rooms/{roomId}",
+            query=f"contract={contract}",
+            path={"weekId": "2026-08-16", "roomId": "r" * 43},
+            cookies=[f"{SESSION_COOKIE_NAME}=session-token"],
+        ),
+        now=NOW,
+    )
+    assert response["statusCode"] == 200
+    (image,) = json.loads(response["body"])["images"]
+    assert image["mood"] == ("neutral" if animated and v3 else "happy")
+    assert image["subjects"][0]["mood"] == image["mood"]
+    assert all("affectionScore" not in subject for subject in image["subjects"])
+    if v3:
+        assert image["animated"] == animated
+    else:
+        assert "animated" not in image
+    if animated and not v3:
+        assert image["url"] == image["thumbnailUrl"]
+        assert "thumbnail" in image["downloadUrl"]
+        assert len(signed) == 2
+    else:
+        assert image["url"] != image["thumbnailUrl"]
+        assert "thumbnail" not in image["downloadUrl"]
+        assert len(signed) == 3
+
+
 @pytest.mark.parametrize(
     "query",
     (
@@ -385,7 +429,7 @@ def test_momotalk_detail_rejects_invalid_image_contract_before_reading(query: st
         store=cast(Any, FakeSessionStore(session())),
         session_key=SESSION_KEY,
         records=cast(Any, None),
-        momotalk=object(),
+        momotalk=lambda: pytest.fail("invalid query initialized MomoTalk"),
     )
     response = controller.handle(
         event(
@@ -400,7 +444,7 @@ def test_momotalk_detail_rejects_invalid_image_contract_before_reading(query: st
 
 
 def test_anonymous_session_is_always_200_no_store_without_cookie() -> None:
-    controller = AuthHttpController(cast(Any, FakeAuthService()))
+    controller = AuthHttpController(lambda: cast(Any, FakeAuthService()))
 
     response = controller.handle(event("GET /api/v1/session"), now=NOW)
 
@@ -416,7 +460,7 @@ def test_anonymous_session_is_always_200_no_store_without_cookie() -> None:
 
 
 def test_authenticated_session_returns_csrf_and_short_lived_avatar_url() -> None:
-    controller = AuthHttpController(cast(Any, FakeAuthService(session(avatar=True))))
+    controller = AuthHttpController(lambda: cast(Any, FakeAuthService(session(avatar=True))))
 
     response = controller.handle(
         event(
@@ -439,7 +483,7 @@ def test_authenticated_session_returns_csrf_and_short_lived_avatar_url() -> None
 
 
 def test_authenticated_legacy_session_response_omits_admin_capability() -> None:
-    controller = AuthHttpController(cast(Any, FakeAuthService(session())))
+    controller = AuthHttpController(lambda: cast(Any, FakeAuthService(session())))
 
     response = controller.handle(
         event(
@@ -464,7 +508,7 @@ def test_authenticated_legacy_session_response_omits_admin_capability() -> None:
     ),
 )
 def test_session_rejects_unknown_or_ambiguous_contract_negotiation(query: str) -> None:
-    controller = AuthHttpController(cast(Any, FakeAuthService()))
+    controller = AuthHttpController(lambda: cast(Any, FakeAuthService()))
 
     response = controller.handle(event("GET /api/v1/session", query=query), now=NOW)
 
@@ -473,7 +517,7 @@ def test_session_rejects_unknown_or_ambiguous_contract_negotiation(query: str) -
 
 
 def test_callback_requires_exactly_one_code_and_state() -> None:
-    controller = AuthHttpController(cast(Any, FakeAuthService()))
+    controller = AuthHttpController(lambda: cast(Any, FakeAuthService()))
 
     response = controller.handle(
         event(
@@ -489,7 +533,7 @@ def test_callback_requires_exactly_one_code_and_state() -> None:
 
 
 def test_logout_returns_two_clearing_cookies() -> None:
-    controller = AuthHttpController(cast(Any, FakeAuthService(session())))
+    controller = AuthHttpController(lambda: cast(Any, FakeAuthService(session())))
 
     response = controller.handle(
         event(
@@ -778,12 +822,21 @@ def test_costs_route_defaults_to_week_and_rejects_unknown_or_duplicate_period() 
     extra = controller.handle(
         event(route, query="period=week&internal=true", cookies=cookies), now=NOW
     )
+    credits = controller.handle(
+        event(route, query="contract=subscription-credits-v1", cookies=cookies), now=NOW
+    )
+    unknown_contract = controller.handle(
+        event(route, query="contract=unknown", cookies=cookies), now=NOW
+    )
 
     assert unauthorized["statusCode"] == 401
     assert json.loads(default["body"])["period"] == "week"
     assert json.loads(today["body"])["period"] == "today"
     assert invalid["statusCode"] == 400
     assert extra["statusCode"] == 400
+    assert unknown_contract["statusCode"] == 400
+    assert json.loads(credits["body"])["openaiSubscriptionCredit"] == "3.000000"
+    assert "openaiSubscriptionCredit" not in default["body"]
     assert "amountUsd" not in default["body"]
 
 
@@ -793,7 +846,7 @@ def test_unknown_auth_failure_is_content_free() -> None:
             del return_to, now
             raise AuthFailure("provider_private_detail")
 
-    response = AuthHttpController(cast(Any, FailingService())).handle(
+    response = AuthHttpController(lambda: cast(Any, FailingService())).handle(
         event("GET /api/v1/auth/discord/start", query="returnTo=%2F"),
         now=NOW,
     )

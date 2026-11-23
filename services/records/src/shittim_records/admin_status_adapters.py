@@ -14,7 +14,13 @@ from types import MappingProxyType
 from typing import Any, Literal, cast
 from urllib.parse import unquote, urlsplit
 
+from botocore.exceptions import BotoCoreError, ClientError
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
+from shittim_chest.adapters.dynamodb.student_gacha_activity import (
+    STUDENT_GACHA_ACTIVITY_KEY,
+    student_gacha_activity_count,
+)
+from shittim_chest.domain import ParticipantSlot
 
 from shittim_records.admin_status import AdminStatusCollection
 from shittim_records.contracts import (
@@ -98,6 +104,9 @@ ADMIN_STATUS_STACK_NAMES: Mapping[str, str] = MappingProxyType(
 ADMIN_STATUS_PARAMETER_NAMES: Mapping[str, str] = MappingProxyType(
     {
         "discord_public_key": "/shittim-chest/production/discord/moderator/public-key",
+        "student_gacha_verification_key": (
+            "/shittim-chest/production/discord/participant-a/public-key"
+        ),
         "moderator_token": "/shittim-chest/production/discord/moderator/token",
         "participant_a_token": "/shittim-chest/production/discord/participant-a/token",
         "participant_b_token": "/shittim-chest/production/discord/participant-b/token",
@@ -501,6 +510,7 @@ class AwsAdminStatusSource:
             primary_deployment.get("platformVersion", service.get("platformVersion"))
         )
         controls = self._runtime_controls()
+        gacha_pending = self._student_gacha_pending()
         heartbeat_age = self._runtime_heartbeat(now)
         idle = desired == running == pending == 0
         telemetry_complete = all(
@@ -517,13 +527,9 @@ class AwsAdminStatusSource:
             or rollout_state == "FAILED"
             or (failed_tasks is not None and failed_tasks > 0 and rollout_state != "COMPLETED")
         )
-        if deployment_needs_attention:
+        if deployment_needs_attention or desired != running or pending != 0:
             state = "warning"
-        elif idle:
-            state = "healthy"
-        elif desired != running or pending != 0:
-            state = "warning"
-        elif not telemetry_complete:
+        elif gacha_pending is None or (not idle and not telemetry_complete):
             state = "unknown"
         else:
             state = "healthy"
@@ -567,6 +573,7 @@ class AwsAdminStatusSource:
                 _optional_boolean(service.get("enableExecuteCommand")),
             ),
             _metric("active_debates", controls.get("active_debates")),
+            _metric("student_gacha_pending", gacha_pending),
             _metric("outbox_pending", controls.get("outbox_pending")),
             _metric("runtime_prompt_revision", controls.get("runtime_prompt_revision")),
             _metric("heartbeat_age_seconds", heartbeat_age),
@@ -577,6 +584,8 @@ class AwsAdminStatusSource:
             summary=(
                 "デプロイ状態の確認が必要です。"
                 if deployment_needs_attention
+                else "生徒ガチャのジョブ件数を取得できません。"
+                if state == "unknown" and gacha_pending is None
                 else "IDLE"
                 if idle
                 else "稼働中"
@@ -670,6 +679,24 @@ class AwsAdminStatusSource:
                     None if pending is None or claimed is None else pending + claimed
                 )
         return result
+
+    def _student_gacha_pending(self) -> int | None:
+        try:
+            response = self._dynamodb.get_item(
+                TableName=self._config.tables["debate"],
+                Key=marshal_item(STUDENT_GACHA_ACTIVITY_KEY),
+                ProjectionExpression="PK, SK, record_type, #count",
+                ExpressionAttributeNames={"#count": "count"},
+                ConsistentRead=True,
+            )
+            if "Item" not in response:
+                return student_gacha_activity_count(None)
+            raw = response["Item"]
+            if not isinstance(raw, Mapping):
+                return None
+            return student_gacha_activity_count(unmarshal_item(raw))
+        except BotoCoreError, ClientError, ValueError, TypeError, InvalidOperation:
+            return None
 
     def _runtime_heartbeat(self, now: datetime) -> str | None:
         return self._latest_metric(
@@ -1051,6 +1078,15 @@ class AwsAdminStatusSource:
         )
 
     def _s3_section(self, now: datetime) -> AdminStatusSection:
+        # This adapter is also imported by the other Records Lambda handlers.
+        from shittim_chest.adapters.assets.student_gacha import (
+            FORMAT_KEY,
+            LOADING_GIF_KEY,
+            PARTICIPANT_REFERENCE_KEYS,
+            ROSTER_KEY,
+            SCHOOL_LOGOS_KEY,
+        )
+
         metrics: list[AdminStatusMetric] = []
         warning = False
         sizes = self._s3_storage_sizes(now)
@@ -1117,14 +1153,60 @@ class AwsAdminStatusSource:
                         _metric("memorial_upload_abort_days", abort_days),
                     )
                 )
+        asset_keys = {
+            "roster": ROSTER_KEY,
+            "loading_gif": LOADING_GIF_KEY,
+            "layout": FORMAT_KEY,
+            "school_logos": SCHOOL_LOGOS_KEY,
+            "reference_a": PARTICIPANT_REFERENCE_KEYS[ParticipantSlot.PARTICIPANT_A],
+            "reference_b": PARTICIPANT_REFERENCE_KEYS[ParticipantSlot.PARTICIPANT_B],
+            "reference_c": PARTICIPANT_REFERENCE_KEYS[ParticipantSlot.PARTICIPANT_C],
+        }
+        media_bucket = self._config.buckets["media"]
+        assets = {
+            label: self._s3_object_present(media_bucket, key) for label, key in asset_keys.items()
+        }
+        metrics.extend(
+            _metric(f"student_gacha_{label}_present", present) for label, present in assets.items()
+        )
+        state: AdminHealthState = "warning" if warning else "healthy"
+        if None in assets.values():
+            state = "unknown"
+            summary = "生徒ガチャの素材の一部を確認できませんでした。"
+        elif False in assets.values():
+            state = "warning"
+            summary = "生徒ガチャに必要な素材の一部がありません。"
+        elif all(size is not None for size, _ in sizes.values()):
+            summary = "Bucket保護設定と日次の容量を確認しました。"
+        else:
+            summary = "Bucket保護設定を確認しました。一部の容量は未取得です。"
         return AdminStatusSection(
             service="s3",
-            state="warning" if warning else "healthy",
-            summary="Bucket保護設定と日次の容量を確認しました。"
-            if all(size is not None for size, _ in sizes.values())
-            else "Bucket保護設定を確認しました。一部の容量は未取得です。",
+            state=state,
+            summary=summary,
             metrics=tuple(metrics),
         )
+
+    def _s3_object_present(self, bucket: str, key: str) -> bool | None:
+        try:
+            response = self._s3.list_objects_v2(
+                Bucket=bucket,
+                Prefix=key,
+                MaxKeys=1,
+                ExpectedBucketOwner=self._config.aws_account_id,
+            )
+        except BotoCoreError, ClientError:
+            return None
+        objects = response.get("Contents", [])
+        if not isinstance(objects, list) or len(objects) > 1:
+            return None
+        if not objects:
+            return False
+        candidate = _mapping_value(objects[0], "Key")
+        if not isinstance(candidate, str) or not candidate.startswith(key):
+            return None
+        # The general purpose bucket lists the exact match before longer keys.
+        return candidate == key
 
     def _s3_storage_sizes(self, now: datetime) -> dict[str, tuple[int | None, datetime | None]]:
         # RecordsEdge owns the Web bucket in us-east-1; all other buckets are in Tokyo.
@@ -1870,7 +1952,10 @@ class AwsAdminStatusSource:
                 )
             )
 
-        complete = True
+        route_registered = self._student_gacha_route_registered(api_ids["discord"])
+        metrics.append(_metric("student_gacha_route_registered", route_registered))
+        complete = route_registered is not None
+        warning = warning or route_registered is False
         for hours in (1, 24):
             period_metrics, period_complete, period_warning = self._apigateway_metrics(
                 api_ids, now, hours=hours
@@ -1881,11 +1966,37 @@ class AwsAdminStatusSource:
         return AdminStatusSection(
             service="apigateway",
             state="unknown" if not complete else "warning" if warning else "healthy",
-            summary="HTTP APIと直近1時間・24時間の応答を確認しました。"
-            if complete
-            else "一部のAPI指標を取得できませんでした。",
+            summary="生徒ガチャの受付ルートを確認できませんでした。"
+            if route_registered is None
+            else "一部のAPI指標を取得できませんでした。"
+            if not complete
+            else "生徒ガチャの受付ルートを確認してください。"
+            if not route_registered
+            else "HTTP APIと直近1時間・24時間の応答を確認しました。",
             metrics=tuple(metrics),
         )
+
+    def _student_gacha_route_registered(self, api_id: str) -> bool | None:
+        from shittim_chest.adapters.discord_http import STUDENT_GACHA_ROUTE
+
+        try:
+            paginator = self._apigateway.get_paginator("get_routes")
+            for page in _bounded_pages(paginator.paginate(ApiId=api_id)):
+                routes = page.get("Items", [])
+                if not isinstance(routes, list):
+                    return None
+                for route in routes:
+                    if not isinstance(route, Mapping) or not isinstance(route.get("RouteKey"), str):
+                        return None
+                    if route["RouteKey"] == STUDENT_GACHA_ROUTE:
+                        target = route.get("Target")
+                        return (
+                            isinstance(target, str)
+                            and re.fullmatch(r"integrations/[^/]+", target) is not None
+                        )
+        except BotoCoreError, ClientError, ValueError:
+            return None
+        return False
 
     def _apigateway_metrics(
         self, api_ids: Mapping[str, str], now: datetime, *, hours: int
@@ -2216,6 +2327,8 @@ class AwsAdminStatusSource:
 
     def _ssm_section(self) -> AdminStatusSection:
         runtime_parameters = self._runtime_stack_parameters()
+        gacha_setting = runtime_parameters.get("StudentGachaEnabled")
+        gacha_enabled = gacha_setting == "true" if gacha_setting in ("true", "false") else None
         config_version = runtime_parameters.get("RuntimeConfigVersion")
         if (
             not isinstance(config_version, str)
@@ -2324,8 +2437,11 @@ class AwsAdminStatusSource:
                     _metric(f"{group}_required", len(required)),
                 )
             )
+        gacha_key_present = "student_gacha_verification_key" in present
         metrics.extend(
             (
+                _metric("student_gacha_enabled", gacha_enabled),
+                _metric("student_gacha_verification_key_present", gacha_key_present),
                 _metric(
                     "runtime_prompt_pointer_present",
                     "runtime_prompts_active" in present,
@@ -2333,11 +2449,16 @@ class AwsAdminStatusSource:
                 _metric("latest_modified_at", _timestamp(max(modified) if modified else None)),
             )
         )
+        ready = ready and (not gacha_enabled or gacha_key_present)
         return AdminStatusSection(
             service="ssm",
-            state="healthy" if ready else "warning",
+            state="unknown" if gacha_enabled is None else "healthy" if ready else "warning",
             summary=(
-                "必要な設定metadataを確認しました。"
+                "生徒ガチャの有効化設定を取得できませんでした。"
+                if gacha_enabled is None
+                else "生徒ガチャの署名検証用公開鍵の設定を確認してください。"
+                if gacha_enabled and not gacha_key_present
+                else "必要な設定metadataを確認しました。"
                 if ready
                 else "不足または形式不一致の設定があります。"
             ),

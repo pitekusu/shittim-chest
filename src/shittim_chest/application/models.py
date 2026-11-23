@@ -90,6 +90,54 @@ class PendingDiscordImage:
 
 
 @dataclass(frozen=True, slots=True)
+class FollowUpParent:
+    """A proposed reference to the exact completed attempt of a prior debate."""
+
+    debate_id: DebateId
+    attempt_id: AttemptId
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.debate_id, DebateId) or not isinstance(self.attempt_id, AttemptId):
+            raise ValueError("invalid follow-up parent identity")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class PreviousDebate:
+    """Bounded public result text frozen from the immediate parent at acceptance."""
+
+    question: str
+    decision: str
+    actions: tuple[str, ...] = ()
+    caveats: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.question.strip() or len(self.question) > 1_000:
+            raise ValueError("invalid prior debate question")
+        if not self.decision.strip() or len(self.decision) > 2_000:
+            raise ValueError("invalid prior debate decision")
+        for entries in (self.actions, self.caveats):
+            if (
+                not isinstance(entries, tuple)
+                or len(entries) > 10
+                or any(
+                    not isinstance(entry, str) or not entry.strip() or len(entry) > 500
+                    for entry in entries
+                )
+            ):
+                raise ValueError("invalid prior debate result details")
+
+    @classmethod
+    def from_result(cls, question: str, decision: FinalDecision) -> PreviousDebate:
+        # Older persisted results can predate the current provider output limits.
+        return cls(
+            question=question,
+            decision=decision.decision.strip()[:2_000],
+            actions=tuple(text.strip()[:500] for text in decision.actions[:10] if text.strip()),
+            caveats=tuple(text.strip()[:500] for text in decision.caveats[:10] if text.strip()),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class AcceptDebateRequest:
     """A validated Discord-independent request to accept a debate."""
 
@@ -102,6 +150,7 @@ class AcceptDebateRequest:
     operation_id: str
     attachments: tuple[DebateImage, ...] = ()
     pending_attachments: tuple[PendingDiscordImage, ...] = field(default=(), repr=False)
+    follow_up_parent: FollowUpParent | None = None
 
     def __post_init__(self) -> None:
         validate_images(self.attachments)
@@ -113,6 +162,10 @@ class AcceptDebateRequest:
             raise ValueError("invalid image request")
         if not 1 <= len(self.question) <= 1000 or not self.question.strip():
             raise ValueError("question must contain between 1 and 1000 characters")
+        if self.follow_up_parent is not None and not isinstance(
+            self.follow_up_parent, FollowUpParent
+        ):
+            raise ValueError("invalid follow-up reference")
         _require_identifier(self.requester_id, label="requester ID")
         _require_display_text(self.requester_username, label="requester username")
         _require_display_text(self.requester_display_name, label="requester display name")
@@ -850,8 +903,20 @@ class DebateSnapshot:
     candidate_plans: tuple[CandidatePlan, ...] = field(default=(), repr=False)
     candidate_coordination: ReconsiderationProgress | None = field(default=None, repr=False)
     opinion_reconsideration: ReconsiderationProgress | None = field(default=None, repr=False)
+    follow_up_parent: FollowUpParent | None = None
+    previous_debate: PreviousDebate | None = field(default=None, repr=False)
+    follow_up_parent_thread_id: str | None = None
 
     def __post_init__(self) -> None:
+        if self.follow_up_parent is None:
+            if self.previous_debate is not None or self.follow_up_parent_thread_id is not None:
+                raise ValueError("prior debate context requires a follow-up reference")
+        elif (
+            not isinstance(self.follow_up_parent, FollowUpParent)
+            or self.follow_up_parent.debate_id == self.state.debate_id
+            or not isinstance(self.previous_debate, PreviousDebate)
+        ):
+            raise ValueError("invalid follow-up context")
         validate_images(self.attachments)
         if any(image.url is None for image in self.pending_attachments):
             raise ValueError("pending debate image requires its source URL")

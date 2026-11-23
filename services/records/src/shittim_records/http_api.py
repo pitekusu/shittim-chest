@@ -24,6 +24,7 @@ from shittim_records.auth import (
     require_same_origin,
 )
 from shittim_records.contracts import (
+    GALLERY_COLLECTION_CONTRACT,
     AnonymousSession,
     AuthenticatedSession,
     ErrorBody,
@@ -43,7 +44,18 @@ from shittim_records.read_api import (
 )
 
 if TYPE_CHECKING:
+    from shittim_records.contracts import (
+        GalleryCollectionListResponse,
+        GalleryDetailResponse,
+        GalleryListResponse,
+        GalleryOriginalResponse,
+        GalleryRosterResponse,
+        GallerySchoolLogosResponse,
+        GalleryThumbnailsResponse,
+    )
+    from shittim_records.gallery_read import GalleryReadService, GalleryViewer
     from shittim_records.mobile_http import MobileAuthHttpController
+    from shittim_records.momotalk_read import MomotalkReadService
 
 JSON_HEADERS = {
     "Cache-Control": "private, no-store",
@@ -60,16 +72,24 @@ MOBILE_READ_ROUTES = frozenset(
     {
         "GET /api/v1/records",
         "GET /api/v1/records/{recordId}",
+        "GET /api/v1/records/{recordId}/follow-ups",
         "GET /api/v1/records/sync-index",
         "GET /api/v1/insights/rankings",
         "GET /api/v1/insights/affection-rankings",
         "GET /api/v1/insights/costs",
+        "GET /api/v1/gallery",
+        "GET /api/v1/gallery/roster",
+        "GET /api/v1/gallery/school-logos",
+        "GET /api/v1/gallery/thumbnails",
+        "GET /api/v1/gallery/{cardId}",
+        "GET /api/v1/gallery/{cardId}/original",
         "GET /api/v1/momotalk/weeks",
         "GET /api/v1/momotalk/weeks/{weekId}/rooms",
         "GET /api/v1/momotalk/weeks/{weekId}/rooms/{roomId}",
     }
 )
 MAX_SEARCH_BODY_BYTES = 16 * 1024
+GALLERY_AVATAR_CONTRACT = "gallery-avatars-v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,7 +106,9 @@ class AuthHttpController:
     """Dispatch Web and mobile login without falling back between their credentials."""
 
     def __init__(
-        self, service: AuthService, mobile: MobileAuthHttpController | None = None
+        self,
+        service: Callable[[], AuthService],
+        mobile: Callable[[], MobileAuthHttpController] | None = None,
     ) -> None:
         self._service = service
         self._mobile = mobile
@@ -97,10 +119,12 @@ class AuthHttpController:
             if self._mobile is not None and request.route_key.partition(" ")[2].startswith(
                 "/api/v1/auth/mobile/"
             ):
-                return self._mobile.handle(event, now=now)
+                return self._mobile().handle(event, now=now)
             if request.route_key == "GET /api/v1/auth/discord/start":
                 query = _query(request.raw_query)
-                result = self._service.begin(return_to=_optional_single(query, "returnTo"), now=now)
+                result = self._service().begin(
+                    return_to=_optional_single(query, "returnTo"), now=now
+                )
                 return redirect(result.location, cookies=[result.oauth_cookie])
             if request.route_key == "GET /api/v1/auth/discord/callback":
                 query = _query(request.raw_query)
@@ -108,8 +132,8 @@ class AuthHttpController:
                 if any(state.startswith("m.") for state in query.get("state", [])):
                     if self._mobile is None:
                         raise AuthFailure("configuration_invalid")
-                    return self._mobile.handle(event, now=now)
-                result = self._service.complete(
+                    return self._mobile().handle(event, now=now)
+                result = self._service().complete(
                     code=_required_single(query, "code"),
                     state=_required_single(query, "state"),
                     browser_nonce=request.cookies.get(OAUTH_COOKIE_NAME, ""),
@@ -122,7 +146,7 @@ class AuthHttpController:
             if request.route_key == "GET /api/v1/session":
                 return self._session(request=request, now=now)
             if request.route_key == "POST /api/v1/logout":
-                clear = self._service.logout(
+                clear = self._service().logout(
                     raw_session=request.cookies.get(SESSION_COOKIE_NAME),
                     raw_csrf=request.cookies.get(CSRF_COOKIE_NAME),
                     csrf_header=_header(request.headers, "x-csrf-token"),
@@ -133,7 +157,7 @@ class AuthHttpController:
             return error_response(404, "ROUTE_NOT_FOUND", request.request_id)
         except AuthFailure as error:
             if request.route_key == "GET /api/v1/auth/discord/callback":
-                origin = self._service.allowed_origin
+                origin = self._service().allowed_origin
                 location = f"{origin}/login?{urlencode({'error': error.code})}"
                 return redirect(location, cookies=[_clear_oauth_cookie()])
             status = {
@@ -155,14 +179,15 @@ class AuthHttpController:
         include_admin = contract == "admin-v1"
         raw_session = request.cookies.get(SESSION_COOKIE_NAME)
         raw_csrf = request.cookies.get(CSRF_COOKIE_NAME)
-        session = self._service.authenticate(raw_session=raw_session, now=now)
-        if session is None or raw_csrf is None:
+        service = self._service() if raw_session else None
+        session = service.authenticate(raw_session=raw_session, now=now) if service else None
+        if service is None or session is None or raw_csrf is None:
             payload = SessionResponse(
                 root=AnonymousSession(schema_version=1, authenticated=False, is_admin=False)
             )
         else:
             if not csrf_token_matches(
-                session=session, session_key=self._service.session_hmac_key, token=raw_csrf
+                session=session, session_key=service.session_hmac_key, token=raw_csrf
             ):
                 payload = SessionResponse(
                     root=AnonymousSession(schema_version=1, authenticated=False)
@@ -177,7 +202,7 @@ class AuthHttpController:
                 else:
                     avatar = ImageAvatarRef(
                         kind="image",
-                        url=self._service.avatar_url(asset_key=session.avatar_asset_key),
+                        url=service.avatar_url(asset_key=session.avatar_asset_key),
                         alt=f"{session.display_name}のアバター",
                         fallback_variant="cyan",
                     )
@@ -187,7 +212,7 @@ class AuthHttpController:
                         authenticated=True,
                         user=SessionUser(display_name=session.display_name, avatar=avatar),
                         csrf_token=raw_csrf,
-                        is_admin=self._service.is_admin(session) if include_admin else False,
+                        is_admin=service.is_admin(session) if include_admin else False,
                     )
                 )
         response_payload = payload.model_dump(by_alias=True, mode="json")
@@ -205,7 +230,8 @@ class ReadHttpController:
         store: AuthStore,
         session_key: bytes,
         records: RecordsReadService,
-        momotalk: Any | None = None,
+        gallery: Callable[[], GalleryReadService] | None = None,
+        momotalk: Callable[[], MomotalkReadService] | None = None,
         mobile_store: MobileSessionReader | None = None,
         clock: Callable[[], datetime] | None = None,
         allowed_origin: str | None = None,
@@ -213,6 +239,7 @@ class ReadHttpController:
         self._store = store
         self._session_key = session_key
         self._records = records
+        self._gallery = gallery
         self._momotalk = momotalk
         self._mobile_store = mobile_store
         self._clock = clock if clock is not None else lambda: datetime.now(UTC)
@@ -224,22 +251,22 @@ class ReadHttpController:
             include_affection_reasons = False
             include_attachments = False
             include_attachment_count = False
+            include_follow_ups = False
             session = None
+            mobile_session = None
             raw_token = _read_bearer_token(
                 event.get("headers") or {}, has_cookies=bool(event.get("cookies"))
             )
             if raw_token is not None:
                 if request.route_key not in MOBILE_READ_ROUTES or self._mobile_store is None:
                     raise AuthFailure("session_required")
-                if (
-                    authenticate_mobile_session(
-                        store=self._mobile_store,
-                        session_key=self._session_key,
-                        raw_token=raw_token,
-                        clock=self._clock,
-                    )
-                    is None
-                ):
+                mobile_session = authenticate_mobile_session(
+                    store=self._mobile_store,
+                    session_key=self._session_key,
+                    raw_token=raw_token,
+                    clock=self._clock,
+                )
+                if mobile_session is None:
                     raise AuthFailure("session_required")
             else:
                 session = authenticate_browser_session(
@@ -250,16 +277,24 @@ class ReadHttpController:
                 )
                 if session is None:
                     raise AuthFailure("session_required")
-            if request.route_key.startswith("GET /api/v1/momotalk/"):
+            if request.route_key == "GET /api/v1/gallery" or request.route_key.startswith(
+                "GET /api/v1/gallery/"
+            ):
+                viewer = mobile_session or session
+                if viewer is None:
+                    raise AuthFailure("session_required")
+                result = self._gallery_read(request, viewer, now)
+            elif request.route_key.startswith("GET /api/v1/momotalk/"):
                 result = self._momotalk_read(request, now)
             elif request.route_key == "GET /api/v1/records":
                 query = _query(request.raw_query)
                 if not set(query).issubset({"cursor", "limit", "sort", "winner", "contract"}):
                     raise ReadFailure("REQUEST_INVALID", 400)
                 contract = _optional_single(query, "contract")
-                if contract not in {None, "record-attachments-v1"}:
+                if contract not in {None, "record-attachments-v1", "record-followups-v1"}:
                     raise ReadFailure("REQUEST_INVALID", 400)
-                include_attachment_count = contract == "record-attachments-v1"
+                include_follow_ups = contract == "record-followups-v1"
+                include_attachment_count = contract is not None
                 result = self._records.list_records(
                     query=ListQuery(
                         limit=_limit(_optional_single(query, "limit")),
@@ -268,13 +303,20 @@ class ReadHttpController:
                         cursor=_optional_single(query, "cursor"),
                     ),
                     now=now,
+                    **({"include_follow_ups": True} if include_follow_ups else {}),
                 )
             elif request.route_key == "GET /api/v1/records/sync-index":
                 query = _query(request.raw_query)
-                if not set(query).issubset({"cursor"}):
+                contract = _optional_single(query, "contract")
+                if not set(query).issubset({"cursor", "contract"}) or contract not in {
+                    None,
+                    "record-followups-v1",
+                }:
                     raise ReadFailure("REQUEST_INVALID", 400)
                 result = self._records.get_sync_index(
-                    cursor=_optional_single(query, "cursor"), now=now
+                    cursor=_optional_single(query, "cursor"),
+                    now=now,
+                    **({"include_follow_ups": True} if contract is not None else {}),
                 )
             elif request.route_key == "POST /api/v1/records/search":
                 if session is None:
@@ -292,10 +334,15 @@ class ReadHttpController:
                 if not set(query).issubset({"contract"}) or request.path_parameters:
                     raise ReadFailure("REQUEST_INVALID", 400)
                 contract = _optional_single(query, "contract")
-                if contract not in {None, "record-attachments-v1"}:
+                if contract not in {None, "record-attachments-v1", "record-followups-v1"}:
                     raise ReadFailure("REQUEST_INVALID", 400)
-                include_attachment_count = contract == "record-attachments-v1"
-                result = self._records.search_records(query=_search_body(event, request), now=now)
+                include_follow_ups = contract == "record-followups-v1"
+                include_attachment_count = contract is not None
+                result = self._records.search_records(
+                    query=_search_body(event, request),
+                    now=now,
+                    **({"include_follow_ups": True} if include_follow_ups else {}),
+                )
             elif request.route_key == "GET /api/v1/records/requesters":
                 query = _query(request.raw_query)
                 if not set(query).issubset({"cursor"}) or request.path_parameters:
@@ -303,18 +350,35 @@ class ReadHttpController:
                 result = self._records.list_requesters(
                     cursor=_optional_single(query, "cursor"), now=now
                 )
+            elif request.route_key == "GET /api/v1/records/{recordId}/follow-ups":
+                query = _query(request.raw_query)
+                if not set(query).issubset({"cursor"}):
+                    raise ReadFailure("REQUEST_INVALID", 400)
+                result = self._records.get_follow_ups(
+                    record_id=request.path_parameters.get("recordId", ""),
+                    cursor=_optional_single(query, "cursor"),
+                    now=now,
+                    mobile=raw_token is not None,
+                )
             elif request.route_key == "GET /api/v1/records/{recordId}":
                 query = _query(request.raw_query)
                 if not set(query).issubset({"contract"}):
                     raise ReadFailure("REQUEST_INVALID", 400)
                 contract = _optional_single(query, "contract")
-                if contract not in {None, "affection-reasons-v1", "record-images-v1"}:
+                if contract not in {
+                    None,
+                    "affection-reasons-v1",
+                    "record-images-v1",
+                    "record-followups-v1",
+                }:
                     raise ReadFailure("REQUEST_INVALID", 400)
-                include_affection_reasons = contract in {"affection-reasons-v1", "record-images-v1"}
-                include_attachments = contract == "record-images-v1"
+                include_follow_ups = contract == "record-followups-v1"
+                include_affection_reasons = contract is not None
+                include_attachments = contract in {"record-images-v1", "record-followups-v1"}
                 result = self._records.get_record(
                     record_id=request.path_parameters.get("recordId", ""),
                     now=now,
+                    **({"include_follow_ups": True} if include_follow_ups else {}),
                 )
             elif request.route_key == "GET /api/v1/insights/rankings":
                 if request.raw_query:
@@ -340,15 +404,26 @@ class ReadHttpController:
                     result = self._records.get_affection_rankings(query=ranking_query, now=now)
             elif request.route_key == "GET /api/v1/insights/costs":
                 query = _query(request.raw_query)
-                if not set(query).issubset({"period"}):
+                contract = _optional_single(query, "contract")
+                if not set(query).issubset({"period", "contract"}) or contract not in {
+                    None,
+                    "subscription-credits-v1",
+                }:
                     raise ReadFailure("REQUEST_INVALID", 400)
                 result = self._records.get_costs(
                     period=_cost_period(_optional_single(query, "period")),
                     now=now,
+                    include_subscription_credits=contract == "subscription-credits-v1",
                 )
             else:
                 return error_response(404, "ROUTE_NOT_FOUND", request.request_id)
             payload = result.model_dump(by_alias=True, mode="json")
+            if request.route_key in {"GET /api/v1/gallery", "GET /api/v1/gallery/{cardId}"}:
+                cards = payload["items"] if "items" in payload else (payload["card"],)
+                for card in cards:
+                    collector = card.get("collector")
+                    if collector is not None and collector.get("avatar") is None:
+                        collector.pop("avatar", None)
             if (
                 request.route_key
                 in {
@@ -360,6 +435,15 @@ class ReadHttpController:
                 # Existing Web clients reject response fields they did not negotiate.
                 for item in payload["items"]:
                     item.pop("attachmentCount", None)
+            if request.route_key in {
+                "GET /api/v1/records",
+                "POST /api/v1/records/search",
+                "GET /api/v1/records/{recordId}",
+            }:
+                for record_payload in payload.get("items", (payload,)):
+                    for field in ("parentRecordId", "parentQuestionPreview", "hasFollowUps"):
+                        if not include_follow_ups or record_payload.get(field) is None:
+                            record_payload.pop(field, None)
             if request.route_key == "GET /api/v1/records/{recordId}" and not include_attachments:
                 payload.pop("attachments", None)
             if (
@@ -387,6 +471,50 @@ class ReadHttpController:
         except ReadFailure as error:
             return error_response(error.status, error.code, request.request_id)
 
+    def _gallery_read(
+        self, request: Request, viewer: GalleryViewer, now: datetime
+    ) -> (
+        GalleryListResponse
+        | GalleryCollectionListResponse
+        | GalleryDetailResponse
+        | GalleryThumbnailsResponse
+        | GalleryOriginalResponse
+        | GalleryRosterResponse
+        | GallerySchoolLogosResponse
+    ):
+        if self._gallery is None:
+            raise ReadFailure("GALLERY_UNAVAILABLE", 503)
+        query = _query(request.raw_query)
+        if request.route_key == "GET /api/v1/gallery/school-logos" and not query:
+            return self._gallery().get_school_logos()
+        if request.route_key == "GET /api/v1/gallery/roster" and not query:
+            return self._gallery().get_roster()
+        if request.route_key == "GET /api/v1/gallery" and set(query) <= {"cursor", "contract"}:
+            cursor = _optional_single(query, "cursor")
+            contract = _optional_single(query, "contract")
+            if contract == GALLERY_COLLECTION_CONTRACT:
+                return self._gallery().list_collection_cards(cursor=cursor, viewer=viewer, now=now)
+            return self._gallery().list_cards(
+                cursor=cursor, viewer=viewer, now=now, include_avatars=_gallery_avatars(contract)
+            )
+        if request.route_key == "GET /api/v1/gallery/{cardId}" and set(query) <= {"contract"}:
+            return self._gallery().get_card(
+                card_id=request.path_parameters.get("cardId", ""),
+                viewer=viewer,
+                include_avatars=_gallery_avatars(_optional_single(query, "contract")),
+            )
+        if request.route_key == "GET /api/v1/gallery/thumbnails" and set(query) == {"ids"}:
+            ids = _required_single(query, "ids")
+            if len(ids) > 1943:
+                raise ReadFailure("REQUEST_INVALID", 400)
+            return self._gallery().get_thumbnails(ids=tuple(ids.split(",")), now=now)
+        if query or request.route_key in {"GET /api/v1/gallery", "GET /api/v1/gallery/thumbnails"}:
+            raise ReadFailure("REQUEST_INVALID", 400)
+        card_id = request.path_parameters.get("cardId", "")
+        if request.route_key == "GET /api/v1/gallery/{cardId}/original":
+            return self._gallery().get_original(card_id=card_id, now=now)
+        raise ReadFailure("ROUTE_NOT_FOUND", 404)
+
     def _momotalk_read(self, request: Request, now: datetime) -> Any:
         from shittim_records.momotalk import MomotalkFailure
 
@@ -398,23 +526,24 @@ class ReadHttpController:
                 if not set(query).issubset({"contract"}):
                     raise ReadFailure("REQUEST_INVALID", 400)
                 contract = _optional_single(query, "contract")
-                if contract not in {None, "momotalk-selfie-v2"}:
+                if contract not in {None, "momotalk-selfie-v2", "momotalk-selfie-v3"}:
                     raise ReadFailure("REQUEST_INVALID", 400)
-                return self._momotalk.get_room(
+                return self._momotalk().get_room(
                     week_id=request.path_parameters.get("weekId", ""),
                     room_id=request.path_parameters.get("roomId", ""),
                     now=now,
                     include_image_subjects=contract == "momotalk-selfie-v2",
+                    include_animation=contract == "momotalk-selfie-v3",
                 )
             if not set(query).issubset({"limit", "cursor"}):
                 raise ReadFailure("REQUEST_INVALID", 400)
             limit = _affection_limit(_optional_single(query, "limit"))
             cursor = _optional_single(query, "cursor")
             if request.route_key == "GET /api/v1/momotalk/weeks":
-                return self._momotalk.list_weeks(limit=limit, cursor=cursor, now=now)
+                return self._momotalk().list_weeks(limit=limit, cursor=cursor, now=now)
             week_id = request.path_parameters.get("weekId", "")
             if request.route_key == "GET /api/v1/momotalk/weeks/{weekId}/rooms":
-                return self._momotalk.list_rooms(
+                return self._momotalk().list_rooms(
                     week_id=week_id, limit=limit, cursor=cursor, now=now
                 )
             raise ReadFailure("ROUTE_NOT_FOUND", 404)
@@ -591,6 +720,12 @@ def _optional_single(query: Mapping[str, list[str]], name: str) -> str | None:
     if len(values) != 1 or not values[0]:
         raise AuthFailure("oauth_request_invalid")
     return values[0]
+
+
+def _gallery_avatars(contract: str | None) -> bool:
+    if contract not in {None, GALLERY_AVATAR_CONTRACT}:
+        raise ReadFailure("REQUEST_INVALID", 400)
+    return contract is not None
 
 
 def _limit(value: str | None) -> int:

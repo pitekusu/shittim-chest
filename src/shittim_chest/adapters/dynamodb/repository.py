@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 
 import boto3
 from botocore.config import Config
+from botocore.exceptions import BotoCoreError, ClientError
 
 if TYPE_CHECKING:
     from mypy_boto3_dynamodb.client import DynamoDBClient
@@ -25,6 +26,9 @@ if TYPE_CHECKING:
     )
 else:
     TransactWriteItemTypeDef = object
+
+if TYPE_CHECKING:
+    from shittim_chest.adapters.dynamodb.student_gacha import DynamoDbStudentGachaRepository
 
 from shittim_chest.adapters.dynamodb.codec import marshal_item, unmarshal_item
 from shittim_chest.adapters.dynamodb.outbox import outbox_activity_action
@@ -88,6 +92,7 @@ from shittim_chest.application.ports import (
     RepositoryQuotaExceeded,
     RepositoryTransactionAction,
     RepositoryTransactionStage,
+    RepositoryUnavailable,
 )
 from shittim_chest.application.scale_to_zero import (
     IngressClaimFence,
@@ -96,12 +101,16 @@ from shittim_chest.application.scale_to_zero import (
     IngressStatus,
 )
 from shittim_chest.domain import (
+    DEFAULT_AFFECTION_SCORE,
     AffectionProfile,
     AttemptId,
     DebateId,
     DebatePhase,
     assess_affection,
 )
+
+if TYPE_CHECKING:
+    from shittim_chest.domain import ParticipantSlot
 
 LEASE_SECONDS = 60
 INGRESS_PREPARE_LEASE_MIN_SECONDS = 50
@@ -166,6 +175,7 @@ class DynamoDbDebateRepository:
         client: DynamoDBClient,
         table_name: str,
         identity_hmac_key: bytes,
+        student_gacha: DynamoDbStudentGachaRepository | None = None,
     ) -> None:
         if not table_name.strip():
             raise ValueError("table name must not be empty")
@@ -176,6 +186,7 @@ class DynamoDbDebateRepository:
         self._client = client
         self._table_name = table_name
         self._identity_hmac_key = bytes(identity_hmac_key)
+        self._student_gacha = student_gacha
         self._ingress_terminal_projection = DynamoDbIngressRepository(
             client=client,
             table_name=table_name,
@@ -211,6 +222,23 @@ class DynamoDbDebateRepository:
 
     async def get(self, debate_id: DebateId) -> DebateSnapshot | None:
         return await asyncio.to_thread(self._load_snapshot, debate_id, None)
+
+    async def get_affection_score(self, requester_id: str, participant: ParticipantSlot) -> int:
+        """Read the current score of a participant for one requester."""
+
+        try:
+            requester_key = derive_affection_requester_key(self._identity_hmac_key, requester_id)
+            profile, _ = await asyncio.to_thread(
+                self._load_affection_profile,
+                requester_key,
+                requester_id,
+                recheck_current_on_miss=True,
+            )
+        except BotoCoreError, ClientError:
+            raise RepositoryUnavailable from None
+        except ValueError:
+            raise RepositoryConflict("affection profile is invalid") from None
+        return DEFAULT_AFFECTION_SCORE if profile is None else profile.score_for(participant)
 
     async def settle_affection(
         self,
@@ -607,6 +635,22 @@ class DynamoDbDebateRepository:
             raise
         return persisted
 
+    def _load_affection_profile(
+        self, requester_key: str, requester_id: str, *, recheck_current_on_miss: bool = False
+    ) -> tuple[AffectionProfile | None, bool]:
+        current_key = _affection_profile_key(requester_key)
+        raw_profile = self._get_item(current_key)
+        legacy = raw_profile is None
+        if legacy:
+            raw_profile = self._get_item(_affection_profile_key(requester_id))
+            if raw_profile is None and recheck_current_on_miss:
+                # The legacy profile may have moved to the opaque key between reads.
+                raw_profile = self._get_item(current_key)
+                legacy = False
+        if raw_profile is None:
+            return None, False
+        return deserialize_affection_profile(raw_profile, requester_key=requester_key), legacy
+
     def _settle_affection(
         self,
         expected: DebateSnapshot,
@@ -637,30 +681,16 @@ class DynamoDbDebateRepository:
                 self._identity_hmac_key,
                 current.requester_id,
             )
-            profile_key: DynamoItem = {
-                "PK": f"AFFECTION#REQUESTER#{requester_key}",
-                "SK": "PROFILE",
-            }
-            raw_profile = self._get_item(profile_key)
-            legacy_profile_key: DynamoItem = {
-                "PK": f"AFFECTION#REQUESTER#{current.requester_id}",
-                "SK": "PROFILE",
-            }
-            legacy_profile = None
-            if raw_profile is None:
-                legacy_profile = self._get_item(legacy_profile_key)
-            profile = (
-                AffectionProfile.initial(
-                    requester_key=requester_key,
-                    requester_username=current.requester_username,
-                    requester_display_name=current.requester_display_name,
-                    at=at,
-                )
-                if raw_profile is None and legacy_profile is None
-                else deserialize_affection_profile(
-                    raw_profile if raw_profile is not None else cast(DynamoItem, legacy_profile),
-                    requester_key=requester_key,
-                )
+            profile_key = _affection_profile_key(requester_key)
+            legacy_profile_key = _affection_profile_key(current.requester_id)
+            existing_profile, legacy_profile = self._load_affection_profile(
+                requester_key, current.requester_id
+            )
+            profile = existing_profile or AffectionProfile.initial(
+                requester_key=requester_key,
+                requester_username=current.requester_username,
+                requester_display_name=current.requester_display_name,
+                at=at,
             )
             if profile.requester_key != requester_key:
                 raise RepositoryConflict("affection profile requester changed")
@@ -677,7 +707,7 @@ class DynamoDbDebateRepository:
                 assessed_at=at,
                 debate_id=current.state.debate_id,
                 operation_seed=str(current.state.attempt_id),
-                allow_existing_max_unlock=legacy_profile is not None,
+                allow_existing_max_unlock=legacy_profile,
             )
             if updated_profile.updated_at < profile.updated_at:
                 updated_profile = replace(updated_profile, updated_at=profile.updated_at)
@@ -707,14 +737,14 @@ class DynamoDbDebateRepository:
                         else self._put(item)
                     )
             if scores is not None:
-                if raw_profile is None and legacy_profile is None:
+                if existing_profile is None:
                     actions.extend(
                         (
                             self._put_new(serialize_affection_profile(updated_profile)),
                             self._check_missing_affection_profile(legacy_profile_key),
                         )
                     )
-                elif legacy_profile is not None:
+                elif legacy_profile:
                     actions.extend(
                         (
                             self._put_new(serialize_affection_profile(updated_profile)),
@@ -734,14 +764,7 @@ class DynamoDbDebateRepository:
                             self._check_missing_affection_profile(legacy_profile_key),
                         )
                     )
-            elif raw_profile is not None:
-                actions.extend(
-                    (
-                        self._check_affection_profile(profile),
-                        self._check_missing_affection_profile(legacy_profile_key),
-                    )
-                )
-            elif legacy_profile is not None:
+            elif legacy_profile:
                 actions.extend(
                     (
                         self._check_legacy_affection_profile(
@@ -749,6 +772,13 @@ class DynamoDbDebateRepository:
                             requester_id=current.requester_id,
                         ),
                         self._check_missing_affection_profile(profile_key),
+                    )
+                )
+            elif existing_profile is not None:
+                actions.extend(
+                    (
+                        self._check_affection_profile(profile),
+                        self._check_missing_affection_profile(legacy_profile_key),
                     )
                 )
             else:
@@ -1217,6 +1247,15 @@ class DynamoDbDebateRepository:
         )
         actions.extend(ingress_actions)
         action_kinds.extend(ingress_action_kinds)
+        if self._student_gacha is not None and persisted.state.phase is DebatePhase.COMPLETED:
+            gacha_actions = self._student_gacha.completion_actions(
+                debate_id=str(persisted.state.debate_id),
+                guild_id=persisted.guild_id,
+                channel_id=persisted.channel_id,
+                at=persisted.state.updated_at,
+            )
+            actions.extend(gacha_actions)
+            action_kinds.extend(RepositoryTransactionAction.STUDENT_GACHA for _ in gacha_actions)
         _require_transaction_size(actions)
         token_source = ":".join(
             (
@@ -1611,6 +1650,7 @@ class DynamoDbDebateRepository:
             raise RepositoryConflict("retry source is not failed")
         if retry.state.retry_of != expected_failed.state.attempt_id:
             raise RepositoryConflict("retry source attempt does not match")
+        _require_same_follow_up(expected_failed, retry)
         if _panel_context_complete(expected_failed) and (
             expected_failed.panel_refresh_required_at is None
             or expected_failed.panel_refreshed_at is None
@@ -3667,6 +3707,10 @@ def _debate_key(debate_id: DebateId) -> DynamoItem:
     return {"PK": f"DEBATE#{debate_id}", "SK": "META"}
 
 
+def _affection_profile_key(requester_key: str) -> DynamoItem:
+    return {"PK": f"AFFECTION#REQUESTER#{requester_key}", "SK": "PROFILE"}
+
+
 def _attempt_key(debate_id: DebateId, attempt_id: AttemptId) -> DynamoItem:
     return {"PK": f"DEBATE#{debate_id}", "SK": f"ATTEMPT#{attempt_id}#META"}
 
@@ -4390,6 +4434,16 @@ def _require_same_attempt(expected: DebateSnapshot, updated: DebateSnapshot) -> 
         or expected.state.attempt_id != updated.state.attempt_id
     ):
         raise RepositoryConflict("replace cannot change debate or attempt identity")
+    _require_same_follow_up(expected, updated)
+
+
+def _require_same_follow_up(expected: DebateSnapshot, updated: DebateSnapshot) -> None:
+    if (
+        expected.follow_up_parent != updated.follow_up_parent
+        or expected.previous_debate != updated.previous_debate
+        or expected.follow_up_parent_thread_id != updated.follow_up_parent_thread_id
+    ):
+        raise RepositoryConflict("accepted follow-up context is immutable")
 
 
 def _require_ingress_origin(
