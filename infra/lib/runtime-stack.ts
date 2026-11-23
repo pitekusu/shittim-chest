@@ -518,7 +518,7 @@ export class RuntimeStack extends Stack {
       `${options.functionName}-role`,
       logGroup,
     );
-    const function_ = new lambda.Function(this, options.id, {
+    return new lambda.Function(this, options.id, {
       architecture: lambda.Architecture.ARM_64,
       code: options.code,
       environment: options.environment,
@@ -529,17 +529,11 @@ export class RuntimeStack extends Stack {
       memorySize: options.memorySize,
       reservedConcurrentExecutions: options.reservedConcurrency,
       role,
-      runtime: lambda.Runtime.PYTHON_3_14,
+      runtime: lambda.Runtime.PYTHON_3_15,
       snapStart: options.snapStart,
       timeout: options.timeout,
       tracing: lambda.Tracing.DISABLED,
     });
-    Validations.of(function_).acknowledge({
-      id: "AwsSolutions-L1",
-      reason:
-        "Python 3.14 is the current project runtime and is explicitly selected instead of an unpinned latest runtime.",
-    });
-    return function_;
   }
 
   private grantApplicationLambdaAccess(

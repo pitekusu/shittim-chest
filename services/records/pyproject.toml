@@ -2,7 +2,7 @@
 name = "shittim-records"
 version = "0.1.0"
 description = "Read-model services for Shittim Chest Records"
-requires-python = ">=3.14,<3.15"
+requires-python = ">=3.15,<3.16"
 license = "MIT"
 dependencies = [
     "authlib>=1.8.0,<2",
@@ -38,7 +38,7 @@ required-version = ">=0.13.5,<0.14"
 shittim-chest = { path = "../..", editable = false }
 
 [tool.ruff]
-target-version = "py314"
+target-version = "py315"
 line-length = 100
 src = ["src", "tests"]
 

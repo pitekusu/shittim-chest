@@ -22,7 +22,7 @@ from typing import Final, cast
 
 MAX_CONFIG_BYTES: Final = 128 * 1024
 MAX_RESPONSE_BYTES: Final = 1024 * 1024
-# The weekly workflow uses the runner's Python, not the application's Python 3.14.
+# The weekly workflow uses the runner's Python, not the pinned application interpreter.
 LOOKUP_ERRORS: Final = (OSError, RuntimeError, ValueError)
 REPOSITORY_PATTERN: Final = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 NPM_PACKAGE_PATTERN: Final = re.compile(r"^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$")

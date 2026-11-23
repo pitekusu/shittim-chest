@@ -30,7 +30,7 @@ env:
   SSL_CERT_DIR: /etc/ssl/certs
   AWS_REGION: ap-northeast-1
   COST_REGION: us-east-1
-  PYTHON_VERSION: 3.14.10
+  PYTHON_VERSION: 3.15.2
   PYTHONDONTWRITEBYTECODE: "1"
   UV_VERSION: 0.13.9
   AWS_SIGNER_NOTATION_INSTALLER_VERSION: 2.2.0-1
@@ -805,7 +805,7 @@ jobs:
           trap 'docker rm -f "${container}" >/dev/null 2>&1 || true' EXIT
           mkdir "${RUNNER_TEMP}/lambda-bundle"
           docker cp \
-            "${container}:/app/.venv/lib/python3.14/site-packages/." \
+            "${container}:/app/.venv/lib/python${PYTHON_VERSION%.*}/site-packages/." \
             "${RUNNER_TEMP}/lambda-bundle/"
           find "${RUNNER_TEMP}/lambda-bundle" -exec touch -d '1980-01-01T00:00:00Z' {} +
           (
