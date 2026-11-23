@@ -80,6 +80,7 @@ internal data object BootstrapScreen : Screen {
     val related: RecordRelatedState = RecordRelatedState(),
     val showFollowUpsFor: String? = null,
     val followUpDraftConflict: String? = null,
+    val newDebateDraftConflict: Boolean = false,
     val followUpParent: RecordPreview? = null,
     val eventSink: (Event) -> Unit,
   ) : CircuitUiState
@@ -111,6 +112,8 @@ internal data object BootstrapScreen : Screen {
     data class SelectOrder(val order: RecordOrder) : Event
     data object ClearRecordQuery : Event
     data object ComposeDebate : Event
+    data object DismissNewDebateDraftConflict : Event
+    data object ConfirmNewDebateDraft : Event
     class EditDebate(val question: String) : Event {
       override fun toString(): String = "EditDebate(<redacted>)"
     }
@@ -351,7 +354,10 @@ internal class BootstrapPresenter private constructor(
     val foregroundLifecycle = LocalLifecycleOwner.current.lifecycle
     val debateRoute = backStack.lastOrNull()
     var openingDebateComposer by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(cacheAccountId, debate.workspace != null, debate.workspace?.requestId, debateRoute) {
+    var newDebateDraftConflict by remember(cacheAccountId) { mutableStateOf(false) }
+    val followUpDraftBusy = debate.busy && debate.workspace?.let { it.parentRecordId != null && it.requestId == null } == true
+    LaunchedEffect(cacheAccountId, debate.workspace != null, debate.workspace?.requestId, debateRoute, followUpDraftBusy) {
+      if (debateRoute != RecordsList) newDebateDraftConflict = false
       if (backStack.lastOrNull() != DebateCompose) {
         openingDebateComposer = false
         return@LaunchedEffect
@@ -361,6 +367,18 @@ internal class BootstrapPresenter private constructor(
       val workspace = model.state.value.workspace ?: return@LaunchedEffect
       val id = workspace.requestId
       // Apply the + intent once after local restoration. Later submissions open their own status.
+      if (openingDebateComposer && id == null && workspace.parentRecordId != null) {
+        when (model.prepareDraft(parentRecordId = null)) {
+          DebateDraftPreparation.Ready -> Unit
+          DebateDraftPreparation.Conflict -> {
+            openingDebateComposer = false
+            newDebateDraftConflict = true
+            backStack.removeLastOrNull()
+            return@LaunchedEffect
+          }
+          DebateDraftPreparation.Blocked -> return@LaunchedEffect
+        }
+      }
       if (openingDebateComposer && id != null && workspace.pendingControl?.requestId != id) {
         // Polling stops when the status screen closes, so its last receipt may be stale.
         if (debateOnline && workspace.receipt?.terminal == false) {
@@ -733,7 +751,7 @@ internal class BootstrapPresenter private constructor(
       publicPageError = publicPageError, insights = insights, momotalk = momotalk, studentGallery = studentGallery,
       loadMomotalkAnimation = { week, room, imageKey -> momotalkModel?.loadAnimation(week, room, imageKey) },
       related = related, showFollowUpsFor = showFollowUpsFor, followUpDraftConflict = followUpDraftConflict,
-      followUpParent = followUpParent) { event ->
+      newDebateDraftConflict = newDebateDraftConflict, followUpParent = followUpParent) { event ->
       when (event) {
         is BootstrapScreen.Event.SelectTheme -> themeChoice = event.choice
         BootstrapScreen.Event.EnterDemo -> runtime.enterDemo()
@@ -827,10 +845,10 @@ internal class BootstrapPresenter private constructor(
         ) {
           if (!event.replaceDraft || followUpDraftConflict == event.recordId) {
             followUpDraftConflict = null
-            when (debateModel?.prepareFollowUp(event.recordId, event.replaceDraft)) {
-              FollowUpDraft.Ready -> backStack.add(DebateCompose)
-              FollowUpDraft.Conflict -> followUpDraftConflict = event.recordId
-              FollowUpDraft.Blocked -> debate.workspace?.requestId?.let { backStack.add(DebateRequestStatus(it)) }
+            when (debateModel?.prepareDraft(event.recordId, event.replaceDraft)) {
+              DebateDraftPreparation.Ready -> backStack.add(DebateCompose)
+              DebateDraftPreparation.Conflict -> followUpDraftConflict = event.recordId
+              DebateDraftPreparation.Blocked -> debate.workspace?.requestId?.let { backStack.add(DebateRequestStatus(it)) }
               null -> Unit
             }
           }
@@ -853,9 +871,17 @@ internal class BootstrapPresenter private constructor(
         is BootstrapScreen.Event.SelectOrder -> listQuery = listQuery.copy(order = event.order)
         BootstrapScreen.Event.ClearRecordQuery -> listQuery = RecordListQuery()
         BootstrapScreen.Event.ComposeDebate -> if (cacheAccountId != null && runtime.isActive(cacheAccountId) &&
-          backStack.lastOrNull() == RecordsList) {
+          backStack.lastOrNull() == RecordsList && !newDebateDraftConflict) {
           openingDebateComposer = true
           debateModel?.restore()
+          backStack.add(DebateCompose)
+        }
+        BootstrapScreen.Event.DismissNewDebateDraftConflict -> newDebateDraftConflict = false
+        BootstrapScreen.Event.ConfirmNewDebateDraft -> if (newDebateDraftConflict && cacheAccountId != null &&
+          runtime.isActive(cacheAccountId) && stackOwner == cacheAccountId && backStack.lastOrNull() == RecordsList &&
+          session?.pendingDestination?.value == null &&
+          debateModel?.prepareDraft(parentRecordId = null, replaceDraft = true) == DebateDraftPreparation.Ready) {
+          newDebateDraftConflict = false
           backStack.add(DebateCompose)
         }
         is BootstrapScreen.Event.EditDebate -> debateModel?.edit(event.question)

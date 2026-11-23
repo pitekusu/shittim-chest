@@ -121,9 +121,9 @@ class DebateSubmissionModelTest {
       withContext(Dispatchers.Main) { model.restore() }
       await { model.state.value.workspace != null }
       withContext(Dispatchers.Main) {
-        assertEquals(FollowUpDraft.Conflict, model.prepareFollowUp(parent))
+        assertEquals(DebateDraftPreparation.Conflict, model.prepareDraft(parent))
         assertEquals("送信前の別の議題", model.state.value.workspace?.draft)
-        assertEquals(FollowUpDraft.Ready, model.prepareFollowUp(parent, replaceDraft = true))
+        assertEquals(DebateDraftPreparation.Ready, model.prepareDraft(parent, replaceDraft = true))
         model.edit("ビーフとポークならどっち？")
         model.addImages(listOf(imageUri))
       }
@@ -132,7 +132,8 @@ class DebateSubmissionModelTest {
       val frozenId = withTimeout(5000) { post.await() }
       await { !model.state.value.busy }
       withContext(Dispatchers.Main) {
-        assertEquals(FollowUpDraft.Blocked, model.prepareFollowUp(otherParent, replaceDraft = true))
+        assertEquals(DebateDraftPreparation.Blocked, model.prepareDraft(otherParent, replaceDraft = true))
+        assertEquals(DebateDraftPreparation.Blocked, model.prepareDraft(parentRecordId = null, replaceDraft = true))
         model.reconcile()
       }
       await { model.state.value.failure == DebateFailure.INVALID_RESPONSE }
