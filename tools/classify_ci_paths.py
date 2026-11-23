@@ -17,7 +17,7 @@ RUNTIME_CONTEXT_FILES = frozenset(
         ".dockerignore",
         "Dockerfile",
         "LICENSE",
-        "README.md",
+        "PACKAGE_DESCRIPTION.md",
         "pyproject.toml",
         "uv.lock",
         "tests/__init__.py",
@@ -129,7 +129,7 @@ def _path_scopes(path: str) -> set[str]:
     if path == STUDENT_GACHA_ROSTER_PATH:
         # The quality job validates this data before its own S3-only release.
         return set()
-    if path.startswith("docs/") or path == "AGENTS.md":
+    if path.startswith("docs/") or path in {"AGENTS.md", "README.md"}:
         return set()
     if path.startswith(ANDROID_PREFIX):
         return {"android"}
