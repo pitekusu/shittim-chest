@@ -1084,6 +1084,24 @@ glibc `2.41-12+deb13u5` の5435・19499と、OpenSSL `3.5.9-1~deb13u1+dhi0` の1
 未修正の12組と、ECRが検出した場合のOpenSSL `CVE-2026-121482` の受容期限は2027-02-19 09:00 JSTである。
 ECR限定の承認は最新スキャンを照合した本番環境の承認記録に残す。過去のconfigの別対象や期限へ移さない。
 
+### Python 3.15.2の完成ARM64イメージの受容
+
+PR #791で実測したPython 3.15.2のARM64 config
+`sha256:c39e8bb9225501a5dc305e0cd22ab4cca33e9e42f010dc73f5e6196660627428`を、
+[完成SBOM・署名付きVEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/45106137079/artifacts/14787626938)と
+[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/45106137079/artifacts/14787890767)に照合した。
+raw High 46組、署名付きVEX適用後High 15組で、Critical・修正可能なHigh/Critical・ソースの検出は0組。
+TLSは60/60成功し、`CVE-2026-121482`は正確なバイナリ照合を経て残存から外れた。
+
+2026年11月23日、所有者はこのconfigの残存15組を、既存と同じ期限で受容した。
+`CVE-2026-107493`のOpenSSL 3組は2026年12月29日09:00 JST、
+残る12組は2027年2月19日09:00 JSTに失効する。
+対応する`expires_on`はそれぞれ2026-12-28と2027-02-18。
+完成イメージで現在検出されない旧17組を有効な記録から除く。
+1組あたりのconfig上限に達していた記録は、最も古いconfigを現行の記録から外す。
+過去の証拠と受容記録はGit履歴に保持する。
+この受容が対象とするのは、上記configの残存検出と各期限のみ。
+
 ## 5. 本番配信
 
 ### 共通の工程
