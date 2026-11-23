@@ -191,7 +191,7 @@ describe("RuntimeStack", () => {
         LoggingConfig: expect.objectContaining({ LogFormat: "JSON" }),
         MemorySize: limits?.memory,
         ReservedConcurrentExecutions: limits?.concurrency,
-        Runtime: "python3.14",
+        Runtime: "python3.15",
         Timeout: limits?.timeout,
       });
       expect(properties.VpcConfig).toBeUndefined();

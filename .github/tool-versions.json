@@ -93,7 +93,7 @@
       "files": {".github/workflows/release.yml": "AWS_SIGNER_NOTATION_PLUGIN_VERSION: ([0-9.]+)"}
     },
     "python": {
-      "repository": "python/cpython", "tag_prefix": "v", "release_prefix": "v3.14.",
+      "repository": "python/cpython", "tag_prefix": "v", "release_prefix": "v3.15.",
       "files": {".github/workflows/*.yml": "(?:PYTHON_VERSION|python-version): \"?([0-9.]+)", ".python-version": "^([0-9.]+)"}
     },
     "node": {

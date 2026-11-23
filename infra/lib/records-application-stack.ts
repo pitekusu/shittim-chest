@@ -2578,10 +2578,10 @@ export class RecordsApplicationStack extends Stack {
     for (const statement of options.policyStatements) {
       role.addToPrincipalPolicy(statement);
     }
-    const function_ = new lambda.Function(this, options.id, {
+    return new lambda.Function(this, options.id, {
       functionName: options.functionName,
       architecture: lambda.Architecture.ARM_64,
-      runtime: lambda.Runtime.PYTHON_3_14,
+      runtime: lambda.Runtime.PYTHON_3_15,
       handler: options.handler,
       code: options.code,
       memorySize: options.memorySize ?? 512,
@@ -2592,12 +2592,6 @@ export class RecordsApplicationStack extends Stack {
       environment: options.environment,
       loggingFormat: lambda.LoggingFormat.JSON,
     });
-    Validations.of(function_).acknowledge({
-      id: "AwsSolutions-L1",
-      reason:
-        "Records builds and tests its deployment bundles for the supported Python 3.14 runtime.",
-    });
-    return function_;
   }
 
   private functionWithRole(options: {
@@ -2750,10 +2744,10 @@ export class RecordsApplicationStack extends Stack {
         ],
       }),
     );
-    const function_ = new lambda.Function(this, options.id, {
+    return new lambda.Function(this, options.id, {
       functionName: options.functionName,
       architecture: lambda.Architecture.ARM_64,
-      runtime: lambda.Runtime.PYTHON_3_14,
+      runtime: lambda.Runtime.PYTHON_3_15,
       handler: options.handler,
       code: options.code,
       memorySize: 512,
@@ -2779,11 +2773,5 @@ export class RecordsApplicationStack extends Stack {
       },
       loggingFormat: lambda.LoggingFormat.JSON,
     });
-    Validations.of(function_).acknowledge({
-      id: "AwsSolutions-L1",
-      reason:
-        "Records builds and tests its deployment bundles for the supported Python 3.14 runtime.",
-    });
-    return function_;
   }
 }
