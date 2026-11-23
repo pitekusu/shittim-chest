@@ -3,6 +3,7 @@ import {
   Aws,
   CfnOutput,
   CfnParameter,
+  CfnResource,
   Duration,
   Fn,
   RemovalPolicy,
@@ -239,6 +240,18 @@ export class RuntimeStack extends Stack {
       ],
       vpcName: "shittim-chest-production",
     });
+    // CDK's generated VPC provider still selects Node.js 24 for this region.
+    const restrictionHandler = this.node
+      .tryFindChild("Custom::VpcRestrictDefaultSGCustomResourceProvider")
+      ?.node.tryFindChild("Handler");
+    if (
+      !restrictionHandler ||
+      !CfnResource.isCfnResource(restrictionHandler) ||
+      restrictionHandler.cfnResourceType !== "AWS::Lambda::Function"
+    ) {
+      throw new Error("The VPC restriction provider handler was not found");
+    }
+    restrictionHandler.addPropertyOverride("Runtime", lambda.Runtime.NODEJS_26_X.name);
     Validations.of(this.vpc).acknowledge({
       id: "AwsSolutions-VPC7",
       reason:

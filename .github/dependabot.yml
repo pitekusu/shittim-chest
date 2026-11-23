@@ -199,7 +199,7 @@ updates:
         update-types:
           - "minor"
           - "patch"
-    # Match the Node 24 runtime; change this alongside a runtime major upgrade.
+    # Match the Node 26 runtime; change this alongside a runtime major upgrade.
     ignore:
       - dependency-name: "@types/node"
         update-types:
