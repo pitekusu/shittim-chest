@@ -219,9 +219,14 @@ Core、Records API、配布・検証ツールはPython 3.15を使う。固定版
 - 公開JSONや状態ファイルはUTF-8を明示する。
 - 性能調査には必要時に標準の`profiling.sampling`を使い、同じ入力で初回と再実行の時間を測る。
   手順は[標準プロファイラによるローカル計測](15_GitHub・CI-CD詳細設計.md#標準プロファイラによるローカル計測)を参照する。
-- 遅延インポートは初回呼び出しと例外の発生時点を含めて計測し、効果を確認した依存だけを採用候補にする。
+- 遅延インポートは、Core LambdaのDiscordアダプターの公開名とOpenAI計測型、Recordsの共有Lambdaの処理固有依存に採用した。
+  起動から初回処理完了までの中央値は、CoreのDiscord受付で547→371 ms、Recordsのランキング生成で850→545 msだった。
+  Python 3.15.2のLinux x86-64で外部接続を代替した[計測記録](https://github.com/pitekusu/shittim-chest/blob/c1efb962512003bec3181c62fbd142b1780cc367/docs/10_%E3%82%A2%E3%83%97%E3%83%AA%E3%82%B1%E3%83%BC%E3%82%B7%E3%83%A7%E3%83%B3%E3%83%BBPython%E8%A9%B3%E7%B4%B0%E8%A8%AD%E8%A8%88.md#coreとrecordsの起動初回処理の計測)を参照する。
 
-全依存に対する一括遅延読み込み、JIT、free-threaded buildはARM64の効果と既存SDKとの互換性を個別に確認する。移行時の候補比較は[当時の記録](https://github.com/pitekusu/shittim-chest/blob/d90665b0fc369b30f4960095bbb88dfa5bcc36ea/docs/10_アプリケーション・Python詳細設計.md)を参照する。
+Core Fargateの画像・生徒ガチャ依存の遅延読み込みは、本番相当設定で初回処理時間の改善が確認できず保留する。
+JITはLambdaで無効で、Core FargateのARM64イメージにも組み込まれていない。ローカルの比較でも初回処理の改善は確認できなかった。
+全依存への一括適用、JIT、free-threaded buildを検討するときは、ARM64で初回・反復処理時間とメモリを計測し、SDKとの互換性を確認する。
+[JITの計測記録](https://github.com/pitekusu/shittim-chest/blob/c1efb962512003bec3181c62fbd142b1780cc367/docs/10_%E3%82%A2%E3%83%97%E3%83%AA%E3%82%B1%E3%83%BC%E3%82%B7%E3%83%A7%E3%83%B3%E3%83%BBPython%E8%A9%B3%E7%B4%B0%E8%A8%AD%E8%A8%88.md#jitの採用判断)を参照する。
 
 ## 公式資料確認記録
 
