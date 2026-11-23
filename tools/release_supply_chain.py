@@ -66,7 +66,7 @@ _S3_SINGLE_PART_MAX_BYTES = 5 * 1024 * 1024 - 1
 _ZIP_SOURCE_MAX_BYTES = 1024 * 1024
 _ZIP_SOURCE_MAX_FILES = 1000
 _ZIP_SOURCE_MAX_PATH_BYTES = 512 * 1024
-_CDK_ASSET_SCHEMA = 2
+_CDK_ASSET_SCHEMA = 3
 _VPC_RESTRICTION_PROVIDER = "CustomVpcRestrictDefaultSGCustomResourceProviderHandlerDC833E5E"
 _VPC_RESTRICTION_TLS_LAYER = "shittim-chest-production-cdk-helper-tls"
 
@@ -537,7 +537,7 @@ def create_cdk_asset_evidence(
         assembly_dir=assembly_dir,
         account=account,
         files=files,
-        legacy=schema_version == 1,
+        schema_version=schema_version,
     )
     return evidence
 
@@ -547,9 +547,9 @@ def _validate_runtime_asset_closure(
     assembly_dir: Path,
     account: str,
     files: Sequence[Mapping[str, object]],
-    legacy: bool,
+    schema_version: int,
 ) -> None:
-    """Bind the Runtime ZIP to the provider; allow the former layer in old evidence."""
+    """Bind the Runtime ZIP to the provider and enforce the runtime for each schema."""
 
     template = _object(
         json.loads((assembly_dir / "Runtime.template.json").read_bytes()),
@@ -566,7 +566,8 @@ def _validate_runtime_asset_closure(
         if _object(value, "Runtime CDK resource").get("Type") == "AWS::Lambda::LayerVersion"
     ]
     bindings = [(provider, provider_properties, "Code")]
-    if legacy:
+    node_major = 24 if schema_version == 2 else 26
+    if schema_version == 1:
         if len(layers) != 1:
             raise ValueError("Runtime CDK requires exactly one helper TLS layer")
         layer_id, layer = layers[0]
@@ -579,10 +580,12 @@ def _validate_runtime_asset_closure(
     elif (
         layers
         or {"Layers", "Environment"} & provider_properties.keys()
-        or provider_properties.get("Runtime") != "nodejs24.x"
+        or provider_properties.get("Runtime") != f"nodejs{node_major}.x"
         or provider_properties.get("Handler") != "__entrypoint__.handler"
     ):
-        raise ValueError("Runtime CDK VPC provider must use the standard Node.js 24 runtime")
+        raise ValueError(
+            f"Runtime CDK VPC provider must use the standard Node.js {node_major} runtime"
+        )
 
     runtime_zips = {
         record["object_key"]: record
@@ -626,7 +629,7 @@ def validate_cdk_asset_evidence(
     if (
         set(root) != {"files", "manifests", "schema_version"}
         or type(schema_version) is not int
-        or schema_version not in (1, _CDK_ASSET_SCHEMA)
+        or schema_version not in (1, 2, _CDK_ASSET_SCHEMA)
     ):
         raise ValueError("CDK asset evidence schema is invalid")
     manifests = _object(root.get("manifests"), "CDK asset evidence manifests")
@@ -794,7 +797,7 @@ def validate_cdk_asset_evidence_against_assembly(
         account=account,
         assembly_dir=assembly_dir,
         require_sources=False,
-        schema_version=1 if actual["schema_version"] == 1 else _CDK_ASSET_SCHEMA,
+        schema_version=cast(int, actual["schema_version"]),
     )
     actual_files = []
     for raw_file in _array(actual.get("files"), "CDK asset evidence files"):

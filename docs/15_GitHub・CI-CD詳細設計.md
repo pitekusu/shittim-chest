@@ -361,6 +361,7 @@ GitHub OIDCからGoogle WIFとサービスアカウントへ委譲し、短寿�
 `npm audit`/`pnpm audit`は通常どおり必須である。
 Coreの`npm run audit:infra`とWebの`pnpm run audit`は、各監査の完全なJSONを
 共用の`infra/check-audit.mjs`へ渡し、package・advisory・severityが一致する未失効の受容だけを適用する。
+例外の`expires`は`YYYY-MM-DD`形式の実在する日付を指定する。`Temporal.PlainDate`でUTCの当日と比較し、指定日00:00 UTCから失効する。
 受容ファイルはinfraとWebで分け、別projectの受容を流用しない。pnpm形式の読取を共用gateへ追加し、
 期限切れ・未知の検出・不正な応答・未使用の例外は従来どおり拒否する。
 CIとRecords Releaseは、このpackage scriptを既存のnpm障害確認ラッパー経由で実行する。
@@ -405,7 +406,7 @@ CDKへの3.15追加に伴う最新バージョンの指摘は、対象関数の`
 
 | 更新対象 | 一緒に確認・更新するもの |
 |---|---|
-| Node | 正式対応は24系。ローカルの固定値、CI/配信、ルート/Webの`engines`、Node型定義を合わせる |
+| Node | 正式対応は26系。ローカルの固定値、CI/配信、ルート/Webの`engines`、Node型定義を合わせる |
 | Nodeの次期系列 | CDKの対応、Corepack導入、jsdomとNode標準Web APIの競合を評価してから採用 |
 | Vite Plus | 本体、coreエイリアス、Web Vitestの依存上書き設定を一組として更新 |
 | OpenAI SDK | Core/Recordsの3系、HTTPX2のクライアント・タイムアウト・例外境界を合わせる。モデル/人格変更は分離 |
@@ -415,6 +416,9 @@ CDKへの3.15追加に伴う最新バージョンの指摘は、対象関数の`
 | BuildKit/DynamoDB Local | `tools/containers/Dockerfile`の名前付きstageを共通の固定値とし、Dependabotでtag・digestを更新。CI・配信・ローカル試験は検証済みの参照を読み取る |
 | Buildx/直接取得CLI | バージョン、ダイジェスト、配布物チェックサム、署名主体を固定し、専用監視で追従 |
 
+VPCのdefault security groupを制限するCDK補助関数には、[AWS Lambdaのmanaged `nodejs26.x`](https://aws.amazon.com/about-aws/whats-new/2026/11/aws-lambda-nodejs-26/)を指定する。
+リリースのアセット証跡はschema v3で補助関数のRuntimeを検査し、過去のschema v1（TLS Layer付き）とv2（Node.js 24）の証跡も照合できる。
+
 ### eMudhra／emSign中間CA侵害への対応（2026年10月21日）
 
 [一次調査](https://emudhra.we-have-a-problem.com/)と[Mozillaの障害報告](https://bugzilla.mozilla.org/show_bug.cgi?id=2083449)を根拠に、通常のemSign経路とSectigoのクロス署名経路を別々に検証する。接続先の運営会社やパッケージの版だけで安全と判定せず、実際にロードするCAと拒否動作を確認する。
@@ -422,12 +426,12 @@ CDKへの3.15追加に伴う最新バージョンの指摘は、対象関数の`
 - [uvの公式対策版](https://github.com/astral-sh/uv/security/advisories/GHSA-hq85-5cpj-mr62)0.13.4へ、Dockerのtag・digest、全workflow、両Python projectの`required-version`・`uv_build`、Dependabotの対応系列、固定ツール監視を合わせる。Pythonは3.14を維持する。両projectでfrozen同期・依存整合性・wheel／sdistを確認する。
 - [certifiの公式対策](https://github.com/certifi/python-certifi/security/advisories/GHSA-6q48-6c7w-9gw2)2026.10.19を直接依存の下限にも指定する。CoreのDiscord／OpenAI／画像取得、RecordsのOAuth／identity／avatar／OpenAIは、共通の`create_public_tls_context()`を標準クライアントへ渡して、このbundleだけを選ぶ。HTTPX2の既定truststore経路やLambdaのOS CAへ依存しない。hostname・証明書検証、SDKの接続制限・timeout・retryは維持する。Discord connectorは各event loopで生成し、失敗・cancel時も閉じる。企業CAなどOSへ追加したCAはこの経路には加わらない。
 - HTTPXによるDiscord status／announcement、botocoreの通常経路、Firebaseのrequests／Google APIのhttplib2はcertifiを使う。CA環境変数・custom locator・certifi不在時のbotocore同梱bundleへのfallbackも別途確認する。配置済みECSとアプリ用shared bundleを使う22 LambdaにCA／proxy上書きはなく、両Lambda ZIPのcertifi実体も照合済みである。別のCDK infrastructure helperへこの結果を外挿しない。
-- VPCのdefault security groupを制限するCDK helperは、managed `nodejs24.x`で同梱EC2 SDKとCloudFormation応答用の標準`https.request`を使う。
+- VPCのdefault security groupを制限するCDK helperは、同梱EC2 SDKとCloudFormation応答用の標準`https.request`を使う。
 - 当初はこのhelperに専用CA Layerを適用した。[AWSの2026年11月11日更新](https://aws.amazon.com/security/security-bulletins/2026-150-aws/)で、ZIP型Node.js 24関数のTLS修正配布が完了した。実配置はx86_64の`nodejs24.x`、自動更新`Auto`を確認した。
 - [公開Lambdaイメージ](https://gallery.ecr.aws/lambda/nodejs)の2026年11月15日版（x86_64、manifest `sha256:7cdb66735cb609e6d79c4b5b198399427fa50599e08711adb5ed444840098b6e`）から、標準Node.js 24.22.3と同梱Smithy 4.9.13を取得して試験した。追加CAとpreloadを指定せず、`https.request`と`NodeHttpHandler`で正常3件・対象12件をそれぞれ判定できた。本番プロセス内の実CA列挙は行っていない。
-- 公式配布と上記検証に基づき、CDKから専用Layerと`NODE_OPTIONS`を撤去する。VPC補助関数の論理ID・コード・IAMは維持し、署名対象には従来どおり補助関数ZIPを含める。新しいアセット証跡はschema v2の4テンプレートと1 ZIPとし、旧schema v1は既存のLayer付き証跡の照合に使う。
+- 公式配布と上記検証に基づき、CDKから専用Layerと`NODE_OPTIONS`を撤去する。VPC補助関数の論理ID・コード・IAMは維持し、署名対象には従来どおり補助関数ZIPを含める。この変更ではアセット証跡をschema v2の4テンプレートと1 ZIPに変更した。
 - DHI builder／runtimeは同じPython／Debian系列のCA更新済みdigestへ固定する。旧runtimeの`ca-certificates 20250419+dhi2`が対象rootを含んでいたため、修正済みbuilderで`update-ca-certificates --fresh`を実行し、runtimeのanchorと生成済みCA directoryを丸ごと置き換えるoverlayを導入した。古いhashed aliasをmergeで残さず、固定digestと`SOURCE_DATE_EPOCH`で再現可能にする。これはCA設定のoverlayであり、runtimeのdpkg台帳を架空の更新版にしない。2026年10月22日のCA更新済みruntime採用でもoverlayを維持し、撤去は実際に採用するCA集合・拒否動作・完成imageの検証と影響評価を経た別の変更として扱う。
-- [Node 24.22.1](https://github.com/nodejs/node/releases/tag/v24.22.1)の対象公開鍵拒否とroot更新を使い、固定版と`engines`の下限を合わせる。PATHのNode更新だけではrunner内蔵Node、native downloader、Lambdaのmanaged Nodeは更新されない。
+- [Node 26系の対策版](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases#security-releases-available)に含まれる対象公開鍵拒否とroot更新を使い、固定版と`engines`の下限を合わせる。PATHのNode更新だけではrunner内蔵Node、native downloader、Lambdaのmanaged Nodeは更新されない。
 - Hosted Ubuntu 26.04 x64／ARM64の公式CAパッケージを使い、checkout前に実際の`ca-certificates`版を記録する。bundleが空、または対象4root表現がbundle／CA directoryに残る場合は停止する。作業directoryは`runner.temp`に明示し、workflowの`NODE_OPTIONS=--use-openssl-ca`で内蔵NodeもこのOS CAを使う。両archのhosted runnerで[Ubuntu公式修正版](https://ubuntu.com/security/notices/USN-9001-1)が既に配備され、正常チェーンの受理と対象チェーンの拒否を確認したため、jobごとのAPT更新は撤去した。runnerが行うAction archiveの取得は各jobの最初のstepより早い。提供元の実行時設定とその通信経路は別に確認する。
 - checkout直後のlocal composite actionは`tools.configure_build_tls`で、Ubuntuの公式パッケージが管理するOS bundleとPEM／hashed aliasを検査する。対象の証明書・公開鍵が見つかればジョブを停止する。子ツールには対象root／公開鍵を除いたPEMと空のCA directoryを指定し、curl／Git／urllib／AWS CLI／vp／pnpmに適用する。Docker daemonは実際のシステムストアと追加CAを検査した後に再起動する。BuildKitは起動時から同じPEMを選び、実際のdaemon環境とbundleを検査する。
 - pip 26.2.2への更新に加え、pip-auditがensurepipの旧pipを起動する間も安全なbundleだけを選ばせる。[pip公式のCA選択](https://pip.pypa.io/en/stable/topics/https-certificates/)に従い、限定した子環境で`PIP_USE_DEPRECATED=legacy-certs`と`PIP_CERT`／`REQUESTS_CA_BUNDLE`を組み合わせ、古いOSとvendored bundleの混在を避ける。証明書検証を維持し、既存の`--strict --require-hashes`を変更しない。不正hashが失敗することも確認する。

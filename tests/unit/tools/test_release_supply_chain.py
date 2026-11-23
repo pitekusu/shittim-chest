@@ -90,7 +90,7 @@ def cdk_assets() -> dict[str, object]:
                     "s3_checksum_sha256": "B" * 43 + "=",
                 }
             )
-    return {"schema_version": 2, "manifests": manifests, "files": files}
+    return {"schema_version": 3, "manifests": manifests, "files": files}
 
 
 def write_cdk_assembly(
@@ -98,6 +98,7 @@ def write_cdk_assembly(
     *,
     include_runtime_provider: bool = True,
     legacy: bool = False,
+    provider_runtime: str = "nodejs26.x",
 ) -> None:
     path.mkdir()
     for index, (_, artifact_name, region) in enumerate(CDK_STACKS, start=1):
@@ -109,7 +110,7 @@ def write_cdk_assembly(
             provider_properties: dict[str, object] = {
                 "Code": {"S3Bucket": bucket, "S3Key": "a" * 64 + ".zip"},
                 "Handler": "__entrypoint__.handler",
-                "Runtime": "nodejs24.x",
+                "Runtime": "nodejs24.x" if legacy else provider_runtime,
             }
             resources = {
                 VPC_PROVIDER_ID: {
@@ -197,12 +198,15 @@ def asset_checksums(evidence: dict[str, object], assembly: Path) -> list[dict[st
     return records
 
 
-@pytest.mark.parametrize("schema_version", [1, 2])
+@pytest.mark.parametrize(
+    ("schema_version", "provider_runtime"),
+    [(1, "nodejs24.x"), (2, "nodejs24.x"), (3, "nodejs26.x")],
+)
 def test_inventory_covers_every_cdk_file_asset_and_binds_the_assembly(
-    tmp_path: Path, schema_version: int
+    tmp_path: Path, schema_version: int, provider_runtime: str
 ) -> None:
     assembly = tmp_path / "cdk.out"
-    write_cdk_assembly(assembly, legacy=schema_version == 1)
+    write_cdk_assembly(assembly, legacy=schema_version == 1, provider_runtime=provider_runtime)
 
     unpublished = create_cdk_asset_evidence(
         account="000000000000",
@@ -301,9 +305,10 @@ def test_rejects_a_legacy_tls_layer_asset_in_a_new_release(tmp_path: Path) -> No
     [
         ("Layers", [{"Ref": TLS_LAYER_ID}]),
         ("Environment", {"Variables": {"NODE_OPTIONS": "--require=/opt/other.cjs"}}),
+        ("Runtime", "nodejs24.x"),
     ],
 )
-def test_new_release_rejects_tls_overrides_on_the_provider(
+def test_new_release_requires_the_standard_node_26_provider(
     tmp_path: Path, property_name: str, value: object
 ) -> None:
     assembly = tmp_path / "cdk.out"
@@ -313,7 +318,7 @@ def test_new_release_rejects_tls_overrides_on_the_provider(
     data["Resources"][VPC_PROVIDER_ID]["Properties"][property_name] = value
     template.write_text(json.dumps(data), encoding="utf-8")
 
-    with pytest.raises(ValueError, match=r"standard Node\.js 24"):
+    with pytest.raises(ValueError, match=r"standard Node\.js 26"):
         create_cdk_asset_evidence(account="000000000000", assembly_dir=assembly)
 
 

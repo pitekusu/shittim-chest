@@ -2068,7 +2068,7 @@ def test_repeated_action_version_requires_one_commit_pin(directory: Path) -> Non
 def test_release_requires_the_locked_node_version(directory: Path) -> None:
     _replace(
         directory / RELEASE_WORKFLOW,
-        '          node-version: "24.22.3"',
+        '          node-version: "26.13.1"',
         "          node-version-file: .node-version",
         1,
     )

@@ -97,7 +97,7 @@
       "files": {".github/workflows/*.yml": "(?:PYTHON_VERSION|python-version): \"?([0-9.]+)", ".python-version": "^([0-9.]+)"}
     },
     "node": {
-      "repository": "nodejs/node", "tag_prefix": "v", "release_prefix": "v24.",
+      "repository": "nodejs/node", "tag_prefix": "v", "release_prefix": "v26.",
       "files": {".github/workflows/*.yml": "(?:NODE_VERSION|node-version): \"?([0-9.]+)", ".node-version": "^([0-9.]+)"}
     },
     "uv": {

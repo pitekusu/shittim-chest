@@ -219,6 +219,11 @@ jobs:
       - name: Configure the incident TLS trust policy
         if: ${{ steps.scope.outputs.required == 'true' }}
         uses: ./.github/actions/configure-tls
+      - name: Install Node.js for audit tests
+        if: ${{ steps.scope.outputs.required == 'true' }}
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
       - name: Install pinned Python and uv
         if: ${{ steps.scope.outputs.required == 'true' }}
         uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
@@ -529,7 +534,7 @@ jobs:
         if: ${{ steps.scope.outputs.required == 'true' }}
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.22.3"
+          node-version: "26.13.1"
           cache: npm
       - name: Install locked CDK dependencies
         if: ${{ steps.scope.outputs.required == 'true' }}
