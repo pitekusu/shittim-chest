@@ -299,6 +299,29 @@ def _verification_codes(packages: list[dict[str, object]]) -> set[str]:
     return result
 
 
+def _match_debian_self_source_binary(
+    signed_packages: list[dict[str, object]],
+    signed_owned: dict[str, dict[str, str | None]],
+    image_packages: list[dict[str, object]],
+    image_files: dict[str, str | None],
+) -> list[dict[str, object]]:
+    """Resolve overlapping source and binary PURLs by exact signed ownership."""
+    image_codes = _verification_codes(image_packages)
+    if len(image_codes) != 1 or not image_files:
+        return []
+    matches = []
+    for package in signed_packages:
+        owned = _owned_files([package], signed_owned)
+        codes = _verification_codes([package])
+        if owned == image_files and codes == image_codes:
+            matches.append(package)
+        elif not owned and not codes and package.get("filesAnalyzed") is False:
+            continue
+        elif not owned or not codes or not image_files.keys().isdisjoint(owned):
+            return []
+    return matches if len(matches) == 1 else []
+
+
 def _inventory(
     document: dict[str, object], *, config_digest: str | None = None, base_digest: str | None = None
 ) -> Inventory:
@@ -418,12 +441,19 @@ def _binary_identity(
         metadata = _object(artifact.get("metadata"), "dpkg metadata")
         source, source_version = metadata.get("source"), metadata.get("sourceVersion")
         version = _text(artifact.get("version"), "binary version")
-        if not isinstance(source, str) or not source or not isinstance(source_version, str):
+        if not isinstance(source, str) or not isinstance(source_version, str):
             return None
-        # Debian Policy 5.6.1: omitted Source version equals the full binary version.
-        # https://www.debian.org/doc/debian-policy/ch-controlfields.html#source
-        source_version = source_version or version
         purl = _purl(artifact.get("purl"))
+        upstream = purl.qualifiers.get("upstream")
+        # Debian Policy 5.6.1: Source is omitted when name and version match the binary.
+        # https://www.debian.org/doc/debian-policy/ch-controlfields.html#source
+        if not source:
+            if source_version or (upstream is not None and upstream != purl.name):
+                return None
+            source = _text(purl.name, "binary name")
+        elif upstream != source:
+            return None
+        source_version = source_version or version
         if not _debian13(purl, vendor=False) or (
             metadata.get("architecture") not in {"arm64", "all"}
             or purl.qualifiers.get("arch") != metadata.get("architecture")
@@ -431,7 +461,6 @@ def _binary_identity(
             or metadata.get("version") != version
             or purl.name != artifact.get("name")
             or purl.version != version
-            or purl.qualifiers.get("upstream") != source
         ):
             return None
         identities.add((purl.to_string(), version, source, source_version))
@@ -558,9 +587,15 @@ def derive_vex(
             continue
         binary = _signed_packages(signed_packages, name, version)
         source = _signed_packages(signed_packages, source_name, source_version)
+        final_files = _owned_files(image_packages[name], image_owned)
+        if source_name == name and source_version == version and len(binary) > 1:
+            # A same-name, same-version Debian source and binary share a PURL.
+            # The selected signed binary also establishes the source identity.
+            binary = source = _match_debian_self_source_binary(
+                binary, signed_owned, image_packages[name], final_files
+            )
         signed_files = _owned_files(binary, signed_owned)
         source_files = _owned_files(source, signed_owned)
-        final_files = _owned_files(image_packages[name], image_owned)
         codes = _verification_codes(binary)
         if (
             not source
