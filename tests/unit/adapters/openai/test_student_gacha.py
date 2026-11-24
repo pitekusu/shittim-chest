@@ -379,7 +379,9 @@ async def test_render_uses_costume_image_and_selected_performer_expression(
     assert "A hood worn down stays down" in prompt
     assert "Never copy anatomical ears or invent headwear" in prompt
     assert "gaze direction, eye shape and color" in prompt
-    assert "Show the performer from the top of the head through the upper thighs" in prompt
+    assert "Use an eye-level portrait with a relaxed, upright pose." in prompt
+    assert "original garment coverage" in prompt
+    assert all(part not in prompt for part in ("upper thighs", "waistline", "neckline"))
     assert "about 18% of the canvas width" in prompt
     assert "beyond the top edge" in prompt
     assert "at about x=42%" in prompt
