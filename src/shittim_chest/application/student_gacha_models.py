@@ -10,6 +10,7 @@ from unicodedata import normalize
 from shittim_chest.domain import ParticipantSlot
 
 STUDENT_GACHA_IMAGE_PREFIX = "student-gacha/results/"
+GACHA_SEXUAL_MODERATION_BLOCKED = "gacha_image_sexual_moderation_blocked"
 TEACHER_PLACEHOLDER = "{teacher}"
 STUDENT_GACHA_RARITIES = frozenset(range(5))
 GACHA_GIF_FRAME_DURATIONS = (170, 160, 170) * 4

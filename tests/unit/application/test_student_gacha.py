@@ -20,6 +20,7 @@ from shittim_chest.application.student_gacha import (
 )
 from shittim_chest.application.student_gacha_discord import GachaDeliveryFailure
 from shittim_chest.application.student_gacha_models import (
+    GACHA_SEXUAL_MODERATION_BLOCKED,
     GachaExpression,
     GachaGenerationFailure,
     GachaImageFormat,
@@ -67,6 +68,11 @@ def test_student_draw_uses_exact_rarity_probabilities(monkeypatch: pytest.Monkey
     ]
 
 
+def test_student_draw_reports_exhaustion() -> None:
+    with pytest.raises(GachaGenerationFailure, match="gacha_costumes_exhausted"):
+        _draw_student(())
+
+
 def _job(**changes: object) -> GachaJob:
     return replace(
         GachaJob(
@@ -110,9 +116,152 @@ def worker_fixture(
     )
     store.checkpoint.side_effect = lambda old, new, **kwargs: new
     store.get_offer.return_value = GachaOffer(OFFER, "100", "101", "102", REQUESTER, live=False)
+    store.excluded_costumes.return_value = frozenset()
     media.costume_reference.return_value = b"costume WebP"
     media.school_branding.return_value = SchoolBranding("ゲヘナ学園", b"logo")
     return worker, store, media, generator, discord
+
+
+@pytest.mark.asyncio
+async def test_moderation_awards_image_and_redraws_only_the_costume(
+    worker_fixture: tuple[StudentGachaWorker, AsyncMock, AsyncMock, AsyncMock, AsyncMock],
+    affection: AsyncMock,
+) -> None:
+    worker, store, media, generator, discord = worker_fixture
+    blocked = Student("blocked outfit", "school", 1)
+    eligible = Student("eligible outfit", "school", 3)
+    performer = ParticipantSlot.PARTICIPANT_A
+    presentation = GachaPresentation(
+        blocked, performer, "costume", "club", "role", "weapon", ("{teacher}", "line", "line")
+    )
+    original = _job(
+        student=blocked,
+        performer=performer,
+        expression=GachaExpression.SMILE,
+        presentation=presentation,
+        loading_message_id="103",
+    )
+    store.claim_next.return_value = original
+    store.excluded_costumes.side_effect = [frozenset(), frozenset({blocked.name})]
+    generator.render.side_effect = [
+        GachaGenerationFailure(GACHA_SEXUAL_MODERATION_BLOCKED),
+        b"new image",
+    ]
+    replacement = replace(presentation, student=eligible)
+    generator.prepare.return_value = replacement
+    media.roster.return_value = (blocked, eligible)
+    media.find.return_value = None
+    media.loading_gif.return_value = b"loading GIF"
+    media.save_moderation.side_effect = lambda award: replace(
+        STORED, key=f"student-gacha/results/{award}.png"
+    )
+    media.load.side_effect = [b"moderation image", b"new image"]
+    media.save.return_value = STORED
+    discord.send_result.return_value = "105"
+    discord.send_loading.return_value = "104"
+
+    await worker.process_next()
+
+    attempt = store.reroll.await_args
+    rejected = attempt.args[0]
+    assert rejected.failure_code == GACHA_SEXUAL_MODERATION_BLOCKED
+    assert rejected.teacher_name == original.teacher_name
+    assert rejected.paid_started
+    award_id = attempt.kwargs["award_id"]
+    store.claim_next.return_value = replace(
+        original,
+        student=None,
+        presentation=None,
+        loading_message_id=None,
+        loading_publication_id=f"{award_id}:loading",
+    )
+    assert award_id != OFFER
+    assert attempt.kwargs["image"].key == f"student-gacha/results/{award_id}.png"
+    discord.send_moderation.assert_awaited_once_with(
+        guild_id="100",
+        channel_id="101",
+        publication_id=award_id,
+        after_message_id="103",
+        content=b"moderation image",
+    )
+    store.finish.assert_not_awaited()
+    discord.send_result.assert_not_awaited()
+    discord.delete_loading.assert_awaited_once_with(
+        guild_id="100", channel_id="101", message_id="103"
+    )
+
+    await worker.process_next()
+
+    discord.send_loading.assert_awaited_once_with(
+        guild_id="100",
+        channel_id="101",
+        publication_id=f"{award_id}:loading",
+        after_message_id="102",
+        content=b"loading GIF",
+    )
+    generator.prepare.assert_awaited_once_with(
+        student=eligible, performer=performer, costume_reference=b"costume WebP"
+    )
+    assert generator.render.await_count == 2
+    assert generator.render.await_args.args[0] == replacement
+    assert generator.render.await_args.kwargs["expression"] is GachaExpression.SMILE
+    affection.get_affection_score.assert_not_awaited()
+    media.save.assert_awaited_once_with(OFFER, b"new image")
+    assert discord.send_result.await_args.kwargs["publication_id"] == OFFER
+    assert store.finish.await_args.kwargs["result_message_id"] == "105"
+
+
+@pytest.mark.asyncio
+async def test_previously_excluded_selection_rerolls_without_a_new_award(
+    worker_fixture: tuple[StudentGachaWorker, AsyncMock, AsyncMock, AsyncMock, AsyncMock],
+) -> None:
+    worker, store, media, generator, discord = worker_fixture
+    blocked = Student("blocked outfit", "school", 1)
+    job = _job(student=blocked, performer=ParticipantSlot.PARTICIPANT_B, loading_message_id="103")
+    store.claim_next.return_value = job
+    store.excluded_costumes.return_value = frozenset({blocked.name})
+
+    await worker.process_next()
+
+    store.reroll.assert_awaited_once_with(job, at=NOW)
+    generator.prepare.assert_not_awaited()
+    generator.render.assert_not_awaited()
+    media.save_moderation.assert_not_awaited()
+    discord.send_moderation.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_moderation_notice_retry_reuses_the_saved_card(
+    worker_fixture: tuple[StudentGachaWorker, AsyncMock, AsyncMock, AsyncMock, AsyncMock],
+) -> None:
+    worker, store, media, generator, discord = worker_fixture
+    job = _job(
+        student=Student("blocked outfit", "school", 1),
+        performer=ParticipantSlot.PARTICIPANT_A,
+        paid_started=True,
+        failure_code=GACHA_SEXUAL_MODERATION_BLOCKED,
+        loading_message_id="103",
+    )
+    store.claim_next.return_value = job
+    media.find.side_effect = lambda award: replace(STORED, key=f"student-gacha/results/{award}.png")
+    media.load.return_value = b"placeholder PNG"
+    discord.send_moderation.side_effect = [
+        GachaDeliveryFailure(retryable=True, ambiguous=True),
+        "104",
+    ]
+
+    await worker.process_next()
+
+    store.reschedule.assert_awaited_once_with(job, at=NOW)
+    store.reroll.assert_not_awaited()
+    discord.delete_loading.assert_not_awaited()
+
+    await worker.process_next()
+
+    assert discord.send_moderation.await_args_list[0] == discord.send_moderation.await_args_list[1]
+    assert store.reroll.await_args.kwargs["award_id"] == media.find.await_args.args[0]
+    media.save_moderation.assert_not_awaited()
+    generator.render.assert_not_awaited()
 
 
 @pytest.mark.asyncio

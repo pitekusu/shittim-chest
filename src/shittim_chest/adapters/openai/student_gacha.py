@@ -37,6 +37,7 @@ from shittim_chest.adapters.openai.service import _extract_parsed, _validation_e
 from shittim_chest.application.generation_policy import PRODUCTION_POLICY
 from shittim_chest.application.student_gacha_models import (
     GACHA_APNG_FRAME_COUNT,
+    GACHA_SEXUAL_MODERATION_BLOCKED,
     TEACHER_PLACEHOLDER,
     GachaExpression,
     GachaGenerationFailure,
@@ -373,7 +374,13 @@ class OpenAIStudentGacha:
         except APIStatusError as error:
             _log_provider_failure("image", error)
             if error.code == "moderation_blocked":
-                raise GachaGenerationFailure("gacha_image_moderation_blocked") from None
+                _, categories = _moderation_details(error.body)
+                reason = (
+                    GACHA_SEXUAL_MODERATION_BLOCKED
+                    if "sexual" in categories
+                    else "gacha_image_moderation_blocked"
+                )
+                raise GachaGenerationFailure(reason) from None
             if 400 <= error.status_code < 500 and error.status_code not in {408, 409}:
                 raise GachaGenerationFailure("gacha_image_request_rejected") from None
             raise GachaGenerationFailure("gacha_image_response_unknown", ambiguous=True) from None
@@ -418,10 +425,10 @@ def _log_text_failure(stage: str, category: str, *, detail: str | None = None) -
     )
 
 
-def _moderation_diagnostics(body: object) -> str:
+def _moderation_details(body: object) -> tuple[str, set[str]]:
     details = body.get("moderation_details") if isinstance(body, dict) else None
     if not isinstance(details, dict):
-        return " moderation_stage=unknown moderation_categories=unknown"
+        return "unknown", set()
 
     stage = details.get("moderation_stage")
     if not isinstance(stage, str) or stage not in {"input", "output"}:
@@ -436,7 +443,12 @@ def _moderation_diagnostics(body: object) -> str:
         if isinstance(categories, list)
         else set()
     )
-    categories_text = ",".join(sorted(known_categories)) or "unknown"
+    return stage, known_categories
+
+
+def _moderation_diagnostics(body: object) -> str:
+    stage, categories = _moderation_details(body)
+    categories_text = ",".join(sorted(categories)) or "unknown"
     return f" moderation_stage={stage} moderation_categories={categories_text}"
 
 

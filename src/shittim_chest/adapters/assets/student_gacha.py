@@ -9,6 +9,7 @@ import hashlib
 import io
 import json
 import warnings
+from importlib.resources import files
 from itertools import pairwise
 from struct import error as StructError
 from typing import TYPE_CHECKING, Final
@@ -119,7 +120,12 @@ class StudentGachaMedia:
         return await asyncio.to_thread(self._school_branding, school)
 
     async def save(self, draw_id: str, apng: bytes) -> StoredGachaImage:
-        return await asyncio.to_thread(self._save, draw_id, apng)
+        return await asyncio.to_thread(
+            self._save, draw_id, apng, image_format=GachaImageFormat.APNG
+        )
+
+    async def save_moderation(self, draw_id: str) -> StoredGachaImage:
+        return await asyncio.to_thread(self._save_moderation, draw_id)
 
     async def load(self, stored: StoredGachaImage) -> bytes:
         return await asyncio.to_thread(self._load, stored)
@@ -185,23 +191,31 @@ class StudentGachaMedia:
         except BotoCoreError, ClientError:
             raise GachaGenerationFailure("gacha_media_unavailable") from None
 
-    def _save(self, draw_id: str, apng: bytes) -> StoredGachaImage:
-        image_format = GachaImageFormat.APNG
+    def _save_moderation(self, draw_id: str) -> StoredGachaImage:
+        try:
+            content = files(__package__).joinpath("student-gacha-moderation.png").read_bytes()
+        except OSError:
+            raise GachaGenerationFailure("gacha_media_unavailable") from None
+        return self._save(draw_id, content, image_format=GachaImageFormat.PNG)
+
+    def _save(
+        self, draw_id: str, content: bytes, *, image_format: GachaImageFormat
+    ) -> StoredGachaImage:
         key = student_gacha_image_key(draw_id, image_format)
-        validate_gacha_result(apng, image_format=image_format)
+        validate_gacha_result(content, image_format=image_format)
         if any(
             self._head_result(draw_id, legacy_format) is not None
             for legacy_format in GachaImageFormat
             if legacy_format is not image_format
         ):
             raise GachaGenerationFailure("gacha_result_conflict", ambiguous=True)
-        digest = hashlib.sha256(apng).digest()
+        digest = hashlib.sha256(content).digest()
         checksum = base64.b64encode(digest).decode("ascii")
         try:
             response = self._client.put_object(
                 Bucket=self._bucket,
                 Key=key,
-                Body=apng,
+                Body=content,
                 IfNoneMatch="*",
                 ContentType=image_format.content_type,
                 CacheControl="private, no-store",

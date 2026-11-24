@@ -19,6 +19,7 @@ from shittim_chest.adapters.openai.student_gacha import OpenAIStudentGacha, _Car
 from shittim_chest.application.student_gacha_models import (
     GACHA_APNG_FRAME_DURATIONS,
     GACHA_GIF_SIZE,
+    GACHA_SEXUAL_MODERATION_BLOCKED,
     TEACHER_PLACEHOLDER,
     GachaExpression,
     GachaGenerationFailure,
@@ -487,6 +488,79 @@ async def test_invalid_chroma_reference_fails_before_paid_image_request() -> Non
         )
 
     edit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stage", "categories", "expected_code", "expected_diagnostics"),
+    [
+        (
+            "output",
+            ["sexual", "private-provider-category"],
+            GACHA_SEXUAL_MODERATION_BLOCKED,
+            "moderation_stage=output moderation_categories=sexual",
+        ),
+        (
+            "input",
+            ["sexual"],
+            GACHA_SEXUAL_MODERATION_BLOCKED,
+            "moderation_stage=input moderation_categories=sexual",
+        ),
+        (
+            "output",
+            ["violence", "private-provider-category"],
+            "gacha_image_moderation_blocked",
+            "moderation_stage=output moderation_categories=violence",
+        ),
+        (
+            "private-provider-stage",
+            "sexual",
+            "gacha_image_moderation_blocked",
+            "moderation_stage=unknown moderation_categories=unknown",
+        ),
+    ],
+)
+async def test_image_moderation_only_classifies_explicit_sexual_category(
+    caplog: pytest.LogCaptureFixture,
+    stage: str,
+    categories: list[str] | str,
+    expected_code: str,
+    expected_diagnostics: str,
+) -> None:
+    client = Mock()
+    client.responses.create = AsyncMock(return_value=_response(_card("青いドレス")))
+    edit = AsyncMock(
+        side_effect=APIStatusError(
+            "private-provider-message",
+            response=httpx2.Response(
+                400, request=httpx2.Request("POST", "https://api.openai.com/v1/images/edits")
+            ),
+            body={
+                "code": "moderation_blocked",
+                "moderation_details": {"moderation_stage": stage, "categories": categories},
+            },
+        )
+    )
+    client.with_options.return_value.images.edit = edit
+    adapter = _adapter(client)
+    presentation = await adapter.prepare(
+        student=_STUDENT, performer=_PERFORMER, costume_reference=_COSTUME
+    )
+
+    with pytest.raises(GachaGenerationFailure) as failure:
+        await adapter.render(
+            presentation,
+            teacher_name=_TEACHER,
+            references=(b"layout", _PORTRAIT_WEBP),
+            costume_reference=_COSTUME,
+            school_branding=_SCHOOL_BRANDING,
+        )
+
+    assert failure.value.code == expected_code
+    assert not failure.value.ambiguous
+    assert expected_diagnostics in caplog.text
+    assert "private-provider" not in caplog.text
+    edit.assert_awaited_once()
 
 
 @pytest.mark.asyncio

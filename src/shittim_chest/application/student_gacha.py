@@ -8,17 +8,23 @@ import secrets
 from bisect import bisect_right
 from dataclasses import replace
 from datetime import datetime
+from itertools import accumulate
 from typing import TYPE_CHECKING, Protocol
+from uuid import NAMESPACE_URL, uuid5
 
 from shittim_chest.application.ports import RepositoryConflict, RepositoryUnavailable
 from shittim_chest.application.student_gacha_discord import GachaDeliveryFailure
-from shittim_chest.application.student_gacha_models import GachaExpression, GachaGenerationFailure
+from shittim_chest.application.student_gacha_models import (
+    GACHA_SEXUAL_MODERATION_BLOCKED,
+    GachaExpression,
+    GachaGenerationFailure,
+    GachaImageFormat,
+)
 from shittim_chest.domain import PARTICIPANTS
 
 if TYPE_CHECKING:
     from shittim_chest.application.ports import Clock
     from shittim_chest.application.student_gacha_models import (
-        GachaImageFormat,
         GachaPresentation,
         SchoolBranding,
         StoredGachaImage,
@@ -32,17 +38,25 @@ _JOB_TIMEOUT_SECONDS = 330
 _IDLE_POLL_SECONDS = 5
 _NOTICE_ATTEMPTS = 8
 _DRAW_ATTEMPTS = 12
-# Upper roll boundaries for rarity 0 through 3. Rolls 98 and 99 select rarity 4.
-_RARITY_THRESHOLDS = (5, 60, 90, 98)
+_RARITY_WEIGHTS = (5, 55, 30, 8, 2)
 
 
 class _Store(Protocol):
     async def get_offer(self, offer_id: str) -> GachaOffer | None: ...
+    async def excluded_costumes(self) -> frozenset[str]: ...
     async def claim_next(self, *, claim_owner: str, at: datetime) -> GachaJob | None: ...
     async def checkpoint(
         self, expected: GachaJob, updated: GachaJob, *, at: datetime
     ) -> GachaJob: ...
     async def reschedule(self, expected: GachaJob, *, at: datetime) -> None: ...
+    async def reroll(
+        self,
+        expected: GachaJob,
+        *,
+        at: datetime,
+        award_id: str | None = None,
+        image: StoredGachaImage | None = None,
+    ) -> None: ...
     async def finish(
         self,
         expected: GachaJob,
@@ -61,6 +75,7 @@ class _Media(Protocol):
     async def costume_reference(self, student: Student) -> bytes: ...
     async def school_branding(self, school: str) -> SchoolBranding: ...
     async def save(self, draw_id: str, apng: bytes) -> StoredGachaImage: ...
+    async def save_moderation(self, draw_id: str) -> StoredGachaImage: ...
     async def load(self, stored: StoredGachaImage) -> bytes: ...
     async def find(self, draw_id: str) -> StoredGachaImage | None: ...
 
@@ -148,6 +163,15 @@ class _Discord(Protocol):
         publication_id: str,
         after_message_id: str | None,
         retryable: bool,
+    ) -> str: ...
+    async def send_moderation(
+        self,
+        *,
+        guild_id: str,
+        channel_id: str,
+        publication_id: str,
+        after_message_id: str | None,
+        content: bytes,
     ) -> str: ...
     async def disable_offer(self, *, guild_id: str, channel_id: str, message_id: str) -> None: ...
     async def delete_loading(self, *, guild_id: str, channel_id: str, message_id: str) -> None: ...
@@ -264,7 +288,9 @@ class StudentGachaWorker:
                 return
             job = prepared
         try:
-            if job.paid_started and job.stored is None and job.failure_code is None:
+            if job.failure_code == GACHA_SEXUAL_MODERATION_BLOCKED:
+                await self._settle_moderation(job)
+            elif job.paid_started and job.stored is None and job.failure_code is None:
                 await self._store.reschedule(job, at=self._clock.now())
             elif job.failure_code is not None:
                 await self._settle_failure(job)
@@ -300,7 +326,7 @@ class StudentGachaWorker:
                 message_id = await self._discord.send_loading(
                     guild_id=job.guild_id,
                     channel_id=job.channel_id,
-                    publication_id=job.job_id,
+                    publication_id=job.loading_publication_id or job.job_id,
                     after_message_id=job.after_message_id,
                     content=gif,
                 )
@@ -332,13 +358,26 @@ class StudentGachaWorker:
         await self._store.finish(job, at=self._clock.now(), park=True)
         _LOGGER.error("student_gacha_requires_recovery offer_id=%s", _required(job.offer_id))
 
-    async def _generate(self, job: GachaJob) -> GachaJob:
+    async def _generate(self, job: GachaJob) -> GachaJob | None:
         offer_id = _required(job.offer_id)
         try:
+            teacher_name = job.teacher_name
+            if teacher_name is None:
+                raise GachaGenerationFailure("gacha_recovery_without_name")
+            excluded = await self._store.excluded_costumes()
+            if job.student is not None and job.student.name in excluded:
+                await self._store.reroll(job, at=self._clock.now())
+                return None
             if job.student is None:
-                roster = await self._media.roster()
+                roster = tuple(
+                    student
+                    for student in await self._media.roster()
+                    if student.name not in excluded
+                )
                 job = await self._checkpoint(
-                    job, student=_draw_student(roster), performer=secrets.choice(PARTICIPANTS)
+                    job,
+                    student=_draw_student(roster),
+                    performer=job.performer or secrets.choice(PARTICIPANTS),
                 )
             performer = _required(job.performer)
             student = _required(job.student)
@@ -356,7 +395,7 @@ class StudentGachaWorker:
             job = await self._checkpoint(job, paid_started=True)
             apng = await self._generator.render(
                 _required(job.presentation),
-                teacher_name=_required(job.teacher_name),
+                teacher_name=teacher_name,
                 references=references,
                 costume_reference=costume_reference,
                 school_branding=school_branding,
@@ -373,6 +412,8 @@ class StudentGachaWorker:
             if error.ambiguous and job.paid_started:
                 # Recovery consults S3 before allowing an explicit retry.
                 return job
+            if error.code == GACHA_SEXUAL_MODERATION_BLOCKED:
+                return await self._checkpoint(job, failure_code=error.code)
             return await self._checkpoint(job, failure_code=error.code, teacher_name=None)
 
     async def _draw_expression(self, offer_id: str, performer: ParticipantSlot) -> GachaExpression:
@@ -400,7 +441,7 @@ class StudentGachaWorker:
             message_id = await self._discord.find_loading(
                 guild_id=job.guild_id,
                 channel_id=job.channel_id,
-                publication_id=job.job_id,
+                publication_id=job.loading_publication_id or job.job_id,
                 after_message_id=job.after_message_id,
                 content=await self._media.loading_gif(),
             )
@@ -420,6 +461,37 @@ class StudentGachaWorker:
                 await self._store.reschedule(job, at=self._clock.now())
                 return
         await self._store.finish(job, at=self._clock.now(), reopen=True)
+
+    async def _settle_moderation(self, job: GachaJob) -> None:
+        award_id = uuid5(
+            NAMESPACE_URL,
+            f"shittim-chest:student-gacha:moderation:{_required(job.offer_id)}:"
+            f"{_required(job.student).name}",
+        ).hex
+        image = await self._media.find(award_id)
+        if image is None:
+            image = await self._media.save_moderation(award_id)
+        if image.image_format is not GachaImageFormat.PNG:
+            raise GachaGenerationFailure("gacha_moderation_image_invalid")
+        content = await self._media.load(image)
+        try:
+            await self._discord.send_moderation(
+                guild_id=job.guild_id,
+                channel_id=job.channel_id,
+                publication_id=award_id,
+                after_message_id=job.loading_message_id or job.after_message_id,
+                content=content,
+            )
+        except GachaDeliveryFailure as error:
+            if error.retryable and job.attempts < _NOTICE_ATTEMPTS:
+                await self._store.reschedule(job, at=self._clock.now())
+                return
+            _LOGGER.warning("student_gacha_moderation_notice_failed")
+        try:
+            await self._remove_loading(job)
+        except GachaDeliveryFailure:
+            _LOGGER.warning("student_gacha_moderation_loading_delete_failed")
+        await self._store.reroll(job, at=self._clock.now(), award_id=award_id, image=image)
 
     async def _publish_result(self, job: GachaJob) -> None:
         offer_id = _required(job.offer_id)
@@ -462,6 +534,14 @@ def _required[Value](value: Value | None) -> Value:
 
 
 def _draw_student(roster: tuple[Student, ...]) -> Student:
-    rarity = bisect_right(_RARITY_THRESHOLDS, secrets.randbelow(100))
-    candidates = tuple(student for student in roster if student.rarity == rarity)
+    groups = [
+        (candidates, weight)
+        for rarity, weight in enumerate(_RARITY_WEIGHTS)
+        if (candidates := tuple(student for student in roster if student.rarity == rarity))
+    ]
+    if not groups:
+        raise GachaGenerationFailure("gacha_costumes_exhausted")
+    thresholds = tuple(accumulate(weight for _, weight in groups))
+    group = bisect_right(thresholds, secrets.randbelow(thresholds[-1]))
+    candidates, _ = groups[group]
     return secrets.choice(candidates)

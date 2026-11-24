@@ -24,12 +24,14 @@ from shittim_chest.adapters.dynamodb.student_gacha_activity import (
 from shittim_chest.application.ports import RepositoryConflict, RepositoryUnavailable
 from shittim_chest.application.scale_to_zero import RuntimeStatus
 from shittim_chest.application.student_gacha_models import (
+    GACHA_SEXUAL_MODERATION_BLOCKED,
     STUDENT_GACHA_RARITIES,
     GachaExpression,
     GachaPresentation,
     StoredGachaImage,
     Student,
     normalize_teacher_name,
+    student_gacha_image_key,
 )
 from shittim_chest.application.student_gacha_state import GachaJob, GachaJobKind, GachaOffer
 from shittim_chest.domain import ParticipantSlot
@@ -46,6 +48,8 @@ _RETRY_DELAY = timedelta(seconds=15)
 _WARNING_INTERVAL = timedelta(minutes=1)
 _JOB_QUERY_LIMIT = 16
 _ACTIVITY_LIMIT = 100_000
+_COSTUME_EXCLUSIONS = "GACHA#COSTUME_EXCLUSIONS"
+_COSTUME_EXCLUSION_TYPE = "gacha_costume_exclusion"
 P = ParamSpec("P")
 T = TypeVar("T")
 
@@ -223,6 +227,19 @@ class DynamoDbStudentGachaRepository:
     async def checkpoint(self, expected: GachaJob, updated: GachaJob, *, at: datetime) -> GachaJob:
         return await self._run(self._checkpoint, expected, updated, at)
 
+    async def excluded_costumes(self) -> frozenset[str]:
+        return await self._run(self._excluded_costumes)
+
+    async def reroll(
+        self,
+        expected: GachaJob,
+        *,
+        at: datetime,
+        award_id: str | None = None,
+        image: StoredGachaImage | None = None,
+    ) -> None:
+        await self._run(self._reroll, expected, at, award_id, image)
+
     async def reschedule(self, expected: GachaJob, *, at: datetime) -> None:
         await self._run(self._reschedule, expected, at)
 
@@ -267,6 +284,11 @@ class DynamoDbStudentGachaRepository:
             created_at=_datetime(offer, "parked_job_created_at"),
             next_available_at=at,
             offer_id=offer_id,
+            teacher_name=(
+                _optional_text(offer, "parked_teacher_name")
+                if failure_code == GACHA_SEXUAL_MODERATION_BLOCKED
+                else None
+            ),
             student=_student(offer),
             performer=_performer(offer),
             expression=_expression(offer),
@@ -274,6 +296,7 @@ class DynamoDbStudentGachaRepository:
             paid_started=paid_started,
             stored=stored,
             loading_message_id=_optional_text(offer, "loading_message_id"),
+            loading_publication_id=_optional_text(offer, "loading_publication_id"),
             result_message_id=_optional_text(offer, "result_message_id"),
             result_after_message_id=_optional_text(offer, "result_after_message_id"),
             failure_code=failure_code,
@@ -287,7 +310,9 @@ class DynamoDbStudentGachaRepository:
             "parked_job_created_at",
             "parked_after_message_id",
             "parked_paid_started",
+            "parked_teacher_name",
             "loading_message_id",
+            "loading_publication_id",
             "result_message_id",
             "failure_code",
         ):
@@ -509,6 +534,43 @@ class DynamoDbStudentGachaRepository:
         ):
             raise ValueError("gacha checkpoint cannot replace a saved selection or receipt")
         actions: list[TransactWriteItemTypeDef] = []
+        if not expected.paid_started and updated.paid_started:
+            if expected.kind is not GachaJobKind.DRAW or updated.student is None:
+                raise ValueError("gacha image call requires a selected costume")
+            actions.append(
+                {
+                    "ConditionCheck": {
+                        "TableName": self._table_name,
+                        "Key": marshal_item(_costume_exclusion_key(updated.student.name)),
+                        "ConditionExpression": "attribute_not_exists(PK)",
+                    }
+                }
+            )
+        if (
+            updated.failure_code == GACHA_SEXUAL_MODERATION_BLOCKED
+            and expected.failure_code != GACHA_SEXUAL_MODERATION_BLOCKED
+        ):
+            if (
+                expected.kind is not GachaJobKind.DRAW
+                or not expected.paid_started
+                or expected.student is None
+                or updated.stored is not None
+                or updated.result_message_id is not None
+            ):
+                raise ValueError("gacha moderation failure requires a rejected draw")
+            actions.append(
+                {
+                    "Update": {
+                        "TableName": self._table_name,
+                        "Key": marshal_item(_costume_exclusion_key(expected.student.name)),
+                        "ConditionExpression": "attribute_not_exists(PK) OR record_type=:type",
+                        "UpdateExpression": "SET record_type=:type",
+                        "ExpressionAttributeValues": marshal_item(
+                            {":type": _COSTUME_EXCLUSION_TYPE}
+                        ),
+                    }
+                }
+            )
         if (
             expected.kind is GachaJobKind.OFFER
             and expected.offer_message_id is None
@@ -534,6 +596,124 @@ class DynamoDbStudentGachaRepository:
         actions.append(self._replace(_serialize_job(expected), _serialize_job(updated)))
         self._transact(*actions)
         return updated
+
+    def _excluded_costumes(self) -> frozenset[str]:
+        pages = self._client.get_paginator("query").paginate(
+            TableName=self._table_name,
+            ConsistentRead=True,
+            KeyConditionExpression="PK=:pk",
+            ExpressionAttributeValues=marshal_item({":pk": _COSTUME_EXCLUSIONS}),
+            ProjectionExpression="SK",
+        )
+        return frozenset(
+            _text(unmarshal_item(item), "SK") for page in pages for item in page.get("Items", ())
+        )
+
+    def _reroll(
+        self,
+        expected: GachaJob,
+        at: datetime,
+        award_id: str | None,
+        image: StoredGachaImage | None,
+    ) -> None:
+        _require_lease(expected, at)
+        moderated = expected.failure_code == GACHA_SEXUAL_MODERATION_BLOCKED
+        if (
+            expected.kind is not GachaJobKind.DRAW
+            or expected.student is None
+            or expected.stored is not None
+            or expected.result_message_id is not None
+            or expected.paid_started != moderated
+            or expected.failure_code not in {None, GACHA_SEXUAL_MODERATION_BLOCKED}
+            or (award_id is None) != (image is None)
+            or (award_id is not None) != moderated
+        ):
+            raise ValueError("gacha reroll requires an excluded draw with no uncertain result")
+        offer_id = _require_id(expected.offer_id)
+        offer = self._require_offer(offer_id)
+        if (
+            offer.get("state") != "claimed"
+            or offer.get("draw_job_id") != expected.job_id
+            or offer.get("guild_id") != expected.guild_id
+        ):
+            raise RepositoryConflict("gacha draw job changed")
+        owner_key = _text(offer, "owner_key")
+        owner = self._get(_owner_key(owner_key))
+        if owner is None or owner.get("active_offer_id") != offer_id:
+            raise RepositoryConflict("gacha active offer changed")
+
+        pending = replace(
+            expected,
+            student=None,
+            presentation=None,
+            paid_started=False,
+            failure_code=None,
+            stored=None,
+            loading_message_id=None if moderated else expected.loading_message_id,
+            loading_publication_id=(
+                f"{award_id}:loading" if award_id is not None else expected.loading_publication_id
+            ),
+            claim_owner=None,
+            claim_expires_at=None,
+            attempts=0,
+            next_available_at=at,
+            version=expected.version + 1,
+        )
+        updated = {**offer}
+        for key in ("student", "presentation", "stored"):
+            updated.pop(key, None)
+        exclusion: TransactWriteItemTypeDef = {
+            "ConditionCheck": {
+                "TableName": self._table_name,
+                "Key": marshal_item(_costume_exclusion_key(expected.student.name)),
+                "ConditionExpression": "record_type=:type",
+                "ExpressionAttributeValues": marshal_item({":type": _COSTUME_EXCLUSION_TYPE}),
+            }
+        }
+        award = (
+            self._moderation_award_actions(expected, offer, award_id, image, at)
+            if award_id is not None and image is not None
+            else ()
+        )
+        self._transact(
+            exclusion,
+            self._version_check(owner),
+            self._replace(offer, updated),
+            *self._move_job(expected, pending),
+            *award,
+        )
+
+    def _moderation_award_actions(
+        self,
+        expected: GachaJob,
+        offer: DynamoItem,
+        award_id: str,
+        image: StoredGachaImage,
+        at: datetime,
+    ) -> tuple[TransactWriteItemTypeDef, ...]:
+        _validate_offer_id(award_id)
+        if award_id == expected.offer_id or image.key != student_gacha_image_key(award_id):
+            raise ValueError("gacha moderation award image does not match its offer")
+        award = replace(expected, stored=image, presentation=None, expression=None)
+        # Records resolves the collector from the redeemed record at the card's result ID.
+        identity: DynamoItem = {
+            **_offer_key(award_id),
+            "guild_id": expected.guild_id,
+            "owner_key": _text(offer, "owner_key"),
+            "state": "redeemed",
+            **_serialize_selection(award),
+        }
+        return (
+            self._put_new(
+                {
+                    **identity,
+                    "channel_id": expected.channel_id,
+                    "debate_id": _text(offer, "debate_id"),
+                    "version": 0,
+                }
+            ),
+            self._gallery_result(award, offer_id=award_id, at=at),
+        )
 
     def _reschedule(self, expected: GachaJob, at: datetime) -> None:
         _require_lease(expected, at)
@@ -590,8 +770,16 @@ class DynamoDbStudentGachaRepository:
                     updated["parked_job_created_at"] = _timestamp(expected.created_at)
                     updated["parked_after_message_id"] = expected.after_message_id
                     updated["parked_paid_started"] = expected.paid_started
+                    if (
+                        expected.failure_code == GACHA_SEXUAL_MODERATION_BLOCKED
+                        and expected.teacher_name is not None
+                    ):
+                        # This rejected call can still lead to a new draw after recovery.
+                        updated["parked_teacher_name"] = expected.teacher_name
                     if expected.loading_message_id is not None:
                         updated["loading_message_id"] = expected.loading_message_id
+                    if expected.loading_publication_id is not None:
+                        updated["loading_publication_id"] = expected.loading_publication_id
                     if expected.result_message_id is not None:
                         updated["result_message_id"] = expected.result_message_id
                     if expected.failure_code is not None:
@@ -807,6 +995,10 @@ def _offer_key(offer_id: str) -> DynamoItem:
     return {"PK": f"GACHA#OFFER#{offer_id}", "SK": "META"}
 
 
+def _costume_exclusion_key(costume: str) -> DynamoItem:
+    return {"PK": _COSTUME_EXCLUSIONS, "SK": costume}
+
+
 def _job_key(job_id: str) -> DynamoItem:
     return {"PK": f"GACHA#JOB#{job_id}", "SK": "META"}
 
@@ -866,6 +1058,7 @@ def _serialize_job(job: GachaJob) -> DynamoItem:
         "offer_id": job.offer_id,
         "teacher_name": job.teacher_name,
         "loading_message_id": job.loading_message_id,
+        "loading_publication_id": job.loading_publication_id,
         "result_message_id": job.result_message_id,
         "result_after_message_id": job.result_after_message_id,
         "offer_message_id": job.offer_message_id,
@@ -900,6 +1093,7 @@ def _deserialize_job(job_id: str, item: DynamoItem) -> GachaJob:
         paid_started=_bool(item, "paid_started"),
         stored=_stored(item),
         loading_message_id=_optional_text(item, "loading_message_id"),
+        loading_publication_id=_optional_text(item, "loading_publication_id"),
         result_message_id=_optional_text(item, "result_message_id"),
         result_after_message_id=_optional_text(item, "result_after_message_id"),
         offer_message_id=_optional_text(item, "offer_message_id"),
