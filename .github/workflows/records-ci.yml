@@ -252,7 +252,7 @@ jobs:
   records-web:
     name: records-web
     runs-on: ubuntu-26.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     needs: records-changes
     if: needs.records-changes.outputs.records_web == 'true'
     defaults:

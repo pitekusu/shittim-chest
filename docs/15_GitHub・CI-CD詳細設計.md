@@ -132,7 +132,7 @@ uv run --project services/records --frozen python -m services.records.tools.prof
 | records-changes | Recordsの変更範囲 |
 | records-python | 固定依存、監査、整形・型・単体・DynamoDB Local |
 | records-contract | OpenAPI、JSON Schema等の生成物一致 |
-| records-web | 整形・型・単体試験・ビルド・Playwright・依存監査 |
+| records-web | 整形・型・単体試験・ビルド・Playwright・依存監査。ブラウザーのセットアップを含め上限15分 |
 | records-infra | Records固有スタックのテンプレート生成 |
 | records-gate | 必須チェックとしてRecords全体の結果を集約 |
 
