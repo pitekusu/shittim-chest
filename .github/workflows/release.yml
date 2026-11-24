@@ -142,8 +142,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # GitHub's completed filter can lag behind the workflow run's current status.
+          # Fetch the exact SHA and verify completion from the returned runs.
           gh api --paginate --slurp \
-            "repos/${GITHUB_REPOSITORY}/actions/workflows/records-release.yml/runs?branch=main&event=workflow_dispatch&status=completed&per_page=100" \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/records-release.yml/runs?branch=main&event=workflow_dispatch&head_sha=${GITHUB_SHA}&per_page=100" \
             > "${RUNNER_TEMP}/records-release-runs.json"
           run=$(jq --exit-status --compact-output --arg sha "${GITHUB_SHA}" '
             [.[].workflow_runs[] |

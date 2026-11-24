@@ -2286,7 +2286,7 @@ def test_release_plan_requires_actions_read_for_records_release_gate(directory: 
     (
         ("actions/workflows/records-release.yml/runs", "actions/runs"),
         (".head_sha == $sha", ".head_sha != $sha"),
-        ("status=completed", "status=success"),
+        ("head_sha=${GITHUB_SHA}", "status=success"),
         ("sort_by(.updated_at, .id, .run_attempt) | last", "sort_by(.id) | last"),
         (
             "run_attempt=$(jq --exit-status --raw-output '.run_attempt'",
