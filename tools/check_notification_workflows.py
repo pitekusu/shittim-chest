@@ -563,7 +563,7 @@ def _validate_release(directory: Path) -> None:
         '.head_branch == "main"',
         '.event == "workflow_dispatch"',
         '.status == "completed"',
-        "status=completed",
+        "head_sha=${GITHUB_SHA}",
         "sort_by(.updated_at, .id, .run_attempt) | last",
         "run_id=$(jq --exit-status --raw-output '.id'",
         "run_attempt=$(jq --exit-status --raw-output '.run_attempt'",
