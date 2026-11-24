@@ -80,6 +80,19 @@ class EvidenceDigestOutputV2(StrictOutput):
     summary: str = Field(max_length=2_000)
 
 
+class EvidencePageDigestOutputV1(StrictOutput):
+    """Factual text from one of the requested pages."""
+
+    url: str = Field(min_length=1)
+    summary: str = Field(min_length=1, max_length=600)
+
+
+class EvidencePageDigestsOutputV1(StrictOutput):
+    """Keep requested pages separate so the adapter can discard unread pages."""
+
+    pages: tuple[EvidencePageDigestOutputV1, ...] = Field(max_length=3)
+
+
 class FarewellOutputV2(StrictOutput):
     """One display message; citations are read from provider annotations."""
 

@@ -58,7 +58,10 @@ from shittim_chest.adapters.openai.observability import (
     OpenAIUsageRecorder,
 )
 from shittim_chest.adapters.openai.prompts import debate_prompt_input, evidence_instructions
-from shittim_chest.adapters.openai.schemas import EvidenceDigestOutputV2
+from shittim_chest.adapters.openai.schemas import (
+    EvidenceDigestOutputV2,
+    EvidencePageDigestsOutputV1,
+)
 from shittim_chest.application.models import PreviousDebate
 from shittim_chest.domain import (
     EvidenceBundle,
@@ -124,6 +127,9 @@ _REQUEST_URL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _YOUTUBE_VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
+
+type _EvidenceDigest = EvidenceDigestOutputV2 | EvidencePageDigestsOutputV1
+type _EvidenceResponse = ParsedResponse[_EvidenceDigest]
 
 _REALTIME_FEEDS = {
     "oai-finance": (
@@ -242,7 +248,9 @@ class OpenAIWebEvidenceService:
                         ),
                         images=images,
                     ),
-                    text_format=EvidenceDigestOutputV2,
+                    text_format=EvidencePageDigestsOutputV1
+                    if request_urls
+                    else EvidenceDigestOutputV2,
                     include=["web_search_call.action.sources"],
                     max_output_tokens=1_200,
                     reasoning={"effort": "medium"},
@@ -286,36 +294,25 @@ class OpenAIWebEvidenceService:
                     diagnostic_context=_SourceDiagnosticContext.EVIDENCE_SOURCES.value,
                     diagnostic_kind=_DiagnosticKind.MISSING.value,
                 )
-            if not parsed.summary.strip():
+            if request_urls and isinstance(parsed, EvidencePageDigestsOutputV1):
+                extraction, summary, routing_reason = _requested_page_evidence(
+                    response, parsed, request_urls, extraction
+                )
+            elif not request_urls and isinstance(parsed, EvidenceDigestOutputV2):
+                summary = parsed.summary
+                routing_reason = _SEARCH_SELECTED_REASON
+            else:
+                raise OpenAIInvalidOutput()
+            if not summary.strip():
                 raise OpenAIInvalidOutput(
                     diagnostic_context=_SourceDiagnosticContext.RESPONSE_OUTPUT.value,
                     diagnostic_kind=_DiagnosticKind.EMPTY_STRING.value,
                 )
-            routing_reason = _SEARCH_SELECTED_REASON
-            if request_urls:
-                requested = {_page_key(url) for url in request_urls}
-                unconfirmed = requested - _opened_and_cited_pages(response, extraction.items)
-                if unconfirmed == requested:
-                    raise OpenAIInvalidOutput(
-                        diagnostic_context=_SourceDiagnosticContext.REQUEST_URL_NOT_CONFIRMED.value,
-                        diagnostic_kind=_DiagnosticKind.MISSING.value,
-                    )
-                routing_reason = "request_url_opened"
-                if unconfirmed:
-                    routing_reason = "request_url_partially_opened"
-                    extraction = replace(
-                        extraction,
-                        items=tuple(
-                            item
-                            for item in extraction.items
-                            if _page_key(item.source_url) not in unconfirmed
-                        ),
-                    )
             stage = _EvidenceStage.BUNDLE_VALIDATION
             try:
                 bundle = EvidenceBundle(
                     items=extraction.items,
-                    summary=parsed.summary,
+                    summary=summary,
                     search_requirement=SearchRequirement.OPTIONAL,
                     search_status=EvidenceSearchStatus.COMPLETED,
                     search_response_id=response.id,
@@ -402,10 +399,10 @@ def _stage_operation(operation: str, stage: _EvidenceStage) -> str:
 
 
 def _validated_output(
-    response: ParsedResponse[EvidenceDigestOutputV2],
+    response: _EvidenceResponse,
     *,
     allow_failed_open: bool,
-) -> tuple[EvidenceDigestOutputV2, bool]:
+) -> tuple[_EvidenceDigest, bool]:
     if response.status != "completed":
         reason = response.status
         if response.status == "incomplete":
@@ -534,8 +531,37 @@ def _page_key(value: str) -> str | None:
     return str(url.copy_with(fragment=None))
 
 
+def _requested_page_evidence(
+    response: _EvidenceResponse,
+    parsed: EvidencePageDigestsOutputV1,
+    request_urls: tuple[str, ...],
+    extraction: _SourceExtraction,
+) -> tuple[_SourceExtraction, str, str]:
+    confirmed = _opened_and_cited_pages(response, extraction.items)
+    summaries_by_page = {_page_key(page.url): page.summary for page in parsed.pages}
+    # A combined provider summary could include claims from failed or unrelated
+    # opens. Assemble it only from page digests with independently observed sources.
+    summaries = {
+        key: summaries_by_page[key]
+        for url in request_urls
+        if (key := _page_key(url)) in confirmed and key in summaries_by_page
+    }
+    if not summaries:
+        raise OpenAIInvalidOutput(
+            diagnostic_context=_SourceDiagnosticContext.REQUEST_URL_NOT_CONFIRMED.value,
+            diagnostic_kind=_DiagnosticKind.MISSING.value,
+        )
+    items = tuple(item for item in extraction.items if _page_key(item.source_url) in summaries)
+    routing_reason = (
+        "request_url_opened"
+        if len(summaries) == len(request_urls)
+        else "request_url_partially_opened"
+    )
+    return replace(extraction, items=items), "\n\n".join(summaries.values()), routing_reason
+
+
 def _opened_and_cited_pages(
-    response: ParsedResponse[EvidenceDigestOutputV2],
+    response: _EvidenceResponse,
     items: tuple[EvidenceItem, ...],
 ) -> set[str | None]:
     opened = {
@@ -555,7 +581,7 @@ def _empty_extraction() -> _SourceExtraction:
 
 
 def _extract_sources(
-    response: ParsedResponse[EvidenceDigestOutputV2],
+    response: _EvidenceResponse,
     retrieved_at: datetime,
 ) -> _SourceExtraction:
     titles: dict[str, str] = {}
@@ -781,7 +807,7 @@ def _unexpected_exception_kind(error: Exception) -> _DiagnosticKind:
 
 def _usage_record(
     operation: str,
-    response: ParsedResponse[EvidenceDigestOutputV2],
+    response: _EvidenceResponse,
     extraction: _SourceExtraction,
     started: float,
     config: OpenAIAdapterConfig,

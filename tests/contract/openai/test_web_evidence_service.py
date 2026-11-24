@@ -32,10 +32,16 @@ from shittim_chest.adapters.openai import (
     OpenAIUsageRecord,
     OpenAIWebEvidenceService,
 )
-from shittim_chest.adapters.openai.schemas import EvidenceDigestOutputV2
+from shittim_chest.adapters.openai.schemas import (
+    EvidenceDigestOutputV2,
+    EvidencePageDigestOutputV1,
+    EvidencePageDigestsOutputV1,
+)
 from shittim_chest.application.models import PreviousDebate
 from shittim_chest.domain import EvidenceSearchStatus, SearchRequirement
 from tests.contract.openai.test_responses_service import request_input_text, request_instructions
+
+_REQUEST_PAGE_SUMMARY = "施設の利用時間は午前9時からです。"
 
 
 @dataclass(slots=True)
@@ -122,16 +128,21 @@ def searched_response(
     )
 
 
-def opened_page_response(*, opened_url: str, cited_url: str) -> SimpleNamespace:
-    response = searched_response(
-        url=cited_url,
-        title="施設の案内",
-        summary="施設の利用時間は午前9時からです。",
+def with_page_digests(response: SimpleNamespace, *pages: tuple[str, str]) -> SimpleNamespace:
+    digests = EvidencePageDigestsOutputV1(
+        pages=tuple(EvidencePageDigestOutputV1(url=url, summary=summary) for url, summary in pages)
     )
+    response.output[-1].content[0].text = digests.model_dump_json()
+    response.output_parsed = digests
+    return response
+
+
+def opened_page_response(*, opened_url: str, cited_url: str) -> SimpleNamespace:
+    response = searched_response(url=cited_url, title="施設の案内")
     response.output[0] = response.output[0].model_copy(
         update={"action": ActionOpenPage(type="open_page", url=opened_url)}
     )
-    return response
+    return with_page_digests(response, (opened_url, _REQUEST_PAGE_SUMMARY))
 
 
 def no_search_response() -> SimpleNamespace:
@@ -244,12 +255,13 @@ async def test_requested_page_is_opened_and_shared_as_evidence(url: str, cited_u
 
     assert bundle.search_status is EvidenceSearchStatus.COMPLETED
     assert bundle.routing_reason == "request_url_opened"
-    assert bundle.summary == "施設の利用時間は午前9時からです。"
+    assert bundle.summary == _REQUEST_PAGE_SUMMARY
     assert [item.source_url for item in bundle.items] == [cited_url]
     assert parse.await_count == 1
     assert parse.await_args is not None
     request = parse.await_args.kwargs
     assert request["tool_choice"] == "required"
+    assert request["text_format"] is EvidencePageDigestsOutputV1
     assert json.loads(request_input_text(request))["request_urls"] == [url]
     assert observer.failures == []
 
@@ -272,6 +284,11 @@ async def test_request_urls_are_deduplicated_bounded_and_scoped_to_the_current_q
     )
     annotations = response.output[2].content[0].annotations
     annotations.append(annotations[0].model_copy(update={"url": second}))
+    with_page_digests(
+        response,
+        (first, _REQUEST_PAGE_SUMMARY),
+        (second, "利用料は無料です。"),
+    )
     service, parse, observer = service_for(response)
 
     bundle = await service.prepare_evidence(
@@ -287,6 +304,7 @@ async def test_request_urls_are_deduplicated_bounded_and_scoped_to_the_current_q
     assert request["tool_choice"] == "required"
     assert bundle.search_status is EvidenceSearchStatus.COMPLETED
     assert bundle.routing_reason == "request_url_partially_opened"
+    assert bundle.summary == _REQUEST_PAGE_SUMMARY
     assert [item.source_url for item in bundle.items] == [first]
     assert observer.usages[0].evidence_source_count == 1
 
@@ -309,14 +327,20 @@ async def test_links_in_previous_debate_and_nonpublic_links_keep_search_optional
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("provider_result", ["no_tool", "search_only", "different_citation"])
+@pytest.mark.parametrize(
+    "provider_result", ["no_tool", "search_only", "different_citation", "different_digest"]
+)
 async def test_unconfirmed_request_url_does_not_become_evidence(provider_result: str) -> None:
     url = "https://example.com/guide"
     response = {
-        "no_tool": no_search_response(),
-        "search_only": searched_response(url=url),
+        "no_tool": with_page_digests(no_search_response()),
+        "search_only": with_page_digests(searched_response(url=url), (url, _REQUEST_PAGE_SUMMARY)),
         "different_citation": opened_page_response(
             opened_url=url, cited_url="https://example.com/other"
+        ),
+        "different_digest": with_page_digests(
+            opened_page_response(opened_url=url, cited_url=url),
+            ("https://example.com/other", _REQUEST_PAGE_SUMMARY),
         ),
     }[provider_result]
     service, _, _ = service_for(response)
