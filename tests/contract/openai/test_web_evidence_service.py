@@ -20,7 +20,7 @@ from openai import (
     RateLimitError,
 )
 from openai.types.responses.response import Response
-from openai.types.responses.response_function_web_search import ActionSearchSource
+from openai.types.responses.response_function_web_search import ActionOpenPage, ActionSearchSource
 from openai.types.responses.response_output_refusal import ResponseOutputRefusal
 from openai.types.responses.response_reasoning_item import ResponseReasoningItem
 from pydantic import ValidationError
@@ -32,9 +32,16 @@ from shittim_chest.adapters.openai import (
     OpenAIUsageRecord,
     OpenAIWebEvidenceService,
 )
-from shittim_chest.adapters.openai.schemas import EvidenceDigestOutputV2
+from shittim_chest.adapters.openai.schemas import (
+    EvidenceDigestOutputV2,
+    EvidencePageDigestOutputV1,
+    EvidencePageDigestsOutputV1,
+)
+from shittim_chest.application.models import PreviousDebate
 from shittim_chest.domain import EvidenceSearchStatus, SearchRequirement
 from tests.contract.openai.test_responses_service import request_input_text, request_instructions
+
+_REQUEST_PAGE_SUMMARY = "施設の利用時間は午前9時からです。"
 
 
 @dataclass(slots=True)
@@ -121,6 +128,23 @@ def searched_response(
     )
 
 
+def with_page_digests(response: SimpleNamespace, *pages: tuple[str, str]) -> SimpleNamespace:
+    digests = EvidencePageDigestsOutputV1(
+        pages=tuple(EvidencePageDigestOutputV1(url=url, summary=summary) for url, summary in pages)
+    )
+    response.output[-1].content[0].text = digests.model_dump_json()
+    response.output_parsed = digests
+    return response
+
+
+def opened_page_response(*, opened_url: str, cited_url: str) -> SimpleNamespace:
+    response = searched_response(url=cited_url, title="施設の案内")
+    response.output[0] = response.output[0].model_copy(
+        update={"action": ActionOpenPage(type="open_page", url=opened_url)}
+    )
+    return with_page_digests(response, (opened_url, _REQUEST_PAGE_SUMMARY))
+
+
 def no_search_response() -> SimpleNamespace:
     response = searched_response(summary="")
     response.id = "resp_no_search"
@@ -174,7 +198,7 @@ async def test_model_selected_search_persists_shared_evidence_and_safe_request_s
     assert bundle.search_status is EvidenceSearchStatus.COMPLETED
     assert bundle.summary == "今日は晴れです。"
     assert bundle.search_response_id == "resp_evidence"
-    assert bundle.router_rules_version == "agentic-search-v1"
+    assert bundle.router_rules_version == "agentic-search-v2"
     assert bundle.routing_reason == "model_selected_search"
     assert bundle.items[0].title == "Weather source"
     assert bundle.items[0].retrieved_at == "2026-07-17T01:02:03Z"
@@ -206,12 +230,126 @@ async def test_model_skipped_search_still_uses_one_agentic_request() -> None:
     assert bundle.search_requirement is SearchRequirement.NONE
     assert bundle.search_status is EvidenceSearchStatus.NOT_REQUESTED
     assert bundle.routing_reason == "model_skipped_search"
-    assert bundle.router_rules_version == "agentic-search-v1"
+    assert bundle.router_rules_version == "agentic-search-v2"
     assert bundle.items == ()
     assert bundle.summary == ""
     assert parse.await_count == 1
     assert observer.usages[0].web_search_source_count == 0
     assert observer.usages[0].evidence_source_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("url", "cited_url"),
+    [
+        ("https://example.com/guide?lang=ja;", "https://example.com/guide?lang=ja;"),
+        ("https://youtu.be/aBcDeF012_-?t=10", "https://www.youtube.com/watch?v=aBcDeF012_-"),
+    ],
+)
+async def test_requested_page_is_opened_and_shared_as_evidence(url: str, cited_url: str) -> None:
+    service, parse, observer = service_for(
+        opened_page_response(opened_url=url, cited_url=cited_url)
+    )
+
+    bundle = await service.prepare_evidence(question=f"この施設について議論して <{url}>")
+
+    assert bundle.search_status is EvidenceSearchStatus.COMPLETED
+    assert bundle.routing_reason == "request_url_opened"
+    assert bundle.summary == _REQUEST_PAGE_SUMMARY
+    assert [item.source_url for item in bundle.items] == [cited_url]
+    assert parse.await_count == 1
+    assert parse.await_args is not None
+    request = parse.await_args.kwargs
+    assert request["tool_choice"] == "required"
+    assert request["text_format"] is EvidencePageDigestsOutputV1
+    assert json.loads(request_input_text(request))["request_urls"] == [url]
+    assert observer.failures == []
+
+
+@pytest.mark.asyncio
+async def test_request_urls_are_deduplicated_bounded_and_scoped_to_the_current_question() -> None:
+    first = "https://example.com/guide"
+    second = "http://example.org/path_(article)"
+    third = "https://example.net/price"
+    prior = PreviousDebate(question="https://example.com/previous", decision="候補を決めた。")
+    response = opened_page_response(opened_url=first, cited_url=first)
+    response.output.insert(
+        1,
+        response.output[0].model_copy(
+            update={
+                "action": ActionOpenPage(type="open_page", url=second),
+                "status": "failed",
+            }
+        ),
+    )
+    annotations = response.output[2].content[0].annotations
+    annotations.append(annotations[0].model_copy(update={"url": second}))
+    with_page_digests(
+        response,
+        (first, _REQUEST_PAGE_SUMMARY),
+        (second, "利用料は無料です。"),
+    )
+    service, parse, observer = service_for(response)
+
+    bundle = await service.prepare_evidence(
+        question=(
+            f"<{first}>、[案内]({second})と {first}、{third}。 最後に https://example.net/other"
+        ),
+        previous_debate=prior,
+    )
+
+    assert parse.await_args is not None
+    request = parse.await_args.kwargs
+    assert json.loads(request_input_text(request))["request_urls"] == [first, second, third]
+    assert request["tool_choice"] == "required"
+    assert bundle.search_status is EvidenceSearchStatus.COMPLETED
+    assert bundle.routing_reason == "request_url_partially_opened"
+    assert bundle.summary == _REQUEST_PAGE_SUMMARY
+    assert [item.source_url for item in bundle.items] == [first]
+    assert observer.usages[0].evidence_source_count == 1
+
+
+@pytest.mark.asyncio
+async def test_links_in_previous_debate_and_nonpublic_links_keep_search_optional() -> None:
+    prior = PreviousDebate(question="https://example.com/previous", decision="候補を決めた。")
+    service, parse, _ = service_for(no_search_response())
+
+    bundle = await service.prepare_evidence(
+        question="http://localhost/guide と http://127.0.0.1/test",
+        previous_debate=prior,
+    )
+
+    assert parse.await_args is not None
+    request = parse.await_args.kwargs
+    assert request["tool_choice"] == "auto"
+    assert "request_urls" not in json.loads(request_input_text(request))
+    assert bundle.search_status is EvidenceSearchStatus.NOT_REQUESTED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider_result", ["no_tool", "search_only", "different_citation", "different_digest"]
+)
+async def test_unconfirmed_request_url_does_not_become_evidence(provider_result: str) -> None:
+    url = "https://example.com/guide"
+    response = {
+        "no_tool": with_page_digests(no_search_response()),
+        "search_only": with_page_digests(searched_response(url=url), (url, _REQUEST_PAGE_SUMMARY)),
+        "different_citation": opened_page_response(
+            opened_url=url, cited_url="https://example.com/other"
+        ),
+        "different_digest": with_page_digests(
+            opened_page_response(opened_url=url, cited_url=url),
+            ("https://example.com/other", _REQUEST_PAGE_SUMMARY),
+        ),
+    }[provider_result]
+    service, _, _ = service_for(response)
+
+    bundle = await service.prepare_evidence(question=f"{url} の内容は?")
+
+    assert bundle.search_status is EvidenceSearchStatus.OPTIONAL_UNAVAILABLE
+    assert bundle.items == ()
+    assert bundle.summary == ""
 
 
 @pytest.mark.asyncio
