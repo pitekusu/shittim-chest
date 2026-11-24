@@ -408,6 +408,60 @@ async def test_result_attachment_keeps_its_saved_format_when_reconciling(
 
 
 @pytest.mark.asyncio
+async def test_moderation_post_uses_arona_and_reconciles_the_same_attachment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = delivery.DiscordStudentGacha(
+        clients={DiscordBotSlot.PARTICIPANT_A: cast(discord.Client, object())},
+        config=_config(),
+    )
+    channel = SimpleNamespace(id=102, send=AsyncMock())
+    content = b"saved moderation PNG"
+    nonce = delivery._nonce(f"{OFFER_ID}:moderation")
+    digest = hashlib.sha256(content).hexdigest()[:16]
+    filename = f"moderation-{nonce}-{digest}.png"
+    message = SimpleNamespace(
+        id=120,
+        author=SimpleNamespace(id=202),
+        channel=channel,
+        nonce=None,
+        content="エッチだったので再募集します\uff01",
+        components=[],
+        attachments=[
+            SimpleNamespace(filename=filename, size=len(content), content_type="image/png")
+        ],
+    )
+
+    def send(text: str, *, files: list[discord.File], **options: object) -> object:
+        assert text == message.content
+        assert options["nonce"] == nonce
+        assert files[0].filename == filename
+        assert files[0].fp.read() == content
+        return message
+
+    async def history(**_kwargs: object) -> AsyncIterator[object]:
+        if channel.send.await_count:
+            yield message
+
+    channel.history = history
+    channel.send.side_effect = send
+    monkeypatch.setattr(gateway, "_channel", AsyncMock(return_value=channel))
+
+    for _ in range(2):
+        assert (
+            await gateway.send_moderation(
+                guild_id="101",
+                channel_id="102",
+                publication_id=OFFER_ID,
+                after_message_id="103",
+                content=content,
+            )
+            == "120"
+        )
+    channel.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("frame_delays", "loop_duration"),
     (

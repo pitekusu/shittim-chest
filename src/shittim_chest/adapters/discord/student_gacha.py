@@ -188,6 +188,30 @@ class DiscordStudentGacha:
             ),
         )
 
+    async def send_moderation(
+        self,
+        *,
+        guild_id: str,
+        channel_id: str,
+        publication_id: str,
+        after_message_id: str | None,
+        content: bytes,
+    ) -> str:
+        delivery_id = f"{publication_id}:moderation"
+        digest_prefix = hashlib.sha256(content).hexdigest()[:16]
+        return await self._send(
+            guild_id,
+            channel_id,
+            delivery_id,
+            after_message_id,
+            _Publication(
+                "エッチだったので再募集します\uff01",
+                f"moderation-{_nonce(delivery_id)}-{digest_prefix}.png",
+                GachaImageFormat.PNG.content_type,
+                content,
+            ),
+        )
+
     async def send_gallery_notice(
         self,
         *,

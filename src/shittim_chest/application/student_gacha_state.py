@@ -52,6 +52,7 @@ class GachaJob:
     paid_started: bool = False
     stored: StoredGachaImage | None = field(default=None, repr=False)
     loading_message_id: str | None = field(default=None, repr=False)
+    loading_publication_id: str | None = None
     result_message_id: str | None = field(default=None, repr=False)
     result_after_message_id: str | None = field(default=None, repr=False)
     offer_message_id: str | None = field(default=None, repr=False)

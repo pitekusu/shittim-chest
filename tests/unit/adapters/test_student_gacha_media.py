@@ -139,6 +139,34 @@ async def test_save_reconciles_lost_put_response_and_loads_verified_version() ->
 
 
 @pytest.mark.asyncio
+async def test_save_moderation_produces_a_versioned_static_png() -> None:
+    client = Mock()
+    client.head_object.side_effect = _missing_object()
+    client.put_object.return_value = {"VersionId": "moderation-version"}
+    media = StudentGachaMedia(client, bucket_name="private-media")
+
+    stored = await media.save_moderation(_DRAW_ID)
+
+    put = client.put_object.call_args.kwargs
+    content = put["Body"]
+    with Image.open(io.BytesIO(content)) as png:
+        assert png.format == "PNG"
+        assert png.size == GachaImageFormat.PNG.size
+        assert getattr(png, "n_frames", 1) == 1
+    assert stored == StoredGachaImage(
+        student_gacha_image_key(_DRAW_ID, GachaImageFormat.PNG),
+        "moderation-version",
+        hashlib.sha256(content).hexdigest(),
+    )
+    assert put["Key"] == stored.key
+    assert put["ContentType"] == "image/png"
+    assert put["IfNoneMatch"] == "*"
+    assert put["ChecksumSHA256"] == base64.b64encode(hashlib.sha256(content).digest()).decode(
+        "ascii"
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("legacy_format", (GachaImageFormat.PNG, GachaImageFormat.GIF))
 async def test_finds_legacy_result_without_overwriting_it_with_apng(
     legacy_format: GachaImageFormat,
