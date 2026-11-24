@@ -840,6 +840,11 @@ class CostConversion(PublicModel):
     updated_at: AwareDatetime | None
 
 
+class NextOpenAISubscriptionCredit(PublicModel):
+    date: date
+    amount_usd: Annotated[str, Field(pattern=r"^[0-9]+\.[0-9]{2}$")]
+
+
 class CostsResponse(PublicModel):
     schema_version: Literal[1]
     period: CostPeriod
@@ -852,6 +857,12 @@ class CostsResponse(PublicModel):
     conversion: CostConversion
     updated_at: AwareDatetime | None
     status: CostStatus
+    openai_subscription_credit: CanonicalJpyAmount | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    openai_next_subscription_credit: NextOpenAISubscriptionCredit | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 PromptRevisionId = Annotated[

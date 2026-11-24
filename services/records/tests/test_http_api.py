@@ -233,6 +233,9 @@ class FakeRecords:
             ),
             updated_at=NOW,
             status="partial",
+            openai_subscription_credit=(
+                "3.000000" if kwargs["include_subscription_credits"] else None
+            ),
         )
 
 
@@ -819,12 +822,21 @@ def test_costs_route_defaults_to_week_and_rejects_unknown_or_duplicate_period() 
     extra = controller.handle(
         event(route, query="period=week&internal=true", cookies=cookies), now=NOW
     )
+    credits = controller.handle(
+        event(route, query="contract=subscription-credits-v1", cookies=cookies), now=NOW
+    )
+    unknown_contract = controller.handle(
+        event(route, query="contract=unknown", cookies=cookies), now=NOW
+    )
 
     assert unauthorized["statusCode"] == 401
     assert json.loads(default["body"])["period"] == "week"
     assert json.loads(today["body"])["period"] == "today"
     assert invalid["statusCode"] == 400
     assert extra["statusCode"] == 400
+    assert unknown_contract["statusCode"] == 400
+    assert json.loads(credits["body"])["openaiSubscriptionCredit"] == "3.000000"
+    assert "openaiSubscriptionCredit" not in default["body"]
     assert "amountUsd" not in default["body"]
 
 

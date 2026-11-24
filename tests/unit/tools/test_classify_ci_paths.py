@@ -84,6 +84,7 @@ def test_records_changes_require_records_ci(path: str) -> None:
         ),
         (("apps/records-web/npm-audit-exceptions.json",), {"records_web"}),
         (("docs/11_Discord詳細設計.md",), set()),
+        (("README.md",), set()),
         (("data/student-gacha/blue_archive_characters_with_npcs.json",), set()),
         (("data/student-gacha/unclassified.json",), set(classifier.SCOPES)),
         (("docs/24_シッテムの箱 議事録設計.md",), set()),
@@ -118,7 +119,12 @@ def test_scopes_follow_changed_inputs(paths: tuple[str, ...], expected: set[str]
 
 @pytest.mark.parametrize(
     "path",
-    ("src/shittim_chest/adapters/dynamodb/codec.py", "pyproject.toml", "uv.lock", "README.md"),
+    (
+        "src/shittim_chest/adapters/dynamodb/codec.py",
+        "pyproject.toml",
+        "uv.lock",
+        "PACKAGE_DESCRIPTION.md",
+    ),
 )
 def test_core_package_inputs_also_verify_the_records_consumer(path: str) -> None:
     result = classify_paths((path,))
@@ -233,7 +239,7 @@ def test_records_roots_are_not_reincluded_in_the_runtime_docker_context() -> Non
 
     assert negated_rules == {
         "!LICENSE",
-        "!README.md",
+        "!PACKAGE_DESCRIPTION.md",
         "!pyproject.toml",
         "!uv.lock",
         "!tools/",

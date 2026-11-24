@@ -238,8 +238,8 @@ def test_exception_unknown_field_fails_closed(tmp_path: Path) -> None:
     assert "unknown: owner" in result.stderr
 
 
-@pytest.mark.parametrize("expires", ["2026-99-99", "2026-02-29"])
-def test_exception_nonexistent_calendar_date_fails_closed(
+@pytest.mark.parametrize("expires", ["2026-99-99", "2026-02-29", "2999-01-01T00:00:00"])
+def test_exception_invalid_expiry_date_fails_closed(
     tmp_path: Path,
     expires: str,
 ) -> None:

@@ -12,13 +12,18 @@ import androidx.activity.compose.LocalActivityResultRegistryOwner
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.core.app.ActivityOptionsCompat
 import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelStoreOwner
+import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.work.Configuration
 import androidx.work.WorkManager
@@ -64,6 +69,95 @@ import org.junit.runner.RunWith
 @ScreenTest
 class BootstrapLocalFirstTest {
   @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+
+  @Test fun newDebateOpensAfterAnEmptySavedFollowUp() = openNewDebateFromSavedFollowUp("")
+
+  @Test fun newDebateAsksBeforeReplacingAnEditedFollowUp() =
+    openNewDebateFromSavedFollowUp("架空の更問の下書き")
+
+  private fun openNewDebateFromSavedFollowUp(draft: String) {
+    val app = compose.activity.applicationContext
+    val directory = Files.createTempDirectory(app.noBackupFilesDir.toPath(), "debate-draft-navigation-").toFile()
+    val context = object : ContextWrapper(compose.activity) {
+      override fun getApplicationContext(): Context = this
+      override fun getNoBackupFilesDir(): File = directory
+      override fun getPackageName(): String = "${app.packageName}.${directory.name}"
+      override fun getDatabasePath(name: String): File = File(directory, name)
+    }
+    val owner = object : ViewModelStoreOwner {
+      override val viewModelStore = ViewModelStore()
+    }
+    val accountId = "u".repeat(43)
+    val parentId = "r".repeat(43)
+    val now = Instant.ofEpochSecond(Instant.now().epochSecond)
+    val deadline = now.plusSeconds(600)
+    val stored = StoredToken("t".repeat(43), deadline, CacheAuthorization(accountId, now, deadline))
+    val client = MobileAuthClient(MockEngine { respond("{}", HttpStatusCode.ServiceUnavailable) })
+    var rendered: BootstrapScreen.State? = null
+    fun readDraft() = runBlocking {
+      DebateWorkspaceStore.open(context, accountId, { it == accountId }).use { it.load(accountId) }
+    }
+    fun label(id: Int) = compose.activity.getString(id)
+
+    try {
+      runBlocking {
+        RecordCacheAccount.activate(context, accountId)
+        DebateWorkspaceStore.open(context, accountId, { it == accountId }).use {
+          it.save(accountId, DebateWorkspace(draft = draft, parentRecordId = parentId))
+        }
+      }
+      compose.activityRule.scenario.onActivity { activity ->
+        val session = MobileSessionModel(client, { stored }, {}, {}, {}, {}, { false }, {},
+          { RecordCacheAccount.activate(context, it) }, { RecordCacheAccount.clear(context) })
+        owner.viewModelStore.put("session", session)
+        val presenter = BootstrapPresenter(session)
+        activity.setContent {
+          CompositionLocalProvider(LocalContext provides context, LocalActivityResultRegistryOwner provides activity,
+            LocalViewModelStoreOwner provides owner) {
+            val state = presenter.present()
+            rendered = state
+            BootstrapUi(state)
+          }
+        }
+      }
+      compose.waitUntil(10_000) {
+        rendered?.let { it.session == SessionState.Unavailable && it.debate.workspace?.parentRecordId == parentId } == true
+      }
+      compose.onNodeWithTag("debate-compose-open").performClick()
+      if (draft.isNotEmpty()) {
+        val message = label(R.string.debate_replace_followup_message)
+        compose.waitUntil(10_000) { compose.onAllNodesWithText(message).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText(message).assertIsDisplayed()
+        compose.onNodeWithText(label(R.string.review_demo_cancel)).performClick()
+        compose.onNodeWithText(message).assertDoesNotExist()
+        compose.onNodeWithTag("debate-compose").assertDoesNotExist()
+        val retained = readDraft()
+        assertEquals(parentId, retained.parentRecordId)
+        assertEquals(draft, retained.draft)
+
+        compose.onNodeWithTag("debate-compose-open").performClick()
+        compose.waitUntil(10_000) { compose.onAllNodesWithText(message).fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText(label(R.string.debate_replace_followup)).performClick()
+      }
+      compose.waitUntil(10_000) {
+        rendered?.let {
+          it.backStack.lastOrNull() == DebateCompose && !it.debate.saving && it.debate.failure == null &&
+            it.debate.workspace?.let { workspace -> workspace.parentRecordId == null && workspace.draft.isEmpty() } == true
+        } == true
+      }
+      compose.onNode(hasText(label(R.string.debate_start)) and !hasTestTag("debate-submit")).assertIsDisplayed()
+      compose.onNodeWithText(label(R.string.debate_question)).assertIsDisplayed()
+      compose.onNodeWithText(label(R.string.record_followup_parent_context)).assertDoesNotExist()
+      val saved = readDraft()
+      assertNull(saved.parentRecordId)
+      assertEquals("", saved.draft)
+    } finally {
+      compose.activityRule.scenario.onActivity { it.setContent {}; owner.viewModelStore.clear() }
+      client.close()
+      runBlocking { RecordCacheAccount.clear(context) }
+      directory.deleteRecursively()
+    }
+  }
 
   @Test fun encryptedSavedRecordIsVisibleBeforeNetworkCompletesAndHiddenOnDenial() {
     val app = compose.activity.applicationContext

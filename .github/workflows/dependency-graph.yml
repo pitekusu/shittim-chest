@@ -22,7 +22,7 @@ env:
   NODE_OPTIONS: --use-openssl-ca
   SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
   SSL_CERT_DIR: /etc/ssl/certs
-  PYTHON_VERSION: "3.14.10"
+  PYTHON_VERSION: "3.15.2"
   UV_VERSION: "0.13.9"
 
 jobs:
@@ -120,10 +120,11 @@ jobs:
       - name: Configure the incident TLS trust policy
         uses: ./.github/actions/configure-tls
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: ${{ env.UV_VERSION }}
           download-from-astral-mirror: false
+          require-checksums: true
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
       - name: Synchronize the locked environment

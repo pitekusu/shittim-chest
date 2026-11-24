@@ -14,19 +14,20 @@ import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performImeAction
 import androidx.compose.ui.test.performScrollToNode
-import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -80,23 +81,34 @@ class StudentCollectionScreenTest {
     compose.onNodeWithTag("gallery-grid").assertIsDisplayed()
   }
 
-  @Test fun retrySearchAndAcquiredCardsKeepOlderRosterEntriesAccessible() {
+  @Test fun retryAndIndependentTabSearchKeepOlderRosterEntriesAccessible() {
     val gallery = FixtureGallery(failFirstLoad = true)
     show(gallery)
     waitFor("gallery-retry")
     compose.onNodeWithTag("gallery-retry").performClick()
     waitFor("gallery-search")
-    compose.onNodeWithTag("gallery-search").performTextInput("サンプル(制服)")
-    compose.onNodeWithTag("gallery-search").performImeAction()
+    val search = compose.onNodeWithTag("gallery-search")
+    val clearSearch = compose.onNodeWithContentDescription(
+      compose.activity.getString(R.string.record_search_clear_text))
+    search.performTextInput("サンプル(制服)")
+    search.performImeAction()
     compose.onNodeWithTag("gallery-entry-uniform").assertIsDisplayed()
     compose.onNodeWithTag("gallery-entry-summer").assertDoesNotExist()
     compose.onNodeWithTag("gallery-entry-secret").assertDoesNotExist()
     compose.onNodeWithTag("gallery-cards-tab").performClick()
-    compose.onNodeWithTag("gallery-search").performClick()
-    compose.onNodeWithTag("gallery-search").performTextClearance()
-    compose.onNodeWithTag("gallery-search").performImeAction()
-    scrollTo("gallery-grid", "gallery-card-legacy")
+    clearSearch.assertDoesNotExist()
+    search.performTextInput("旧名簿")
+    search.performImeAction()
     compose.onNodeWithTag("gallery-card-legacy").assertIsDisplayed()
+    compose.onNodeWithTag("gallery-card-newer").assertDoesNotExist()
+    compose.onNodeWithTag("gallery-collection-tab").performClick()
+    search.assertTextContains("サンプル(制服)")
+    compose.onNodeWithTag("gallery-entry-uniform").assertIsDisplayed()
+    compose.onNodeWithTag("gallery-cards-tab").performClick()
+    search.assertTextContains("旧名簿")
+    clearSearch.performClick()
+    clearSearch.assertDoesNotExist()
+    compose.onNodeWithTag("gallery-card-newer").assertIsDisplayed()
   }
 
   @Test fun inlineFiltersClearSearchAndConditionsWhileKeepingSort() {

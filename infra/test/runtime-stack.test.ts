@@ -150,7 +150,7 @@ describe("RuntimeStack", () => {
     expect(deploymentProviders).toHaveLength(1);
     expect(functions).toHaveLength(5);
     template.resourceCountIs("AWS::Lambda::LayerVersion", 0);
-    expect(deploymentProviders[0]!.Properties.Runtime).toBe("nodejs24.x");
+    expect(deploymentProviders[0]!.Properties.Runtime).toBe("nodejs26.x");
     expect(deploymentProviders[0]!.Properties.Layers).toBeUndefined();
     expect(deploymentProviders[0]!.Properties.Environment).toBeUndefined();
     expect(
@@ -191,7 +191,7 @@ describe("RuntimeStack", () => {
         LoggingConfig: expect.objectContaining({ LogFormat: "JSON" }),
         MemorySize: limits?.memory,
         ReservedConcurrentExecutions: limits?.concurrency,
-        Runtime: "python3.14",
+        Runtime: "python3.15",
         Timeout: limits?.timeout,
       });
       expect(properties.VpcConfig).toBeUndefined();

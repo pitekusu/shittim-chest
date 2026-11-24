@@ -4,19 +4,21 @@ aliases:
 tags: [project, shittim-chest, github, ci-cd, detailed-design]
 status: current
 created: 2026-07-16
-updated: 2026-11-16
+updated: 2026-11-23
 ---
 
 # GitHub・CI-CD詳細設計
 
 [ドキュメント索引へ戻る](00_シッテムの箱_ドキュメント索引.md)
 
-## この文書の役割
+PRの検証、依存更新、署名した成果物の本番配信を扱う。
 
-変更を通常PRから本番へ届ける手順、成果物の照合、失敗時の安全境界を定義する。
-個別試験の目的は[試験設計](18_試験・品質保証設計.md)、スタックの所有範囲は
-[AWS設計](14_AWS・CDK詳細設計.md)、実際の配信・検証履歴は
-[実装・試験・検証記録](20_実装・試験・検証記録.md)を参照する。
+| 確認したいこと | 参照先 |
+|---|---|
+| 変更に必要な試験 | [試験・品質保証設計](18_試験・品質保証設計.md) |
+| スタック・権限・データの所有範囲 | [AWS・CDK設計](14_AWS・CDK詳細設計.md) |
+| 失敗時の調査と復旧 | [運用保守設計](17_運用保守・監視・障害対応設計.md) |
+| 実際の配信・検証履歴 | [実装・試験・検証記録](20_実装・試験・検証記録.md) |
 
 ## 1. リポジトリと変更の流れ
 
@@ -45,7 +47,7 @@ GitHubへ書き込む前に`gh auth status`と`gh api user --jq '.login'`で操�
 
 配信とCIの範囲は[変更パス分類](https://github.com/pitekusu/shittim-chest/blob/main/tools/classify_ci_paths.py)と
 実際の差分で決める。「Webだけ」「文書だけ」という呼び名だけでは判定しない。
-例えばREADMEはイメージのビルド対象なので、その変更は現在の分類ではコンテナ検証対象になる。
+Pythonの配布パッケージの説明は `PACKAGE_DESCRIPTION.md` で管理し、コンテナとRecordsの検証入力に含める。ルートの `README.md` は文書検査の対象とする。
 Recordsだけの変更でFargateイメージを変更しない場合は、Core配信を追加しない。
 Core配信を行う場合は、変更内容にかかわらず同じSHAのRecords配信成功が必要である。
 
@@ -89,6 +91,9 @@ GitHub-hosted runnerはUbuntu 26.04に固定する。x64は`ubuntu-26.04`、
 | grype | 生スキャン、VEX適用、修正可能/残存リスクの判定 |
 | docs-public-safety | 文書構造、参照、公開情報、ライセンス境界 |
 
+uvを導入するworkflowは、完全SHAで固定した`setup-uv`に`require-checksums: true`を指定する。
+Actionやuvを更新するときは、使うrunnerのOS・アーキテクチャに対応するchecksumがあることを確認する。
+
 ### tyのコードスキャン連携
 
 Coreの`quality`とRecordsの`records-python`は、ty標準の`--output-format sarif`を使い、
@@ -102,42 +107,23 @@ Coreの非同期試験は`pytest-asyncio`を使い、既存のfunction単位のf
 
 ### 標準プロファイラによるローカル計測
 
-本番Core／RecordsのPython 3.14は維持する。標準sampling profiler（Tachyon）はprofilerと対象processの
-Python minor一致が必要なので、3.15から3.14アプリへattachしない。
-純粋な標準ライブラリで動く公開面検査は、project環境から分離した3.15で現在計測できる。
-リポジトリrootから、採用済みuvと既存の3.15 interpreterを使って次を実行する。
+対象プロセスと同じPython minorの標準プロファイラを使う。利用できる標準sampling profilerでは、
+同じ固定入力をwallとCPUで別々に計測してI/Oなどの待機とCPU処理を分ける。C拡張への帰属が必要な場合だけnative frameを有効にする。
+短い固定fixtureは標準の `cProfile` でも計測できる。取得時と同じminorの `pstats` で結果を読む。
 
-```bash
-PROFILE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/shittim-chest/profiles"
-install -d -m 700 "$PROFILE_DIR"
-(
-  umask 077
-  PYTHONDONTWRITEBYTECODE=1 uv run --no-project --python 3.15 python \
-    -m profiling.sampling run --pstats \
-    -o "$PROFILE_DIR/public-surface.pstats" -m tools.check_public_surface
-)
+RecordsのOGPレンダラとLambda配布ZIPは、リポジトリルートから固定fixtureで計測する。
+
+```sh
+uv run --project services/records --frozen python -m services.records.tools.profile_workload ogp
+uv run --project services/records --frozen python -m services.records.tools.profile_workload zip
 ```
 
-`--no-project`で3.14 projectのvenv・依存・lockを取り込まず、計測のための追加依存や本番移行を行わない。
-3.14アプリの固定fixtureには同じ3.14の標準`cProfile`を使い、raw結果の読出しも取得時と同じminorの`pstats`を使う。
-2026-11-02に公開面検査とdomainの固定fixtureで両方の標準CLIを実行し、取得と読出しの成功を確認した。
+`first_ms` は対象のimportと初回処理、`warm_median_ms` は同じプロセスでの再実行の中央値を示す。
+同じ入力・Python・マシンで比較し、本番Lambdaの初期化時間はCloudWatchで確認する。
 
-CPU処理と待機を切り分ける場合は、同じ固定入力を`--mode wall`と`--mode cpu`で別々に実行する。
-`wall`はI/O・lock・sleepの待機も含め、`cpu`はCPU上で実行しているsampleだけを残す。
-C拡張の呼出元への帰属を分けたい場合は`--native`で`<native>` frameを表示する。
-上記コマンドへ例えば`--mode cpu --native`を加え、出力名も`public-surface-cpu.pstats`へ分ける。
-同じ入力・条件で比較し、短時間処理や数%の差だけで最適化の効果を断定しない。
-
-2026-11-05、独立したPython 3.15.0と標準CLIで、既存`tools.build_records_bundle`を
-64MiBの合成入力から実行し、出力ZIPのhash一致を確認した。
-同じ生成に既知の1.25秒待機を加えた対照では、待機のsampling推定値がwallで1.250秒、cpuで0秒となり、
-CPU処理と待機の切り分けに使えることを確認した。この比較手順をローカル調査へ採用する。
-合成fixtureの結果であり、API・本番性能や速度改善率の証明には使わない。
-仕様は[標準profilerのモード比較](https://docs.python.org/3.15/library/profiling.sampling.html#comparing-wall-clock-and-cpu-profiles)を参照する。
-
-profileは公開ソースと機密を含まない固定fixtureに限定する。実利用の質問・生成結果・外部I/Oを対象にしない。
-rawはprivate cacheに置き、Git・CI artifactへ公開しない。共有はlocal pathを除いた関数名・回数・時間に限定する。
-短い単発計測を速度改善の証明にせず、CPU処理と外部待ちの切り分けや改善前後の比較に使う。
+公開ソースと合成入力を使い、利用者の質問・生成結果・秘密値を計測しない。
+結果の原本はprivate cacheへ保存し、共有する場合は端末のパスを除いた関数名・回数・時間だけを使う。
+過去のコマンド例と合成入力の計測結果は[整理前の記録](https://github.com/pitekusu/shittim-chest/blob/d90665b0fc369b30f4960095bbb88dfa5bcc36ea/docs/15_GitHub・CI-CD詳細設計.md#標準プロファイラによるローカル計測)を参照する。
 
 ### Records検証
 
@@ -162,21 +148,8 @@ trace・動画・HTML report・他の添付画像はアップロードしない�
 `tests`・`package`・`cdk`・`android-gate`・`container-arm64`・`grype`は、必須チェックと実処理を同じジョブで実行する。
 分類成功と明示的な対象フラグを先に検証し、対象外だけ重い処理を省く。終了時には必要な試験・成果物の
 step outcomeとconclusionを検査し、未実行・失敗・キャンセルやcontinue-on-errorによる失敗の隠蔽を通さない。
-対象外と実行成功は各ジョブのSummaryで区別する。主要3ワークフローの全対象時は20ジョブとなる。
-CodeQLは`.github/workflows/codeql.yml`のadvanced setupでPython、JavaScript/TypeScript、
-GitHub Actions、Java/Kotlinを解析し、`ubuntu-26.04`と`security-extended`を使う。
-解析には完全SHAで固定したCodeQL Actionの既定CLIを使う。Java/Kotlinだけ`manual`モードでAndroidをビルドし、既存3言語の`none`モードは維持する。
-PR、mainへのpush、週次定期実行、手動実行を対象にする。
-2026年10月11日にKotlin 2.4.20のローカルmanual抽出を確認した。C04完了にはPRとマージ後のmainで4言語の解析・upload成功を確認する。
-既存3言語の解析・必須チェックを維持し、Androidの失敗を成功や対象外に置き換えない。
-ブランチ保護のチェック名は実際のジョブ名に合わせ、失敗を隠すための再実行はしない。
-
-管理画面の縦長な全体スクリーンショットは撮影・比較に最大15秒を認め、
-サービス別撮影を含む管理画面単独のテスト全体は60秒とする。
-複数ルートを画面幅ごとに順に開き、axeで共通画面枠と本文を確認する横断テストだけは全体120秒とする。
-画像比較用Chromiumは`--font-render-hinting=none`でhintingを固定する。アプリの描画設定は変えず、改行・寸法を含めた画像レビュー後に基準画像を採用し、比較許容差は広げない。
-画像基準の正はCIのUbuntu 26.04上の固定Playwright/Chromiumとする。異なるLinuxのFreeType/fontconfigでは文字輪郭に差が出るため、基準画像はCIの比較artifactを寸法・改行・図形と合わせてレビューして採用する。ローカルの機能検証と別OSでのpixel完全一致は区別する。
-画像差分の許容値と再試行回数は増やさない。
+対象外と実行成功は各ジョブのSummaryで区別する。
+Playwrightの環境、代表画面の比較、調査用成果物は[試験設計](18_試験・品質保証設計.md)を参照する。
 
 ### Webで失敗した試験だけを再実行する
 
@@ -198,12 +171,7 @@ pnpm exec vp test run
 ```
 
 CIと`verify`は既存の全件試験を維持し、このaliasへ置き換えない。
-2026-11-05、既存334件に合成3件を加えた全件と、修正後の失敗1件を同じ条件で2組比較し、
-warmup後の中央値が7.125秒と1.135秒だった。
-cacheなし・全pass後の終了値1、名前変更時の0件選択、flagなしでの失敗再検出も確認した。
-合成testを撤去した既存334件の全件試験も成功している。
-この端末の限定条件での修正反復の比較であり、CIやアプリの速度改善率ではない。
-[公式の選択・終了値仕様](https://vitest.dev/guide/cli.html#last-failed)に従う。
+選択と終了値は[Vitestの仕様](https://vitest.dev/guide/cli.html#last-failed)に従う。
 
 ### ローカルでブラウザー試験の失敗ログに絞る
 
@@ -214,33 +182,16 @@ cd apps/records-web
 pnpm run test:e2e --reporter failures
 ```
 
-同じ合成試験を1 worker・再試行1回で比較し、全成功時は両方5件成功・終了値0、
-混在時は両方5件成功・1件失敗・1件再試行成功・終了値1だった。全成功時の出力は10行から1行になり、
-失敗時の期待値・実値は表示される。試験の選択、速度、CIのGitHub reporterは変更しない。
-[Playwright公式のreporter仕様](https://playwright.dev/docs/test-reporters#failures-reporter)を参照する。
+試験の選択は維持したまま出力を絞る。[Playwrightのfailures reporter](https://playwright.dev/docs/test-reporters#failures-reporter)を参照する。
 
 ### CodeQLの既存3言語の移行とAndroid追加
 
-既存3言語はUbuntu 26.04への固定のため、Android追加より先にadvanced setupへ移す。
-default setupのラベル指定はリポジトリに割り当て済みのrunnerを要求し、
-標準runnerの`ubuntu-26.04`指定を受け付けないためである。
-移行PRでworkflow構文と既存の`Analyze (...)`名、`security-extended`の維持を確認し、
-GitHubのdefault setupを`not-configured`に変更してから3言語の解析・uploadを確認する。
-default setupとadvanced setupは併用しない。必須チェックとブランチ保護は解除しない。
-移行を中断する場合は独自workflowとの併走を止め、既存3言語・extendedのdefault setupへ戻す。
+[codeql.yml](https://github.com/pitekusu/shittim-chest/blob/main/.github/workflows/codeql.yml)のadvanced setupでPython、JavaScript/TypeScript、GitHub Actions、Java/Kotlinを
+`security-extended`で解析する。Java/Kotlinは `manual` で `:app:assembleDebug` を実行し、実ソースを抽出する。他の3言語は `none` を使う。
+Android抽出はキャッシュ済み出力や差分コンパイルに頼らず実行し、Kotlin更新時もPRと同じ変更のmainで4言語の解析・送信を確認する。
 
-2026年9月17日の確認では、自動設定で新しく追加されたKotlinが`none`モードで処理され、
-ソース抽出に失敗した。CodeQL 2.27.0によるmanual buildでもKotlin 2.4.20が未対応として拒否された。
-Kotlin 2.4.20への対応は2026年9月22日公開のCodeQL 2.27.1で入り、2.27.2でローカルmanual抽出を確認した。Kotlinはダウングレードせず、C04の別PRでAndroid解析を追加する。
-
-1. 対応版のCodeQLでAndroidビルドとKotlin抽出の成功を確認する。
-2. 既存の`.github/workflows/codeql.yml`へJava/Kotlinを追加し、JDK・SDKを用意して
-   `manual`モードで`:app:assembleDebug`をビルドする。Gradle Actionのキャッシュ、daemon、build/configuration cache、Kotlin incremental compilationを無効にしてtaskを再実行する。既存3言語の解析・チェック名・query suiteは維持する。
-3. PRで4言語すべての解析・uploadを確認してから、許可された範囲でsquash mergeする。
-   mainの同一SHAでも4言語の成功を確認する。
-
-既存3言語の切替中は他PRのマージ・リリースを行わない。Android解析未完了は成功として扱わない。
-Core／Records／Android Releaseの共通判定は既存3言語のチェック名を維持し、`Analyze (java-kotlin)`も必須とする。
+PR、mainへのpush、定期実行、手動実行が対象。共通配信判定では `Analyze (java-kotlin)` を含む全4言語の成功が必要。
+default setupからの移行判断と当時の抽出結果は[整理前の記録](https://github.com/pitekusu/shittim-chest/blob/d90665b0fc369b30f4960095bbb88dfa5bcc36ea/docs/15_GitHub・CI-CD詳細設計.md#codeqlの既存3言語の移行とandroid追加)を参照する。
 
 ### Android検証（C03）
 
@@ -255,81 +206,33 @@ Androidは同じ`ci.yml`の`android-gate`で検証し、独立した大規模mat
 | 結果 | `android-gate`で分類成功と実行済みJUnit結果を確認。結果欠落・0件・失敗・取消・skipは不合格 |
 | 成果物 | Lint・テストのレポートのみ7日保持。APK配布・署名・Play認証は行わない |
 
-PR、mainへのpush、手動実行でチェックを作成する。手動実行はAndroidとCore全検証を明示的に実行する。
-Composeの画面・操作試験は実行時annotationの`@ScreenTest`で分離し、通常のPR／mainでは全件実行しない。
-AndroidJUnitRunnerの標準`notAnnotation`フィルターを使い、非画面試験は必須のまま維持する。
-手動CIの`android_screen_tests`は既定falseとし、trueの場合だけフィルターを外して画面を含む全試験を実行する。
-UI変更時と配布前には関連する画面試験を標準の`class`フィルターで選び、必要な明暗・狭幅・操作を確認する。
-選択方法はAndroid READMEを参照する。未実施と実行成功を区別し、タイムアウト・取消・skipを成功扱いしない。
-端末やインストールの異常でGradleが成功終了しても、実行済みJUnit結果がなければ不合格とする。試験件数の固定目標は設けない。
-`apps/records-android/`、共通CI、変更範囲判定とその試験の変更でAndroidを検証する。
-Androidのみや文書を伴う差分では、Coreの全pytest・wheel作成・CDKを省略する。
-`tests`・`package`・`cdk`の必須チェック名は実処理のジョブで維持し、対象外と実行成功を区別する。
-混在差分は各領域の和集合、未知のパス・空差分・共通の分類基盤変更は全検証を実行する。
-quality・security・公開文書検証・CodeQLは変更範囲によらず継続する。
+通常のPRとmainではAndroidJUnitRunnerの `notAnnotation` で `@ScreenTest` を除く。
+UI変更時・配布前には関連する画面試験を選び、手動CIで全件を確認する場合は `android_screen_tests` を使う。
+Gradle、システムイメージ、AVDのキャッシュはmainだけが保存する。cache hitでも試験を実行する。
 
-Gradle setup・dependency submission・Android Emulator Runnerを完全SHAで固定し、リポジトリのAction許可リストにも
-そのSHAだけを追加する。既存の許可設定は維持し、更新時は新SHAの許可も合わせて確認する。
-Gradle Wrapper検証を有効にし、キャッシュへの書き込みはmainのみ。秘密値・署名鍵・AWS権限は渡さない。
-Android system imageとAVD snapshotもmainだけで保存し、PRは復元だけを行う。
-キャッシュはUbuntu版・runnerのCPU・API・ABI・emulator版で分離し、AVDはsystem imageの版も含める。
-mainのcache missではアプリを入れる前のAVDを起動して保存する。試験中はsnapshotを保存せず、
-cache hitでも選択対象のinstrumentation testを実行する。cache missや互換性不一致では通常起動して同じ選択対象を実行する。
+### Web・CDKのツール実行
 
-`setup-vp`の更新時はworkflow参照・検査用の許可SHA・repositoryの選択Action許可を同じ完全SHAへ揃える。選択Action設定は既存許可を維持し、必要な完全SHAだけを追加する。
-Records WebのCIとReleaseは完全SHA固定の`voidzero-dev/setup-vp`でNode・Vite+・pnpmを設定し、
-Action標準のpnpm依存キャッシュと`cache-toolchain: true`を使う。Nodeはworkflowのexact version、Vite+とpnpmはWebの`package.json`のexact versionを選択する。toolchain／package managerのキャッシュはOS・CPU・libc・版・取得設定に対応する完全キーで復元し、Action標準の実行probe・payload／layout検証に失敗した場合は通常のinstallへ戻す。CIとReleaseのキャッシュ保存はmainのみとし、依存は毎回`vp install --frozen-lockfile`で固定する。キャッシュはCA制御・依存署名監査・check／test／buildを省略する根拠にしない。
-ローカル・Records CI・Records Releaseは`pnpm run check`を使う。`--deny-warnings`でlint警告も失敗として扱い、
-`--continue-on-error`で残りの整形・lint・型診断を表示してから失敗を返す。
-IaCのローカル再確認では`npm run test:infra:failed`で直前の失敗だけを再実行できる。
-直前に失敗がなければ成功で終了する。CIとReleaseからは全件を実行する。
+Records WebのCIとReleaseは同じ固定 `setup-vp` でNode・Vite+・pnpmを選び、
+`packageManager` と実行中pnpmの完全一致を確認して `vp install --frozen-lockfile` を実行する。
+キャッシュの保存はmainだけとし、検証に失敗した場合は通常の導入へ戻す。
+パッケージ・lock・workspace設定・関係するnpm設定が変わる場合と手動全検証では `pnpm audit signatures` も実行し、署名検証失敗は不合格とする。
 
-React Compilerは2026年11月16日にランキングの5コンポーネントをアノテーションで選んで計測した。
-Viteの本番ビルド各6回の中央値は、現行0.877秒、Compiler直列1.275秒、Babelワーカー並列1.325秒だった。
-Chromiumの390×844、CPU 4倍スローダウンで、6つの実行環境ごとに各操作を30回試した。スクリプトCPU中央値は
-開閉が2.288→1.718 ms、期間切替が2.274→1.293 msだった。画面が安定するまでの中央値はいずれも約33 msだった。
-ランキングの遅延読み込みJSはgzipで15,023→17,821 bytesとなった。体感に関わる時間の改善を確認できなかったため、
-計測結果だけを記録し、本番構成への導入を保留する。候補のランキングPlaywright試験は9件成功、設定によるskipは1件だった。
-書式・lint・型のいずれかが失敗した場合は非0で終了する。
-pnpm 12の環境用lock documentは[GitHubの静的依存検出に未対応の報告](https://github.com/dependabot/dependabot-core/issues/15904)があるため、
-`pmOnFail: ignore`でproject依存の単一documentを維持する。pnpm自身によるversion切替・検査は無効になるので、
-ローカルもVite+経由で実行する。CIとRecords Releaseはinstall直前に実行中のpnpmと`packageManager`の完全一致を検査し、
-不一致は停止する。この検査を既存のworkflow方針検証でも必須とする。
-
-`lockfile.includeResolutionSettings`で依存解決設定をlockへ記録し、設定が違うfrozen installを拒否する。
-`autoDedupe`を有効にし、互換範囲の重複版を通常install時に集約する。直接依存の固定とfrozen CIは維持する。
-
-Vite+ 1.3.0のタスクキャッシュは、ローカルでも採用を保留する。同一端末の単発計測ではcheckが2.675秒から0.528秒、単体試験が7.509秒から0.545秒へ短縮したが、workspace外の`contracts/records/v1/records-invariants.ts`とリポジトリ直下の`.npmrc`の変更時に古い成功結果を再利用した。契約コードへ意図的な失敗を加えた対照試験では、cache有効時だけ成功し、cache無効時には失敗した。[採用版の標準input glob実装](https://github.com/voidzero-dev/vite-task/blob/9ba4cc93379cf2d7a6c7e657285bb8a00e8339dc/crates/vt_graph/src/config/mod.rs#L280-L308)もworkspace外を拒否する。Webのworkspace構成で外部入力を安全に追跡できるようになるまでは、通常の`pnpm run check`・`pnpm run test`・build前後の検証・監査を毎回実行する。
-
-Webのpackage・lock・workspace設定またはroot/Webの`.npmrc`変更時は、固定install直後に
-`pnpm audit signatures`でlockのintegrityとregistry署名を照合する。手動の全検証でも実行する。
-署名の不正・欠落・取得失敗はCIを失敗させる。脆弱性監査用のnpm障害時skipは署名監査へ流用しない。
-Webソースだけの変更では署名監査を省き、既存の脆弱性監査・Web試験・buildは継続する。
-公開直後のfast-uriを明示更新する際のrelease-age例外は、要求されたexact versionだけに限定する。
-fast-uriはAjvのschema生成用依存であり、Ajvの指定範囲を超えるmajor overrideでは全21validatorのbyte照合と
-全Web試験・build・auditで互換性を確認する。ブラウザーの実行依存として新たに取り込まない。
-Playwrightの2並列と全画面試験は維持し、変更分類でWeb対象外の実行だけを省く。
-Dependabotの通常更新は設定順に09:00から15分間隔で開始し、既存の日次／週次頻度とセキュリティ更新方針は変えない。
-初回成功とC03のマージを確認し、`android-gate`をmainの必須チェックへ登録済み。
-KotlinのCodeQL解析はC04の別作業であり、このCIの成功を解析成功として扱わない。
+書式・lint・型は `pnpm run check` に集約する。workspace外にある共有契約やnpm設定も検証入力であるため、通常の検証では依存キャッシュとタスク結果キャッシュを区別する。
+CDKをローカルで修正中は `npm run test:infra:failed` で直前の失敗を再確認できる。CIは対象の全件を実行する。
+`npm run synth` または `npm run synth:records` の後に `npm run cdk -- explore --output cdk.out` を実行すると、ブラウザーでconstruct構成とCloudFormationテンプレートを確認できる。
 
 ### Androidクローズドテスト配布（C39）
 
-`android-release.yml`は固定main SHAの手動実行だけを受け付け、`android-internal` Environmentに配布認証を分離する。同一SHAの最新CI・Records CI・CodeQL成功を確認し、署名・manifest・hashを検証した同一AABだけをクローズドトラック`alpha`へ提出する。Core／Records配信やPlay掲載情報は変更しない。
+[Android Closed Release](https://github.com/pitekusu/shittim-chest/blob/main/.github/workflows/android-release.yml) は `main` のSHAを指定する手動配布である。同一SHAの最新CI・Records CI・CodeQLを確認し、署名と内容を検証した同一AABだけをクローズドトラック `alpha` へ提出する。Play API認証はGitHub OIDCからの短寿命資格情報を使い、AAB署名用の鍵と分ける。
 
-GitHub OIDCからGoogle WIFとサービスアカウントへ委譲し、短寿命のADCを使う。AWS権限と長期Play API秘密鍵は渡さない。署名用upload keyとFirebase Android設定はEnvironment Secretとして別途保護する。外部設定未完了では`ANDROID_RELEASE_ENABLED=false`により起動を拒否する。
-
-完全SHA固定の`r0adkll/upload-google-play`が単一の検証済みAABを`alpha`・`completed`へupload・commitする。WIF資格情報ファイルのpathを渡し、helperは公式Google SDKによる版番号読取・AAB検証・提出後照合と秘密の準備・回収に限定する。独自commitやedit受け渡しは行わない。 毎回必須の`release_notes_ja`入力を1〜500 Unicode文字で事前検査し、固定の`whatsnew-ja-JP`をActionの`whatsNewDirectory`へ渡して更新情報も同じeditで設定する。入力は環境変数経由で処理し、提出後は対象版の日本語本文digestまで照合する。
-
-通常commitが既存審査や未送信変更へ作用し得ることは継続して考慮する。配布依頼を受けたら、同一SHAの必須CI、直近のWorkflow・receipt、Play APIで確認できる提出状態を調べて進め、Console状態を毎回ユーザーへ再質問しない。APIだけでConsoleの審査・公開状態を確認済みとは扱わず、実際に競合が判明した場合は副作用を確認する。失敗・応答不明では自動再送せず、Play側の状態と副作用を調べてから新しい手動実行を判断する。公開artifactは7日保持の`verification.json`と簡単な`receipt.json`だけとし、提出後照合と実機での更新可能性を区別する。
-
-外部設定、最小権限、配布・失敗時の手順は[Androidアプリ設計](29_Androidアプリ設計.md#c39クローズドテスト配布の自動化)を参照する。4言語のCodeQLと同一SHAのmain CIを確認する。
+資格情報の設定、必須の日本語更新情報、提出後の照合、競合・応答不明時の調査は [Androidアプリ設計](29_Androidアプリ設計.md#c39クローズドテスト配布の自動化) に定める。提出結果の照合、Playの審査・公開状態、実機更新はそれぞれ確認する。
 
 ### npm監査サービスの障害
 
 `npm audit`/`pnpm audit`は通常どおり必須である。
 Coreの`npm run audit:infra`とWebの`pnpm run audit`は、各監査の完全なJSONを
 共用の`infra/check-audit.mjs`へ渡し、package・advisory・severityが一致する未失効の受容だけを適用する。
+例外の`expires`は`YYYY-MM-DD`形式の実在する日付を指定する。`Temporal.PlainDate`でUTCの当日と比較し、指定日00:00 UTCから失効する。
 受容ファイルはinfraとWebで分け、別projectの受容を流用しない。pnpm形式の読取を共用gateへ追加し、
 期限切れ・未知の検出・不正な応答・未使用の例外は従来どおり拒否する。
 CIとRecords Releaseは、このpackage scriptを既存のnpm障害確認ラッパー経由で実行する。
@@ -345,176 +248,55 @@ npm標準reportの`via`がパッケージ名を参照する場合は、参照先
 参照欠落・循環・空または不正なmetadataは拒否し、例外のパッケージ名は参照元の依存元でなくadvisoryを持つ末端へ束縛する。
 未知ID、パッケージ／重大度の不一致、期限切れ、未使用の例外は拒否する。
 
-2026-11-02、所有者が[minimatchのCVE-2026-118764／GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249)の
-Moderate 1件を、2026-11-03 00:00 UTC（日本時間09:00）まで明示受容した。
-この時刻以降は再び監査を拒否し、自動延長しない。npm上のaws-cdk-lib・cdk-nag・minimatchの3node検出は、
-この1件のadvisoryへの依存伝播であり、他のIDやパッケージをまとめて受容したことにはしない。
-
-攻撃者が制御するglobを`optimizationLevel >= 2`で処理すると、CPU・メモリの過剰消費を起こす。
-確認したCDK 2.274.0／2.275.0の同梱minimatch 10.2.6の3呼出は既定の1を使い、
-Web／Discord入力からglobへ渡す経路や既定値を書き換える設定は見つからない。
-本番のPython討論runtime・Records LambdaへCDKを同梱しないが、未修正依存は開発・CIに残り、
-将来の設定や入力経路変更時のリスクを解消済みとは扱わない。
-
-例外はこのID・minimatch・Moderateのパッケージ単位であり、CDKのpathだけへ限定する機能ではない。
-公式CDKが修正版minimatch 11.0.1以降を同梱したら実体を確認して更新し、例外を削除して通常監査を行う。
-依存経路が変わった場合は受容根拠を再確認し、他の監査・必須試験・CodeQLを維持する。
-2026-11-21、PR #763で期限切れを検出した。公式npm配布のaws-cdk-lib 2.276.0と2.277.0も
-minimatch 10.2.6を同梱していることを照合した。所有者は同じModerate 1件を1年間受容した。
-新しい失効時刻は2027-11-21 00:00 UTC（09:00 JST）である。
-2026-10-03に受容したbrace-expansionの旧3件は、CDK 2.273.0での上流修正採用時に削除済みである。
+受容の追加は承認された対象と期限に限る。親依存が修正版を選べるようになった場合は実際の解決結果を確認して受容を削除し、通常の監査を行う。
+CDK同梱minimatchの受容は、aws-cdk-lib 2.278.0の公式npm配布物で修正版を確認した時点で削除した。
+過去の判断は[整理前の記録](https://github.com/pitekusu/shittim-chest/blob/d90665b0fc369b30f4960095bbb88dfa5bcc36ea/docs/15_GitHub・CI-CD詳細設計.md#cdk依存の期限付きリスク受容)を参照する。
 
 ## 3. 依存と配信ツールの更新
 
-正確なバージョンは各ロックファイル、`pyproject.toml`、`package.json`、`.node-version`、Gradle Wrapper、Version Catalog、ワークフローを正とする。
-設計書へパッチバージョンを重複記載しない。
+採用バージョンはロックファイル、プロジェクト設定、ワークフローの固定値を参照する。
+Dependabotの対象、頻度、cooldownと例外は[設定ファイル](https://github.com/pitekusu/shittim-chest/blob/main/.github/dependabot.yml)で管理する。
 
-| 更新対象 | 一緒に確認・更新するもの |
+| 更新対象 | 一緒に確認するもの |
 |---|---|
-| Node | 正式対応は24系。ローカルの固定値、CI/配信、ルート/Webの`engines`、Node型定義を合わせる |
-| Nodeの次期系列 | CDKの対応、Corepack導入、jsdomとNode標準Web APIの競合を評価してから採用 |
-| Vite Plus | 本体、coreエイリアス、Web Vitestの依存上書き設定を一組として更新 |
-| OpenAI SDK | Core/Recordsの3系、HTTPX2のクライアント・タイムアウト・例外境界を合わせる。モデル/人格変更は分離 |
-| uv/ビルド基盤 | 両Pythonプロジェクトの対応系列、`required-version`、`uv_build`、ワークフロー、Docker、更新監視を合わせる |
-| Actions | `uses:`を完全なコミットSHAで固定し、Dependabotで追従 |
-| Android | Gradle Wrapperの配布版・SHA-256・生成ファイルを合わせる。Kotlin Gradle PluginとCompose Compiler、Compose BOMとMaterial 3はそれぞれ一組で確認 |
-| BuildKit/DynamoDB Local | `tools/containers/Dockerfile`の名前付きstageを共通の固定値とし、Dependabotでtag・digestを更新。CI・配信・ローカル試験は検証済みの参照を読み取る |
-| Buildx/直接取得CLI | バージョン、ダイジェスト、配布物チェックサム、署名主体を固定し、専用監視で追従 |
+| Python | `.python-version`、両プロジェクトの制約・lock・Ruff、uv、CDKのLambda runtime、ARM64 wheelとコンテナ |
+| Node | 26系。 `.node-version`、ルートとWebの `engines`、固定CIツール、Node型、CDK・Webの互換性 |
+| Vite+ | 本体・coreエイリアス・Vitest override・pnpm設定・契約生成 |
+| OpenAI SDK | Core／Recordsの共有制約、HTTPクライアント・タイムアウト・例外境界 |
+| uvとビルドバックエンド | 両Pythonプロジェクトの対応系列、`required-version`、`uv_build`、CI、Docker、監視 |
+| Actions | 完全コミットSHAと上流タグ、リポジトリの許可済みSHA |
+| Android | Gradle Wrapper配布・チェックサム、KotlinとCompose Compiler、Compose BOMとMaterial 3、依存グラフ |
+| コンテナ・直接取得CLI | 対象アーキテクチャ、固定ダイジェスト・チェックサム、署名、実際の読み込み元 |
+
+依存の導入・更新に伴い、対応範囲のビルドと試験を通す。コンテナが変わる場合は完成イメージのSBOM、VEX、スキャン結果を照合し、期限付き受容は対象のダイジェストを確認する。
+AGPなどの間接依存へ修正版の制約を設ける場合は実際の依存グラフで確認し、親依存の更新で制約が不要になった場合は撤去を検討する。
+
+Dependabotだけでは揃わないVite+のエイリアスとoverrideは専用の整合性検査で確認する。
+別経路の更新後に同じDependabot PRが後続ダイジェストを吸収した場合は、必要に応じて既存PRを再評価または再作成し、更新後の差分を確認する。
 
 ### eMudhra／emSign中間CA侵害への対応（2026年10月21日）
 
-[一次調査](https://emudhra.we-have-a-problem.com/)と[Mozillaの障害報告](https://bugzilla.mozilla.org/show_bug.cgi?id=2083449)を根拠に、通常のemSign経路とSectigoのクロス署名経路を別々に検証する。接続先の運営会社やパッケージの版だけで安全と判定せず、実際にロードするCAと拒否動作を確認する。
+証明書とホスト名の検証を維持し、各経路が実際に使う信頼集合を確認する。
 
-- [uvの公式対策版](https://github.com/astral-sh/uv/security/advisories/GHSA-hq85-5cpj-mr62)0.13.4へ、Dockerのtag・digest、全workflow、両Python projectの`required-version`・`uv_build`、Dependabotの対応系列、固定ツール監視を合わせる。Pythonは3.14を維持する。両projectでfrozen同期・依存整合性・wheel／sdistを確認する。
-- [certifiの公式対策](https://github.com/certifi/python-certifi/security/advisories/GHSA-6q48-6c7w-9gw2)2026.10.19を直接依存の下限にも指定する。CoreのDiscord／OpenAI／画像取得、RecordsのOAuth／identity／avatar／OpenAIは、共通の`create_public_tls_context()`を標準クライアントへ渡して、このbundleだけを選ぶ。HTTPX2の既定truststore経路やLambdaのOS CAへ依存しない。hostname・証明書検証、SDKの接続制限・timeout・retryは維持する。Discord connectorは各event loopで生成し、失敗・cancel時も閉じる。企業CAなどOSへ追加したCAはこの経路には加わらない。
-- HTTPXによるDiscord status／announcement、botocoreの通常経路、Firebaseのrequests／Google APIのhttplib2はcertifiを使う。CA環境変数・custom locator・certifi不在時のbotocore同梱bundleへのfallbackも別途確認する。配置済みECSとアプリ用shared bundleを使う22 LambdaにCA／proxy上書きはなく、両Lambda ZIPのcertifi実体も照合済みである。別のCDK infrastructure helperへこの結果を外挿しない。
-- VPCのdefault security groupを制限するCDK helperは、managed `nodejs24.x`で同梱EC2 SDKとCloudFormation応答用の標準`https.request`を使う。
-- 当初はこのhelperに専用CA Layerを適用した。[AWSの2026年11月11日更新](https://aws.amazon.com/security/security-bulletins/2026-150-aws/)で、ZIP型Node.js 24関数のTLS修正配布が完了した。実配置はx86_64の`nodejs24.x`、自動更新`Auto`を確認した。
-- [公開Lambdaイメージ](https://gallery.ecr.aws/lambda/nodejs)の2026年11月15日版（x86_64、manifest `sha256:7cdb66735cb609e6d79c4b5b198399427fa50599e08711adb5ed444840098b6e`）から、標準Node.js 24.22.3と同梱Smithy 4.9.13を取得して試験した。追加CAとpreloadを指定せず、`https.request`と`NodeHttpHandler`で正常3件・対象12件をそれぞれ判定できた。本番プロセス内の実CA列挙は行っていない。
-- 公式配布と上記検証に基づき、CDKから専用Layerと`NODE_OPTIONS`を撤去する。VPC補助関数の論理ID・コード・IAMは維持し、署名対象には従来どおり補助関数ZIPを含める。新しいアセット証跡はschema v2の4テンプレートと1 ZIPとし、旧schema v1は既存のLayer付き証跡の照合に使う。
-- DHI builder／runtimeは同じPython／Debian系列のCA更新済みdigestへ固定する。旧runtimeの`ca-certificates 20250419+dhi2`が対象rootを含んでいたため、修正済みbuilderで`update-ca-certificates --fresh`を実行し、runtimeのanchorと生成済みCA directoryを丸ごと置き換えるoverlayを導入した。古いhashed aliasをmergeで残さず、固定digestと`SOURCE_DATE_EPOCH`で再現可能にする。これはCA設定のoverlayであり、runtimeのdpkg台帳を架空の更新版にしない。2026年10月22日のCA更新済みruntime採用でもoverlayを維持し、撤去は実際に採用するCA集合・拒否動作・完成imageの検証と影響評価を経た別の変更として扱う。
-- [Node 24.22.1](https://github.com/nodejs/node/releases/tag/v24.22.1)の対象公開鍵拒否とroot更新を使い、固定版と`engines`の下限を合わせる。PATHのNode更新だけではrunner内蔵Node、native downloader、Lambdaのmanaged Nodeは更新されない。
-- Hosted Ubuntu 26.04 x64／ARM64の公式CAパッケージを使い、checkout前に実際の`ca-certificates`版を記録する。bundleが空、または対象4root表現がbundle／CA directoryに残る場合は停止する。作業directoryは`runner.temp`に明示し、workflowの`NODE_OPTIONS=--use-openssl-ca`で内蔵NodeもこのOS CAを使う。両archのhosted runnerで[Ubuntu公式修正版](https://ubuntu.com/security/notices/USN-9001-1)が既に配備され、正常チェーンの受理と対象チェーンの拒否を確認したため、jobごとのAPT更新は撤去した。runnerが行うAction archiveの取得は各jobの最初のstepより早い。提供元の実行時設定とその通信経路は別に確認する。
-- checkout直後のlocal composite actionは`tools.configure_build_tls`で、Ubuntuの公式パッケージが管理するOS bundleとPEM／hashed aliasを検査する。対象の証明書・公開鍵が見つかればジョブを停止する。子ツールには対象root／公開鍵を除いたPEMと空のCA directoryを指定し、curl／Git／urllib／AWS CLI／vp／pnpmに適用する。Docker daemonは実際のシステムストアと追加CAを検査した後に再起動する。BuildKitは起動時から同じPEMを選び、実際のdaemon環境とbundleを検査する。
-- pip 26.2.2への更新に加え、pip-auditがensurepipの旧pipを起動する間も安全なbundleだけを選ばせる。[pip公式のCA選択](https://pip.pypa.io/en/stable/topics/https-certificates/)に従い、限定した子環境で`PIP_USE_DEPRECATED=legacy-certs`と`PIP_CERT`／`REQUESTS_CA_BUNDLE`を組み合わせ、古いOSとvendored bundleの混在を避ける。証明書検証を維持し、既存の`--strict --require-hashes`を変更しない。不正hashが失敗することも確認する。
-- Hosted CIでは固定JDKのcacertsを検査し、すべての証明書が安全で、JVM起動オプション・JSSEが優先するjssecacerts・既存のストア指定がなければ標準ストアをそのまま使う。ローカルビルドとそれ以外の条件では、選択したJDKのcacertsから対象だけを除いた一時PKCS12を標準`javax.net.ssl.trustStore`で指定する。Gradle Wrapper／Maven／SDK取得に適用する。
+| 経路 | 維持する検証 |
+|---|---|
+| Core／Recordsの外部HTTPS | アプリが選ぶcertifi、botocore同梱fallback、明示CAパスを別々に確認 |
+| CI・ビルド | checkout前のOSストア、固定ツール設定、子プロセスへ渡すCAfileとCApath、Docker／BuildKitの実設定を確認 |
+| 完成本番イメージ | OS既定、CApath、アプリcertifi、botocore fallbackの4系統を同じARM64イメージで検証。対象12件の拒否と正常3件の受理を各系統で確認し、結果をSBOMと同じ成果物に残す |
+| CDKの補助Lambda | AWS管理ランタイムの配布状況を別途確認し、アプリのbundleの結果を流用しない |
+| Android | アプリのOkHttp／CoilがHTTP送信前に対象の公開鍵を拒否する。SDK独自通信、ブラウザー、OS側失効の到達状況は個別に扱う |
 
-対策前の配置済みCore imageのOS CAは対象12チェーンを受理し、アプリとLambda bundleのcertifiは全12本を拒否した。ローカル修正後のHTTPX2同期／非同期とaiohttpは、旧OS bundle／hashed directoryを環境に指定しても対象12本を全て拒否し、正常な公開HTTPSを受理した。CA overlayも抽出した実ARM64 layerを使い、CAfile／CApathの双方で12本の拒否と正常3本の成功を確認する。完成ARM64 imageのbuild・container gate・SBOM／VEX／risk gateは別の検証であり、layer検証の成功で代替しない。ARM64 CIでは完成した同じproduction imageから、OS既定・CApathのみ・アプリcertifi・botocore同梱fallbackの4ストアを標準SSLContextで別々に検証し、対象12ホストの拒否と正常3ホストの受理、合計60判定を要求する。HTTP要求・認証情報は送らず、timeout・DNS・期限切れ・hostname不一致はCA拒否の成功として扱わない。標準のIPv4／IPv6接続切り替えを使い、通信障害だけを最大3回試す。全試行の固定分類を残し、証明書の受理・拒否は再試行せず判定する。実際のPython／OpenSSL・信頼集合のhash・image情報と結果をSBOMと同じartifactへ残す。
+TLSの接続障害、期限切れ、ホスト名不一致を対象証明書の拒否と取り違えない。
+VPCのdefault security groupを制限するCDK補助関数はmanaged `nodejs26.x` を使う。署名付きアセット証跡はschema v3で補助関数のランタイムを検証し、旧schema v1（TLS Layer付き）とv2（Node.js 24）も照合できる。
 
-旧CA Layerは、旧・修正版Nodeで対象12チェーンの拒否と正常系を検証していた。今回の撤去はAWSの配布完了告知と公開イメージの標準CA検証を根拠とする。本番反映時は、Change Setの変更が補助関数からのLayer・環境変数削除と専用Layerリソースの削除に限定され、補助関数の置換がないことを確認する。
+各CAの実体・旧Layerの撤去判断・試験記録は[整理前の記録](https://github.com/pitekusu/shittim-chest/blob/d90665b0fc369b30f4960095bbb88dfa5bcc36ea/docs/15_GitHub・CI-CD詳細設計.md#emudhraemsign中間ca侵害への対応2026年10月21日)を参照する。
 
-AndroidのKtor／OkHttp全4クライアントとCoilは、標準のTLS／hostname検証が成功した後、HTTP送信前にcleaned peer chainの8対象公開鍵を追加拒否する。信頼するCAを固定するpinningや独自TrustManagerは使わない。未更新AOSP API36で標準TrustManagerが対象12本を受理する条件でも、アプリは全件を送信前に拒否する。cached intermediateを使う場合と正常HTTPSも確認する。
+### Pythonの実行環境
 
-[Googleの案内](https://blog.google/security/protecting-chrome-and-android-users-from-compromised-emudhra-intermediate-ca-certificates/)によるPlay Services／OEM／Conscryptの失効配信は別に必要である。Firebase Android SDKの独自HTTPS、GMS、Custom Tabs／ブラウザはこのOkHttp interceptorを通らず、対象端末への更新到達は未確認。FCM auto-init無効は維持するが、利用者が通知を有効にした際のSDK通信を保護済みとは扱わない。CTはAPI37標準・36 opt-in・35以下非対応であり、targetSDKだけで全端末を保護できない。
+Core／Recordsと配布・検証ツールはPython 3.15系を使う。パッチ版は `.python-version` と各ワークフロー、CoreのDHIはDockerfileの固定digestを参照する。対象のLambda Event FunctionsはCDKの `Runtime.PYTHON_3_15` を使い、実配信の適用はLambdaのランタイム情報で確認する。[AWSの正式対応](https://aws.amazon.com/about-aws/whats-new/2026/11/aws-lambda-python-315/)
 
-検証には一次資料の公開チェーンを使い、隔離CAでhostname・server用途を確認する。認証なしの公開TLSだけを正負の対照とし、CA列挙・offline検証・実クライアントの拒否を区別する。本番invoke、課金生成、Discord投稿、MITMや侵害秘密鍵を使うPoCは追加しない。ローカル対策の完了、hosted CI実行、本番反映、Android配布、実端末更新はそれぞれ独立した状態として報告する。
-
-### Recordsの公式CA bundle更新（2026年11月2日）
-
-Records用lockの`certifi`を`2026.10.23`へ更新し、emSign Root CA - C1／emSign ECC Root CA - C3を除いた公式118根をWeb・Android共通API用bundleへ取り込む。共通Coreの親制約、Core imageとCDK helper Layerの更新は分け、対象以外の依存固定値を維持する。frozen sync・hash必須の依存監査に加え、Recordsが実際に選択するSSLContextのCA集合と対象チェーン拒否・正常系を確認する。既存の明示CA選択とfallback条件を維持し、Recordsの依存更新だけでCore・managed runtime・端末への適用まで完了したとは扱わない。本番配置とその検証は別に確認する。
-
-### botocore同梱CA bundleの更新（2026年10月22日）
-
-[botocoreの公式修正PR #3838](https://github.com/boto/botocore/pull/3838)は、Sectigoのクロス署名経路に使われる`AAA Certificate Services`を同梱`cacert.pem`から削除する。[配布版1.43.117](https://pypi.org/project/botocore/1.43.117/)の実wheelをPyPIのSHA-256と照合し、公式tagと同じPEMであること、126根に既存拒否ポリシーのDER／SPKIが残らないことを確認した。直前の1.43.116も含む1.43.114～1.43.116は同じ127根の旧PEMで対象CAを含むため、修正下限は1.43.117とする。rootとRecordsのboto3下限を1.43.117へ上げ、両lockのboto3／botocoreを同版に揃える。botocoreへの独自patchや新CA追加は行わない。
-
-botocoreは通常`certifi.where()`を使い、certifiのimportが`ImportError`になった場合だけ同梱bundleを選ぶ。`AWS_CA_BUNDLE`や共有設定の`ca_bundle`、クライアントの明示`verify`パスは別のCA選択であり、通常経路の成功をそのまま外挿しない。隔離試験ではcertifiあり／import不可／明示CAパスを区別し、実際に選んだbundleと対象チェーン拒否を確認する。Coreの依存はDocker imageからCore Lambda bundleへ、Recordsの依存はRecords lockからRecords Lambda bundleへ伝播するため、各成果物の同梱fallback自体も検証する。この確認時点では、OS CA overlay、アプリの明示certifi選択、CDK helperのCA Layer、pip向け限定CA指定を維持した。
-
-このfallbackの提供元修正待ちは解消しているが、PRでの依存更新・検証と本番への適用は別である。この変更のmerge・追加の本番反映・Android配布は未実施であり、AWS管理ランタイムに同梱されたSDKの実版・CA実体もこのwheelの検査だけでは確認済みと扱わない。
-
-### Python 3.14.10の採用範囲（2026年10月28日）
-
-[Python 3.14.9の公式案内](https://www.python.org/downloads/release/python-3149/)では、ensurepip同梱のpip 26.2.2と、そのvendored certifi 2026.10.19が今回のCA侵害に対応する。2026年10月22日に開発・CIへ採用した。uv 0.13.4にはこのPython配布情報がないため、CA除外を維持し`rustls-webpki` 0.103.16による対象鍵拒否も含む[uv 0.13.5](https://github.com/astral-sh/uv/releases/tag/0.13.5)へCLI・Docker・CIを更新した。`required-version`の下限0.13.5は互換条件として維持する。ビルドbackendである`uv_build`の互換範囲は別の条件として維持する。[setup-uv v10.3.2](https://github.com/astral-sh/setup-uv/releases/tag/v10.3.2)にはuv 0.13.5の既知checksumが入り、公式配布indexのGNU x86_64／aarch64のURL・SHA-256も旧補助manifestと一致したため、repository内manifestと`manifest-file`指定を撤去し、Action標準の取得・checksum検証へ戻す。TLS・checksum・必須gateは維持する。[Python 3.14.10](https://www.python.org/downloads/release/python-31410/)はsslモジュールで侵害中間CA鍵を拒否する公式修正版である。[uv 0.13.6](https://github.com/astral-sh/uv/releases/tag/0.13.6)の標準配布解決に追加されたため、開発環境の`.python-version`と全workflowのPython固定値を3.14.10、workflowのuvを0.13.6へ更新する。uvのlock／resolveのメモリ削減とmetadata解析高速化も取り込む。DHIのPython版・digestとは別に採用を判断する。CPythonの更新だけで、既存venvのpip、OS CA、アプリのcertifiが更新されたとは扱わず、それぞれ実体とCA選択を確認する。配布するwheelとARM64 Lambda bundleも、実際に使うinterpreterと依存を記録して検証する。
-
-CoreのDHIは別の採用条件を持つ。2026年10月22日、認証済みregistryで`3.14.9-debian13`／`3.14.9-debian13-dev`はいずれもmanifest未公開であり、既存固定digestの取得は成功した。一方、公開済みのCA更新済み3.14.8を採用するため、builderのindex digestを`03cf5ae71ab5a7761ec0dcbf9d522c0209581fb5196ac303537c74d2ac92de32`、runtimeを`046a46512297187590b40b85e86ea2b128077d57601847ce916ecb7d919a7291`へ更新する。ARM64 manifestはそれぞれ`05095418e3d664d7e768b48282b9ea36af7f4a12ee20972b795849ba05958c12`と`d988e9c5e19801c2fe5a69b7961d386646136e1fa46493e86f25d938c24a5ca4`である。Python実版は3.14.8を維持し、OSは`ca-certificates 20250419+deb13u1+dhi0`の148根、installed pipとensurepip wheelは26.2.2、両vendored certifiは2026.10.19の120根で、抽出実体に対象fingerprint／SPKIがないことを確認した。パッケージ版の一致だけで採用完了とせず、提供元の署名・SBOM／VEXと、完成した同一ARM64 imageのPython実版・OS CAfile／CApath・アプリCA・正常系と対象12チェーン拒否・risk gateを照合し、それぞれの実施結果を記録する。3.14.9 ARM64 imageの提供元待ちは、この3.14.8の採用検証と分けて[issue #639](https://github.com/pitekusu/shittim-chest/issues/639)で追跡する。
-
-この評価時点では、OS CA overlay、アプリの明示certifi選択、CDK helperのCA Layer、pip向けの限定したCA環境指定を維持した。提供元の更新版が出たことやPythonの版番号だけを理由に撤去しない。Lambdaのmanaged `python3.14`も、build用Pythonの固定値ではpatch版を指定できないため、AWSの配布・実適用確認を分ける。この更新PRの完了、本番反映、Android配布はそれぞれ独立した承認・確認対象である。今回のdigest更新はPRでの検証までを対象とし、merge・本番反映・Android配布は未実施である。
-
-### Python 3.15への移行評価（2026年10月14日）
-
-2026年11月5日に配布・依存の状況を再確認した。
-[Issue #599](https://github.com/pitekusu/shittim-chest/issues/599)の更新要求は未完了。
-[Python 3.15.2](https://www.python.org/downloads/release/python-3152/)は10月25日公開済みで、
-侵害中間CA鍵の拒否などのセキュリティ修正を含む。下記の配布・互換性条件を満たすまで現行3.14系列を維持する。
-新機能の提案と推奨理由は
-[アプリケーション設計](10_アプリケーション・Python詳細設計.md#9-python-315の新機能の採用候補)に集約する。
-
-| 対象 | 2026年11月5日に確認した状態 | 移行に必要なこと |
-|---|---|---|
-| Lambda | [AWSの対応表](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html#runtimes-supported)で3.15は引き続きpublic preview。本番利用は推奨されず、正式公開の目標は11月（変更あり） | 正式対応後にCoreの受付・監督LambdaとRecords API／workerのmanaged runtime、CDKの対応を確認する |
-| CoreのDHI | `3.15.2-debian13-dev`／`3.15.2-debian13`の公開manifestを取得でき、[PR #661](https://github.com/pitekusu/shittim-chest/pull/661)の固定index digestと一致した。両方にLinux ARM64／AMD64がある | 10月14日時点の未公開条件は解消。ARM64実体・署名・SBOM／VEX・CA選択・Expat・完成imageのrisk gateは別途検証する |
-| 標準Python配布・uv | 10月14日のuv 0.13系列による3.15正式版インストールは成功済み。3.15.2をプロジェクトへ採用した検証は未実施 | Python配布解決とuvの対応系列・固定値・更新監視を合わせる。`uv_build`は公式の互換案内とlockで確認し、CLIと同じ番号だと決めつけない |
-| 実行依存wheel | 現固定値のCore／Records ARM64と開発用x86_64の3.15・binary限定依存解決は、`jiter 0.16.0`の対応wheel不足で失敗。`jiter 0.18.0`だけを候補変更すると3対象とも解決成功 | `aiohttp 3.14.4`／`msgpack 1.2.4`は現在の固定値で解決でき、追加更新の必要条件ではない。両lockの再生成と実import・関連試験を行う |
-| 開発・字体生成 | `grimp 3.17`と`fonttools 4.66.1`／`Brotli 1.2.1`は3.15・Linux x86_64のbinary限定依存解決に成功 | 以前のwheel不足はこの対象では解消。実行・字体再生成は未実施であり、通常Web buildの成功で代替しない |
-
-`audioop-lts`は既存の`cp313-abi3` ARM64 wheelを利用でき、阻害要因ではない。
-lockに`cp315`が記録されていないことだけで上流未対応と判定しない。上流の配布metadataと実際の解決結果を使う。
-上記の実行依存候補は、それ以外の再調査時の依存固定値を維持し、共有Coreの依存も含めた
-`aarch64-manylinux_2_28`向け・source build禁止の解決で確認した。lockへの3.15移行変更は適用していない。
-ここまでの3.15検証は標準機能の合成データsmokeと依存解決だけであり、アプリ全体の互換性、API性能、本番動作を確認したものではない。
-
-PR #661はDockerのFROMだけを3.15.2へ更新するため、そのままではマージしない。
-Core／Recordsの`requires-python <3.15`、3.14を承認対象とするcontainer policy、
-Docker内の`/usr/bin/python3.14`、CI／Releaseのsite-packages指定と整合しない。
-既存の安全条件を外してCIを通すのではなく、移行条件が揃ってからこれらを一組で更新する。
-
-条件が揃ったら、次の順に更新・検証する。
-
-1. Core／Recordsの`requires-python`、Ruff対象、両lock、`.python-version`、uv、各workflow、tool監視を合わせる。
-   LambdaとCoreを段階移行する場合は、共有Core packageを両実行版で試験し、Lambda bundleのPython指定を実runtimeに合わせる。
-2. DHIのtag・digest、`container-policy.json`とvalidator、Docker内のPython path、CI／Releaseのsite-packages pathを一組で更新する。
-   Lambda runtimeとIaCの期待値も同時に更新する。
-3. 両projectのfrozen sync、lint・型・関連試験、警告の互換性、配布wheelのimport、ARM64 binary限定bundle、関連stackのtest／synthを確認する。
-   コンテナの起動・停止、再現性、SBOM／VEX／risk gateとAndroid配布ツールの関連試験を維持する。
-4. 同一SHAの必須CI・CodeQLを確認してからマージする。本番／Play配布は、その時点で依頼された範囲だけ進める。
-
-この評価では3.15へのバージョン固定変更、必須CIの緩和、本番構成の変更を行っていない。
-更新未完了のためIssueを閉じない。失敗・未実施を成功として扱わない。
-
-AndroidのGradle Wrapper・プラグイン・ライブラリは、`.github/dependabot.yml`で毎週月曜09:15（日本時間）に確認する。
-Kotlin関連、Compose関連、Bouncy Castle関連はそれぞれ同じ更新PRにまとめ、ビルド・Lint・Android計装テストを確認して取り込む。
-通常は公開から3日待って更新候補にする。`androidx.activity:activity-compose`はDependabotが公開日時を取得できず
-全版を除外してしまうため、この待機だけを適用せず、週次確認と取り込み前の検証を行う。
-
-AGP由来の脆弱な間接依存は、ルートの`buildscript.classpath`と独立した`androidLintTool`に修正版の制約を設ける。
-バージョンはVersion Catalogへ宣言し、Dependabotが警告対象の更新箇所を読み取れるようにする。
-親プラグインの更新だけで修正版へ解決されるようになった場合は制約の撤去を検討し、
-依存グラフから旧版が消えることとAndroidのビルド・Lint・計装テストを確認する。
-
-2026年11月1日、Guavaの`CVE-2026-102554`（`GHSA-xxph-c9ww-hj94`）へ対応し、Version Catalogの`build-guava`を`33.7.2-jre`に固定する。AGP／Google Servicesのbuildscript classpath、独立した`androidLintTool`、RoomコンパイラーのKSP processorへ同じ標準constraintを適用する。アプリのimplementationへ不要なGuava依存は追加しない。各解決グラフとdebug／release KSPで修正版選択を確認し、Kotlin／Room生成とLintを検証する。Gradle distribution本体の同梱Guavaは別コピーであり、このconstraintで更新済みとは扱わない。
-
-同日のPython依存監査で検出されたASN.1デコードのDoS修正を取り込むため、Core／Records両lockの`pyasn1`を`0.6.5`へ更新する。Recordsの`joserfc`は`1.7.6`へ更新し、JWS分割前のサイズ検査等の堅牢化を取り込む。既存の親依存条件は変更せず、対象以外の依存固定値を維持する。両projectのfrozen sync・hash必須監査と、既存の認証／モバイル認証・Android配布helper試験で確認する。
-
-
-Dependabotの対象はActions、Core/Recordsのuv、ルート/Webのnpm/pnpm、AndroidのGradle、
-実行用Dockerfile、試験・ビルド用イメージ定義。実行用Dockerは毎日10:00、その他は毎週月曜に確認する。
-日本時間でActions 09:00、Gradle 09:15、Core uv 09:30、Records uv 09:45、
-試験・ビルド用Docker 10:15、ルートnpm 10:30、Web npm/pnpm 10:45の順に分散する。
-共通イメージ定義を変更した場合は、Runtimeのコンテナ検証とRecordsの永続化試験をどちらも実行する。
-
-Dependabotの通常更新には、`cooldown`を省略しても既定で3日の待機期間が適用される。
-ルートDockerfileのDHI `python`とGHCR `astral-sh/uv`は、Dependabotがレジストリの公開日時を取得できず、
-待機期間を適用できない警告が出るため、ルートDocker設定の`cooldown.exclude`へ依存名で指定する。
-この除外は待機期間だけに適用し、日次の更新確認、tag・digest固定、PRの検証は継続する。
-Docker Hubを使う試験・ビルド用イメージには既定の待機期間を適用する。
-
-Vite+の`npm:`エイリアスとpnpmの固定overrideは、Dependabotの通常更新だけでは揃わない。
-Vite+関連は専用グループへ分け、CLIとcoreエイリアスは公式の対応版へ揃え、coreの直接依存とoverride、Vitest overrideの不一致を通常CIで拒否する。
-Vite+のメジャー更新は公式の移行コマンドを使い、同梱Vitestと上書き設定も同時に更新する。
-Vitest 5への移行では`clearMocks: false`を明示して既存試験の互換動作を保ち、型検査・全Web試験・build・Playwrightを確認する。
-Gradleが配布するWindows用WrapperのCRLFは、該当ファイルだけにGitの`whitespace=cr-at-eol`属性を指定する。
-行末の余分な空白と他のファイルの検査は継続する。
-coreエイリアス、Vitest、fast-uriの固定overrideは専用監視でも確認し、対応系列と組み合わせを検証して更新する。
-JDK、Android SDK、Actionsの入力で選ぶ実行ツールもDependabotの直接更新対象外として専用監視で補う。
-runner同梱のCLIやAndroid EmulatorはGitHub runner image／SDK配布元による更新を使用する。
-
-互換性のない自動更新は理由を記録してDependabot側で保留する。
-別PRで更新済みのDependabot PRを手動で閉じると、同じバージョンの後続ダイジェスト更新も既存PR扱いになることがある。
-その場合、ブランチが削除済みなら元PRのBotコミットを確認してそのブランチだけ先に復元し、その後、元PRを再オープンしてDependabotに再評価させる。
-古い差分は直接マージせず、再評価後の差分を確認する。再作成が必要な場合は`@dependabot recreate`を使う。
-Dockerのuv更新PRでも、CI・配信の`UV_VERSION`を同時に揃える。
-依存更新でイメージが変わる場合は、新しいSBOM・VEX・検査結果を確認して既存の期限付きリスク承認へ紐付ける。
-承認対象や期限の拡大、型検査の無効化で更新PRを通さない。
-uvの系列変更ではロックファイル、ビルド、SBOMの互換性を検証し、反映後は両プロジェクトのDependabot更新処理も確認する。
+Python minorの更新では、両lock・ネイティブ依存・Lambda runtime・DHI・コンテナポリシーを揃える。両lockで `jiter` を含むARM64向けビルド済みwheelを解決し、完成イメージ、CDK、同一SHAのCIを検証する。
+当時の配布・互換性調査は[整理前の記録](https://github.com/pitekusu/shittim-chest/blob/d90665b0fc369b30f4960095bbb88dfa5bcc36ea/docs/15_GitHub・CI-CD詳細設計.md#python-315への移行評価2026年10月14日)を参照する。
 
 ### 固定ツール監視
 
@@ -538,204 +320,11 @@ DependabotのActions更新は`uses:`を扱い、`with.version`、`driver-opts`�
 - 終了値は最新`0`、更新候補あり`1`、取得/設定不正`2`。
   `main`限定で`contents: read`と`issues: write`を使い、書換え・自動マージ・AWS操作・配信開始はしない。
 
-### 2026年11月19日の固定ツール更新
+### 固定ツールの更新調査
 
-[Issue #700](https://github.com/pitekusu/shittim-chest/issues/700)に追加された更新候補を反映する。
-Grypeはamd64／ARM64とも[0.122.1](https://github.com/anchore/grype/releases/tag/v0.122.1)へ更新し、
-公式チェックサムの署名と両配布物のSHA-256を照合する。この版はJVM版の比較とPythonパッケージへの誤ったマッチングを修正する。
-完成ARM64イメージは従来のSBOM・署名付きVEX・期限付き受容に照合する。
-
-Androidの`.java-version`は[Temurin 21.0.13.1+2](https://github.com/adoptium/temurin21-binaries/releases/tag/jdk-21.0.13.1%2B2)へ更新する。
-`setup-java`のファイル入力では4桁目とbuild番号が落ちるため、Android CI・配布・依存グラフ・CodeQLは
-共通のセットアップを使い、同じファイルの完全な版を`java-version`入力へ渡す。
-配布物の署名検証とインストール後の実際の版照合を必須にし、AndroidのビルドとCodeQLの手動抽出で確認する。
-
-### 2026年11月18日の固定ツール更新
-
-[Issue #700](https://github.com/pitekusu/shittim-chest/issues/700)の更新候補を反映する。
-Grypeはamd64／ARM64とも0.122.0、Syftは1.57.2、ECR Credential Helperは0.13.0へ更新し、
-Grype／SyftのGitHub asset digestとchecksum署名、ECRの公式S3 checksumを配布物の実体と照合する。
-GrypeのDHI OSV対応やSyftのdpkg重複修正は、既存のSBOM・VEX・risk gateを省略する根拠にしない。
-
-uvは全workflowとDockerの両方を0.13.9へ揃え、Dockerのmanifest digest固定を維持する。
-[0.13.9の公式変更](https://github.com/astral-sh/uv/releases/tag/0.13.9)には別名wheelの拒否と
-同値なplatform markerのlock検査修正が含まれる。CLI更新だけを理由にPython本体・uv_build・両lockを更新しない。
-既存のlockで`lock --check`と`sync --frozen --all-groups`を確認する。
-
-Webはpnpm 12.22.0、Vite+ 1.7.0、Vitest／UI／関連override 5.1.1へ揃える。
-[Vite+ 1.7.0の公式変更](https://github.com/voidzero-dev/vite-plus/releases/tag/v1.7.0)に従い、
-CLIと版番号が分かれたcoreエイリアス／overrideは8.3.8000とし、広すぎるVite peer許可を外す。
-型検査は同梱のtsrsへ切り替わるため、警告拒否を維持したcheck・単体試験・build・Playwrightで確認する。
-依存の公開後待機期間の例外は、今回指定した正確な版だけに限定する。
-
-既存mainのlockにも含まれるpicomatch 4.0.7は、
-[GHSA-fc5q-39xc-vjpf](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)の対象で、
-11月18日の確認時点では修正版が公開されていない。同日、所有者が開発・CI用の本件Highを
-2026年11月20日09:00 JSTまで受容し、CI成功後のPR #752マージを明示承認した。
-infraとWebの受容記録は`expires: 2026-11-20`とし、同日00:00 UTCから拒否する。
-Vite+ coreのNode用vendor copyにも同版が残り、正式修正や非影響の証明とは扱わない。
-11月19日、GitHubで当該アドバイザリの取り下げを確認した。固定版pnpmとnpmの監査でも
-報告されなくなったため、Webとinfraの未使用の受容記録を削除した。依存の版は維持する。
-
-同じ承認で、今回の実測ARM64 production config
-`sha256:d61d02a8c0c0f8f0c8616c64bf53ed25a9885be72ec1c00c3383f9c4fe18e2c4`に残るHigh 28組を
-同期限まで受容する。既存22組のCVE・package・版は前回と一致し、新規6組は
-CVE-2026-107493／CVE-2026-124709それぞれの`libssl3t64`・`openssl`・`openssl-provider-legacy`
-（全て`3.5.7-1~deb13u3+dhi0`）に限定する。Critical、sourceの検出、修正可能High/Criticalは0、
-ARM64 TLSは60/60成功を確認した。
-[同一実行のSBOM・署名VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44314277139/artifacts/14431173930)と
-[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44314277139/artifacts/14432471438)を照合した。
-
-[OpenSSL公式](https://openssl-library.org/news/secadv/20261117.txt)は新規2件をLowと評価し、
-3.5系列では3.5.10を修正版とする。前者は非NULLの既存X509_INFO stackへのPEM追加に失敗した後の再利用・解放、
-後者はQUICサーバーでの拒否stream作成・resetの反復が成立条件だが、到達不能とは扱わずGrype Highを維持する。
-新規6組はこのconfigだけに限定し、containerの`expires_on`はUTC最終有効日`2026-11-19`とする。
-4枠の上限がある既存10組では最古のconfigを今回のconfigと入れ替え、現行mainのconfigは保持する。
-本番配信の承認は今回追加していない。
-
-### 2026年11月5日の固定ツール更新
-
-[Issue #679](https://github.com/pitekusu/shittim-chest/issues/679)の候補を確認し、
-Scout 1.29.0、Grypeの両architecture 0.121.1、Syft 1.56.0、Buildx 0.38.2、
-Node 24.22.2、pnpm 12.18.0、uv 0.13.7、Vite+ 1.5.0へ固定値を合わせる。
-Issue作成後の再取得で公開済みのBetterleaks 1.10.0とpnpm 12.18.0も確認対象に含める。
-Vite+に同梱されるVitest 5.1.0へWebの直接依存・UI・override・更新監視を合わせ、
-infra用Vitestの系列は維持する。Nodeのproject下限とlock metadataも同期する。
-uvのCLI更新だけを理由に、既に互換範囲内のbuild backendやPython lockを再生成しない。
-
-各配布物の公式checksum・asset digest、Nodeの署名、Grype／Syftの署名を確認する。
-新しいScoutのDHI取得結果は、署名原本のSPDXと独立に照合する。
-GrypeのversionなしOpenVEX処理の修正は配布DBにも依存し、CLI更新だけで検出が解消したと扱わない。
-Syftの再帰archive解析は既定の無効を維持する。BuildxのBake修正については、
-このCIがBakeを使わずadvisoryも0.38.1以上を修正版とするため、今回新たにCVEを解消したとは扱わない。
-Vite+のminimatch更新は、別のCDK同梱copyの修正ではない。
-
-同じPython 3.14.10／Debian 13の新しいDHI builder・runtimeも固定digestへ更新する。
-[固定した公式recipe](https://github.com/docker-hardened-images/catalog/tree/606e3a01ca8e879cde247085db127f44cb2e7ceb)と、
-署名SPDX／VEX・実library hashにより、SQLite `+dhi3`のCVE-2026-119371 backportと
-Python `3.14.10-3`のCVE-2026-116566（`socket.getaddrinfo()`のNUL拒否）を確認する。
-これらの修正を、別CVEやPython静的内蔵Expatの修正済み判断へ一般化しない。
-
-以前のcontainer High 12組とCDK同梱minimatchの所有者受容は、
-2026年11月3日00:00 UTC（09:00 JST）に失効した。
-新しい対象・digest・期限へ自動で移さず、完成した同一ARM64 imageのSBOM／VEX・TLS・risk gateを再検証する。
-ncursesは公式recipeに修正patchがあるが、署名provenanceからそのpatchへの結合を確認できないため調査中を維持する。
-必須CIの失敗を、古い受容や`no-dsa`だけで成功に置き換えない。
-
-2026-11-05、[PR #680の同一実行](https://github.com/pitekusu/shittim-chest/actions/runs/42004113350)の
-完成production config `sha256:b7c7c63c397cde746369384a7320c452d52700da09cdded3b0642fb7f703c8fc`を独立照合した。
-最新Grype DBで既存と同じHigh 12組、新規追加0、source・Critical・修正可能High/Critical 0、TLS60/60を確認した。
-所有者がこの12組とCDK同梱minimatchのModerate 1件を、
-2026年11月6日09:00 JST（同日00:00 UTC）まで受容してマージすることを明示承認した。
-containerの対象はこの新configだけへ置き換え、旧digestの受容は再開しない。
-`expires_on`は当日を含むため`2026-11-05`、npmの`expires`は当日00:00 UTCに失効するため`2026-11-06`とする。
-対象・期限・severityの限定と、その他の検出拒否を維持する。受容は正式修正や非影響の証明を意味しない。
-
-2026-11-09、[PR #697](https://github.com/pitekusu/shittim-chest/pull/697)で
-DHI Python 3.14.10／Debian 13のbuilder・runtimeを更新し、
-[Debianのzlib修正](https://security-tracker.debian.org/tracker/DSA-6613-1)を含む
-`zlib1g 1:1.3.dfsg+really1.3.1-1+deb13u1+dhi0`を完成ARM64 imageのSBOMで照合した。
-[BuildKit 0.34.2](https://github.com/moby/buildkit/releases/tag/v0.34.2)はGitキャッシュを経由した
-[CVE-2026-121522](https://github.com/moby/buildkit/security/advisories/GHSA-2fqp-xg6f-v7gj)のdaemon停止を修正する。
-
-[候補のCI](https://github.com/pitekusu/shittim-chest/actions/runs/42603921271)で
-署名・SBOM／VEX・TLS60件を検証し、Grypeのraw High 24組、VEX適用後High 12組を確認した。
-Critical、修正可能なHigh／Critical、前回の残存Highからの追加はいずれも0組だった。
-所有者の明示承認に基づき、`security/container-risk-acceptance.json`で
-実測production config `sha256:12fe1baa66e9517a5ff49ecba8bf84e9dc1fa086b88b59742986bbfbc2aa791d`の
-同じ12組だけを2026年11月13日09:00 JST（同日00:00 UTC）まで受容する。
-UTC日付を含む`expires_on`は`2026-11-12`とし、CDKの受容期限は別に扱う。
-
-2026-11-10、最新mainを取り込んだ[PR #688のCI](https://github.com/pitekusu/shittim-chest/actions/runs/42786890362)で、
-実行時のPython依存を更新した完成ARM64 imageのconfig `sha256:87ae4fc54283c1684d47f55444cdcce557372cb3fa59817dcb35a0202390343f` を確認した。
-署名付きVEX適用後は既存と同じHigh 12組で、Critical・新規High・修正可能Highは0組、TLSは60件すべて成功した。
-所有者の明示承認により、このconfigだけを既存の本番configに追加する。
-期限は両方とも2026年11月13日09:00 JST（同日00:00 UTC）のままとする。
-[PR #689のCI](https://github.com/pitekusu/shittim-chest/actions/runs/42786895599)では、開発用pytest-asyncioの更新後も
-完成イメージのconfigとmanifestが本番に一致したため、この更新単独の再デプロイは不要とした。
-
-CDK 2.275.0は公式配布物にもminimatch 10.2.6が同梱され、
-標準npmのnested overrideに11.0.4を指定して`install`と`ci`が成功しても、実解決先は10.2.6だった。
-[npmの公式実装](https://github.com/npm/cli/blob/v11.19.1/workspaces/arborist/lib/edge.js)もbundled依存のoverrideを対象外とする。
-無検証のpostinstall置換や監査省略を追加せず、正式な修正CDKが公開されたら実体を確認して例外を削除する。
-
-### Gradle配布ZIPの手動スポット監査
-
-Gradle Wrapper更新時に、配布ZIPへ同梱されたbuild toolの依存を固定Syftで調べる手順を採用する。
-アプリのGradle解決グラフやconstraintsとは別のcopyとして扱う。
-通常CIへ重いjobや独自wrapperを追加せず、必要時のローカル手動調査に限定する。
-
-公式checksum・署名を検証済みのSyftを`.github/tool-versions.json`の版へ合わせ、
-その絶対pathを`SYFT_BINARY`へ、Wrapperの`distributionUrl`から取得したZIPの絶対pathを`GRADLE_DIST_ZIP`へ指定する。
-`SCAN_DIR`はディスク上のprivate cacheに固定し、権限0700、生成物はumask 077で保管する。
-`SCAN_DIR/scratch`を事前に作り、既存の同名systemd unitが実行中でないことを確認する。
-取得したZIPは必ずWrapperに固定されたSHA-256と照合する。
-
-```bash
-SCAN_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/shittim-chest/toolchain-audit/gradle"
-umask 077
-install -d -m 700 "$SCAN_DIR" "$SCAN_DIR/scratch"
-GRADLE_DIST_SHA="$(sed -n 's/^distributionSha256Sum=//p' apps/records-android/gradle/wrapper/gradle-wrapper.properties)"
-printf '%s  %s\n' "$GRADLE_DIST_SHA" "$GRADLE_DIST_ZIP" | sha256sum --check --strict
-```
-
-次の標準configを`SCAN_DIR/syft.yaml`へ保存する。既定のdepth 0でもJavaのJAR解析は有効である。
-外部enrichment・更新照会・cacheを使わず、結果はローカルへ保存する。
-
-```yaml
-check-for-app-update: false
-parallelism: 1
-enrich: []
-cache:
-  dir: ""
-  ttl: 0
-package:
-  nested-archive-max-depth: 0
-  nested-archive-max-memory-bytes: 134217728
-  nested-archive-max-disk-bytes: 536870912
-```
-
-Linuxの短命user serviceでCPU・メモリ・実行時間を制限し、外部socketを使わずに解析する。
-Goのaddress予約を妨げる仮想address上限ではなく、cgroupの`MemoryMax`を使う。
-制限到達や異常終了は完了扱いにせず、実行状態とscratchを確認してから再試行を判断する。
-
-```bash
-systemd-run --user --wait --pipe --quiet --collect \
-  --unit shittim-syft-gradle-spot \
-  -p CPUQuota=100% -p MemoryMax=1610612736 \
-  -p MemorySwapMax=0 -p TasksMax=64 -p RuntimeMaxSec=90 \
-  -p NoNewPrivileges=yes -p RestrictAddressFamilies=AF_UNIX \
-  /usr/bin/time -f '%e\n%U\n%S\n%M\n%x' -o "${SCAN_DIR}/time.txt" \
-  /usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 \
-    TMPDIR="${SCAN_DIR}/scratch" GOMAXPROCS=2 GOMEMLIMIT=768MiB \
-    "${SYFT_BINARY}" scan "file:${GRADLE_DIST_ZIP}" \
-    -c "${SCAN_DIR}/syft.yaml" -v \
-    -o "syft-json=${SCAN_DIR}/sbom.syft.json"
-```
-
-終了値に加え、`files[].unknowns`・version不明・展開打切りの理由を確認し、
-未識別が残る結果を完全なinventoryや脆弱性なしの証明として扱わない。
-終了後はscratchが空、短命unitが回収済みであることを確認する。
-生のSBOM・logはprivate cacheに置き、公開文書へlocal pathをコピーしない。
-CVE判定と更新可否は別途確認し、本番containerの受容記録をbuild toolへ流用しない。
-
-2026-11-05、Wrapper固定SHAが一致したGradle 9.8.2 ZIP（348 JAR）でSyft 1.56.0を比較した。
-同じ入力・cgroup制限・排他lock下のwarm-cache単発計測は次のとおり。
-
-| 項目 | depth 0 | depth 2 |
-|---|---:|---:|
-| Java package | 351 | 351 |
-| 所要時間 | 4.40秒 | 8.29秒 |
-| peak RSS | 200.95MiB | 345.75MiB |
-| 未識別file | 1 | 72 |
-
-Javaのidentity集合は完全一致し、depth 2の追加16件はJAR内のWindows DLLだった。
-そのうち14件はversion不明、全件PURLなしであり、Linuxでの実行やCVEを判定する根拠にはしない。
-対象のJava依存調査には上積みがなく資源使用が増えたため、depth 2の常用は採用しない。
-既定scanでは同梱Guava 33.4.6-jreのPURLと実`pom.properties`・JAR hashも一致した。
-このcopyはアプリのconstraintsで更新されず、今回の計測だけでCVEの影響・修正有無を断定しない。
-[Syftの標準archive仕様](https://github.com/anchore/syft/pull/5260)に従い、
-新しいnative-resourceの調査目的ができた場合だけ、depthと予算を限定して再評価する。
+公式配布の実体・署名・チェックサムを新旧で照合し、組み合わせと対象アーキテクチャを確認してから固定値を変更する。
+未解決の更新は[固定ツールの追跡Issue](https://github.com/pitekusu/shittim-chest/issues/700)で確認する。
+日付別の検証、Gradle配布ZIPの手動監査結果、採否の根拠は[整理前の記録](https://github.com/pitekusu/shittim-chest/blob/d90665b0fc369b30f4960095bbb88dfa5bcc36ea/docs/15_GitHub・CI-CD詳細設計.md)にある。
 
 ## 4. イメージと成果物の信頼性
 
@@ -785,301 +374,31 @@ PRの必須条件として固定された旧基準値や別実行との完全な
 同じベースイメージでもベンダーのVEX判定は更新される。以前の「影響なし」がなくなった場合は、
 過去のVEXや承認範囲の拡大で通さず、修正版のベースイメージと最新の検査結果を確認する。
 
-2026年10月22日公開のDHIメタデータでは、ソースパッケージのVEX判定とバイナリの関連情報が失われ、Grypeの完全なPURL照合だけでは提供元の判断を適用できない。CI／Core Releaseは、固定したDocker公式公開鍵でindex・ARM64 attestation manifestの署名とdigestを検証し、元のin-toto SPDX／OpenVEXをそのまま保存する。SPDXはScoutでも独立に署名検証する。OCI 1.1署名との互換性に必要なCosign／regctlは版・配布物SHA-256を固定し、透過性ログの検証省略は提供元の手順と同じ範囲に限定する。署名・固定鍵・TLS・subject／blob hashの検証は省略しない。2026年10月28日、DHI用Cosignを3.1.4へ更新した。現行のOCI 1.1検証引数を変えず、固定ARM64 DHIのindex・SPDX／VEX署名、全subject／blob hash、Scout 1.28.0による独立SPDX一致を実取得で確認した。新しいbundle既定値を理由に既存署名の検証を省略しない。
+### SBOM・VEX・期限付きリスク受容
 
-Docker Scoutは[1.28.0](https://github.com/docker/scout-cli/releases/tag/v1.28.0)へ更新し、Brotli／HTTP2のsecurity修正とDistroless Debian検出修正を取り込む。1.27.0で取り込んだGo 1.26.10の[crypto/x509対策（GO-2026-6809）](https://pkg.go.dev/vuln/GO-2026-6809)も維持し、今回の中間CAを含むチェーンを拒否する。CIとCore Releaseが共用する`.github/tool-versions.json`で、版・ARM64配布物名・SHA-256を揃えて固定する。既存のprocess限定CAfile／空のCApathによるroot除外を維持し、上流検証器の中間鍵拒否と併用する。他のTLSクライアントの対策状況は引き続き個別に確認する。[Scoutの出力問題 #247](https://github.com/docker/scout-cli/issues/247)と提供元のsource／binary関連メタデータは別件として追跡し、原本保持・署名照合・厳密なVEX対応付けと既存risk gateも維持する。
+CIとCore Releaseは、固定したDocker公式公開鍵でDHIのindexとARM64のattestation manifestを照合し、署名済みSPDX／OpenVEXを原本のまま保存する。
+SPDXはScoutでも独立に検証する。検証ツールと配布物のチェックサムは固定する。
 
-`tools/derive_dhi_vex.py`は独自の脆弱性判断を追加せず、元の`not_affected`と根拠を完全なバイナリPURLへ対応付ける。提供元OpenVEXの`products[].@id`はIRIとして扱い、HTTPSのイメージIDはソース・バイナリ対応付けの対象にせず、Debian PURLだけを従来の厳密照合対象とし、壊れた`pkg:` PURLは拒否する。署名付きSPDXのソース・バイナリの全版番号とファイル集合の関連、実dpkgのSource／版、完成SPDX、標準Syftの実ファイルSHA-256を照合する。同名の別版・別identity、変更されたファイル、欠けたSource情報、矛盾する判定には適用しない。署名付きSPDXにないリンク先は、固定ARM64ベースと完成イメージを標準Syftの`SYFT_FILE_METADATA_SELECTION=all`で取得して比較する。base manifestとconfigのhash、完成config digestも結合する。提供元原本・両Syft inventory・完成SPDX・対応付けreportを保存し、これらの入力hashを派生VEXへ結合する。Releaseは署名付きrelease manifestで派生VEXのhashを固定し、deploy前に同じ原本・実体情報から再計算してVEXとreportのbyte一致を要求する。既存の修正可能High／Critical拒否と残存リスク検査は維持し、期限付き受容は後段の承認記録へ限定する。提供元の関連メタデータ修正と、こちらで証明できた対応付けは別に追跡する。2026年11月2日、提供元の`status_notes`がDebian Security Teamの`no-dsa`指定と当該CVEのtracker URLだけを根拠にする場合は、署名とファイル対応付けが正しくても`not_affected`を派生しないよう修正した。行政上の優先度判断を修正・到達不能の証明とせず、生の検出と既存の期限付き受容を維持する。CVEの参照が矛盾する記述は拒否し、具体的な技術的説明を含む他の提供元判定は従来の厳密照合で扱う。
-2026年10月28日、Webのpackage managerをpnpm 12.16.1へ更新する。既存lockfile形式を維持し、frozen install、registry署名、Webのcheck／test／production buildを確認する。環境ファイル読込などの新APIは必要な工程ができるまで追加しない。Core／Records両lockのmsgpackは1.2.4へ更新し、1.2.1に対するCVE-2026-114613の監査失敗を解消する。監査や既存risk gateを弱めず、他の依存は固定する。
+提供元の `not_affected` を派生VEXに使う場合は、署名した原本から完全なバイナリPURL・版・実ファイルSHA-256による対応を確認する。
+dpkgのSource名と版がともに省略される場合は、Debian Policyに従ってPURLと整合するバイナリのPackageとVersionを使う。この場合も、署名付きSPDXの同名・同版ノードからpackage verification codeと所有ファイル全体のSHA-256が一致する唯一のノードを選ぶ。[DebianのSource規則](https://www.debian.org/doc/debian-policy/ch-controlfields.html#source)
 
-基盤更新を含む配信では、Recordsの変更に加えてCore Releaseで本番イメージも更新する。
-CIとCore Releaseは共通のDB準備action／スクリプトを使い、Grype版・OS・UTC日付をキーに保存する。
-mainで保存したDBは同じツール版のx64／ARM64で再利用できる。キャッシュ対象はDBのみである。
-Grypeのデータベースは取得済みキャッシュがある場合も毎回`db update`で更新を確認し、失敗時は停止する。
-実スキャン・ARM64での再検証・署名済みVEXの取得は省略しない。ソースSBOMのschema検証方式も維持する。
-日付付きキャッシュだけで当日公開分の取得済み判定をせず、各実行で使ったデータベースは生スキャンの証拠に残す。
+同名の別版、変更されたファイル、照合に必要な情報の欠落、矛盾する判定では適用しない。Debianの `no-dsa` とtracker URLだけでは非影響の根拠にならない。
+原本、比較用inventory、完成SPDX、対応レポートと入力ハッシュを保存し、配信前に派生VEXとレポートの再計算が一致することを確認する。
 
-検査データベースの反映遅れは、ベンダー公式の修正版と実イメージのSBOMが一致することを確認した場合に限り、
-利用者の承認で期限付き例外にできる。対象の検出項目・パッケージ・実測設定ダイジェスト、
-根拠URL、期限、削除条件をリスク承認ファイルへ記録する。修正情報が反映されたら例外を削除し、
-期限や対象を自動で広げない。CIの無効化やスキャン結果の書換えは行わない。
+GrypeのDBキャッシュには版・OS・UTC日付を用いる。キャッシュがあっても `db update` の成功を要求し、実スキャン、署名済みVEXの取得、ARM64での再検証を行う。
+CIとCore Releaseは `docker image save` 内のconfig実体をSHA-256で測定し、配信時はECR manifestの `config.digest` と一致させる。
+ビルドで使うbytecode・時刻・ファイルなどの再現性に関わる設定はDockerfileとコンテナ検証で管理する。
 
-2026年9月14日UTCのPR #366検査では、Grype DB（同日06:38:38 UTC生成）から以前の
-libc6・libsqlite3-0に対する反映待ち4件が解消した。生スキャンで対象4件の不在と、
-署名付きVEX適用後の高・重大の残存0件を確認し、期限付き例外を削除した。
-旧イメージへの例外を新しいイメージへ付け替えず、例外なしでリスク判定を継続する。
+修正可能なHigh／Criticalは不合格。未修正リスクの承認は、該当項目、パッケージと実測config digest、根拠、期限、削除条件を `security/container-risk-acceptance.json` へ記録する。
+ベンダー修正済みでスキャナーDBへの反映だけが遅い場合は、公式の修正版と実イメージのSBOMを照合する。
+期限はUTCの最終有効日までで、承認日から最大90日とする。登録できるdigestはイメージ種別ごとに最大4個。
+正式修正・新しい検出・パッケージやdigestの変更・期限到達で再評価する。
+同じ系統でも別digestや別イメージへ承認は広げない。対象が解消した承認は削除する。
 
-2026年10月8日、`CVE-2026-77214`に対応する同系列のDHI Python 3.14.8／Debian 13へbuilder・runtimeのダイジェストを更新する。
-ARM64の実SBOMでbackport済み`libexpat1 2.8.3-1~deb13u1+dhi5`を照合し、当該イメージの署名検証済みVEXと既存Grypeゲートで解消を確認する。
-リスク受容ファイルは空を維持し、Python・OS系列・公開APIの契約を継承する。
+`fault-test` イメージと強制停止・復旧訓練は明示的なRuntime検証に限る。
+現在のリスク判定では、設定ファイルと実測したconfig digest、検出項目、UTC期限を照合する。Python 3.15.2への移行時に承認した15組の内訳と期限は[PR #791の受容記録](https://github.com/pitekusu/shittim-chest/blob/d90665b0fc369b30f4960095bbb88dfa5bcc36ea/docs/15_GitHub・CI-CD詳細設計.md#python-3152の完成arm64イメージの受容)を参照する。
 
-`fault-test`イメージと強制停止・復旧訓練は手動のRuntime検証に限定する。
-2026年10月17日、`CVE-2026-76957`のGrype検出に対応し、Python 3.14.8／Debian 13の系列を維持してDHI builder／runtimeの固定digestを更新する。DHI builderにはDebian修正版があるが、同系列runtimeの`libexpat1`は固有の旧版番号のままで、当該CVEの署名済みVEX判定もない。そのため、runtimeへDebianの修正版`2.9.0-1~deb13u1`を導入する。
-
-当時はbuilderの標準APTで認証した固定版パッケージを取得し、ビルド時だけ標準dpkgをbind mountして導入していた。2026-11-02、旧CVE-2026-76957の正式修正も収録したDHI Python 3.14.10／Debian 13へ移行し、Expatの一時導入と専用スクリプトを撤去する。providerのパッケージ実体と台帳を保持し、CA directoryのoverlayは別の責務として維持する。最終イメージは非root・shell／APT／dpkgなしを維持する。
-
-Coreのコンテナゲートで、実際にロードするsystem側の通常・wide双方のExpatが2.9.0以上であることを検証する。CPython内蔵の別コピーも2.8.4以上を要求し、正常XMLの解析と不正XMLの拒否を確認する。完成ARM64イメージのSBOM・署名済みVEX・Grypeによる判定を継続する。2026年10月17日には利用者承認により、Grype DB反映待ちの`CVE-2026-76957`／`libexpat1`を、確認済み設定digest 1個・2026年10月24日期限で例外登録した。2026年10月18日、[ARM64 CIの実測結果](https://github.com/pitekusu/shittim-chest/actions/runs/39049529578)で、正式修正版`2.9.0-1~deb13u1`とGrype DB（2026年10月17日生成）による当該CVEの未検出を確認したため、削除条件に従い例外を撤去した。VEX適用後のHigh／Criticalも0件であり、例外なしの判定を維持する。DHI runtimeへ修正版が取り込まれたら、この一時的なパッケージ導入を撤去する。
-
-再ビルドでCPythonのbytecode直列化が変わることを避けるため、uvの並列bytecode生成を無効にし、builderだけで`PYTHONHASHSEED=0`を指定して標準`compileall`を単一worker・checked-hashで実行する。既存のRECORD・時刻・所有権の正規化と、runtimeのhash randomizationは維持する。Dockerの`imageid`や`inspect.Id`はストアによってmanifestを返すため、設定digestには使用しない。CIとCore Releaseは標準`docker image save`の`manifest.json`が指す単一configの実バイトをSHA-256で測定し、push後のECR manifestの`config.digest`とも一致させる。Coreは別に保存したローカルIDでpush直前のtag不変も確認し、保存用archiveはstep終了時に削除する。
-根拠は[Debianの修正版情報](https://security-tracker.debian.org/tracker/CVE-2026-76957)を参照する。
-
-
-2026年10月26日、未修正のHigh 2件によるマージ保留の説明後に利用者がマージ・本番リリースを指示したことを承認根拠として、`libexpat1 2.9.0-1~deb13u1`の次の残存リスクを2026年11月2日まで期限付きで受容した。`security/container-risk-acceptance.json`へ`status: affected`で記録し、非影響や修正済みとは扱わない。
-
-| 検出 | 残存する影響 | 一次根拠 |
-| --- | --- | --- |
-| `CVE-2026-113351` | 大きなXMLの処理後に同じparserをresetすると、メモリ計数の不整合により後続の解析がメモリ不足で失敗し続けるDoS | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-113351)／[上流修正 #1431](https://github.com/libexpat/libexpat/pull/1431) |
-| `CVE-2026-115506` | 大きなDTDと入れ子のentity展開の増幅検出が遅れ、悪性XMLの解析が長時間CPUを占有するDoS。新規parserの作成だけでは解消しない | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-115506)／[上流修正 #1433](https://github.com/libexpat/libexpat/pull/1433) |
-
-10月26日の承認対象は[CI実行40307236822](https://github.com/pitekusu/shittim-chest/actions/runs/40307236822)のARM64 SBOM・raw／VEXレポートと実測で照合した、本番設定digest `sha256:aef36c150282c9c6081152e8ffb1d7754ad83dc98fe12147a7d1b42ef2bb5de0`の1個だった。
-
-2026年10月27日、モデル変更後の実測イメージについて利用者が「11月2日まで受容して続行」と明示承認したため、同じ2件・同じパッケージ版の対象へ本番設定digest `sha256:87915701608591364a82ef1c2db4510df85eece9eebf14e7068b207ed3d5d1b7`を追加した。[CI実行40485858367](https://github.com/pitekusu/shittim-chest/actions/runs/40485858367)のARM64 SBOM・raw／VEXレポートと実測を照合し、VEX適用後のHighは上表の2件だけで、修正可能なHigh／Criticalはないことを確認した。10月26日の承認対象も維持し、期限は2026年11月2日、分類は`status: affected`のままとする。
-
-2026年10月29日、uv 0.13.6等の更新を含む[PR #659](https://github.com/pitekusu/shittim-chest/pull/659)の実測イメージについて、利用者が同じ2件を11月2日まで受容してマージすることを明示承認したため、本番設定digest `sha256:2ce109528b7ba8cf597f27c271cdf0084f9abe757b39c4e20e5a27ad86db941d`の1個を追加した。[CI実行40710929200](https://github.com/pitekusu/shittim-chest/actions/runs/40710929200)のARM64 SBOM・raw／VEXレポートで同じlibexpat1版と未修正High 2件だけの残存、修正可能High／Critical 0件、TLS 60/60成功を照合した。期限・分類・既存の受容対象は維持し、本番反映はこの承認に含めない。
-
-botocoreにはXMLParserを使う応答解析経路があり、アプリ全体の非影響は証明していない。上流の修正はmerge済みだが、Debianは同版を両件ともvulnerableとし、正式修正版は未提供である。この受容は検査DB反映待ちの例外ではなく、未修正リスクの期限付き承認である。Debianの`no-dsa`や、新DHIの同記述に基づくVEXだけを修正済み・非影響の根拠にしない。
-
-正式修正版の公開、XML到達性の変化、新しい検出、パッケージ版・設定digestの変化、期限到達で再評価し、修正版を実装・検証して検出が解消したら受容記録を削除する。対象・digest・期限を自動で追加・延長しない。修正可能High／Criticalの拒否、その他の未追跡残存リスクの拒否、実スキャンと署名・VEX照合を維持する。
-
-2026年11月1日、[PR #663](https://github.com/pitekusu/shittim-chest/pull/663)の既存と同一イメージで新たに検出された`libc6 2.41-12+deb13u4+dhi1`のHigh `CVE-2026-84243`について、利用者が「11月2日まで受容してマージ」と明示承認した。対象は本番設定digest `sha256:2ce109528b7ba8cf597f27c271cdf0084f9abe757b39c4e20e5a27ad86db941d`の1個、期限は2026年11月2日、分類は`status: affected`とし、他のdigestへ追加しない。[CI実行41316755276](https://github.com/pitekusu/shittim-chest/actions/runs/41316755276)のARM64 SBOM・raw／VEXレポートで、本件と既承認Expat 2件だけの未修正High、修正可能High／Critical 0件、TLS 60/60成功を照合した。
-
-本件はgettextの`LANGUAGE`経由で悪性`.mo`を読み込むDoS・任意コード実行の可能性がある。成立には環境変数の制御、非C系locale、悪性ファイル配置、環境変数の信頼境界越えが必要である。現imageのlocale環境変数指定やアプリ入力由来の変更経路は確認できなかったが、native依存を含む実プロセス全体の到達不能は証明していない。`noexec`を`.mo`読み込みの防御根拠にしない。[GNU公式CVE記録](https://github.com/CVEProject/cvelistV5/blob/main/cves/2026/84xxx/CVE-2026-84243.json)・[Debian tracker](https://security-tracker.debian.org/tracker/CVE-2026-84243)・[DHI recipe](https://github.com/docker-hardened-images/catalog/blob/main/package/deb/main/glibc/debian-13/2.yaml)に基づき正式修正版未提供・未修正として扱う。11月1日の照合では署名付きVEXに本件statementはなかったが、11月2日に取得した新しいVEXはDebianの`no-dsa`指定だけを理由に`not_affected`を記載していた。この記述だけでは非影響とせず、派生VEXへの採用を見送り、既存の実測digest・11月2日期限の受容を維持する。修正版公開、入力境界・版・digestの変化、期限到達で再評価し、他の検出と既存gateは維持する。
-
-2026年11月2日、[PR #673](https://github.com/pitekusu/shittim-chest/pull/673)で`no-dsa`だけのVEX抑制を除いた結果、新たに可視化された次のHigh 5件について、利用者が「追加5件を11月2日まで受容してマージ」と明示承認した。対象は既存と同一の本番設定digest `sha256:2ce109528b7ba8cf597f27c271cdf0084f9abe757b39c4e20e5a27ad86db941d`の1個、期限は2026年11月2日とし、既存3件・他のdigest・期限は変更しない。日付の検査は承認日と同日の期限を認め、既存のUTC日付判定で期限当日まで有効・翌日は拒否とする。最大90日の上限、承認日より前の期限の拒否、実測digest照合は維持する。
-
-| 検出 | 影響と今回の分類 | 一次根拠 |
-| --- | --- | --- |
-| `CVE-2026-5435`／`libc6` | 非推奨DNSレコード整形APIのTSIG出力でbuffer長を守らない範囲外書込み。現Debian 13／DHI版は未修正のため`affected` | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-5435) |
-| `CVE-2026-76642`／`libuuid1` | util-linuxのmount helper失敗後の特権hook実行。source package単位の検出波及を`under_investigation`で受容 | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-76642) |
-| `CVE-2026-78408`／`libuuid1` | nsenterのcgroup操作FDが権限変更後まで残る問題。同上 | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-78408) |
-| `CVE-2026-78409`／`libuuid1` | X-mount.subdirのpath解決が中間symlinkを制限しない問題。同上 | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-78409) |
-| `CVE-2026-78410`／`libuuid1` | SUID mountでfstabのbind元差替え競合を悪用できる問題。同上 | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-78410) |
-
-[同一イメージの検査成果物](https://github.com/pitekusu/shittim-chest/actions/runs/41401997805)でconfig・base subject・VEX原本hashと実file対応付けを照合した。glibcの該当整形APIをアプリが直接利用する実装は見つからないが、native依存を含む到達不能は証明していない。完成runtimeにmount／umount／nsenter／libmount／fstabはなく、util-linux由来はlibuuid1だけで、[上流のlibuuid build対象](https://github.com/util-linux/util-linux/blob/v2.41.5/libuuid/src/Makemodule.am)も該当機能を含まない。この技術根拠と、no-dsaだけの提供元記述は区別する。自前の非影響VEXへ置き換えず、未確定の検出として明示承認の期限付き受容に限定し、builderや別imageへ一般化しない。正式修正・提供元の具体的な技術判断・構成や入力境界の変化・期限到達で再評価し、自動追加や延長はしない。
-
-同日、最新Grype DB（生成2026年11月2日06:26:52 UTC）で、同じ完成イメージの`libsqlite3-0 3.46.1-7+deb13u2+dhi1`に次のHigh 3件が追加検出された。利用者が「追加3件を11月2日まで受容してマージ」と明示承認したため、同じ本番設定digest `sha256:2ce109528b7ba8cf597f27c271cdf0084f9abe757b39c4e20e5a27ad86db941d`の1個、2026年11月2日期限、`status: affected`に限定して追加する。既存8件・他digest・期限は変更しない。
-
-| 検出 | 成立条件と影響 | 一次根拠 |
-| --- | --- | --- |
-| `CVE-2026-119373` | FTS5のdetail=none表に負rowidを入れprefix MATCHを実行するとheap範囲外書込み | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-119373) |
-| `CVE-2026-119374` | 壊れたFTS5索引のDBをsecure-delete有効で削除するとheap範囲外書込み | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-119374) |
-| `CVE-2026-119379` | session拡張へ細工changesetを適用するとheap範囲外書込み | [Debian](https://security-tracker.debian.org/tracker/CVE-2026-119379) |
-
-Coreの永続化はS3／DynamoDBで、SQL・DBfile・changesetの入力／実行経路は見つからないが、imageにはlibsqlite3とCPythonの`_sqlite3`が存在し、全native経路の到達不能は証明していない。[SQLite 3.54.0](https://sqlite.org/releaselog/3_54_0.html)の上流修正と、[DHIの正式backport recipe](https://github.com/docker-hardened-images/catalog/blob/d290a7585dc8600a3f563ec4e873f4cc82de43d2/package/deb/main/sqlite3/debian-13/3.yaml)は公開済みである。最新3.14.10 runtimeのindex `sha256:7773fe0d15497d7dc20d59148261e81d968b0d8088b3074d8ff06b25a3e38b7b`は、署名・SPDX／VEX・独立取得結果で`+dhi2`の実収録と具体的な修正commitのbackportを確認した。当初は3.14.10 builderも`+dhi1`だったが、同日の再確認でbuilderの新index `sha256:e1c528dee57ce33c3192099679a1690a1541030f5137df3587d3ed0454a172b6`にも`+dhi2`の配布と署名を確認した。runtimeとbuilderをこの修正済みdigestへ固定し、完成imageは別途検証する。
-
-3.14.10の適用に必要な共有`container-policy.json`も更新する。CDKの未修正minimatchは上記の明示受容で扱い、監査を省略しない。旧Expat overlayを撤去し、完成ARM64イメージのSBOM・VEX・TLS・実測digest・残存リスクを再検証する。既存の受容を別digestへ自動で移さず、正式修正を適用できた対象は該当受容を削除する。
-
-### DHI 3.14.10の完成イメージと同期限の受容
-
-2026-11-02、[同一実行の成果物](https://github.com/pitekusu/shittim-chest/actions/runs/41419104147)で
-完成production config `sha256:fd3cee04ef9ea4a38e18af57150bfe07e47bd9ce38c0c2a9aabd04f24552bdd2`、
-ARM64／Python 3.14.10、TLS60件、署名検証結果と全原本hash／subject、SBOMの実ファイル、VEX再生成を独立照合した。
-SQLite `+dhi2`の3件は具体的backport根拠のVEXと実fileの一致を確認し、旧受容を削除した。
-system Expat `+dhi1`はCVE-2026-117610／118370のbackportを保持するが、
-旧受容の113351／115506やPython静的内蔵copyまで解消したとは扱わない。
-
-既承認の8組（Expat2・glibc2・libuuid4）は残存する。libuuid4の成立に必要なmount／umount／nsenter／libmount／fstabが
-新完成inventoryにも存在しないことを再確認し、旧imageの判断を自動転用しない。
-さらにncursesの[CVE-2025-69720](https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves/2025/69xxx/CVE-2025-69720.json)が
-ncurses-base／ncurses-bin／libncursesw6／libtinfo6の4組で残る。
-
-ncursesは細工したterminfoを`infocmp -i`で処理した場合のスタックメモリ破壊であり、該当実行fileは新imageに存在する。
-Coreからの直接呼出しやterminfo入力経路は見つからないが、全native依存での到達不能は証明していない。
-[現dhi5のrecipe](https://github.com/docker-hardened-images/catalog/blob/c320263cabcb842e07a3412167e3142f301b82fb/package/deb/main/ncurses/debian-13/6.yaml)は
-公式修正と一致するpatchを適用し、infocmp／tic／tputと共有library2件の実hashは旧検証imageと全て一致する。
-一方、現署名VEXはno-dsaだけで、署名SLSA／sourceと公開recipe commit／patchへの完全な結合は未確認である。
-未修正への回帰とも技術的な非影響とも断定せず、提供元VEXとの整合を調査中として扱う。
-
-利用者は上記12組について、当該新configだけを既存と同じ2026-11-03 00:00 UTC（日本時間09:00）まで受容し、
-マージ・本番・Play配布へ進むことを明示承認した。container policyの`expires_on`は当日を含むため`2026-11-02`を維持する。
-旧8組へこのdigestだけを追加し、ncurses4組は`under_investigation`で同じdigest・期限へ限定する。
-Critical・修正可能High／Critical・source検出は0件。raw High23組からvendor VEX11組を除いた残12組と受容12組の完全一致を要求し、
-他digest・翌UTC日・未知検出は拒否する。最終コミットとmainでも同じ完成imageと検査結果を再確認する。
-
-
-通常PR/`main`では本番イメージの基本検証を行い、訓練用イメージを本番リスク承認の対象へ含めない。
-
-2026-11-17、PR #747の完成ARM64 production config
-`sha256:c8da1fd6b7ed267792133b90d24241aded7f7a9d7e8f3681352712fada31e329`
-について、現行本番と同じHigh 24組のうち署名付きVEXの適用後に同じ10組が残ることを確認した。
-Critical、修正可能なHigh/Critical、ソースのHigh/Criticalはいずれも0組で、TLSは60件すべて通過した。
-Grypeの更新後にCVE-2026-125709のMediumが3パッケージで新たに検出された。
-[同一実行のARM64 SBOM・VEX・TLS・Grype](https://github.com/pitekusu/shittim-chest/actions/runs/43892845317)
-
-所有者は、このconfigに残るHigh 10組を2026-11-20 09:00 JST（同日00:00 UTC）まで受容すると明示承認した。
-`expires_on`にはUTCの最終有効日`2026-11-19`を指定する。4枠の上限に従い、
-稼働中のconfigを含む直近3枠と今回のconfigで対象を構成し、最古のPR #719用の枠を外す。
-
-2026-11-17、PR #749の完成ARM64 production config
-`sha256:f3ed7f3fbfac2e8865eb866239749962b8225a17da959ee4e97293fe91d598b7`
-では、GrypeのHigh 36組のうち署名付きDHI VEXの適用後に22組が残った。
-従来と同じ10組に加え、OpenSSLのCVE-2026-88823／95691／95692／107496が
-`libssl3t64`、`openssl`、`openssl-provider-legacy`の各`3.5.7-1~deb13u3+dhi0`でHighとなった。
-Critical、修正可能なHigh/Critical、ソースのHigh/Criticalは0組で、TLSは60件すべて通過した。
-[同一実行の完成ARM64 SBOM・VEX・TLS・Grype](https://github.com/pitekusu/shittim-chest/actions/runs/44052362770)
-
-OpenSSLはこの4件をLowと評価している。Dockerの署名付きパッケージ索引から取得して検証した
-`+dhi1`には修正がある。CIと同一のGrype版・DBでSBOM上の版だけを差し替えた検証では、
-12組ともDebian由来の修正版未検出が続いた。今回の完成イメージには`+dhi0`が含まれる。
-[OpenSSLの告知](https://openssl-library.org/news/secadv/20261110.txt)・[Dockerの署名付きパッケージ索引](https://dhi.io/deb/debian/main/dists/trixie/InRelease)
-
-所有者は今回のconfigに限り、残る22組を2026-11-20 09:00 JSTまで受容し、必須CI通過後の
-マージと本番配信を明示承認した。`expires_on`はUTCの最終有効日`2026-11-19`とする。
-既存の10組では最古のPR #720用configを入れ替え、追加12組の対象は今回のconfigだけに限定する。
-
-2026-11-17、PR #750の完成ARM64 production config
-`sha256:d26ef2004599ed0be2c31e93a513b92f7d5c4f3b755b28edece0e2f8d42d0c07`
-では、署名付きDHI VEX適用後のHigh 22組が現行本番と同じCVE・パッケージ・版だった。
-Critical、修正可能なHigh/Critical、ソースのHigh/Criticalは0組で、TLSは60件すべて通過した。
-[同一実行の完成ARM64 SBOM・VEX・TLS・Grype](https://github.com/pitekusu/shittim-chest/actions/runs/44099220055)
-
-所有者はこのconfigの22組を2026-11-20 09:00 JSTまで受容し、必須CIとCodeQLの成功後のマージ、本番配信、Playクローズドテスト配布を明示承認した。
-`expires_on`は`2026-11-19`とし、既存の10組では4枠の上限に従って最古のPR #723用configを今回のconfigへ入れ替える。
-
-2026-11-19、PR #753を最新mainへ合わせた完成ARM64 production config
-`sha256:3a42446d8992733a9b7a06680a6588c12c68cb0604da33d2a8ed13ed3380d4c1`を再計測した。
-Grypeのraw Highは42組、署名付きDHI VEX適用後は28組で、既承認のCVE・パッケージ・版・修正状態と一致した。
-Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは60/60成功した。
-[完成SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44496940681/artifacts/14515322210)と
-[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44496940681/artifacts/14515457231)を照合した。
-
-所有者はこのconfigに限り、同じ28組を2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、
-必須CIとCodeQL成功後のマージ・本番反映を明示承認した。`expires_on`は`2026-11-19`のままとする。
-4枠を使用していた既存10組では、最古のPR #747のconfigを入れ替え、稼働中のconfigを保持する。
-
-2026-11-19、PR #756のGPT-6.2 Sol移行を含む完成ARM64 production config
-`sha256:16ded5f9931d741f3b0fb58eb8c06f9eb7556ac1f552889553cf16fd69553c11`をGrype 0.122.1で検査した。
-署名付きDHI VEX適用後のHigh 28組はPR #753の承認とCVE・パッケージ・版・修正状態が一致した。
-Critical、ソースの検出、修正可能なHigh/Criticalは0組だった。
-[完成SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44502325653/artifacts/14516579940)と[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44502325653/artifacts/14518211821)を照合した。
-
-所有者はこのconfigの同じ28組に限り、2026-11-20 09:00 JST（同日00:00 UTC）まで受容した。
-`expires_on`はUTCの最終有効日`2026-11-19`を維持する。4枠を使用していた22組では、
-最古のPR #749用configを入れ替え、PR #750用configを保持する。
-
-2026-11-19、PR #756を取り込んだPR #742のPython SDK更新で完成ARM64 production config
-`sha256:44adc62b886e31b4ebf367afe07286db6813c9a3791dd40b13ff29389f9b936f`を再計測した。
-署名付きDHI VEX適用後のHigh 28組は既承認記録とCVE・パッケージ・版・修正状態が一致した。
-Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは60/60成功した。
-[完成SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44506659110/artifacts/14518674515)と
-[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44506659110/artifacts/14520420560)を照合した。
-
-所有者はPR #742の実測configに限り、この28組を2026-11-20 09:00 JST（同日00:00 UTC）まで受容し、
-必須CIとCodeQL成功後のマージを承認した。`expires_on`は`2026-11-19`を維持する。
-マージ済みのPR #752用configは承認範囲がそのPRのマージまでだったため今回のconfigに入れ替え、
-PR #750・#753・#756用の既存の受容を保持する。
-
-2026-11-19、PR #757の生徒ガチャGIF変更を含む完成ARM64 production config
-`sha256:b20fd4e8378f2450d450d6d175dedf316c12fab26f07b22c8d88f295b639b1cb`をGrype 0.122.1で検査した。
-raw Highは42組、署名付きDHI VEX適用後の未修正High 28組は稼働中のPR #742用configとCVE・パッケージ・版・修正状態が一致した。
-新規High、Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは60/60成功した。
-[完成ARM64 SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44513976545/artifacts/14523394062)と
-[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44513976545/artifacts/14524651581)を照合した。
-
-所有者はこのconfigに限り、同じHigh 28組を2026-11-20 09:00 JST（同日00:00 UTC）まで受容した。
-`expires_on`はUTCの最終有効日`2026-11-19`を維持する。
-4枠を使用していた22組では旧PR #750用configを入れ替え、PR #753・#756・#742用configを保持する。
-
-2026-11-20 JST、PR #758の生徒ガチャAPNG・画風・衣装参照を含む完成ARM64 production config
-`sha256:459c61d124a1271f10c2855078a02972f22e0ca61264c8d9b22bca9e5ee44ee7`を検査した。
-raw High 42組のうち署名付きDHI VEX適用後のHigh 28組は、現行本番とCVE・パッケージ・版・修正状態が一致した。
-新規High、Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは60/60成功した。
-[完成ARM64 SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44561514632/artifacts/14549871309)と[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44561514632/artifacts/14550521339)を照合した。
-
-所有者はこのconfigに限り、同じHigh 28組を2026-11-20 09:00 JST（同日00:00 UTC）まで受容した。
-`expires_on`はUTCの最終有効日`2026-11-19`を維持する。
-全28組で上限4枠を使用していたため、旧PR #753用configを入れ替え、PR #756・#742・#757用configを保持する。
-
-2026-11-20 JST、PR #759の生徒ガチャ背景組版と輪郭補正を含む完成ARM64 production config
-`sha256:0fd9678dccd7287ed1c9898f1ada705ec18f9afd488fde6b4de34f502aa71917`を検査した。
-raw High 42組のうち署名付きDHI VEX適用後のHigh 28組は、現行本番とCVE・パッケージ・版・修正状態が一致した。
-新規High、Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは60/60成功した。
-[完成ARM64 SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44569708165/artifacts/14552354444)と[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44569708165/artifacts/14552973618)を照合した。
-
-所有者はこのconfigに限り、同じHigh 28組を2026-11-20 09:00 JST（同日00:00 UTC）まで受容した。
-`expires_on`はUTCの最終有効日`2026-11-19`を維持する。
-全28組で上限4枠を使用していたため、本番に配信しなかったPR #758用configを入れ替え、PR #756・#742・#757用configを保持する。
-
-2026-11-20 JST、PR #760の生徒ガチャ1.8秒ループと旧1.5秒形式の互換対応を含む完成ARM64 production config
-`sha256:0d4beffdfd82b10c7bec71bd1eca72c82c7a2b6db4bd29ada6dca31b7d5f2f7a`を検査した。
-raw High 42組のうち署名付きDHI VEX適用後のHigh 28組は、現行本番とCVE・パッケージ・版・修正状態が一致した。
-新規High、Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは60/60成功した。
-[完成ARM64 SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44579373596/artifacts/14558965933)と[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44579373596/artifacts/14557543956)を照合した。
-
-所有者はこのconfigに限り、同じHigh 28組を2026-11-20 09:00 JST（同日00:00 UTC）まで受容した。
-`expires_on`はUTCの最終有効日`2026-11-19`を維持する。
-全28組で上限4枠を使用していたため、最古のPR #756用configを入れ替え、PR #742・#757・#759用configを保持する。
-
-2026-11-20 JST、PR #761の生徒募集カード描画修正を含む完成ARM64 production config
-`sha256:f9aa859a02f8153666c77b62142422ee297c90e25e6a220cfbc90b9e01420273`を検査した。
-raw High 45組のうち、署名付きDHI VEX適用後はHigh 31組だった。
-現行本番とパッケージの版は一致し、前回の28組に加え、更新されたGrype DBが
-`CVE-2026-84786`を`libssl3t64`、`openssl`、`openssl-provider-legacy`の3組で検出した。
-Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは60/60成功した。
-[完成ARM64 SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44716737890/artifacts/14619588420)と[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44716737890/artifacts/14619358914)を照合した。
-
-所有者はこのconfigのHigh 31組に限り、2026-11-21 09:00 JST（同日00:00 UTC）まで受容し、
-必須CI通過後のマージと本番反映を承認した。
-`expires_on`はUTCの最終有効日`2026-11-20`とし、期限切れの旧configを有効対象から外した。
-
-2026-11-20 JST、PR #762の透過GIF対応を含む完成ARM64 production config
-`sha256:63b52c13472bdc6259b4663ade2d5090f4b28de281148ea9b0e9e610ff487cc6`を検査した。
-raw High 45組、署名付きDHI VEX適用後High 31組は、本番とCVE・パッケージ・版・修正状態が一致した。
-新規High、Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは60/60成功した。
-[完成ARM64 SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44726636406/artifacts/14624691000)と[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44726636406/artifacts/14624666411)を照合した。
-実画像APIが返した透過GIFの全12フレームから、人物の色と1.8秒の再生を維持した完成APNGおよびDiscord用WebPを確認した。
-
-所有者は実画像検証を条件に、このconfigのHigh 31組を2026-11-21 09:00 JST（同日00:00 UTC）まで受容し、
-必須CI通過後のマージと本番反映を承認した。`expires_on`はUTCの最終有効日`2026-11-20`とする。
-
-2026-11-20 JST、PR #762のレビュー対応で一辺に残る単色背景の除去を追加した。
-実画像APIが返した同じ透過GIFを最終版で再処理し、完成APNGとDiscord用WebPが先に検証した画像と一致した。
-最終ARM64 production configは`sha256:590ec571ed5d87eea8e47d6be7c70d5f050fb9df087c823718e396abd857be69`。
-raw High 45組と署名付きDHI VEX適用後のHigh 31組は、現行本番とCVE・パッケージ・版・修正状態が一致した。
-Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは60/60成功した。
-[完成ARM64 SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44730667612/artifacts/14625978331)と[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44730667612/artifacts/14627020129)を照合した。
-所有者はこの最終configのHigh 31組に限り、2026-11-21 09:00 JST（同日00:00 UTC）まで受容し、
-必須CI通過後のマージと本番反映を承認した。先に検証した未配信のPR #762用configを対象から外した。
-
-2026-11-21 JST、PR #763のMNC追加を含む完成ARM64 production config
-`sha256:1e134372c8f35e35c82b300c123c3a8b211d286853646cfff9cf8f5cebdc7efb`を検査した。
-raw High 45組、署名付きDHI VEX適用後High 31組で、現行本番とCVE・パッケージ・版・修正状態がすべて一致した。
-Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは60/60成功した。
-[完成ARM64 SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44779382623/artifacts/14651671596)と[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44779382623/artifacts/14652515744)を照合した。
-所有者は今回のconfigと31組について1年間の受容と、必須CI通過後のマージ・本番配信を承認した。
-Coreの有効期間の上限は90日なので、`approved_on` はUTC日付の `2026-11-20`、
-`expires_on` は `2027-02-18` とし、日本時間の2027-02-19 09:00に失効する。
-対象configはPR #763で実測した1件とし、従来の承認を他のconfigに引き継がない。
-
-2026-11-22 JST、PR #768の完成ARM64 production config
-`sha256:64dd6b8ee84aee203ed3be71c8903ad813d6b986dab5bef4c0ffc150056b0353`を検査した。
-raw High 45組、署名付きDHI VEX適用後のHigh 31組が現行本番とCVE・パッケージ・版・修正状態で一致した。
-新規High、Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは60/60成功した。
-[完成ARM64 SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44923899527/artifacts/14715161663)と[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44923899527/artifacts/14715440862)を照合した。
-所有者はこのconfigと同一31組に限り、既存と同じ2027-02-19 09:00 JSTまでの受容と必須CI成功後の配信を承認した。
-本番の既承認configを保持したまま今回の実測configを追加し、受容の有効期限を維持する。
-
-2026-11-22 JST、PR #769の完成ARM64 production config
-`sha256:1c6287b8ea870a49e736cf94762c0a4587cfd91aa935ecb36f9f376666d37bcd`を検査した。
-raw High 45組、署名付きDHI VEX適用後のHigh 31組が現行本番とCVE・パッケージ・版・修正状態で一致した。
-新規High、Critical、修正可能なHigh/Critical、ソースの検出は0組で、TLSは60/60成功した。
-[完成ARM64 SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44981673738/artifacts/14738470019)と[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44981673738/artifacts/14737304576)を照合した。
-所有者はこのconfigと同一31組に限り、既存と同じ2027-02-19 09:00 JSTまでの受容と必須CI成功後の配信を承認した。
-既承認のconfigを保持し、今回の実測configを追加した。受容の有効期限は維持する。
-
-PR #769のCore配信計画で、ECRが`CVE-2026-5435`の修正版としてglibc `2.41-12+deb13u5`を検出した。
-[Debianの修正情報](https://security-tracker.debian.org/tracker/CVE-2026-5435)と[同系列のDHI ARM64版](https://hub.docker.com/hardened-images/catalog/dhi/python/images/python%2Fdebian-13%2F3.14/sha256-66fb7a9294ccf35d8caece64813a5c566f26766f7242608f7cdd01f06182650b/vulnerabilities)の収録版を照合した。
-同じPython 3.14.10／Debian 13のruntimeベースを新しいindex digestに固定する。
-このベースにはOpenSSLの`CVE-2026-121482`が残る。完成ARM64イメージのSBOM、VEX、Grype、TLSとECRスキャンを確認し、残存リスクは実測のconfig digestと検出項目に結び付ける。
-
-PR #770の完成ARM64 config `sha256:ece549bb5e6454a43bda1994d1aa94e23b655ca213e6a453806b62aecc1f9810` では、raw High 45組、署名付きVEX適用後High 32組、修正可能なHigh/Critical 0組、TLS 60/60を確認した。
-[完成ARM64 SBOM・VEX・TLS](https://github.com/pitekusu/shittim-chest/actions/runs/44987037672/artifacts/14740286771)と[Grype原本](https://github.com/pitekusu/shittim-chest/actions/runs/44987037672/artifacts/14740312870)を照合した。
-GrypeのDebianデータ取得は2026年11月21日00:21 UTCで、実体で確認済みの修正20組を検出している。
-glibc `2.41-12+deb13u5` の5435・19499と、OpenSSL `3.5.9-1~deb13u1+dhi0` の107493・107496・124709・88823・95691・95692が対象である。
-[Debianの変更履歴](https://metadata.ftp-master.debian.org/changelogs/main/g/glibc/glibc_2.41-12+deb13u5_changelog)と[Dockerの固定レシピ](https://github.com/docker-hardened-images/catalog/blob/da4329c4f02dbce667e3fb6f9a4ace64afa16eb4/package/deb/main/openssl/debian-13/3.yaml#L69-L97)、署名付きAPTで取得した配布パッケージの変更履歴と実ファイルSHA-256を完成SBOMに照合した。
-所有者はこのconfigに限り、修正済み20組の検査DB例外を2026-12-29 09:00 JSTまで承認した。DB反映で検出が消えた項目は削除する。
-未修正の12組と、ECRが検出した場合のOpenSSL `CVE-2026-121482` の受容期限は2027-02-19 09:00 JSTである。
-ECR限定の承認は最新スキャンを照合した本番環境の承認記録に残す。過去のconfigの別対象や期限へ移さない。
+日付別のスキャン結果と承認の根拠は[整理前の記録](https://github.com/pitekusu/shittim-chest/blob/d90665b0fc369b30f4960095bbb88dfa5bcc36ea/docs/15_GitHub・CI-CD詳細設計.md#4-イメージと成果物の信頼性)を参照する。
 
 ## 5. 本番配信
 
@@ -1145,13 +464,13 @@ CDKを介さず変更セットを直接実行するため、CDKメタデータ�
 Webは配信直前にZIPの署名/ハッシュと固定SyftによるSBOMハッシュを再検証する。
 CI用の`records-code-splitting.json`はbuild出力に保持してJS予算・ルート分割を検証し、公開用ZIPからだけ除外する。
 公開ポリシーと削除申請の固定2 HTMLも同じ署名済みZIPから配信し、通常入口・App Linksファイルと合わせてキャッシュ無効化と前版復元へ含める。公開HTMLの前版がない初回の復元は、認証・スクリプト・外部リンクを含まない固定の準備中HTMLへ置換する。通常入口の前版の有無によらず、公開ページではセッション照会を発生させない。既存の読込・書込権限で対応し、公開2 HTMLの削除権限は追加しない。
-公開ZIPの最上位は`index.html`だけとし、`assets/`と`.well-known/assetlinks.json`の配信、他の余分なファイルを拒否する既存のguardを維持する。
-ハッシュ付きアセットを先に配置し、`index.html`を最後に更新して`/index.html`だけを無効化する。
+公開ZIPには `index.html`、ハッシュ付き `assets/`、`.well-known/assetlinks.json`、プライバシーポリシー・削除申請のHTMLを含める。
+ハッシュ付きアセットを先に配置し、`index.html` を最後に更新する。CloudFrontでは通常入口、App Linksファイル、公開2ページの経路を無効化する。
 過去のハッシュ付きアセットは即削除しない。公開後のスモークが失敗した場合は、直前のバージョン付き
 `index.html`を戻して再無効化する。回復はLambdaエイリアス、S3オブジェクトバージョン、
 CloudFront無効化を使い、Archiveや親愛度レコードを削除しない。
 
-Lambdaのネイティブ依存はPython 3.14の`aarch64-manylinux_2_28`向けのビルド済みwheelだけをハッシュ付きで解決する。
+Lambdaのネイティブ依存は、配信先のPython minorに対応する `aarch64-manylinux_2_28` 向けのビルド済みwheelをハッシュ付きで解決する。
 x86_64の実行環境で得たPillow等のネイティブ拡張を混入させない。
 プロンプトの有効参照先の初回作成、アップロード、画像生成、親愛度リセットは配信処理では行わない。
 匿名の疎通確認では、セッションの200と`no-store`、`Set-Cookie`なし、記録一覧の401も確認する。

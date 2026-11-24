@@ -629,7 +629,7 @@ def _validate_release(directory: Path) -> None:
         "group: production-release",
         "cancel-in-progress: false",
         "runs-on: ubuntu-26.04-arm",
-        'node-version: "24.22.3"',
+        'node-version: "26.13.1"',
         'EXPECTED_REPOSITORY_ID: "1302516701"',
         ".use_immutable_subject == true",
         "ACTIONS_ID_TOKEN_REQUEST_URL",

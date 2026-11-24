@@ -24,7 +24,7 @@ env:
   SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
   SSL_CERT_DIR: /etc/ssl/certs
   DOCKER_BUILD_RECORD_RETENTION_DAYS: "30"
-  PYTHON_VERSION: "3.14.10"
+  PYTHON_VERSION: "3.15.2"
   UV_VERSION: "0.13.9"
 
 jobs:
@@ -137,10 +137,11 @@ jobs:
       - name: Configure the incident TLS trust policy
         uses: ./.github/actions/configure-tls
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: ${{ env.UV_VERSION }}
           download-from-astral-mirror: false
+          require-checksums: true
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
       - name: Verify and synchronize the lock
@@ -218,12 +219,18 @@ jobs:
       - name: Configure the incident TLS trust policy
         if: ${{ steps.scope.outputs.required == 'true' }}
         uses: ./.github/actions/configure-tls
+      - name: Install Node.js for audit tests
+        if: ${{ steps.scope.outputs.required == 'true' }}
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
       - name: Install pinned Python and uv
         if: ${{ steps.scope.outputs.required == 'true' }}
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: ${{ env.UV_VERSION }}
           download-from-astral-mirror: false
+          require-checksums: true
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
       - name: Synchronize the locked environment
@@ -297,10 +304,11 @@ jobs:
       - name: Configure the incident TLS trust policy
         uses: ./.github/actions/configure-tls
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: ${{ env.UV_VERSION }}
           download-from-astral-mirror: false
+          require-checksums: true
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
       - name: Synchronize the locked environment
@@ -431,10 +439,11 @@ jobs:
         uses: ./.github/actions/configure-tls
       - name: Install pinned Python and uv
         if: ${{ steps.scope.outputs.required == 'true' }}
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: ${{ env.UV_VERSION }}
           download-from-astral-mirror: false
+          require-checksums: true
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
       - name: Build source and wheel distributions
@@ -525,7 +534,7 @@ jobs:
         if: ${{ steps.scope.outputs.required == 'true' }}
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.22.3"
+          node-version: "26.13.1"
           cache: npm
       - name: Install locked CDK dependencies
         if: ${{ steps.scope.outputs.required == 'true' }}
@@ -998,10 +1007,11 @@ jobs:
           test "${installed_version}" = "${scout_version}"
       - name: Install pinned Python and uv for evidence verification
         if: ${{ steps.scope.outputs.required == 'true' }}
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: ${{ env.UV_VERSION }}
           download-from-astral-mirror: false
+          require-checksums: true
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
       - name: Install pinned DHI signature verification tools
@@ -1054,7 +1064,7 @@ jobs:
           }
           trap cleanup_record_container EXIT
           docker cp \
-            "${record_container}:/app/.venv/lib/python3.14/site-packages/shittim_chest-1.0.0.dist-info/RECORD" \
+            "${record_container}:/app/.venv/lib/python${PYTHON_VERSION%.*}/site-packages/shittim_chest-1.0.0.dist-info/RECORD" \
             "${RUNNER_TEMP}/application-record.csv"
           test -s "${RUNNER_TEMP}/application-record.csv"
           if grep --fixed-strings --quiet "/uv_cache.json," \
@@ -1377,10 +1387,11 @@ jobs:
       - name: Configure the incident TLS trust policy
         uses: ./.github/actions/configure-tls
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: ${{ env.UV_VERSION }}
           download-from-astral-mirror: false
+          require-checksums: true
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
       - name: Synchronize the locked environment

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from calendar import monthrange
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal
-from typing import Literal, Protocol
+from typing import Annotated, Literal, Protocol, Self
 from zoneinfo import ZoneInfo
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from shittim_records.contracts import CostPeriod
 
@@ -300,6 +303,74 @@ class StoredDailyRate:
     collected_at: datetime
 
 
+CreditUsd = Annotated[Decimal, Field(gt=0, max_digits=10, decimal_places=2)]
+
+
+class OpenAISubscriptionRenewal(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    start_date: date
+    amount_usd: CreditUsd
+
+
+class OpenAISubscriptionGrant(OpenAISubscriptionRenewal):
+    end_date: date
+
+    @model_validator(mode="after")
+    def check_window(self) -> Self:
+        if self.end_date <= self.start_date:
+            raise ValueError("grant must end after it starts")
+        return self
+
+
+class OpenAISubscription(BaseModel):
+    """Verified grants and the expected monthly renewal for the tracked project."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    grants: tuple[OpenAISubscriptionGrant, ...] = ()
+    monthly_renewal: OpenAISubscriptionRenewal | None = None
+
+    @model_validator(mode="after")
+    def check_renewal(self) -> Self:
+        if self.monthly_renewal and any(
+            grant.end_date > self.monthly_renewal.start_date for grant in self.grants
+        ):
+            raise ValueError("confirmed grants overlap the renewal schedule")
+        return self
+
+    def windows(
+        self, *, first_cost_date: date, today: date
+    ) -> tuple[tuple[OpenAISubscriptionGrant, ...], OpenAISubscriptionRenewal | None]:
+        if self.monthly_renewal is None:
+            return self.grants, None
+        schedule = self.monthly_renewal
+        anchor = schedule.start_date
+        month = max(
+            0, 12 * (first_cost_date.year - anchor.year) + first_cost_date.month - anchor.month - 1
+        )
+        start = _renewal_date(anchor, month)
+        grants = list(self.grants)
+        while start <= today:
+            month += 1
+            end = _renewal_date(anchor, month)
+            grants.append(
+                OpenAISubscriptionGrant(
+                    start_date=start, end_date=end, amount_usd=schedule.amount_usd
+                )
+            )
+            start = end
+        return tuple(grants), OpenAISubscriptionRenewal(
+            start_date=start, amount_usd=schedule.amount_usd
+        )
+
+
+def _renewal_date(anchor: date, month_offset: int) -> date:
+    year_offset, month_index = divmod(anchor.month - 1 + month_offset, 12)
+    year, month = anchor.year + year_offset, month_index + 1
+    return date(year, month, min(anchor.day, monthrange(year, month)[1]))
+
+
 @dataclass(frozen=True, slots=True)
 class CostView:
     period: CostPeriod
@@ -310,6 +381,8 @@ class CostView:
     updated_at: datetime | None
     conversion_updated_at: datetime | None
     status: Literal["partial", "final", "unavailable"]
+    openai_subscription_credit_jpy: str
+    openai_next_subscription_credit: OpenAISubscriptionRenewal | None
 
 
 def build_cost_view(
@@ -318,6 +391,7 @@ def build_cost_view(
     rates: tuple[StoredDailyRate, ...],
     period: CostPeriod,
     now: datetime,
+    openai_subscription: OpenAISubscription | None = None,
 ) -> CostView:
     """Convert USD with same-day rates or the prior rate for the in-progress JST day."""
 
@@ -337,12 +411,22 @@ def build_cost_view(
         raise CostDataInvalid("duplicate exchange rate")
     previous_day_rate = previous_day_rates[0] if previous_day_rates else None
 
+    deductions: dict[date, Decimal] = {}
+    incomplete_credit_dates: set[date] = set()
+    next_credit = None
+    if openai_subscription is not None:
+        grants, next_credit = openai_subscription.windows(
+            first_cost_date=min(all_dates, default=now.date()), today=now.date()
+        )
+        deductions, incomplete_credit_dates = _openai_deductions(costs, grants)
+
     amount_by_category = {category: Decimal(0) for category in COST_CATEGORIES}
     seen: set[tuple[date, CostCategory]] = set()
     latest_cost_timestamp: dict[CostCategory, datetime] = {}
     used_rate_timestamps: list[datetime] = []
     convertible_records = 0
     partial = end_date >= today
+    credit_jpy = Decimal(0)
     for cost in selected:
         key = (cost.cost_date, cost.category)
         if key in seen:
@@ -365,13 +449,20 @@ def build_cost_view(
         if rate is not None:
             _positive_decimal(rate.usd_jpy, field="stored exchange rate")
             used_rate_timestamps.append(_aware_utc(rate.collected_at))
-            amount_by_category[cost.category] += cost.amount_usd * rate.usd_jpy
+            amount = cost.amount_usd
+            if cost.category == "OPENAI":
+                credit = deductions.get(cost.cost_date, Decimal(0))
+                amount -= credit
+                credit_jpy += credit * rate.usd_jpy
+            amount_by_category[cost.category] += amount * rate.usd_jpy
         if cost.estimated:
             partial = True
 
     expected_dates = tuple(_dates(start_date, end_date + timedelta(days=1)))
     for expected_date in expected_dates:
-        if any((expected_date, category) not in seen for category in COST_CATEGORIES):
+        if expected_date in incomplete_credit_dates or any(
+            (expected_date, category) not in seen for category in COST_CATEGORIES
+        ):
             partial = True
 
     if not selected or convertible_records == 0:
@@ -393,7 +484,44 @@ def build_cost_view(
             max(used_rate_timestamps).astimezone(JST) if used_rate_timestamps else None
         ),
         status=status,
+        openai_subscription_credit_jpy=_jpy_string(credit_jpy),
+        openai_next_subscription_credit=next_credit,
     )
+
+
+def _openai_deductions(
+    costs: tuple[StoredDailyCost, ...], grants: tuple[OpenAISubscriptionGrant, ...]
+) -> tuple[dict[date, Decimal], set[date]]:
+    """Spend the earliest expiring credit first, including days outside the view."""
+    deductions: dict[date, Decimal] = {}
+    incomplete: set[date] = set()
+    ordered_grants = sorted(grants, key=lambda grant: grant.end_date)
+    remaining = [grant.amount_usd for grant in ordered_grants]
+    ordered_costs = sorted(
+        (cost for cost in costs if cost.category == "OPENAI"), key=lambda cost: cost.cost_date
+    )
+    previous_day: date | None = None
+    continuous_start = date.min
+    for cost in ordered_costs:
+        day = cost.cost_date
+        if day == previous_day:
+            raise CostDataInvalid("duplicate daily cost")
+        if previous_day is None or day - previous_day != timedelta(days=1):
+            continuous_start = day
+        previous_day = day
+        _nonnegative_decimal(cost.amount_usd, field="stored amount")
+        uncovered = cost.amount_usd
+        for index, grant in enumerate(ordered_grants):
+            if remaining[index] == 0 or not grant.start_date <= day < grant.end_date:
+                continue
+            if grant.start_date < continuous_start:
+                incomplete.add(day)
+                continue
+            applied = min(uncovered, remaining[index])
+            remaining[index] -= applied
+            uncovered -= applied
+        deductions[day] = cost.amount_usd - uncovered
+    return deductions, incomplete
 
 
 def period_bounds(

@@ -1,6 +1,7 @@
 import {
   QueryClient,
   QueryClientProvider,
+  noop,
   useMutation,
   useQuery,
   useQueryClient,
@@ -102,7 +103,7 @@ function AuthenticatedRoutes({
     if (!startupArchive || prefetchedArchive.current) return;
     prefetchedArchive.current = true;
     // The data request can run while the welcome screen or the route chunk is pending.
-    void client.prefetchInfiniteQuery(archiveListQuery(INITIAL_ARCHIVE_FILTERS, csrfToken));
+    void client.infiniteQuery(archiveListQuery(INITIAL_ARCHIVE_FILTERS, csrfToken)).catch(noop);
   }, [client, csrfToken, startupArchive]);
 
   const [showTransition, setShowTransition] = useState(

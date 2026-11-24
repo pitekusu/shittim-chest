@@ -779,6 +779,8 @@ function CostDashboard({
 }) {
   const apiError = costs.error instanceof RecordsApiError ? costs.error : undefined;
   const values = costs.data?.breakdown;
+  const openaiCredit = costs.data?.openaiSubscriptionCredit;
+  const nextOpenaiCredit = costs.data?.openaiNextSubscriptionCredit;
   const numericTotal = costs.data === undefined ? 0 : Number(costs.data.total);
   const graphTotal = Number.isFinite(numericTotal) && numericTotal > 0 ? numericTotal : 0;
 
@@ -875,7 +877,12 @@ function CostDashboard({
                   className={[rankingStyles.costSwatch, className].join(" ")}
                   aria-hidden="true"
                 />
-                <span>{label}</span>
+                <span>
+                  {label}
+                  {key === "openai" && openaiCredit && /[1-9]/u.test(openaiCredit) && (
+                    <small>（ChatGPT特典で約{formatJpy(openaiCredit)}を充当）</small>
+                  )}
+                </span>
                 <strong>{formatJpy(values[key])}</strong>
               </li>
             ))}
@@ -884,6 +891,13 @@ function CostDashboard({
             <p>
               概算・日本時間。Frankfurter v2の日次参照rateでUSD原価を円換算しています。
               共有固定費のRoute 53は含みません。
+              {nextOpenaiCredit && (
+                <>
+                  <br />
+                  次回のChatGPT特典付与予定は{formatCalendarDate(nextOpenaiCredit.date)}（$
+                  {nextOpenaiCredit.amountUsd}）です。
+                </>
+              )}
             </p>
             {costs.data.updatedAt && (
               <p>

@@ -188,7 +188,7 @@ export default function GalleryPage({ scope }: { readonly scope: number }) {
   const cards = useMemo(() => {
     const unique = new Map<string, GalleryCollectionCard>();
     for (const page of query.data?.pages ?? []) {
-      for (const card of page.items) if (!unique.has(card.cardId)) unique.set(card.cardId, card);
+      for (const card of page.items) unique.getOrInsert(card.cardId, card);
     }
     return [...unique.values()];
   }, [query.data]);

@@ -33,14 +33,11 @@ export function galleryCollection(
   const cardsByStudent = new Map<string, { cards: GalleryCard[]; firstAcquisitionOrder: number }>();
   // The API preserves the exact storage order, including sub-millisecond timestamps.
   for (const card of [...newestFirst].reverse()) {
-    const group = cardsByStudent.get(card.studentId);
-    if (group) group.cards.push(card);
-    else {
-      cardsByStudent.set(card.studentId, {
-        cards: [card],
-        firstAcquisitionOrder: cardsByStudent.size,
-      });
-    }
+    const group = cardsByStudent.getOrInsertComputed(card.studentId, () => ({
+      cards: [],
+      firstAcquisitionOrder: cardsByStudent.size,
+    }));
+    group.cards.push(card);
   }
   return roster.map((entry) => ({
     ...entry,

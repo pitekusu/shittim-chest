@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 from shittim_chest.adapters.aws import SsmParameterReader
 from shittim_chest.adapters.discord import create_discord_status_http_client
 from shittim_chest.adapters.dynamodb.codec import unmarshal_item
-from shittim_chest.adapters.openai.prompts import LEGACY_RUNTIME_SYSTEM_PROMPT
+lazy from shittim_chest.adapters.openai.prompts import LEGACY_RUNTIME_SYSTEM_PROMPT
 
 from shittim_records.adapters import (
     AffectionProjectionRepository,
@@ -55,12 +55,6 @@ from shittim_records.cost_adapters import (
     OpenAICostSource,
 )
 from shittim_records.costs import CostCollectionFailed, CostCollectionService
-from shittim_records.inspector_translation_adapters import (
-    AwsInspectorDescriptionSource,
-    DynamoInspectorTranslationStore,
-    InspectorTranslationConfigurationRepository,
-    OpenAIInspectorSummaryTranslator,
-)
 from shittim_records.inspector_translations import (
     InspectorTranslationService,
     InspectorTranslationUnavailable,
@@ -77,18 +71,7 @@ from shittim_records.memorial import (
     MemorialGenerationService,
     MemorialService,
 )
-from shittim_records.memorial_adapters import (
-    MEMORIAL_PARTICIPANT_REFERENCE_ASSET_KEYS,
-    DynamoMemorialRepository,
-    DynamoRecentQuestionSource,
-    MemorialConfigurationRepository,
-    MemorialSecurityConfigurationRepository,
-    OpenAIMemorialContentGenerator,
-    S3MemorialAssetStore,
-    SqsMemorialJobQueue,
-)
 from shittim_records.memorial_http import MemorialHttpController
-from shittim_records.mobile_notification_adapters import SqsMobileNotificationQueue
 from shittim_records.ogp_adapters import LambdaPreviewPreparer
 from shittim_records.projector import (
     LEGACY_AFFECTION_SCHEMA_VERSION,
@@ -104,6 +87,23 @@ from shittim_records.record_link_adapters import (
     DynamoRecordLinkNotificationStore,
 )
 from shittim_records.record_link_notifications import RecordLinkNotificationService
+lazy from shittim_records.inspector_translation_adapters import (
+    AwsInspectorDescriptionSource,
+    DynamoInspectorTranslationStore,
+    InspectorTranslationConfigurationRepository,
+    OpenAIInspectorSummaryTranslator,
+)
+lazy from shittim_records.memorial_adapters import (
+    MEMORIAL_PARTICIPANT_REFERENCE_ASSET_KEYS,
+    DynamoMemorialRepository,
+    DynamoRecentQuestionSource,
+    MemorialConfigurationRepository,
+    MemorialSecurityConfigurationRepository,
+    OpenAIMemorialContentGenerator,
+    S3MemorialAssetStore,
+    SqsMemorialJobQueue,
+)
+lazy from shittim_records.mobile_notification_adapters import SqsMobileNotificationQueue
 
 if TYPE_CHECKING:
     from shittim_records.gallery_projection import GalleryProjector

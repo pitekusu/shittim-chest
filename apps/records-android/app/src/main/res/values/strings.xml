@@ -238,6 +238,8 @@
     <string name="record_followup_replace_title">未送信の下書きがあります</string>
     <string name="record_followup_replace_message">この更問を始めると、現在の下書きと添付画像を破棄します。</string>
     <string name="record_followup_replace">下書きを破棄して更問する</string>
+    <string name="debate_replace_followup_message">新しい議論を始めると、更問の下書きと添付画像を破棄します。</string>
+    <string name="debate_replace_followup">下書きを破棄して新しい議論を始める</string>
     <string name="record_followup_parent_context">元の議論と結論</string>
     <string name="record_followup_question">追加で聞きたいこと</string>
     <string name="record_followup_parent_unavailable">元の議論を参照できなくなったため、更問を受け付けられませんでした。</string>

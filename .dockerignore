@@ -1,6 +1,6 @@
 *
 !LICENSE
-!README.md
+!PACKAGE_DESCRIPTION.md
 !pyproject.toml
 !uv.lock
 !tools/

@@ -30,7 +30,7 @@ env:
   SSL_CERT_DIR: /etc/ssl/certs
   AWS_REGION: ap-northeast-1
   COST_REGION: us-east-1
-  PYTHON_VERSION: 3.14.10
+  PYTHON_VERSION: 3.15.2
   PYTHONDONTWRITEBYTECODE: "1"
   UV_VERSION: 0.13.9
   AWS_SIGNER_NOTATION_INSTALLER_VERSION: 2.2.0-1
@@ -176,17 +176,18 @@ jobs:
           repository: ${{ github.repository }}
           run-id: ${{ steps.records_release.outputs.run_id }}
       - name: Set up uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: ${{ env.UV_VERSION }}
           download-from-astral-mirror: false
+          require-checksums: true
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.22.3"
+          node-version: "26.13.1"
           cache: npm
       - name: Install locked test environments
         run: |
@@ -805,7 +806,7 @@ jobs:
           trap 'docker rm -f "${container}" >/dev/null 2>&1 || true' EXIT
           mkdir "${RUNNER_TEMP}/lambda-bundle"
           docker cp \
-            "${container}:/app/.venv/lib/python3.14/site-packages/." \
+            "${container}:/app/.venv/lib/python${PYTHON_VERSION%.*}/site-packages/." \
             "${RUNNER_TEMP}/lambda-bundle/"
           find "${RUNNER_TEMP}/lambda-bundle" -exec touch -d '1980-01-01T00:00:00Z' {} +
           (
@@ -1144,10 +1145,11 @@ jobs:
       - name: Configure the incident TLS trust policy
         uses: ./.github/actions/configure-tls
       - name: Set up uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: ${{ env.UV_VERSION }}
           download-from-astral-mirror: false
+          require-checksums: true
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock

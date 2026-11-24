@@ -984,6 +984,16 @@ export class RecordsApplicationStack extends Stack {
           resources: [sessionTable.tableArn],
         }),
         new iam.PolicyStatement({
+          actions: ["dynamodb:GetItem"],
+          resources: [statisticsTable.tableArn],
+          conditions: {
+            "ForAllValues:StringEquals": {
+              "dynamodb:LeadingKeys": ["COST#OPENAI_SUBSCRIPTION"],
+            },
+            Null: { "dynamodb:LeadingKeys": "false" },
+          },
+        }),
+        new iam.PolicyStatement({
           actions: ["dynamodb:GetItem", "dynamodb:Query"],
           resources: [statisticsTable.tableArn],
           conditions: {
@@ -2581,7 +2591,7 @@ export class RecordsApplicationStack extends Stack {
     return new lambda.Function(this, options.id, {
       functionName: options.functionName,
       architecture: lambda.Architecture.ARM_64,
-      runtime: lambda.Runtime.PYTHON_3_14,
+      runtime: lambda.Runtime.PYTHON_3_15,
       handler: options.handler,
       code: options.code,
       memorySize: options.memorySize ?? 512,
@@ -2744,10 +2754,10 @@ export class RecordsApplicationStack extends Stack {
         ],
       }),
     );
-    const function_ = new lambda.Function(this, options.id, {
+    return new lambda.Function(this, options.id, {
       functionName: options.functionName,
       architecture: lambda.Architecture.ARM_64,
-      runtime: lambda.Runtime.PYTHON_3_14,
+      runtime: lambda.Runtime.PYTHON_3_15,
       handler: options.handler,
       code: options.code,
       memorySize: 512,
@@ -2773,6 +2783,5 @@ export class RecordsApplicationStack extends Stack {
       },
       loggingFormat: lambda.LoggingFormat.JSON,
     });
-    return function_;
   }
 }

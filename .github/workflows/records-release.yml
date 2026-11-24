@@ -25,8 +25,8 @@ env:
   SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
   SSL_CERT_DIR: /etc/ssl/certs
   AWS_REGION: ap-northeast-1
-  NODE_VERSION: "24.22.3"
-  PYTHON_VERSION: "3.14.10"
+  NODE_VERSION: "26.13.1"
+  PYTHON_VERSION: "3.15.2"
   UV_VERSION: "0.13.9"
 
 jobs:
@@ -98,10 +98,11 @@ jobs:
             --event workflow_dispatch --status success --json headSha,conclusion \
             | jq --exit-status --arg sha "${GITHUB_SHA}" 'any(.[]; .headSha == $sha and .conclusion == "success")'
       - name: Install pinned Python and uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: ${{ env.UV_VERSION }}
           download-from-astral-mirror: false
+          require-checksums: true
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
           cache-dependency-glob: services/records/uv.lock
@@ -677,10 +678,11 @@ jobs:
           name: ${{ needs.plan.outputs.artifact_name }}
           path: ${{ runner.temp }}/records-evidence
       - name: Install pinned Python and uv for evidence validation
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
           version: ${{ env.UV_VERSION }}
           download-from-astral-mirror: false
+          require-checksums: true
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
           cache-dependency-glob: services/records/uv.lock

@@ -327,6 +327,76 @@ def test_unconfirmed_source_remains_unsuppressed(tmp_path: Path, source: str | N
     assert result["statements"] == []
 
 
+@pytest.mark.parametrize(
+    ("source_version", "upstream", "duplicate", "accepted"),
+    [
+        ("", None, "metadata-only", True),
+        ("", "openssl", "metadata-only", True),
+        ("", "other-source", "metadata-only", False),
+        (VERSION, None, "metadata-only", False),
+        ("", None, "separate-component", True),
+        ("", None, "same-files-same-code", False),
+        ("", None, "same-files-other-code", False),
+    ],
+)
+def test_self_source_debian_binary_requires_one_exact_signed_match(
+    tmp_path: Path,
+    source_version: str,
+    upstream: str | None,
+    duplicate: str,
+    accepted: bool,
+) -> None:
+    values = evidence()
+    signed = values[0]["predicate"]
+    vendor_packages = signed["packages"]
+    duplicate_package = vendor_packages[1]
+    duplicate_relationship = signed["relationships"][-1]
+    if duplicate == "metadata-only":
+        duplicate_package["filesAnalyzed"] = False
+        del duplicate_package["packageVerificationCode"]
+        signed["relationships"].remove(duplicate_relationship)
+    elif duplicate == "separate-component":
+        duplicate_package["packageVerificationCode"]["packageVerificationCodeValue"] = "f" * 40
+        duplicate_relationship["relatedSpdxElement"] = "SPDXRef-SeparateFile"
+        signed["files"].append(
+            {
+                "SPDXID": "SPDXRef-SeparateFile",
+                "fileName": "/usr/lib/libssl.so.3",
+                "checksums": [{"algorithm": "SHA256", "checksumValue": "e" * 64}],
+            }
+        )
+    elif duplicate == "same-files-other-code":
+        duplicate_package["packageVerificationCode"]["packageVerificationCodeValue"] = "f" * 40
+    for signed_package in vendor_packages:
+        reference = signed_package["externalRefs"][0]
+        reference["referenceLocator"] = reference["referenceLocator"].replace(
+            signed_package["name"], "openssl"
+        )
+        signed_package["name"] = "openssl"
+    values[1]["predicate"]["statements"][0]["products"] = [
+        {"@id": vendor_packages[1]["externalRefs"][0]["referenceLocator"]}
+    ]
+    native_purl = BINARY_PURL.replace("libncursesw6", "openssl").removesuffix("&upstream=ncurses")
+    if upstream is not None:
+        native_purl = f"{native_purl}&upstream={upstream}"
+    native_package = values[3]["packages"][0]
+    native_package["name"] = "openssl"
+    native_package["externalRefs"][0]["referenceLocator"] = native_purl
+    for inventory in (values[2], values[5]):
+        artifact = inventory["artifacts"][0]
+        artifact.update(name="openssl", purl=native_purl)
+        artifact["metadata"].update(package="openssl", source="", sourceVersion=source_version)
+
+    result, report = run(tmp_path, values)
+    if accepted:
+        assert result["statements"][0]["products"] == [{"@id": native_purl}]
+        assert report["mappings"][0]["source_name"] == "openssl"
+        assert report["mappings"][0]["source_version"] == VERSION
+    else:
+        assert result["statements"] == []
+        assert report["mappings"] == []
+
+
 @pytest.mark.parametrize("status", ["affected", "fixed", "under_investigation", "unknown"])
 def test_other_vendor_status_is_never_derived(tmp_path: Path, status: str) -> None:
     values = evidence()

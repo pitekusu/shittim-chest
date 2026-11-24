@@ -14,7 +14,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-internal enum class FollowUpDraft { Ready, Conflict, Blocked }
+internal enum class DebateDraftPreparation { Ready, Conflict, Blocked }
 
 internal class DebateSubmissionState(val workspace: DebateWorkspace? = null,
   val busy: Boolean = false, val saving: Boolean = false, val failure: DebateFailure? = null,
@@ -337,33 +337,35 @@ internal class DebateSubmissionModel(
       lookup(resendIfMissing = true)
   }
 
-  fun prepareFollowUp(parentRecordId: String, replaceDraft: Boolean = false): FollowUpDraft {
+  fun prepareDraft(parentRecordId: String?, replaceDraft: Boolean = false): DebateDraftPreparation {
     val current = mutable.value
-    val value = current.workspace ?: return FollowUpDraft.Blocked
-    if (!authorized() || current.busy || sendFollowUp == null || !mobileOpaqueValue.matches(parentRecordId))
-      return FollowUpDraft.Blocked
+    val value = current.workspace ?: return DebateDraftPreparation.Blocked
+    if (!authorized() || current.busy ||
+      (parentRecordId != null && (sendFollowUp == null || !mobileOpaqueValue.matches(parentRecordId))))
+      return DebateDraftPreparation.Blocked
     if (value.requestId != null &&
       (value.receipt?.terminal != true || value.pendingControl?.requestId == value.requestId))
-      return FollowUpDraft.Blocked
+      return DebateDraftPreparation.Blocked
     if (value.requestId == null) {
-      if (value.parentRecordId == parentRecordId) return FollowUpDraft.Ready
+      if (value.parentRecordId == parentRecordId) return DebateDraftPreparation.Ready
       if (!replaceDraft && (value.draft.isNotEmpty() || value.attachments.isNotEmpty()))
-        return FollowUpDraft.Conflict
+        return DebateDraftPreparation.Conflict
     }
-    autosave?.cancel()
-    val draft = DebateWorkspace(pendingControl = value.pendingControl, parentRecordId = parentRecordId)
-    mutable.value = DebateSubmissionState(draft, saving = true)
-    autosave = viewModelScope.launch { if (persistEdit(draft)) loadPreviews(draft) }
-    return FollowUpDraft.Ready
+    replaceWorkspace(DebateWorkspace(pendingControl = value.pendingControl, parentRecordId = parentRecordId))
+    return DebateDraftPreparation.Ready
   }
 
   fun newDraft(): Boolean {
     val value = mutable.value.workspace ?: return false
     if (!authorized() || mutable.value.busy || value.receipt?.terminal != true) return false
-    val draft = DebateWorkspace(pendingControl = value.pendingControl)
-    mutable.value = DebateSubmissionState(draft, saving = true)
-    viewModelScope.launch { if (persistEdit(draft)) loadPreviews(draft) }
+    replaceWorkspace(DebateWorkspace(pendingControl = value.pendingControl))
     return true
+  }
+
+  private fun replaceWorkspace(draft: DebateWorkspace) {
+    autosave?.cancel()
+    mutable.value = DebateSubmissionState(draft, saving = true)
+    autosave = viewModelScope.launch { if (persistEdit(draft)) loadPreviews(draft) }
   }
 
   fun publishedRecordId(id: String): String? {

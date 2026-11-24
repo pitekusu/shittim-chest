@@ -1548,6 +1548,47 @@ test("authenticated member can review responsive rankings", async ({ page }) => 
   }
 });
 
+test("shows applied and upcoming ChatGPT credits in the selected period's costs", async ({
+  page,
+}) => {
+  await mockAuthenticatedApi(page);
+  await page.route("**/api/v1/insights/costs?*", (route) => {
+    const params = new URL(route.request().url()).searchParams;
+    const period = params.get("period");
+    expect(params.get("contract")).toBe("subscription-credits-v1");
+    if (period === "today") {
+      return route.fulfill({
+        json: {
+          ...costs,
+          period,
+          startDate: costs.endDate,
+          total: "88.456789",
+          breakdown: { ...costs.breakdown, openai: "65.000000" },
+          openaiSubscriptionCredit: "35.000001",
+          openaiNextSubscriptionCredit: { date: "2026-09-01", amountUsd: "29.00" },
+        },
+      });
+    }
+    return route.fulfill({ json: { ...costs, period, openaiSubscriptionCredit: "0.000000" } });
+  });
+  await page.goto("/insights");
+
+  const dashboard = page.getByRole("region", { name: "概算費用" });
+  const openaiRow = dashboard.getByRole("listitem").filter({ hasText: "OpenAI" });
+  await expect(openaiRow.getByText("¥100")).toBeVisible();
+  await expect(dashboard.getByText(/ChatGPT特典/)).toHaveCount(0);
+
+  await dashboard.getByText("今日", { exact: true }).click();
+  await expect(dashboard.getByRole("radio", { name: "今日" })).toBeChecked();
+
+  await expect(openaiRow.getByText("¥65")).toBeVisible();
+  await expect(openaiRow.getByText("（ChatGPT特典で約¥36を充当）")).toBeVisible();
+  await expect(dashboard.getByText("¥89", { exact: true })).toBeVisible();
+  await expect(
+    dashboard.getByText(/次回のChatGPT特典付与予定は2026年9月1日（\$29\.00）/),
+  ).toBeVisible();
+});
+
 test("expands all affection ranks together, keeps cached pages and leaves lower requests visible", async ({
   page,
 }, testInfo) => {

@@ -523,7 +523,7 @@ describe("RecordsApplicationStack", () => {
         },
         FunctionName: functionName,
         MemorySize: functionName.endsWith("-worker") || functionName.endsWith("-mobile-debate-api") ? 1024 : 512,
-        Runtime: "python3.14",
+        Runtime: "python3.15",
       });
     }
   });
@@ -642,7 +642,7 @@ describe("RecordsApplicationStack", () => {
       Handler: "shittim_records.lambda_handlers.ranking_handler",
       MemorySize: 512,
       ReservedConcurrentExecutions: 1,
-      Runtime: "python3.14",
+      Runtime: "python3.15",
       Timeout: 60,
       Environment: {
         Variables: {
@@ -683,7 +683,7 @@ describe("RecordsApplicationStack", () => {
       Handler: "shittim_records.lambda_handlers.cost_handler",
       MemorySize: 512,
       ReservedConcurrentExecutions: 1,
-      Runtime: "python3.14",
+      Runtime: "python3.15",
       Timeout: 300,
       Environment: {
         Variables: {
@@ -733,7 +733,7 @@ describe("RecordsApplicationStack", () => {
       Handler: "shittim_records.lambda_handlers.inspector_translation_handler",
       MemorySize: 512,
       ReservedConcurrentExecutions: 1,
-      Runtime: "python3.14",
+      Runtime: "python3.15",
       Timeout: 300,
       Environment: {
         Variables: {
@@ -771,7 +771,7 @@ describe("RecordsApplicationStack", () => {
       Handler: "shittim_records.lambda_handlers.memorial_api_handler",
       MemorySize: 512,
       ReservedConcurrentExecutions: 2,
-      Runtime: "python3.14",
+      Runtime: "python3.15",
       Timeout: 15,
       Environment: {
         Variables: {
@@ -794,7 +794,7 @@ describe("RecordsApplicationStack", () => {
       Handler: "shittim_records.lambda_handlers.memorial_worker_handler",
       MemorySize: 1024,
       ReservedConcurrentExecutions: 1,
-      Runtime: "python3.14",
+      Runtime: "python3.15",
       Timeout: 300,
       Environment: {
         Variables: {
@@ -1125,7 +1125,7 @@ describe("RecordsApplicationStack", () => {
       Handler: "shittim_records.lambda_handlers.admin_config_handler",
       MemorySize: 512,
       ReservedConcurrentExecutions: 2,
-      Runtime: "python3.14",
+      Runtime: "python3.15",
       Timeout: 15,
       Environment: {
         Variables: {

@@ -51,12 +51,15 @@ for (const [index, entry] of exceptions.entries()) {
     console.error(`npm audit exception ${index} had invalid severity; refusing to pass`);
     process.exit(1);
   }
-  const expiry = new Date(`${entry.expires}T00:00:00.000Z`);
-  if (
-    !/^\d{4}-\d{2}-\d{2}$/.test(entry.expires) ||
-    Number.isNaN(expiry.valueOf()) ||
-    expiry.toISOString().slice(0, 10) !== entry.expires
-  ) {
+  let expiry;
+  try {
+    expiry = /^\d{4}-\d{2}-\d{2}$/.test(entry.expires)
+      ? Temporal.PlainDate.from(entry.expires)
+      : null;
+  } catch {
+    expiry = null;
+  }
+  if (expiry === null) {
     console.error(`npm audit exception ${index} had invalid expires; refusing to pass`);
     process.exit(1);
   }
@@ -64,7 +67,7 @@ for (const [index, entry] of exceptions.entries()) {
     console.error(`npm audit exception ${entry.id} was duplicated; refusing to pass`);
     process.exit(1);
   }
-  allowed.set(entry.id, entry);
+  allowed.set(entry.id, { ...entry, expires: expiry });
 }
 
 let input = "";
@@ -89,7 +92,7 @@ process.stdin.on("end", () => {
     console.error("npm audit report was incomplete or reported an error; refusing to pass");
     process.exit(1);
   }
-  const today = new Date().toISOString().slice(0, 10);
+  const today = Temporal.Now.plainDateISO("UTC");
   const failures = [];
   const referencedExceptions = new Set();
   const advisories = [];
@@ -196,7 +199,7 @@ process.stdin.on("end", () => {
       failures.push(
         `${name}: ${id} exception severity ${exception.severity} did not match ${advisory.severity}`,
       );
-    } else if (exception.expires <= today) {
+    } else if (Temporal.PlainDate.compare(exception.expires, today) <= 0) {
       referencedExceptions.add(id);
       failures.push(`${name}: ${id} exception expired on ${exception.expires}`);
     } else {
