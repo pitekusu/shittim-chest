@@ -364,6 +364,7 @@ async def test_render_uses_costume_image_and_selected_performer_expression(
 
     edit.assert_awaited_once()
     payload = edit.call_args.kwargs
+    assert payload["extra_body"] == {"moderation": "low"}
     portrait_type = "png" if is_arona else "webp"
     assert payload["image"] == [
         (f"performer.{portrait_type}", portrait, f"image/{portrait_type}"),
@@ -373,14 +374,16 @@ async def test_render_uses_costume_image_and_selected_performer_expression(
     prompt = payload["prompt"]
     assert "Image 3 is the exact outfit variant" in prompt
     assert "the sole wardrobe reference" in prompt
+    assert "Dress\nthe character in the exact costume design shown in image 3" in prompt
     assert "Keep the costume from image 3 visible in every frame" in prompt
     assert "For every performer, put any clearly visible wearable costume headwear" in prompt
     assert "from image 3 on their\nhead" in prompt
     assert "hat, cap, beret, hood worn up, or a headband with costume ears" in prompt
     assert "A hood worn down stays down" in prompt
     assert "Never copy anatomical ears or invent headwear" in prompt
-    assert "gaze direction, eye shape and color" in prompt
-    assert "Show the performer from the top of the head through the upper thighs" in prompt
+    assert "facial features, gaze direction, eye shape and color" in prompt
+    assert "and hair style from image 1." in prompt
+    assert "Use a three-quarter length portrait, from the head down to the knees." in prompt
     assert "about 18% of the canvas width" in prompt
     assert "beyond the top edge" in prompt
     assert "at about x=42%" in prompt
