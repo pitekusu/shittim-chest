@@ -17,6 +17,7 @@ from shittim_chest.adapters.dynamodb.student_gacha_activity import STUDENT_GACHA
 from shittim_chest.application.ports import RepositoryConflict
 from shittim_chest.application.scale_to_zero import RuntimeState, RuntimeStatus
 from shittim_chest.application.student_gacha_models import (
+    GACHA_SEXUAL_MODERATION_BLOCKED,
     GachaExpression,
     GachaPresentation,
     StoredGachaImage,
@@ -47,6 +48,168 @@ async def _start_runtime(repository: DynamoDbRuntimeStateRepository) -> RuntimeS
     return await repository.replace(
         expected=started, updated=started.transition(RuntimeStatus.READY, at=NOW)
     )
+
+
+@pytest.mark.asyncio
+async def test_moderation_exclusion_and_award_preserve_the_original_draw(
+    dynamodb_client: DynamoDBClient,
+    dynamodb_table: str,
+    runtime_repository: DynamoDbRuntimeStateRepository,
+) -> None:
+    repository = DynamoDbStudentGachaRepository(client=dynamodb_client, table_name=dynamodb_table)
+    other_worker = DynamoDbStudentGachaRepository(client=dynamodb_client, table_name=dynamodb_table)
+    await _start_runtime(runtime_repository)
+    blocked = Student("生徒(水着)", "トリニティ", rarity=3)
+    performer = ParticipantSlot.PARTICIPANT_A
+    expression = GachaExpression.NEUTRAL
+
+    async def submit_open_offer(label: str, *, offer_id: str, owner: str, requester: str) -> None:
+        items: tuple[DynamoItem, ...] = (
+            {
+                "PK": f"DEBATE#{label}",
+                "SK": "META",
+                "record_type": "debate_meta",
+                "requester_id": requester,
+            },
+            {
+                "PK": f"GACHA#OWNER#{owner}",
+                "SK": "STATE",
+                "active_offer_id": offer_id,
+                "count": 0,
+                "generation": 1,
+                "version": 0,
+            },
+            {
+                "PK": f"GACHA#OFFER#{offer_id}",
+                "SK": "META",
+                "owner_key": owner,
+                "debate_id": label,
+                "guild_id": "1",
+                "channel_id": "2",
+                "message_id": "3",
+                "state": "open",
+                "version": 0,
+                "student": {"name": blocked.name, "school": blocked.school, "rarity": 3},
+                "performer": performer.value,
+                "expression": expression.value,
+            },
+        )
+        for item in items:
+            dynamodb_client.put_item(TableName=dynamodb_table, Item=marshal_item(item))
+        assert await repository.submit(
+            offer_id=offer_id,
+            guild_id="1",
+            channel_id="2",
+            requester_id=requester,
+            message_id="3",
+            interaction_id=label,
+            teacher_name="先生",
+            at=NOW,
+        )
+
+    offer_id = "a" * 32
+    await submit_open_offer("first", offer_id=offer_id, owner=OWNER, requester="4")
+    draw = await repository.claim_next(claim_owner=RUNTIME_OWNER, at=NOW)
+    assert draw is not None and draw.student == blocked
+    presentation = GachaPresentation(
+        blocked, performer, "帽子", "部活", "STRIKER", "SR", ("{teacher}先生!", "一", "二")
+    )
+    paid = await repository.checkpoint(
+        draw,
+        replace(draw, paid_started=True, presentation=presentation, loading_message_id="5"),
+        at=NOW,
+    )
+
+    legacy_offer_id = "b" * 32
+    await submit_open_offer("second", offer_id=legacy_offer_id, owner="other-owner", requester="6")
+    legacy = await other_worker.claim_next(claim_owner=RUNTIME_OWNER, at=NOW)
+    assert legacy is not None and legacy.offer_id == legacy_offer_id and legacy.student == blocked
+
+    # A rejected compare-and-swap cannot add an exclusion on its own.
+    current = await repository.checkpoint(paid, paid, at=NOW)
+    with pytest.raises(RepositoryConflict):
+        await repository.checkpoint(
+            paid, replace(paid, failure_code=GACHA_SEXUAL_MODERATION_BLOCKED), at=NOW
+        )
+    assert await other_worker.excluded_costumes() == frozenset()
+    moderated = await repository.checkpoint(
+        current, replace(current, failure_code=GACHA_SEXUAL_MODERATION_BLOCKED), at=NOW
+    )
+    assert await other_worker.excluded_costumes() == {blocked.name}
+    with pytest.raises(RepositoryConflict):
+        await other_worker.checkpoint(legacy, replace(legacy, paid_started=True), at=NOW)
+    with pytest.raises(ValueError, match="no uncertain result"):
+        await repository.reroll(current, at=NOW)
+
+    await repository.finish(moderated, at=NOW, park=True)
+    assert await repository.resume_parked(offer_id, at=NOW)
+    moderated = await repository.claim_next(claim_owner=RUNTIME_OWNER, at=NOW)
+    assert moderated is not None and moderated.job_id == draw.job_id
+    assert moderated.failure_code == GACHA_SEXUAL_MODERATION_BLOCKED
+    assert moderated.teacher_name == "先生"
+
+    award_id = "c" * 32
+    placeholder = StoredGachaImage(f"student-gacha/results/{award_id}.png", "placeholder", "1" * 64)
+    await repository.reroll(moderated, at=NOW, award_id=award_id, image=placeholder)
+    assert await repository.recovery_state(offer_id) == "claimed"
+    assert await repository.recovery_state(award_id) == "redeemed"
+    award_offer = dynamodb_client.get_item(
+        TableName=dynamodb_table,
+        Key=marshal_item({"PK": f"GACHA#OFFER#{award_id}", "SK": "META"}),
+        ConsistentRead=True,
+    )["Item"]
+    assert award_offer["owner_key"] == {"S": OWNER} and "result_message_id" not in award_offer
+
+    with pytest.raises(RepositoryConflict):
+        await repository.reroll(
+            moderated, at=NOW + timedelta(microseconds=1), award_id=award_id, image=placeholder
+        )
+    rerolled = await repository.claim_next(claim_owner=RUNTIME_OWNER, at=NOW)
+    assert rerolled is not None and rerolled.job_id == draw.job_id and rerolled.attempts == 1
+    assert rerolled.student is None and rerolled.presentation is None
+    assert rerolled.stored is None and rerolled.failure_code is None and not rerolled.paid_started
+    assert (rerolled.performer, rerolled.expression) == (performer, expression)
+    assert rerolled.teacher_name == "先生"
+    assert rerolled.loading_message_id is None
+    assert rerolled.loading_publication_id == f"{award_id}:loading"
+
+    later = NOW + timedelta(seconds=1)
+    await other_worker.reroll(legacy, at=later)
+    requeued = await other_worker.claim_next(claim_owner=RUNTIME_OWNER, at=later)
+    assert requeued is not None and requeued.job_id == legacy.job_id and requeued.student is None
+    await other_worker.finish(requeued, at=later, reopen=True)
+    reopened = dynamodb_client.get_item(
+        TableName=dynamodb_table,
+        Key=marshal_item({"PK": f"GACHA#OFFER#{legacy_offer_id}", "SK": "META"}),
+        ConsistentRead=True,
+    )["Item"]
+    assert "student" not in reopened and "presentation" not in reopened
+
+    replacement = Student("生徒", blocked.school, rarity=1)
+    generated = StoredGachaImage(f"student-gacha/results/{offer_id}.apng", "generated", "2" * 64)
+    successful = await repository.checkpoint(
+        rerolled,
+        replace(
+            rerolled,
+            student=replacement,
+            paid_started=True,
+            stored=generated,
+            result_message_id="7",
+            teacher_name=None,
+        ),
+        at=later,
+    )
+    await repository.finish(successful, at=later, result_message_id="7")
+    gallery = dynamodb_client.query(
+        TableName=dynamodb_table,
+        KeyConditionExpression="PK=:guild",
+        ExpressionAttributeValues=marshal_item({":guild": "GACHA#GUILD#1"}),
+        ConsistentRead=True,
+    )["Items"]
+    assert [
+        (item["offer_id"]["S"], item["student"]["M"]["name"]["S"], item["stored"]["M"]["key"]["S"])
+        for item in gallery
+    ] == [(award_id, blocked.name, placeholder.key), (offer_id, replacement.name, generated.key)]
 
 
 def _complete_first_debate(repository: DynamoDbStudentGachaRepository, *, at: datetime) -> None:
