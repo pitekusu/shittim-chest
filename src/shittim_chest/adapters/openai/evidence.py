@@ -5,13 +5,16 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
+from ipaddress import ip_address
 from time import monotonic
 from urllib.parse import urlsplit
 
+from httpx2 import URL, InvalidURL
 from openai import (
     APIConnectionError,
     APIStatusError,
@@ -88,6 +91,7 @@ class _SourceDiagnosticContext(StrEnum):
     OUTPUT_TEXT_ANNOTATION = "output_text_annotation"
     URL_CITATION_URL = "url_citation_url"
     EVIDENCE_SOURCES = "evidence_sources"
+    REQUEST_URL_NOT_CONFIRMED = "request_url_not_confirmed"
     UNEXPECTED_EXCEPTION = "unexpected_exception"
 
 
@@ -109,10 +113,17 @@ class _DiagnosticKind(StrEnum):
 
 
 _MISSING = object()
-_ROUTER_RULES_VERSION = "agentic-search-v1"
+_ROUTER_RULES_VERSION = "agentic-search-v2"
 _SEARCH_SKIPPED_REASON = "model_skipped_search"
 _SEARCH_SELECTED_REASON = "model_selected_search"
 _SEARCH_UNAVAILABLE_REASON = "agentic_search_unavailable"
+_MAX_REQUEST_URLS = 3
+_MAX_WEB_TOOL_CALLS = 4
+_REQUEST_URL_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9+./:@-])https?://[^\s<>\"'`「」『』【】、。\uFF01\uFF1F\uFF08\uFF09]+",
+    re.IGNORECASE,
+)
+_YOUTUBE_VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 
 _REALTIME_FEEDS = {
     "oai-finance": (
@@ -210,6 +221,10 @@ class OpenAIWebEvidenceService:
         started = monotonic()
         operation = "evidence_search"
         stage = _EvidenceStage.PROVIDER_RESPONSE
+        request_urls = _request_urls(question)
+        payload = debate_prompt_input(question, previous_debate)
+        if request_urls:
+            payload["request_urls"] = request_urls
         try:
             async with self.limiter.slot():
                 response = await self.client.responses.parse(
@@ -220,7 +235,7 @@ class OpenAIWebEvidenceService:
                             moderator_prompt=self.moderator_prompt,
                         ),
                         text=json.dumps(
-                            debate_prompt_input(question, previous_debate),
+                            payload,
                             ensure_ascii=False,
                             separators=(",", ":"),
                             sort_keys=True,
@@ -233,14 +248,21 @@ class OpenAIWebEvidenceService:
                     reasoning={"effort": "medium"},
                     store=False,
                     tools=[{"type": "web_search", "search_context_size": "medium"}],
-                    tool_choice="auto",
-                    max_tool_calls=4,
+                    tool_choice="required" if request_urls else "auto",
+                    max_tool_calls=_MAX_WEB_TOOL_CALLS,
                     parallel_tool_calls=False,
                     truncation="disabled",
                 )
             stage = _EvidenceStage.OUTPUT_VALIDATION
-            parsed, used_web_search = _validated_output(response)
+            parsed, used_web_search = _validated_output(
+                response, allow_failed_open=bool(request_urls)
+            )
             if not used_web_search:
+                if request_urls:
+                    raise OpenAIInvalidOutput(
+                        diagnostic_context=_SourceDiagnosticContext.REQUEST_URL_NOT_CONFIRMED.value,
+                        diagnostic_kind=_DiagnosticKind.MISSING.value,
+                    )
                 extraction = _empty_extraction()
                 self.recorder.record_usage(
                     _usage_record(operation, response, extraction, started, self.config)
@@ -269,6 +291,26 @@ class OpenAIWebEvidenceService:
                     diagnostic_context=_SourceDiagnosticContext.RESPONSE_OUTPUT.value,
                     diagnostic_kind=_DiagnosticKind.EMPTY_STRING.value,
                 )
+            routing_reason = _SEARCH_SELECTED_REASON
+            if request_urls:
+                requested = {_page_key(url) for url in request_urls}
+                unconfirmed = requested - _opened_and_cited_pages(response, extraction.items)
+                if unconfirmed == requested:
+                    raise OpenAIInvalidOutput(
+                        diagnostic_context=_SourceDiagnosticContext.REQUEST_URL_NOT_CONFIRMED.value,
+                        diagnostic_kind=_DiagnosticKind.MISSING.value,
+                    )
+                routing_reason = "request_url_opened"
+                if unconfirmed:
+                    routing_reason = "request_url_partially_opened"
+                    extraction = replace(
+                        extraction,
+                        items=tuple(
+                            item
+                            for item in extraction.items
+                            if _page_key(item.source_url) not in unconfirmed
+                        ),
+                    )
             stage = _EvidenceStage.BUNDLE_VALIDATION
             try:
                 bundle = EvidenceBundle(
@@ -278,7 +320,7 @@ class OpenAIWebEvidenceService:
                     search_status=EvidenceSearchStatus.COMPLETED,
                     search_response_id=response.id,
                     router_rules_version=_ROUTER_RULES_VERSION,
-                    routing_reason=_SEARCH_SELECTED_REASON,
+                    routing_reason=routing_reason,
                 )
             except ValueError as error:
                 raise OpenAIInvalidOutput() from error
@@ -361,6 +403,8 @@ def _stage_operation(operation: str, stage: _EvidenceStage) -> str:
 
 def _validated_output(
     response: ParsedResponse[EvidenceDigestOutputV2],
+    *,
+    allow_failed_open: bool,
 ) -> tuple[EvidenceDigestOutputV2, bool]:
     if response.status != "completed":
         reason = response.status
@@ -387,6 +431,8 @@ def _validated_output(
         if isinstance(output, ResponseFunctionWebSearch):
             used_web_search = True
             if output.status != "completed":
+                if allow_failed_open and isinstance(output.action, ActionOpenPage):
+                    continue
                 raise OpenAIIncompleteResponse(
                     diagnostic_context="web_search_status",
                     diagnostic_kind=output.status,
@@ -421,6 +467,87 @@ def _validated_output(
     if response.output_parsed is None:
         raise OpenAIInvalidOutput()
     return response.output_parsed, used_web_search
+
+
+def _request_urls(question: str) -> tuple[str, ...]:
+    urls: dict[str, str] = {}
+    for match in _REQUEST_URL_PATTERN.finditer(question):
+        prefix = question[max(0, match.start() - 2) : match.start()]
+        candidate = _strip_link_delimiters(match.group(), enclosed=prefix.endswith(("<", "](")))
+        key = _page_key(candidate)
+        if key is None:
+            continue
+        urls.setdefault(key, candidate)
+        if len(urls) == _MAX_REQUEST_URLS:
+            break
+    return tuple(urls.values())
+
+
+def _strip_link_delimiters(candidate: str, *, enclosed: bool) -> str:
+    closing: list[str] = []
+    for index, character in enumerate(candidate):
+        if character in "([":
+            closing.append(")" if character == "(" else "]")
+        elif character in ")]" and (not closing or closing.pop() != character):
+            candidate = candidate[:index]
+            break
+    return candidate if enclosed else candidate.rstrip(".,;!?")
+
+
+def _page_key(value: str) -> str | None:
+    try:
+        url = URL(value)
+    except InvalidURL, ValueError:
+        return None
+    host = url.raw_host.decode("ascii").rstrip(".")
+    if (
+        url.scheme not in {"http", "https"}
+        or not host
+        or url.userinfo
+        or (url.port is not None and not 0 < url.port <= 65_535)
+    ):
+        return None
+    try:
+        address = ip_address(host)
+    except ValueError:
+        if (
+            "." not in host
+            or not host.rpartition(".")[2][:1].isalpha()
+            or host.endswith((".localhost", ".local", ".internal", ".home.arpa"))
+        ):
+            return None
+    else:
+        if not address.is_global or address.is_multicast:
+            return None
+
+    # YouTube can cite its canonical watch URL for a short/share link to the same video.
+    video_id = None
+    if host == "youtu.be":
+        video_id = url.path.removeprefix("/")
+    elif host in {"youtube.com", "www.youtube.com", "m.youtube.com"}:
+        if url.path == "/watch":
+            video_id = url.params.get("v")
+        elif url.path.startswith(("/shorts/", "/live/")):
+            video_id = url.path.split("/")[2]
+    if video_id and _YOUTUBE_VIDEO_ID.fullmatch(video_id):
+        return f"youtube:{video_id}"
+    return str(url.copy_with(fragment=None))
+
+
+def _opened_and_cited_pages(
+    response: ParsedResponse[EvidenceDigestOutputV2],
+    items: tuple[EvidenceItem, ...],
+) -> set[str | None]:
+    opened = {
+        _page_key(output.action.url)
+        for output in response.output
+        if isinstance(output, ResponseFunctionWebSearch)
+        and output.status == "completed"
+        and isinstance(output.action, ActionOpenPage)
+        and output.action.url
+    }
+    cited = {_page_key(item.source_url) for item in items}
+    return opened & cited
 
 
 def _empty_extraction() -> _SourceExtraction:
