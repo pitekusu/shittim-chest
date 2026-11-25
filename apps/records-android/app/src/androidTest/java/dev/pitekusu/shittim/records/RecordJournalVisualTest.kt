@@ -190,7 +190,13 @@ class RecordJournalVisualTest {
     val localAvatar = compose.activity.resources.openRawResource(R.drawable.participant_b).use {
       RecordAvatar(null, "cyan", bytes = it.readBytes())
     }
-    val entries = journalSamples(localAvatar)
+    val entries = listOf(RecordListEntry("f".repeat(43),
+      "雨の日に家で楽しめる読書の工夫も教えてください。",
+      "架空の読書好き", localAvatar, Instant.parse("2026-10-02T15:01:00Z"), "アロナ", "participant-a",
+      parentRecordId = "p".repeat(43),
+      parentQuestionPreview = "雨の日に家で静かに過ごす方法を考えています。図書館で借りた本が何冊かありますが、" +
+        "普段は途中で集中が切れてしまいます。好きなお茶を用意したり、短い章から始めたりするほかに、" +
+        "気分を切り替えて読書を楽しめる工夫はありますか。")) + journalSamples(localAvatar)
     val records = RecordListState.Ready.fromSaved(entries)
     compose.activityRule.scenario.onActivity { it.setContent {
       DeviceConfigurationOverride(DeviceConfigurationOverride.WindowSize(window.value) then
@@ -208,6 +214,8 @@ class RecordJournalVisualTest {
       capture("journal-${if (mode) "dark" else "light"}")
     }
     compose.runOnIdle { window.value = DpSize(320.dp, 800.dp); scale.value = 2f }
+    compose.onNodeWithTag("bootstrap-content")
+      .performScrollToNode(hasTestTag("journal-parent-${entries.first().recordId}"))
     capture("journal-320dp-2x")
     compose.runOnIdle {
       window.value = DpSize(1000.dp, 700.dp)
