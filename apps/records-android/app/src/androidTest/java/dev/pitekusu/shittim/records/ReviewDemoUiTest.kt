@@ -73,7 +73,7 @@ class ReviewDemoUiTest {
     compose.onNodeWithTag("debate-submit").performScrollTo().assertIsNotEnabled()
   }
 
-  @Test fun floatingActionOpensAnEditableDraftAfterPublication() {
+  @Test fun menuAndFloatingActionOpenTheSameDraftAfterPublication() {
     enter()
     val publishedQuestion = "架空の相談：公園の花壇を手入れする順番を考えてください。"
     compose.onNodeWithTag("debate-compose-open").performClick()
@@ -83,7 +83,10 @@ class ReviewDemoUiTest {
     compose.waitUntil(20_000) { compose.onAllNodesWithTag("debate-open-result").fetchSemanticsNodes().isNotEmpty() }
 
     back()
-    compose.onNodeWithTag("debate-compose-open").performClick()
+    compose.onNodeWithTag("bootstrap-content").performScrollToNode(hasText(publishedQuestion))
+    compose.onNodeWithText(publishedQuestion).assertIsDisplayed()
+    compose.onNodeWithTag("records-menu-open").performClick()
+    compose.onNodeWithTag("menu-debate-compose-open").performClick()
     compose.waitUntil(10_000) { compose.onAllNodesWithTag("debate-question").fetchSemanticsNodes().isNotEmpty() }
     compose.onNodeWithTag("debate-status").assertDoesNotExist()
     compose.onNodeWithTag("debate-submit").performScrollTo().assertIsNotEnabled()
@@ -91,11 +94,10 @@ class ReviewDemoUiTest {
     compose.onNodeWithTag("debate-question").performScrollTo().performTextInput(nextQuestion)
     compose.onNodeWithTag("debate-question").assertTextContains(nextQuestion)
 
-    compose.onNodeWithTag("records-menu-open").performClick()
-    compose.onNodeWithTag("debate-requests-open").performScrollTo().performClick()
-    compose.waitUntil(10_000) { compose.onAllNodesWithTag("debate-requests").fetchSemanticsNodes().isNotEmpty() }
-    compose.waitUntil(10_000) { compose.onAllNodesWithText(publishedQuestion).fetchSemanticsNodes().isNotEmpty() }
-    compose.onNodeWithText(publishedQuestion).assertIsDisplayed()
+    back()
+    compose.onNodeWithTag("debate-compose-open").performClick()
+    compose.waitUntil(10_000) { compose.onAllNodesWithTag("debate-question").fetchSemanticsNodes().isNotEmpty() }
+    compose.onNodeWithTag("debate-question").assertTextContains(nextQuestion)
   }
 
   @Test fun draftSurvivesRecreationAndResetExitReturnToReusableEntry() {
@@ -127,6 +129,7 @@ class ReviewDemoUiTest {
     compose.onNodeWithText(question).performScrollTo().performClick()
     compose.waitUntil(10_000) { compose.onAllNodesWithTag("detail-question-open").fetchSemanticsNodes().isNotEmpty() }
     compose.onNodeWithTag("records-menu-open").performClick()
+    compose.onNodeWithTag("menu-debate-compose-open").assertDoesNotExist()
     compose.onNodeWithTag("insights-open").performScrollTo().performClick()
     compose.waitUntil(10_000) { compose.onAllNodesWithTag("insights-screen").fetchSemanticsNodes().isNotEmpty() }
     compose.onNodeWithTag("insights-tab-Affection").assertIsSelected()

@@ -134,7 +134,6 @@ internal data object BootstrapScreen : Screen {
     data object ShowStudentCollection : Event
     data object ShowMomotalk : Event
     data class MomotalkAction(val action: MomotalkEvent) : Event
-    data object ShowDebateRequests : Event
     data class OpenDebateRequest(val requestId: String) : Event
     data object LoadMoreDebateRequests : Event
     data object RefreshDebateRequests : Event
@@ -974,10 +973,6 @@ internal class BootstrapPresenter private constructor(
           stackOwner == cacheAccountId && backStack.lastOrNull() == Insights) {
           if (event.action == InsightsEvent.Back) backStack.removeLastOrNull()
           else insightsModel?.event(event.action)
-        }
-        BootstrapScreen.Event.ShowDebateRequests -> if (cacheAccountId != null && runtime.isActive(cacheAccountId)) {
-          val show = { backStack.closeRecord(); backStack.add(DebateRequests); Unit }
-          if (backStack.lastOrNull() == DebateCompose) debateModel?.flush(show) else show()
         }
         is BootstrapScreen.Event.OpenDebateRequest -> if (
           cacheAccountId != null && runtime.isActive(cacheAccountId) && stackOwner == cacheAccountId &&

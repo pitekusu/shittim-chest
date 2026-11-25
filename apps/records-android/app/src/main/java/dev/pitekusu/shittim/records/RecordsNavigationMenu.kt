@@ -70,9 +70,9 @@ internal fun RecordsNavigationMenu(state: BootstrapScreen.State, onDismiss: () -
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).testTag("records-menu-content")
       .padding(horizontal = ShittimSpacing.Medium, vertical = ShittimSpacing.Small),
       verticalArrangement = Arrangement.spacedBy(ShittimSpacing.Small)) {
-      DebateRequestsMenuItem(onClick = {
+      if (state.backStack.lastOrNull() == RecordsList) DebateComposeMenuItem(onClick = {
         onDismiss()
-        state.eventSink(BootstrapScreen.Event.ShowDebateRequests)
+        state.eventSink(BootstrapScreen.Event.ComposeDebate)
       })
       MenuItem(R.string.menu_insights, R.drawable.ic_debate_history,
         modifier = Modifier.testTag("insights-open"), onClick = {
@@ -135,25 +135,23 @@ internal fun RecordsNavigationMenu(state: BootstrapScreen.State, onDismiss: () -
 }
 
 @Composable
-private fun DebateRequestsMenuItem(onClick: () -> Unit) {
+private fun DebateComposeMenuItem(onClick: () -> Unit) {
   val colors = MaterialTheme.colorScheme
-  Surface(onClick = onClick, modifier = Modifier.fillMaxWidth().testTag("debate-requests-open"),
+  Surface(onClick = onClick, modifier = Modifier.fillMaxWidth().testTag("menu-debate-compose-open"),
     shape = MaterialTheme.shapes.large, color = colors.primaryContainer,
     contentColor = colors.onPrimaryContainer, border = BorderStroke(1.dp, colors.primary.copy(alpha = .45f))) {
     ListItem(leadingContent = {
       Surface(shape = CircleShape, color = colors.primary, contentColor = colors.onPrimary) {
-        Icon(painterResource(R.drawable.ic_debate_history), contentDescription = null,
+        Icon(painterResource(R.drawable.ic_add_debate), contentDescription = null,
           modifier = Modifier.padding(12.dp).size(28.dp))
       }
-    }, supportingContent = {
-      Text(stringResource(R.string.debate_requests_description), style = MaterialTheme.typography.bodyMedium)
     }, trailingContent = {
       Icon(painterResource(R.drawable.ic_expand_more), contentDescription = null,
         modifier = Modifier.size(24.dp).rotate(-90f))
     }, colors = ListItemDefaults.colors(containerColor = colors.primaryContainer,
-      headlineColor = colors.onPrimaryContainer, supportingColor = colors.onPrimaryContainer,
+      headlineColor = colors.onPrimaryContainer,
       trailingIconColor = colors.primary)) {
-      Text(stringResource(R.string.debate_requests), style = MaterialTheme.typography.titleLargeEmphasized)
+      Text(stringResource(R.string.menu_debate_compose), style = MaterialTheme.typography.titleLargeEmphasized)
     }
   }
 }
