@@ -320,7 +320,7 @@ API 36の架空データで[ライト](screenshots/progress-light.png)、[ダー
 ログイン画面の「デモで試す / Try demo」は、Discordアカウント・サーバー参加・審査用の資格情報を要求しない。初回審査・更新審査で同じ入口を使う。通常のDiscord OAuth／Guild認可は維持し、デモ用tokenやバックエンドの認証例外は設けない。
 
 - 通常と同じ一覧・検索・勝者／依頼者の絞り込み・並べ替え、詳細の質問全文・意見・投票／採点・結果・親愛度、画像の拡大表示を使う。初期データは6件の架空記録、3人の勝者、2人の架空依頼者と端末内で描画したサンプル画像である。
-- 「＋」から通常の入力・画像プレビュー・下書き保存・送信・依頼履歴・進捗・結果を試す。「架空のサンプル画像を追加」だけで画像付きの審査手順が完結する。同じPhoto Pickerで選んだ画像も既存validatorを使って端末内へ暗号化コピーし、外部へ送らない。
+- 一覧の「＋」またはメニューの「議論を依頼」から、通常の入力・画像プレビュー・下書き保存・送信・進捗・結果を試す。「架空のサンプル画像を追加」だけで画像付きの審査手順が完結する。同じPhoto Pickerで選んだ画像も既存validatorを使って端末内へ暗号化コピーし、外部へ送らない。
 - 進行は約10秒の端末内処理で、結果は操作確認用の定型サンプルである。入力した議題・画像をAIが分析する機能ではなく、有料生成・Discord投稿・本番の親愛度変更・S3アップロードを行わない。入力・進行・結果の画面と状態管理は通常版と共有する。
 - `StorageNamespace.DEMO`は本番とは別のDB・owner/deletion marker・Keystore alias・鍵ファイル・画像・workspace・依頼進行を使う。通常利用の保存名・形式は維持する。初期記録は同梱データから読め、デモの下書き・画像・進行は再起動後も復元する。期限・地域制限・ワンタイム認証・手動許可は設けない。
 - 通常→デモは通常ログアウトと端末内消去を先に完了する。期限切れ・再認証取消でtokenがない場合も、残った通常の記録・画像・下書きを消去してから開く。消去失敗時はデモへ進めず、再試行する。
@@ -342,7 +342,7 @@ API 36の架空データで[ライト](screenshots/progress-light.png)、[ダー
 提出予定と同じReleaseビルドを実機で確認する。受入操作は架空データだけを使用し、本番の有料生成やDiscord投稿を追加しない。
 
 1. Discord未ログイン・機内モードで「デモで試す / Try demo」を開き、一覧・検索・絞り込み・並べ替え・詳細・質問全文・サンプル画像を操作する。メニューの「いろいろな記録」から3タブ・人格別／依頼者別・依頼者ページ・費用期間と更新を操作し、架空集計として表示されることを確認する。「モモトーク」では架空の週・依頼者を選び、入力中からの会話再生・全表示・再再生と完了後の集合写真、過去閲覧中の追従停止と「会話の続きへ」、更新・戻るを確認する。背景・画像Dialogで再生が止まり、アニメーション無効・TalkBackでは全文と写真をすぐ読めることも確認する。
-2. 架空の議題とサンプル画像で送信し、依頼履歴・進捗・結果・画像を確認する。下書き中／進行中の再起動、同IDの再確認で重複が増えないことも確認する。
+2. 架空の議題とサンプル画像で送信し、進捗・結果・画像と、公開された議論が一覧に表示されることを確認する。下書き中／進行中の再起動、同IDの再確認で重複が増えないことも確認する。
 3. デモ通知のオン／オフ、OS許可／拒否、通知タップ、再起動、デモ終了後の古い通知拒否を確認する。実FCM配送の受入とは分ける。
 4. 初期化・終了・再入場と、通常ログアウト→デモ→終了→通常再ログインを確認する。期限切れ・tokenなし・保存失敗・途中cleanupと古いApp Link／認証callbackを含め、別モードの保存データを読めないことを確認する。
 5. 明暗・320dp／文字2倍・広幅・回転・Photo Pickerを確認する。任意の端末画像の取り込みも端末内で完結することを確認する。
@@ -383,15 +383,16 @@ Password: Not required for the review demo.
    and play the sample conversation in the native screen. Try "すべて表示"
    (show all) and "もう一度再生" (replay); the group selfie appears after the conversation.
    Week selection and refresh use only isolated demo data.
-3. Return to the list and tap "+" to create a demo discussion. Enter a
+3. Return to the list and tap "+" or choose "議論を依頼" from the top-right
+   menu to create a demo discussion. Enter a
    fictional question, such as "Please plan a fictional picnic."
    Tap "架空のサンプル画像を追加" to attach an in-app sample image.
    No personal photo is needed. The regular photo picker is also available;
    selected images are processed and stored only on this device in demo mode.
 4. Tap "議論を開始" to submit locally. Inspect the progress screen;
    the demo normally completes in about 10 seconds. Tap "議論の記録を読む"
-   to open the result. The top-right menu item "依頼した議論" opens request
-   history. Drafts, selected images, and request progress survive app restart.
+   to open the result. Published discussions appear in the records list.
+   Drafts, selected images, and request progress survive app restart.
 5. Optional: in the top-right menu, enable "デモの端末内通知" and allow the
    Android notification permission. Complete another demo discussion and
    tap its local completion notification to open the result.
@@ -670,12 +671,12 @@ API 36・架空データ。標準のテスト用window／font scale overrideで�
 
 ## C37：Web機能メニューとログアウト
 
-- 先頭の「依頼した議論」は、時計付きの履歴アイコン・「進行状況・結果を見る」・右向き矢印を備えた強調カードにする。標準Surface／ListItemと既存のシアン配色を使い、カード全体から依頼履歴を開く。新規作成の「＋」とは区別し、狭幅・文字拡大では折り返す。
-- 認証済みの一覧・詳細の上部にメニューを置く。「いろいろな記録」と「モモトーク」は通常・Demoともネイティブ画面へ移動する。通常版では「生徒図鑑」もネイティブ画面へ移動する。メモリアルロビーを「Webで開く」、サービス状態確認・プロンプト管理を「Webの管理機能」に分けて表示する。固定HTTPS URLを既存Custom Tabsで開き、アプリの資格情報・質問・画像は渡さず、Web側で別途ログイン・管理者認可を確認する。Demoではこの外部Web機能を非表示にし、失効した通常runtimeやDemoからの起動も拒否する。依頼履歴・公開情報・通知・表示切替・ログアウトを残し、Demoでは初期化・終了を確認付きで行う。
+- 一覧のメニュー先頭に「議論を依頼」を置く。既存のシアン配色のカードを押すと、メニューを閉じて一覧の「＋」と同じ操作を実行する。
+- 認証済みの一覧・詳細の上部にメニューを置く。「いろいろな記録」と「モモトーク」は通常・Demoともネイティブ画面へ移動する。通常版では「生徒図鑑」もネイティブ画面へ移動する。メモリアルロビーを「Webで開く」、サービス状態確認・プロンプト管理を「Webの管理機能」に分けて表示する。固定HTTPS URLを既存Custom Tabsで開き、アプリの資格情報・質問・画像は渡さず、Web側で別途ログイン・管理者認可を確認する。Demoではこの外部Web機能を非表示にし、失効した通常runtimeやDemoからの起動も拒否する。公開情報・通知・表示切替・ログアウトを残し、Demoでは初期化・終了を確認付きで行う。
 - ログアウト・自動／ライト／ダーク切替をメニューへ移し、記録一覧にあったログイン状態カードと表示切替を撤去。通信不調によるオフライン閲覧でも同じログアウト操作が可能。
 - ログイン前の常設説明文を削除。期限切れ・取消・失敗・ブラウザー不可の状態表示は残す。C35の短い完了通知は次の起動／ログイン演出PRで置き換える。
-- 架空データの画面試験で依頼履歴・通知・表示切替・ログアウト／Demo終了、通常・Demoのネイティブ集計・モモトーク導線、通常版の外部Web導線と下方の公開情報へのスクロール、DemoでのWeb機能非表示、一覧・詳細のスクロール維持を確認する。ブラウザーIntentの固定URL・アプリ資格情報の非付加、旧runtime・DemoからのWeb機能起動拒否は関連非画面試験で確認する。通常認証の実機受入とDemoだけの操作確認は区別する。
-- 依頼履歴カードのプレビュー：[ダーク](screenshots/debate-history-menu-dark.png)、[ライト](screenshots/debate-history-menu-light.png)、[OS設定320dp・文字2倍](screenshots/debate-history-menu-large-text.png)。Bottom Sheetの文字拡大は内容内だけのoverrideではなく、専用AVDのOS設定で確認する。
+- 架空データの画面試験で議論入力・通知・表示切替・ログアウト／Demo終了、通常・Demoのネイティブ集計・モモトーク導線、通常版の外部Web導線と下方の公開情報へのスクロール、DemoでのWeb機能非表示、一覧・詳細のスクロール維持を確認する。ブラウザーIntentの固定URL・アプリ資格情報の非付加、旧runtime・DemoからのWeb機能起動拒否は関連非画面試験で確認する。通常認証の実機受入とDemoだけの操作確認は区別する。
+- Bottom Sheetの文字拡大は、専用AVDのOS設定で確認する。
 
 ## いろいろな記録：ネイティブ集計
 
