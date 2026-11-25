@@ -49,6 +49,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.testTag
@@ -334,6 +335,7 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
                     preview.parentRecordId?.let { parentId ->
                       item(key = "record-parent") {
                         TextButton(onClick = { onEvent(BootstrapScreen.Event.OpenRelatedRecord(recordId, parentId)) },
+                          shape = RectangleShape,
                           modifier = Modifier.heightIn(min = 48.dp).testTag("detail-parent-record")) {
                           Text(preview.parentQuestionPreview?.let {
                             stringResource(R.string.record_followup_parent_question, it)
@@ -354,6 +356,7 @@ internal fun RecordDetailScreen(state: RecordPreviewState, recordId: String,
                     }
                     items(related.items, key = { "related-${it.recordId}" }) { child ->
                       TextButton(onClick = { onEvent(BootstrapScreen.Event.OpenRelatedRecord(recordId, child.recordId)) },
+                        shape = RectangleShape,
                         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("detail-child-${child.recordId}")) {
                         Text(child.questionPreview, modifier = Modifier.fillMaxWidth())
                       }

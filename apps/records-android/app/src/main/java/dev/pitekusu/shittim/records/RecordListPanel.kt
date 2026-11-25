@@ -30,6 +30,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -256,7 +257,7 @@ private fun RecordListCard(item: RecordListEntry, isSelected: Boolean, modifier:
         modifier = Modifier.testTag("journal-question-${item.recordId}"))
       item.parentRecordId?.let { parentId ->
         Text(stringResource(R.string.record_followup_child), style = MaterialTheme.typography.labelMedium)
-        TextButton(onClick = { onOpenParent(parentId) },
+        TextButton(onClick = { onOpenParent(parentId) }, shape = RectangleShape,
           modifier = Modifier.heightIn(min = 48.dp).testTag("journal-parent-${item.recordId}")) {
           Text(item.parentQuestionPreview?.let { stringResource(R.string.record_followup_parent_question, it) }
             ?: stringResource(R.string.record_followup_parent))
