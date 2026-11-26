@@ -30,10 +30,10 @@
     },
     "cosign-dhi": {
       "archive_name": "cosign-linux-arm64",
-      "archive_sha256": "516893301e9ec0f2594edfcf8f943ec3b3ba96f3aad2b507eff2b71e644e5fca",
+      "archive_sha256": "bbb2ebc765f483cf9fac42da8763dddc2b55b350ee12ea0c44a520a6d6d52334",
       "repository": "sigstore/cosign",
       "tag_prefix": "v",
-      "version": "3.1.5"
+      "version": "3.1.6"
     },
     "regctl": {
       "archive_name": "regctl-linux-arm64",
