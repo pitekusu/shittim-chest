@@ -92,6 +92,7 @@ GitHub-hosted runnerはUbuntu 26.04に固定する。x64は`ubuntu-26.04`、
 | docs-public-safety | 文書構造、参照、公開情報、ライセンス境界 |
 
 uvを導入するworkflowは、完全SHAで固定した`setup-uv`に`require-checksums: true`を指定する。
+Actionに対象版のchecksumが同梱されていない場合は、公式リリースの配布物と照合したSHA-256をrunnerのアーキテクチャごとに`checksum`へ指定する。
 Actionやuvを更新するときは、使うrunnerのOS・アーキテクチャに対応するchecksumがあることを確認する。
 
 ### tyのコードスキャン連携

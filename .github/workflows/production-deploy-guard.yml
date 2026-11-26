@@ -32,6 +32,7 @@ env:
   AWS_REGION: ap-northeast-1
   PYTHON_VERSION: 3.15.2
   UV_VERSION: 0.13.10
+  UV_LINUX_X64_SHA256: bf65ac1a0af10f92c522d91ac096c7c0a39657647b155577e7836c2cbbb4526c
 
 jobs:
   guard:
@@ -89,6 +90,7 @@ jobs:
           version: ${{ env.UV_VERSION }}
           download-from-astral-mirror: false
           require-checksums: true
+          checksum: ${{ env.UV_LINUX_X64_SHA256 }}
           python-version: ${{ env.PYTHON_VERSION }}
           enable-cache: true
           cache-dependency-glob: uv.lock
