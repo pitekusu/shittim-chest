@@ -11,29 +11,29 @@ autoDedupe: true
 
 # Reviewed stable releases; age exceptions cover only these exact versions.
 minimumReleaseAgeExclude:
-  - fast-uri@4.2.3
-  - "@vitest/mocker@5.1.1"
-  - "@vitest/pretty-format@5.1.1"
-  - "@vitest/spy@5.1.1"
-  - "@vitest/ui@5.1.1"
-  - "@vitest/utils@5.1.1"
-  - vitest@5.1.1
-  - "@vitest/browser-preview@5.1.1"
-  - "@vitest/browser@5.1.1"
-  - "@vitest/snapshot@5.1.1"
+  - fast-uri@4.2.4
+  - "@vitest/mocker@5.1.2"
+  - "@vitest/pretty-format@5.1.2"
+  - "@vitest/spy@5.1.2"
+  - "@vitest/ui@5.1.2"
+  - "@vitest/utils@5.1.2"
+  - vitest@5.1.2
+  - "@vitest/browser-preview@5.1.2"
+  - "@vitest/browser@5.1.2"
+  - "@vitest/snapshot@5.1.2"
 
 overrides:
-  fast-uri: "4.2.3"
-  vite: "npm:@voidzero-dev/vite-plus-core@8.3.8000"
-  vitest: "5.1.1"
-  # Vite+ 1.7.0 bundles 5.1.0. Keep its exact Vitest family on the project patch.
-  "@vitest/browser": "5.1.1"
-  "@vitest/browser-preview": "5.1.1"
-  "@vitest/mocker": "5.1.1"
-  "@vitest/pretty-format": "5.1.1"
-  "@vitest/snapshot": "5.1.1"
-  "@vitest/spy": "5.1.1"
-  "@vitest/utils": "5.1.1"
+  fast-uri: "4.2.4"
+  vite: "npm:@voidzero-dev/vite-plus-core@8.3.8001"
+  vitest: "5.1.2"
+  # Vite+ 1.8.0 bundles 5.1.1. Keep its exact Vitest family on the project patch.
+  "@vitest/browser": "5.1.2"
+  "@vitest/browser-preview": "5.1.2"
+  "@vitest/mocker": "5.1.2"
+  "@vitest/pretty-format": "5.1.2"
+  "@vitest/snapshot": "5.1.2"
+  "@vitest/spy": "5.1.2"
+  "@vitest/utils": "5.1.2"
 
 peerDependencyRules:
   allowAny:

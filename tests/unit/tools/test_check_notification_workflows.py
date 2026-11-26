@@ -1952,7 +1952,7 @@ def test_runtime_projection_cannot_replace_raw_results_with_success(directory: P
 @pytest.mark.parametrize(
     ("workflow", "old", "new"),
     [
-        ("ci.yml", "version: v0.39.0", "version: latest"),
+        ("ci.yml", "version: v0.39.1", "version: latest"),
         (
             RELEASE_WORKFLOW,
             "image=${{ steps.buildkit-image.outputs.image }}",

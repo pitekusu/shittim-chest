@@ -27,7 +27,7 @@ env:
   AWS_REGION: ap-northeast-1
   NODE_VERSION: "26.13.1"
   PYTHON_VERSION: "3.15.2"
-  UV_VERSION: "0.13.9"
+  UV_VERSION: "0.13.10"
 
 jobs:
   plan:
