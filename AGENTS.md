@@ -134,6 +134,7 @@ Androidアプリと、それを支えるPythonの認証・閲覧APIに適用す�
   `codex/` branch → commit → 通常PR。PRのtitle・本文は日本語、mergeは必須CI・CodeQL成功後のsquashとする。
 - release対象は実際の差分と`tools/classify_ci_paths.py`、`docs/15_*`、workflowで決める。
   Core Releaseには同一SHAのRecords Release成功が必要。image変更時はdigest・SBOM・VEX・risk gateの整合を確認する。
+- 通常のCore Releaseは未配信の変更をまとめ、日本時間で原則1日1回まで開始する。緊急配信と再試行は`docs/15_*`の「Core配信」に従う。
 - 本番変更・Environment承認はユーザーが許可した範囲で行う。リリース完了まで承認済みなら、承認待ちで止めず検証まで進む。
   Releaseのsmokeに、有料生成・Discord投稿・親愛度resetなど未依頼の受入操作を追加しない。
 - CI／Releaseは1 watcherで原則60秒以上の間隔で終端まで監視する。変化のない状態報告を繰り返さない。
